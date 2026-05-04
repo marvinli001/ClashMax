@@ -1,3 +1,4 @@
+import Combine
 import XCTest
 @testable import ClashMax
 
@@ -18,6 +19,76 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(reason.contains("No active profile"))
   }
 
+  func testAddingSubscriptionShowsLoadingUntilRequestFinishes() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    let model = AppModel(paths: paths, profileStore: store)
+    let recorder = URLProtocolRecorder(
+      responseBody: "proxies:\n  - name: DIRECT\n    type: direct\n",
+      responseDelay: 0.2
+    )
+    let session = URLSession(configuration: recorder.configuration)
+
+    let addTask = Task {
+      await model.addSubscription(
+        name: "Remote",
+        urlString: "https://example.com/sub",
+        session: session
+      )
+    }
+
+    for _ in 0..<20 where !model.isAddingSubscription {
+      await Task.yield()
+    }
+
+    XCTAssertTrue(model.isAddingSubscription)
+    XCTAssertTrue(store.profiles.isEmpty)
+
+    let didAdd = await addTask.value
+    XCTAssertTrue(didAdd)
+    XCTAssertFalse(model.isAddingSubscription)
+    XCTAssertEqual(store.profiles.count, 1)
+  }
+
+  func testDeletingActiveProfilePublishesStatusMessage() throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try """
+    proxies:
+      - name: DIRECT
+        type: direct
+    """.write(to: configURL, atomically: true, encoding: .utf8)
+
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    let profile = try store.importLocalConfig(from: configURL)
+    let model = AppModel(paths: paths, profileStore: store)
+
+    model.deleteProfile(profile)
+
+    XCTAssertTrue(store.profiles.isEmpty)
+    XCTAssertNil(store.activeProfileID)
+    XCTAssertEqual(model.profileOperationMessage, "Deleted profile profile.")
+  }
+
+  func testProxyGroupsUnavailableMessageExplainsRuntimeLoadingBeforeStart() throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try """
+    proxies:
+      - name: DIRECT
+        type: direct
+    """.write(to: configURL, atomically: true, encoding: .utf8)
+
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try store.importLocalConfig(from: configURL)
+    let model = AppModel(paths: paths, profileStore: store)
+
+    XCTAssertEqual(
+      model.proxyGroupsUnavailableMessage,
+      "Start the active profile to load proxy groups from Mihomo. Subscription protocols are parsed by the core at launch."
+    )
+  }
+
   func testStartInFlightTakesPriorityOverStoppedTunPath() {
     XCTAssertEqual(
       DashboardRuntimeState.resolve(
@@ -28,6 +99,72 @@ final class DashboardRuntimeStateTests: XCTestCase {
       ),
       .starting
     )
+  }
+
+  func testStartDefersPublishedStateChangesUntilNextActorTurn() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try """
+    proxies:
+      - name: DIRECT
+        type: direct
+    """.write(to: configURL, atomically: true, encoding: .utf8)
+
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    let profile = try store.importLocalConfig(from: configURL)
+    try "mixed-port: 7890\nrules: []\n"
+      .write(to: URL(fileURLWithPath: profile.originalConfigPath), atomically: true, encoding: .utf8)
+    let model = AppModel(paths: paths, profileStore: store)
+
+    model.start()
+
+    XCTAssertFalse(model.startInFlight)
+    XCTAssertNil(model.lastError)
+
+    for _ in 0..<20 where model.lastError == nil {
+      await Task.yield()
+    }
+
+    XCTAssertFalse(model.startInFlight)
+    XCTAssertEqual(model.lastError, "Profile must include at least one proxy or proxy provider.")
+  }
+
+  func testSettingCurrentModeDoesNotPublishChanges() throws {
+    let paths = try Self.makeRuntimePaths()
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    )
+    var changeCount = 0
+    let cancellable = model.objectWillChange.sink { changeCount += 1 }
+    defer { cancellable.cancel() }
+
+    model.setMode(model.overrides.mode)
+
+    XCTAssertEqual(changeCount, 0)
+  }
+
+  func testRequestingModeDefersPublishedChangesUntilNextActorTurn() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    )
+    var changeCount = 0
+    let cancellable = model.objectWillChange.sink { changeCount += 1 }
+    defer { cancellable.cancel() }
+
+    model.requestMode(.global)
+
+    XCTAssertEqual(model.overrides.mode, .rule)
+    XCTAssertEqual(changeCount, 0)
+
+    for _ in 0..<20 where model.overrides.mode != .global {
+      await Task.yield()
+    }
+
+    XCTAssertEqual(model.overrides.mode, .global)
+    XCTAssertGreaterThan(changeCount, 0)
   }
 
   func testRunningCoversUserModeAndTunnelCore() {

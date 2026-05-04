@@ -21,9 +21,11 @@ final class URLProtocolRecorder: @unchecked Sendable {
   private var recordedRequest: URLRequest?
   private var recordedBody: Data?
   private let responseBody: String
+  private let responseDelay: TimeInterval
 
-  init(responseBody: String = #"{"delay":42}"#) {
+  init(responseBody: String = #"{"delay":42}"#, responseDelay: TimeInterval = 0) {
     self.responseBody = responseBody
+    self.responseDelay = responseDelay
   }
 
   var configuration: URLSessionConfiguration {
@@ -64,6 +66,12 @@ final class URLProtocolRecorder: @unchecked Sendable {
   fileprivate func responseData() -> Data {
     responseBody.data(using: .utf8)!
   }
+
+  fileprivate func delayResponseIfNeeded() {
+    if responseDelay > 0 {
+      Thread.sleep(forTimeInterval: responseDelay)
+    }
+  }
 }
 
 final class RecordingURLProtocol: URLProtocol, @unchecked Sendable {
@@ -75,6 +83,7 @@ final class RecordingURLProtocol: URLProtocol, @unchecked Sendable {
     let body = request.httpBody ?? Self.readBodyStream(request.httpBodyStream)
 
     URLProtocolRecorder.current()?.record(request, body: body)
+    URLProtocolRecorder.current()?.delayResponseIfNeeded()
     let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
     client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
     client?.urlProtocol(self, didLoad: URLProtocolRecorder.current()?.responseData() ?? Data())

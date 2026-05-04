@@ -6,8 +6,15 @@ struct ProxiesView: View {
   var body: some View {
     AdaptivePage(
       title: "Proxies",
-      subtitle: appModel.proxyGroups.isEmpty ? "Proxy groups appear after a profile is running." : "\(appModel.proxyGroups.count) groups"
+      subtitle: appModel.proxyGroups.isEmpty ? "Runtime groups load after the active profile starts." : "\(appModel.proxyGroups.count) groups"
     ) {
+      if !appModel.isRunning, appModel.profileStore.activeProfile != nil {
+        Button {
+          appModel.start()
+        } label: {
+          Label("Start", systemImage: "play.fill")
+        }
+      }
       Button {
         appModel.reloadRuntimeData()
       } label: {
@@ -18,7 +25,7 @@ struct ProxiesView: View {
         CenteredUnavailableState(
           title: "No proxy groups",
           systemImage: "point.3.connected.trianglepath.dotted",
-          message: "Start ClashMax with an active profile, then refresh runtime data."
+          message: appModel.proxyGroupsUnavailableMessage
         )
       } else {
         List {

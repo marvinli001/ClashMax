@@ -15,7 +15,7 @@ final class HelperListenerDelegate: NSObject, NSXPCListenerDelegate {
   }
 
   func listener(_ listener: NSXPCListener, shouldAcceptNewConnection newConnection: NSXPCConnection) -> Bool {
-    newConnection.exportedInterface = NSXPCInterface(with: ClashMaxHelperXPCProtocol.self)
+    newConnection.exportedInterface = ClashMaxHelperXPCInterface.make()
     newConnection.exportedObject = service
     newConnection.resume()
     return true

@@ -23,6 +23,43 @@ protocol ClashMaxHelperXPCProtocol {
   func recentLogs(withReply reply: @escaping (NSArray) -> Void)
 }
 
+enum ClashMaxHelperXPCInterface {
+  static func make() -> NSXPCInterface {
+    let interface = NSXPCInterface(with: ClashMaxHelperXPCProtocol.self)
+    let dictionaryReplyClasses = allowedClassSet([
+      NSDictionary.self,
+      NSString.self,
+      NSNumber.self
+    ])
+    let logReplyClasses = allowedClassSet([
+      NSArray.self,
+      NSString.self
+    ])
+    let dictionaryReplySelectors = [
+      #selector(ClashMaxHelperXPCProtocol.status(withReply:)),
+      #selector(ClashMaxHelperXPCProtocol.startTunnel(corePath:configPath:workDirectoryPath:secret:withReply:)),
+      #selector(ClashMaxHelperXPCProtocol.stopTunnel(withReply:)),
+      #selector(ClashMaxHelperXPCProtocol.restartTunnel(corePath:configPath:workDirectoryPath:secret:withReply:))
+    ]
+
+    for selector in dictionaryReplySelectors {
+      interface.setClasses(dictionaryReplyClasses, for: selector, argumentIndex: 0, ofReply: true)
+    }
+
+    interface.setClasses(
+      logReplyClasses,
+      for: #selector(ClashMaxHelperXPCProtocol.recentLogs(withReply:)),
+      argumentIndex: 0,
+      ofReply: true
+    )
+    return interface
+  }
+
+  private static func allowedClassSet(_ classes: [AnyClass]) -> Set<AnyHashable> {
+    NSSet(array: classes) as! Set<AnyHashable>
+  }
+}
+
 enum HelperResponseKey {
   static let ok = "ok"
   static let running = "running"

@@ -2,7 +2,10 @@ import Pow
 import SwiftUI
 
 enum DashboardLayoutMetrics {
-  static let runModePickerWidth: CGFloat = 204
+  static let runModePickerWidth: CGFloat = 214
+  static let launchProfileControlWidth: CGFloat = 178
+  static let launchMixedPortControlWidth: CGFloat = 104
+  static let launchStartButtonWidth: CGFloat = 156
 
   static func pagePadding(for width: CGFloat) -> CGFloat {
     width < 760 ? 14 : 18
@@ -16,7 +19,7 @@ enum DashboardLayoutMetrics {
   }
 
   static func launchControlsMaxWidth(availableWidth: CGFloat) -> CGFloat {
-    min(max(availableWidth - 32, 360), 760)
+    min(max(availableWidth - 32, 360), 640)
   }
 
   static func dashboardMaxWidth(for width: CGFloat) -> CGFloat {
@@ -35,8 +38,7 @@ struct RunModePicker: View {
     }
     .labelsHidden()
     .pickerStyle(.segmented)
-    .controlSize(.small)
-    .frame(width: DashboardLayoutMetrics.runModePickerWidth)
+    .frame(width: DashboardLayoutMetrics.runModePickerWidth, alignment: .leading)
   }
 }
 

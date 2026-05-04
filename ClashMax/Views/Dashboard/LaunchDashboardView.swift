@@ -123,50 +123,50 @@ private struct LaunchControlDeck: View {
   let startAction: () -> Void
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      if availableWidth >= 720 {
-        HStack(alignment: .top, spacing: 14) {
-          profileControl
-          modeControl
-          Spacer(minLength: 0)
-          mixedPortControl(alignment: .trailing)
-        }
-      } else {
+    let compact = availableWidth < 620
+
+    VStack(alignment: .leading, spacing: compact ? 12 : 14) {
+      if compact {
         VStack(alignment: .leading, spacing: 12) {
           profileControl
-          HStack(alignment: .top, spacing: 12) {
+          HStack(alignment: .bottom, spacing: 20) {
             modeControl
-            Spacer(minLength: 0)
-            mixedPortControl(alignment: .trailing)
+            mixedPortControl
           }
+        }
+      } else {
+        HStack(alignment: .bottom, spacing: 30) {
+          profileControl
+          modeControl
+          mixedPortControl
         }
       }
 
       Divider()
         .opacity(0.28)
 
-      if availableWidth >= 620 {
+      if compact {
+        VStack(alignment: .leading, spacing: 12) {
+          toggleControls
+          startButton
+        }
+      } else {
         HStack(spacing: 14) {
           toggleControls
           Spacer(minLength: 0)
           startButton
         }
-      } else {
-        VStack(alignment: .leading, spacing: 12) {
-          toggleControls
-          startButton
-            .frame(maxWidth: .infinity, alignment: .trailing)
-        }
       }
     }
-    .padding(18)
+    .padding(.horizontal, 16)
+    .padding(.vertical, 14)
     .dashboardCard(interactive: true)
   }
 
   private var profileControl: some View {
-    VStack(alignment: .leading, spacing: 8) {
+    VStack(alignment: .leading, spacing: 6) {
       Text("Profile")
-        .font(.caption)
+        .font(.caption2)
         .foregroundStyle(.secondary)
       Picker("Profile", selection: profileSelection) {
         Text("None").tag(Profile.ID?.none)
@@ -175,32 +175,35 @@ private struct LaunchControlDeck: View {
         }
       }
       .labelsHidden()
-      .frame(minWidth: 160, idealWidth: 240, maxWidth: 300)
+      .frame(width: DashboardLayoutMetrics.launchProfileControlWidth, alignment: .leading)
       .matchedGeometryEffect(id: "profile-control", in: namespace)
     }
+    .frame(width: DashboardLayoutMetrics.launchProfileControlWidth, alignment: .leading)
   }
 
   private var modeControl: some View {
-    VStack(alignment: .leading, spacing: 8) {
+    VStack(alignment: .leading, spacing: 6) {
       Text("Mode")
-        .font(.caption)
+        .font(.caption2)
         .foregroundStyle(.secondary)
       RunModePicker(selection: Binding(
         get: { appModel.overrides.mode },
-        set: { appModel.setMode($0) }
+        set: { appModel.requestMode($0) }
       ))
       .matchedGeometryEffect(id: "mode-control", in: namespace)
     }
+    .frame(width: DashboardLayoutMetrics.runModePickerWidth, alignment: .leading)
   }
 
-  private func mixedPortControl(alignment: HorizontalAlignment) -> some View {
-    VStack(alignment: alignment, spacing: 8) {
+  private var mixedPortControl: some View {
+    VStack(alignment: .leading, spacing: 6) {
       Text("Mixed Port")
-        .font(.caption)
+        .font(.caption2)
         .foregroundStyle(.secondary)
       Stepper("\(appModel.overrides.mixedPort)", value: $appModel.overrides.mixedPort, in: 1024...65535)
-        .frame(width: 146)
+        .frame(width: DashboardLayoutMetrics.launchMixedPortControlWidth, alignment: .leading)
     }
+    .frame(width: DashboardLayoutMetrics.launchMixedPortControlWidth, alignment: .leading)
   }
 
   private var toggleControls: some View {
@@ -222,10 +225,10 @@ private struct LaunchControlDeck: View {
     } label: {
       Label("Start", systemImage: "play.fill")
         .font(.system(.headline, design: .rounded).weight(.semibold))
-        .frame(minWidth: 128)
+        .frame(width: DashboardLayoutMetrics.launchStartButtonWidth)
     }
     .buttonStyle(.borderedProminent)
-    .controlSize(.large)
+    .controlSize(.regular)
     .disabled(startDisabled)
     .matchedGeometryEffect(id: "primary-run-control", in: namespace)
     .changeEffect(.shine(duration: reduceMotion ? 0.18 : 0.72), value: state)

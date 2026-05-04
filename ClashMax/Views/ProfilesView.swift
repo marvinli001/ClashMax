@@ -5,6 +5,7 @@ struct ProfilesView: View {
   @State private var subscriptionName = ""
   @State private var subscriptionURL = ""
   @State private var renameText = ""
+  @State private var profilePendingDeletion: Profile?
 
   var body: some View {
     AdaptivePage(
@@ -54,6 +55,13 @@ struct ProfilesView: View {
           .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
 
+        if let message = appModel.profileOperationMessage {
+          Label(message, systemImage: "checkmark.circle.fill")
+            .font(.callout)
+            .foregroundStyle(.green)
+            .lineLimit(2)
+        }
+
         if let error = appModel.lastError {
           Label(error, systemImage: "exclamationmark.triangle.fill")
             .font(.callout)
@@ -68,22 +76,39 @@ struct ProfilesView: View {
     .onChange(of: appModel.profileStore.activeProfileID) { _, _ in
       renameText = appModel.profileStore.activeProfile?.name ?? ""
     }
+    .alert("Delete Profile?", isPresented: deleteConfirmationPresented) {
+      Button("Delete", role: .destructive) {
+        confirmDeleteProfile()
+      }
+      Button("Cancel", role: .cancel) {
+        profilePendingDeletion = nil
+      }
+    } message: {
+      Text("Remove \(profilePendingDeletion?.name ?? "this profile") from ClashMax. Stored subscription metadata and the app-managed profile copy will be deleted.")
+    }
   }
 
   private var subscriptionControls: some View {
     GroupBox("Subscription") {
-      ViewThatFits(in: .horizontal) {
-        HStack(spacing: 10) {
-          subscriptionFields
-          addSubscriptionButton
-        }
+      VStack(alignment: .leading, spacing: 8) {
+        ViewThatFits(in: .horizontal) {
+          HStack(spacing: 10) {
+            subscriptionFields
+            addSubscriptionButton
+          }
 
-        VStack(alignment: .leading, spacing: 10) {
-          subscriptionFields
-          addSubscriptionButton
+          VStack(alignment: .leading, spacing: 10) {
+            subscriptionFields
+            addSubscriptionButton
+          }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+
+        if appModel.isAddingSubscription {
+          subscriptionLoadingIndicator
         }
       }
-      .frame(maxWidth: .infinity, alignment: .leading)
+      .animation(.easeInOut(duration: 0.16), value: appModel.isAddingSubscription)
     }
   }
 
@@ -94,17 +119,45 @@ struct ProfilesView: View {
       TextField("Subscription URL", text: $subscriptionURL)
         .frame(minWidth: 260)
     }
+    .disabled(appModel.isAddingSubscription)
   }
 
   private var addSubscriptionButton: some View {
     Button {
-      appModel.addSubscription(name: subscriptionName, urlString: subscriptionURL)
-      subscriptionName = ""
-      subscriptionURL = ""
+      let name = subscriptionName
+      let urlString = subscriptionURL
+      Task { @MainActor in
+        let didAdd = await appModel.addSubscription(name: name, urlString: urlString)
+        if didAdd {
+          subscriptionName = ""
+          subscriptionURL = ""
+        }
+      }
     } label: {
-      Label("Add", systemImage: "plus")
+      HStack(spacing: 6) {
+        if appModel.isAddingSubscription {
+          ProgressView()
+            .controlSize(.small)
+        } else {
+          Image(systemName: "plus")
+        }
+        Text(appModel.isAddingSubscription ? "Adding" : "Add")
+      }
+      .frame(minWidth: 64)
     }
-    .disabled(subscriptionURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    .disabled(subscriptionURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || appModel.isAddingSubscription)
+  }
+
+  private var subscriptionLoadingIndicator: some View {
+    HStack(spacing: 8) {
+      ProgressView()
+        .controlSize(.small)
+      Text("Fetching and validating subscription...")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+    .accessibilityElement(children: .combine)
+    .transition(.opacity)
   }
 
   private func activeProfileControls(_ activeProfile: Profile) -> some View {
@@ -141,7 +194,7 @@ struct ProfilesView: View {
       .disabled(!activeProfile.isSubscription)
 
       Button(role: .destructive) {
-        appModel.deleteActiveProfile()
+        profilePendingDeletion = activeProfile
       } label: {
         Label("Delete", systemImage: "trash")
       }
@@ -153,6 +206,23 @@ struct ProfilesView: View {
     case .localFile: "Local YAML"
     case .subscription: "Subscription"
     }
+  }
+
+  private var deleteConfirmationPresented: Binding<Bool> {
+    Binding(
+      get: { profilePendingDeletion != nil },
+      set: { isPresented in
+        if !isPresented {
+          profilePendingDeletion = nil
+        }
+      }
+    )
+  }
+
+  private func confirmDeleteProfile() {
+    guard let profile = profilePendingDeletion else { return }
+    profilePendingDeletion = nil
+    appModel.deleteProfile(profile)
   }
 }
 

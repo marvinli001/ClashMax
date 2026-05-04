@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import XCTest
 @testable import ClashMax
 
@@ -24,11 +25,25 @@ final class ProfileStoreTests: XCTestCase {
     XCTAssertFalse(FileManager.default.fileExists(atPath: renamed.originalConfigPath))
   }
 
+  func testSelectingAlreadyActiveProfileDoesNotPublishChanges() throws {
+    let fixture = try TemporaryProfileFixture()
+    let store = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
+    let profile = try store.importLocalConfig(from: fixture.configURL)
+    var changeCount = 0
+    let cancellable = store.objectWillChange.sink { changeCount += 1 }
+    defer { cancellable.cancel() }
+
+    try store.select(profile)
+
+    XCTAssertEqual(changeCount, 0)
+  }
+
   func testSubscriptionURLIsStoredOutsideManifestAndUpdateRefreshesConfig() async throws {
     let fixture = try TemporaryProfileFixture()
     let secrets = InMemorySecretStore()
     let store = ProfileStore(paths: fixture.paths, keychain: secrets)
-    let session = URLSession(configuration: URLProtocolRecorder.configurationReturning("mixed-port: 9000\nproxies:\n  - name: DIRECT\n    type: direct\n"))
+    let recorder = URLProtocolRecorder(responseBody: "mixed-port: 9000\nproxies:\n  - name: DIRECT\n    type: direct\n")
+    let session = URLSession(configuration: recorder.configuration)
 
     let profile = try await store.addSubscription(
       name: "",
@@ -36,12 +51,15 @@ final class ProfileStoreTests: XCTestCase {
       session: session
     )
 
+    XCTAssertEqual(recorder.lastRequest?.value(forHTTPHeaderField: "User-Agent"), "clash.meta")
     XCTAssertEqual(try secrets.load(account: "subscription.\(profile.id.uuidString)"), "https://example.com/sub.yaml")
     let manifest = try String(contentsOf: fixture.paths.manifestURL, encoding: .utf8)
     XCTAssertFalse(manifest.contains("https://example.com/sub.yaml"))
 
-    let updateSession = URLSession(configuration: URLProtocolRecorder.configurationReturning("mixed-port: 9001\nproxies:\n  - name: DIRECT\n    type: direct\n"))
+    let updateRecorder = URLProtocolRecorder(responseBody: "mixed-port: 9001\nproxies:\n  - name: DIRECT\n    type: direct\n")
+    let updateSession = URLSession(configuration: updateRecorder.configuration)
     try await store.updateSubscription(profile, session: updateSession)
+    XCTAssertEqual(updateRecorder.lastRequest?.value(forHTTPHeaderField: "User-Agent"), "clash.meta")
     XCTAssertEqual(try String(contentsOfFile: profile.originalConfigPath, encoding: .utf8), "mixed-port: 9001\nproxies:\n  - name: DIRECT\n    type: direct\n")
   }
 

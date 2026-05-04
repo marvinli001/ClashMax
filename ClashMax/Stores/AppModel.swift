@@ -9,6 +9,7 @@ final class AppModel: ObservableObject {
   @Published var systemProxyEnabled = false
   @Published var tunEnabled = false
   @Published var tunnelCoreRunning = false
+  @Published private(set) var isAddingSubscription = false
   @Published private(set) var startInFlight = false
   @Published private(set) var sessionStartedAt: Date?
   @Published var proxyGroups: [ProxyGroup] = []
@@ -19,6 +20,7 @@ final class AppModel: ObservableObject {
   @Published var trafficSample: TrafficSample = .zero
   @Published var trafficHistory: [TrafficSample] = []
   @Published var lastError: String?
+  @Published private(set) var profileOperationMessage: String?
 
   let profileStore: ProfileStore
   let coreController: CoreProcessController
@@ -27,6 +29,8 @@ final class AppModel: ObservableObject {
   private let paths: RuntimePaths
   private let normalizer = ConfigNormalizer()
   private var apiClient: MihomoAPIClient?
+  private var startTask: Task<Void, Never>?
+  private var pendingModeTask: Task<Void, Never>?
   private var streamTasks: [Task<Void, Never>] = []
   private var logBuffer = BoundedBuffer<LogEntry>(limit: AppConstants.retainedLogLimit)
   private var connectionBuffer = BoundedBuffer<ConnectionSnapshot>(limit: AppConstants.retainedConnectionLimit)
@@ -107,6 +111,16 @@ final class AppModel: ObservableObject {
     return nil
   }
 
+  var proxyGroupsUnavailableMessage: String {
+    if profileStore.activeProfile == nil {
+      return "Add or select a profile first."
+    }
+    if !isRunning {
+      return "Start the active profile to load proxy groups from Mihomo. Subscription protocols are parsed by the core at launch."
+    }
+    return "No proxy groups were reported by Mihomo. Refresh runtime data or check the active profile's proxy-groups."
+  }
+
   func importLocalProfile() {
     let panel = NSOpenPanel()
     panel.allowedContentTypes = [.yaml, .yml, .text]
@@ -114,23 +128,43 @@ final class AppModel: ObservableObject {
     panel.canChooseDirectories = false
     guard panel.runModal() == .OK, let url = panel.url else { return }
     do {
-      _ = try profileStore.importLocalConfig(from: url)
+      let profile = try profileStore.importLocalConfig(from: url)
+      lastError = nil
+      profileOperationMessage = "Imported profile \(profile.name)."
     } catch {
+      profileOperationMessage = nil
       lastError = String(describing: error)
     }
   }
 
-  func addSubscription(name: String, urlString: String) {
-    guard let url = URL(string: urlString) else {
+  @discardableResult
+  func addSubscription(name: String, urlString: String, session: URLSession = .shared) async -> Bool {
+    guard !isAddingSubscription else { return false }
+
+    let trimmedURLString = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let url = URL(string: trimmedURLString) else {
+      profileOperationMessage = nil
       lastError = "Invalid subscription URL."
-      return
+      return false
     }
-    Task {
-      do {
-        _ = try await profileStore.addSubscription(name: name, url: url)
-      } catch {
-        lastError = String(describing: error)
-      }
+
+    isAddingSubscription = true
+    lastError = nil
+    profileOperationMessage = nil
+    defer { isAddingSubscription = false }
+
+    do {
+      let profile = try await profileStore.addSubscription(
+        name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+        url: url,
+        session: session
+      )
+      profileOperationMessage = "Added subscription \(profile.name)."
+      return true
+    } catch {
+      profileOperationMessage = nil
+      lastError = String(describing: error)
+      return false
     }
   }
 
@@ -139,7 +173,10 @@ final class AppModel: ObservableObject {
     Task {
       do {
         try await profileStore.updateSubscription(profile)
+        lastError = nil
+        profileOperationMessage = "Updated subscription \(profile.name)."
       } catch {
+        profileOperationMessage = nil
         lastError = String(describing: error)
       }
     }
@@ -149,68 +186,90 @@ final class AppModel: ObservableObject {
     guard let profile = profileStore.activeProfile else { return }
     do {
       try profileStore.rename(profile, to: name)
+      lastError = nil
+      profileOperationMessage = "Renamed profile to \(name)."
     } catch {
+      profileOperationMessage = nil
       lastError = String(describing: error)
     }
   }
 
   func deleteActiveProfile() {
     guard let profile = profileStore.activeProfile else { return }
+    deleteProfile(profile)
+  }
+
+  func deleteProfile(_ profile: Profile) {
     do {
       try profileStore.delete(profile)
+      lastError = nil
+      profileOperationMessage = "Deleted profile \(profile.name)."
     } catch {
+      profileOperationMessage = nil
       lastError = String(describing: error)
     }
   }
 
   func start() {
+    guard startTask == nil, !startInFlight else { return }
+    startTask = Task { [weak self] in
+      await Task.yield()
+      guard let self, !Task.isCancelled else { return }
+      await self.performStart()
+    }
+  }
+
+  private func performStart() async {
     startInFlight = true
     lastError = nil
-    Task {
-      defer { startInFlight = false }
-      do {
-        let profile = try requireActiveProfile()
-        overrides.secret = UUID().uuidString.replacingOccurrences(of: "-", with: "")
-        overrides.tunEnabled = tunEnabled
-        let runtimeConfig = try generateRuntimeConfig(for: profile)
-        let client = MihomoAPIClient(baseURL: overrides.endpoint.baseURL, secret: overrides.secret)
-        apiClient = client
+    defer {
+      startInFlight = false
+      startTask = nil
+    }
+    do {
+      let profile = try requireActiveProfile()
+      overrides.secret = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+      overrides.tunEnabled = tunEnabled
+      let runtimeConfig = try generateRuntimeConfig(for: profile)
+      let client = MihomoAPIClient(baseURL: overrides.endpoint.baseURL, secret: overrides.secret)
+      apiClient = client
 
-        if tunEnabled {
-          try helperClient.register()
-          let response = try await helperClient.startTunnel(
-            coreURL: try bundledCoreURL(),
-            configURL: runtimeConfig,
-            workDirectory: paths.runtime,
-            secret: overrides.secret
-          )
-          if !response.ok {
-            throw AppError.helperResponse(response.message.isEmpty ? "Helper failed to start TUN." : response.message)
-          }
-          tunnelCoreRunning = response.running
-          coreController.stop()
-        } else {
-          tunnelCoreRunning = false
-          try await coreController.startUserMode(
-            coreURL: try bundledCoreURL(),
-            configURL: runtimeConfig,
-            workDirectory: paths.runtime,
-            api: overrides.endpoint
-          )
+      if tunEnabled {
+        try helperClient.register()
+        let response = try await helperClient.startTunnel(
+          coreURL: try bundledCoreURL(),
+          configURL: runtimeConfig,
+          workDirectory: paths.runtime,
+          secret: overrides.secret
+        )
+        if !response.ok {
+          throw AppError.helperResponse(response.message.isEmpty ? "Helper failed to start TUN." : response.message)
         }
-
-        if systemProxyEnabled && !tunEnabled {
-          try systemProxyController.apply(host: overrides.externalControllerHost, port: overrides.mixedPort)
-        }
-        sessionStartedAt = Date()
-        startStreams(client: client)
-      } catch {
-        lastError = String(describing: error)
+        tunnelCoreRunning = response.running
+        coreController.stop()
+      } else {
+        tunnelCoreRunning = false
+        try await coreController.startUserMode(
+          coreURL: try bundledCoreURL(),
+          configURL: runtimeConfig,
+          workDirectory: paths.runtime,
+          api: overrides.endpoint
+        )
       }
+
+      if systemProxyEnabled && !tunEnabled {
+        try systemProxyController.apply(host: overrides.externalControllerHost, port: overrides.mixedPort)
+      }
+      sessionStartedAt = Date()
+      startStreams(client: client)
+    } catch {
+      lastError = String(describing: error)
     }
   }
 
   func stop() {
+    startTask?.cancel()
+    startTask = nil
     startInFlight = false
     Task {
       streamTasks.forEach { $0.cancel() }
@@ -233,6 +292,7 @@ final class AppModel: ObservableObject {
   }
 
   func setMode(_ mode: RunMode) {
+    guard overrides.mode != mode else { return }
     overrides.mode = mode
     Task {
       do {
@@ -240,6 +300,18 @@ final class AppModel: ObservableObject {
       } catch {
         lastError = String(describing: error)
       }
+    }
+  }
+
+  func requestMode(_ mode: RunMode) {
+    pendingModeTask?.cancel()
+    pendingModeTask = nil
+    guard overrides.mode != mode else { return }
+    pendingModeTask = Task { @MainActor [weak self] in
+      await Task.yield()
+      guard let self, !Task.isCancelled else { return }
+      setMode(mode)
+      pendingModeTask = nil
     }
   }
 

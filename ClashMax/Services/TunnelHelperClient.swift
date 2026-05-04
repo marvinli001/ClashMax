@@ -118,7 +118,7 @@ struct PrivilegedHelperXPCTransport: HelperXPCTransport {
     _ body: @escaping (ClashMaxHelperXPCProtocol, @escaping (NSDictionary) -> Void) -> Void
   ) async throws -> HelperClientResponse {
     let connection = NSXPCConnection(machServiceName: clashMaxHelperMachServiceName, options: .privileged)
-    connection.remoteObjectInterface = NSXPCInterface(with: ClashMaxHelperXPCProtocol.self)
+    connection.remoteObjectInterface = ClashMaxHelperXPCInterface.make()
     connection.resume()
     defer { connection.invalidate() }
 
@@ -141,7 +141,7 @@ struct PrivilegedHelperXPCTransport: HelperXPCTransport {
     _ body: @escaping (ClashMaxHelperXPCProtocol, @escaping (NSArray) -> Void) -> Void
   ) async throws -> [String] {
     let connection = NSXPCConnection(machServiceName: clashMaxHelperMachServiceName, options: .privileged)
-    connection.remoteObjectInterface = NSXPCInterface(with: ClashMaxHelperXPCProtocol.self)
+    connection.remoteObjectInterface = ClashMaxHelperXPCInterface.make()
     connection.resume()
     defer { connection.invalidate() }
 

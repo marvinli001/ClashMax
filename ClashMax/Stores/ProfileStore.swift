@@ -8,6 +8,7 @@ final class ProfileStore: ObservableObject {
   private let paths: RuntimePaths
   private let keychain: SecretStoring
   private let fileManager: FileManager
+  private static let subscriptionUserAgent = "clash.meta"
 
   init(paths: RuntimePaths, keychain: SecretStoring = KeychainStore(), fileManager: FileManager = .default) {
     self.paths = paths
@@ -42,7 +43,7 @@ final class ProfileStore: ObservableObject {
 
   @discardableResult
   func addSubscription(name: String, url: URL, session: URLSession = .shared) async throws -> Profile {
-    let (data, response) = try await session.data(from: url)
+    let (data, response) = try await session.data(for: subscriptionRequest(url: url))
     if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
       throw AppError.invalidSubscriptionResponse
     }
@@ -74,7 +75,7 @@ final class ProfileStore: ObservableObject {
           let url = URL(string: rawURL)
     else { return }
 
-    let (data, response) = try await session.data(from: url)
+    let (data, response) = try await session.data(for: subscriptionRequest(url: url))
     if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
       throw AppError.invalidSubscriptionResponse
     }
@@ -107,6 +108,7 @@ final class ProfileStore: ObservableObject {
   }
 
   func select(_ profile: Profile) throws {
+    guard activeProfileID != profile.id else { return }
     activeProfileID = profile.id
     try saveManifest()
   }
@@ -119,6 +121,14 @@ final class ProfileStore: ObservableObject {
 
   private func subscriptionAccount(for id: UUID) -> String {
     "subscription.\(id.uuidString)"
+  }
+
+  private func subscriptionRequest(url: URL) -> URLRequest {
+    var request = URLRequest(url: url)
+    request.httpMethod = "GET"
+    request.setValue(Self.subscriptionUserAgent, forHTTPHeaderField: "User-Agent")
+    request.setValue("text/yaml, application/yaml, text/plain, */*", forHTTPHeaderField: "Accept")
+    return request
   }
 
   private func loadManifest() {

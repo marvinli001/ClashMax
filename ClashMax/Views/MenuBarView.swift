@@ -10,7 +10,7 @@ struct MenuBarView: View {
 
     Picker("Mode", selection: Binding(
       get: { appModel.overrides.mode },
-      set: { appModel.setMode($0) }
+      set: { appModel.requestMode($0) }
     )) {
       ForEach(RunMode.allCases) { mode in
         Text(mode.displayName).tag(mode)

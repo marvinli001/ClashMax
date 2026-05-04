@@ -17,7 +17,7 @@ struct ContentView: View {
           ToolbarItemGroup {
             RunModePicker(selection: Binding(
               get: { appModel.overrides.mode },
-              set: { appModel.setMode($0) }
+              set: { appModel.requestMode($0) }
             ))
 
             Button {

@@ -12,6 +12,33 @@ final class TunnelHelperClientTests: XCTestCase {
 
     XCTAssertEqual(logs, ["one", "two"])
   }
+
+  func testHelperInterfaceRestrictsCollectionReplyClasses() {
+    let interface = ClashMaxHelperXPCInterface.make()
+    let dictionaryReplySelectors = [
+      #selector(ClashMaxHelperXPCProtocol.status(withReply:)),
+      #selector(ClashMaxHelperXPCProtocol.startTunnel(corePath:configPath:workDirectoryPath:secret:withReply:)),
+      #selector(ClashMaxHelperXPCProtocol.stopTunnel(withReply:)),
+      #selector(ClashMaxHelperXPCProtocol.restartTunnel(corePath:configPath:workDirectoryPath:secret:withReply:))
+    ]
+
+    for selector in dictionaryReplySelectors {
+      let classes = interface.classes(for: selector, argumentIndex: 0, ofReply: true) as NSSet
+      XCTAssertTrue(classes.contains(NSDictionary.self))
+      XCTAssertTrue(classes.contains(NSString.self))
+      XCTAssertTrue(classes.contains(NSNumber.self))
+      XCTAssertFalse(classes.contains(NSObject.self))
+    }
+
+    let logClasses = interface.classes(
+      for: #selector(ClashMaxHelperXPCProtocol.recentLogs(withReply:)),
+      argumentIndex: 0,
+      ofReply: true
+    ) as NSSet
+    XCTAssertTrue(logClasses.contains(NSArray.self))
+    XCTAssertTrue(logClasses.contains(NSString.self))
+    XCTAssertFalse(logClasses.contains(NSObject.self))
+  }
 }
 
 private final class FakeHelperTransport: HelperXPCTransport {
