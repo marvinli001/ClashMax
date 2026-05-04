@@ -185,16 +185,10 @@ private struct LaunchControlDeck: View {
       Text("Mode")
         .font(.caption)
         .foregroundStyle(.secondary)
-      Picker("Mode", selection: Binding(
+      RunModePicker(selection: Binding(
         get: { appModel.overrides.mode },
         set: { appModel.setMode($0) }
-      )) {
-        ForEach(RunMode.allCases) { mode in
-          Text(mode.displayName).tag(mode)
-        }
-      }
-      .pickerStyle(.segmented)
-      .frame(width: 230)
+      ))
       .matchedGeometryEffect(id: "mode-control", in: namespace)
     }
   }

@@ -36,6 +36,10 @@ struct RuntimePaths {
   func runtimeConfigURL(for profile: Profile) -> URL {
     runtime.appendingPathComponent("\(profile.id.uuidString).runtime.yaml")
   }
+
+  func runtimeProviderContentURL(for profile: Profile) -> URL {
+    runtime.appendingPathComponent("\(profile.id.uuidString).provider.txt")
+  }
 }
 
 enum AppConstants {
@@ -67,7 +71,7 @@ enum AppError: Error, CustomStringConvertible {
     case .noActiveProfile:
       return "No active profile is selected."
     case .invalidSubscriptionResponse:
-      return "The subscription did not return a readable YAML response."
+      return "The subscription did not return a readable profile response."
     case let .invalidProfileConfig(message):
       return "Invalid profile config: \(message)"
     case let .configValidationFailed(message):

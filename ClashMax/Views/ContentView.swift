@@ -15,16 +15,10 @@ struct ContentView: View {
       }
         .toolbar {
           ToolbarItemGroup {
-            Picker("Mode", selection: Binding(
+            RunModePicker(selection: Binding(
               get: { appModel.overrides.mode },
               set: { appModel.setMode($0) }
-            )) {
-              ForEach(RunMode.allCases) { mode in
-                Text(mode.displayName).tag(mode)
-              }
-            }
-            .pickerStyle(.segmented)
-            .frame(width: 220)
+            ))
 
             Button {
               appModel.isRunning ? appModel.stop() : appModel.start()

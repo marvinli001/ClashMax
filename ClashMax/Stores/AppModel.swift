@@ -323,7 +323,20 @@ final class AppModel: ObservableObject {
 
   private func generateRuntimeConfig(for profile: Profile) throws -> URL {
     let source = try String(contentsOfFile: profile.originalConfigPath, encoding: .utf8)
-    let output = try normalizer.runtimeConfig(from: source, overrides: overrides)
+    let providerContentPath: String?
+    if try ProfileConfigInspector.format(of: source) == .proxyProviderContent {
+      let providerContentURL = paths.runtimeProviderContentURL(for: profile)
+      try source.write(to: providerContentURL, atomically: true, encoding: .utf8)
+      providerContentPath = providerContentURL.path
+    } else {
+      providerContentPath = nil
+    }
+    let output = try normalizer.runtimeConfig(
+      from: source,
+      providerContentPath: providerContentPath,
+      profileName: profile.name,
+      overrides: overrides
+    )
     let url = paths.runtimeConfigURL(for: profile)
     try output.write(to: url, atomically: true, encoding: .utf8)
     return url

@@ -1,5 +1,4 @@
 import Foundation
-import Yams
 
 @MainActor
 final class ProfileStore: ObservableObject {
@@ -50,7 +49,7 @@ final class ProfileStore: ObservableObject {
     guard let source = String(data: data, encoding: .utf8) else {
       throw AppError.invalidSubscriptionResponse
     }
-    try ProfileConfigValidator.validate(source)
+    try ProfileConfigValidator.validateProfileSource(source)
 
     let id = UUID()
     let destination = paths.profiles.appendingPathComponent("\(id.uuidString).yaml")
@@ -82,7 +81,7 @@ final class ProfileStore: ObservableObject {
     guard let source = String(data: data, encoding: .utf8) else {
       throw AppError.invalidSubscriptionResponse
     }
-    try ProfileConfigValidator.validate(source)
+    try ProfileConfigValidator.validateProfileSource(source)
     try source.write(to: URL(fileURLWithPath: profile.originalConfigPath), atomically: true, encoding: .utf8)
     touch(profile.id)
     try saveManifest()
@@ -147,21 +146,17 @@ private struct ProfileManifest: Codable {
 
 private enum ProfileConfigValidator {
   static func validate(_ source: String) throws {
-    let loaded: Any?
+    try validateProfileSource(source, allowProviderContent: false)
+  }
+
+  static func validateProfileSource(_ source: String, allowProviderContent: Bool = true) throws {
     do {
-      loaded = try Yams.load(yaml: source)
-    } catch {
-      throw AppError.invalidProfileConfig("YAML parse error: \(error)")
-    }
-
-    guard let root = loaded as? [String: Any] else {
-      throw AppError.invalidProfileConfig("YAML root must be a mapping.")
-    }
-
-    let proxies = root["proxies"] as? [[String: Any]] ?? []
-    let providers = root["proxy-providers"] as? [String: Any] ?? [:]
-    guard !proxies.isEmpty || !providers.isEmpty else {
-      throw AppError.invalidProfileConfig("Profile must include at least one proxy or proxy provider.")
+      let format = try ProfileConfigInspector.format(of: source)
+      if !allowProviderContent, format == .proxyProviderContent {
+        throw AppError.invalidProfileConfig("Local imports must be Clash/Mihomo YAML. Add URI/base64 node lists as a subscription.")
+      }
+    } catch let error as ProfileConfigFormatError {
+      throw AppError.invalidProfileConfig(String(describing: error))
     }
   }
 }

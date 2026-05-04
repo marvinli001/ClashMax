@@ -2,6 +2,8 @@ import Pow
 import SwiftUI
 
 enum DashboardLayoutMetrics {
+  static let runModePickerWidth: CGFloat = 204
+
   static func pagePadding(for width: CGFloat) -> CGFloat {
     width < 760 ? 14 : 18
   }
@@ -19,6 +21,22 @@ enum DashboardLayoutMetrics {
 
   static func dashboardMaxWidth(for width: CGFloat) -> CGFloat {
     width < 900 ? .infinity : 1180
+  }
+}
+
+struct RunModePicker: View {
+  let selection: Binding<RunMode>
+
+  var body: some View {
+    Picker("Mode", selection: selection) {
+      ForEach(RunMode.allCases) { mode in
+        Text(mode.displayName).tag(mode)
+      }
+    }
+    .labelsHidden()
+    .pickerStyle(.segmented)
+    .controlSize(.small)
+    .frame(width: DashboardLayoutMetrics.runModePickerWidth)
   }
 }
 
