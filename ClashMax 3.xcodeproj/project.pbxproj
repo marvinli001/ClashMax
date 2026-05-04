@@ -1,0 +1,840 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0726E0A274C59104498300B2 /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 608E910E0AB43ACEEB146E9D /* SidebarView.swift */; };
+		0786A610F48409C6706A09F9 /* MihomoAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EE23FBD08FD740D82ABB9D6 /* MihomoAPIClient.swift */; };
+		0CF9FEE27C87AE34882DC521 /* TestDoubles.swift in Sources */ = {isa = PBXBuildFile; fileRef = E935C963C504825DE6A4F8BF /* TestDoubles.swift */; };
+		150793B689941D7F36C821B8 /* RulesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B5452AC779C350D39717FD0 /* RulesView.swift */; };
+		18EC2C605AA61371B60EF1F4 /* DashboardRuntimeState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B6DA1173C99B9FB4A163A2E /* DashboardRuntimeState.swift */; };
+		2D0EEFA4792D38AC4BAF5290 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4294DDEF4FE7C6F6B5D92D11 /* ContentView.swift */; };
+		2E63AA5AE5083BD53BDCEA25 /* CoreProcessController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94791AE83711A844BABE209F /* CoreProcessController.swift */; };
+		3F626C87D97B6B83BBFB050F /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6749AA04E814E55D0045AB86 /* DashboardView.swift */; };
+		459B18A0DA1B260D3CAFA0C1 /* ConnectionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D259E5B68D779085576EA21A /* ConnectionsView.swift */; };
+		4C499AC953D294AB0B1ED625 /* DashboardComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54DFA4FE364633A28C1ED410 /* DashboardComponents.swift */; };
+		534998D677D07CA075B79150 /* ProxiesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB63869696982BB828A172DE /* ProxiesView.swift */; };
+		582338603DF2C43438BF0518 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD0BF20165DDA5CBA93D70BE /* KeychainStore.swift */; };
+		6507627D59CE801909FBDF59 /* Yams in Frameworks */ = {isa = PBXBuildFile; productRef = 9FF6185A9B5F20B8664BA152 /* Yams */; };
+		765BB58702FA82EAA03CDA95 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBDCBD94E79A76CA63291C71 /* AppModel.swift */; };
+		7833F2BEAAE74C3587715CB6 /* Pow in Frameworks */ = {isa = PBXBuildFile; productRef = AC88EA016AB92CD58BDFAEC1 /* Pow */; };
+		7BCB87E35CCF1CD745D33AFA /* ProfileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C92D6C3C6B280CDDFC29470F /* ProfileStore.swift */; };
+		817C82AAB0C2BB01D0DDFA96 /* TunnelHelperValidationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78EF9C7EFB9B051CE212A49B /* TunnelHelperValidationTests.swift */; };
+		82BED5A9B8D2DAD2714D431C /* HelperProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7EE62DA4C3657653D44F922 /* HelperProtocol.swift */; };
+		8CF16164DAAFD7ED31F7AA7C /* RiveRuntime in Frameworks */ = {isa = PBXBuildFile; productRef = 34214080213A992B3CAF212F /* RiveRuntime */; };
+		8F30DCF7999D5EC70C40E8A6 /* Formatters.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2435F74711FCEE85D5058FC9 /* Formatters.swift */; };
+		9435537B65D100571BA1DB93 /* ClashMaxApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7ED7AA0F377BF1BF367C2AC5 /* ClashMaxApp.swift */; };
+		993E27377946D94ECEC6CA47 /* RunningDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2ACF34B3417EEFB4C13CB013 /* RunningDashboardView.swift */; };
+		9F9BD79C3A92F49607A26D64 /* ConfigNormalizerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B38F8F5042460DDFC4142D6E /* ConfigNormalizerTests.swift */; };
+		A663D8BE71B424A043DDF051 /* LaunchDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D6E012D514CB8CC83940BCB /* LaunchDashboardView.swift */; };
+		B09DA1E8D5571B3D00E74431 /* CoreProcessControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71A566E7FD4BA3634EEB1E5A /* CoreProcessControllerTests.swift */; };
+		B3C29A1240D3B5EBA9FE5A03 /* LogsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4A2BEB4712640A482254EF3 /* LogsView.swift */; };
+		B472275C65969F85A10A1180 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3049F5E5929A9350DF21AB0 /* main.swift */; };
+		B7F87955C7C14EA8E12691C4 /* TunnelHelperClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11BC6F6EFDDABB919C5C09FA /* TunnelHelperClient.swift */; };
+		BA22256993B295697F6E4694 /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6FB4802572E1217EBCEE7D7 /* MenuBarView.swift */; };
+		BCCAD19625BA61056468BC2A /* Yams in Frameworks */ = {isa = PBXBuildFile; productRef = 88FF56EB7BDC95E76EC245CF /* Yams */; };
+		BEC85118460E6D6C220CE812 /* RiveCoreVisualView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0BAFC3DD5F62E8FCA9AB88A /* RiveCoreVisualView.swift */; };
+		C0456C1F18ADEE6DC65F28D3 /* SystemProxyControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D9E260500E476D9D4BDAF98 /* SystemProxyControllerTests.swift */; };
+		C054AF00023F8C2AAFC76D11 /* ConfigNormalizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A31C178439DDE1DF4A02EDB /* ConfigNormalizer.swift */; };
+		C123B8F15E793C2B09520600 /* AppSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED4D40FA9519F3398CE1C96 /* AppSection.swift */; };
+		C17D266234459D3AD8FFEED7 /* DashboardRuntimeStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22AAFD1267E58A56D94592ED /* DashboardRuntimeStateTests.swift */; };
+		C5DA1F51557D61C4E1A7E6A1 /* MihomoAPIClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FB11E012D31B8CC33A511BD /* MihomoAPIClientTests.swift */; };
+		C91370422264FC1660896543 /* ProfileStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 102CFE841EECC431BA65A694 /* ProfileStoreTests.swift */; };
+		C9C79AC20DC2CAE61FFB29DA /* BoundedBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD56AF5DDE11F6F2901B2E84 /* BoundedBuffer.swift */; };
+		CD94E81AD8133D6E9396B91E /* CoreRuntimePreflightTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33B5EAE971B5BB7B41079222 /* CoreRuntimePreflightTests.swift */; };
+		D04B95E5009D49D3BA4FCFCA /* SystemProxyController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93A93A1E61ED764914241456 /* SystemProxyController.swift */; };
+		D625A914F25B58C627A234A4 /* TunnelHelperClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47357CB3092C971F87BF7463 /* TunnelHelperClientTests.swift */; };
+		DBEC598D4B18752FCB871795 /* HelperProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7EE62DA4C3657653D44F922 /* HelperProtocol.swift */; };
+		DFA6A6509657F3D972E73F03 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 071CA2908C95169B76DF5A8F /* SettingsView.swift */; };
+		E5D87BAE2859A358110D7152 /* ProfilesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF132FA46F43BF05B1C6DA56 /* ProfilesView.swift */; };
+		EFA791062B0C236B26E0F5B6 /* BoundedBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD56AF5DDE11F6F2901B2E84 /* BoundedBuffer.swift */; };
+		F1E72D85621085912127922D /* CoreModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE5860266615A0F87895E7A0 /* CoreModels.swift */; };
+		F232BA21F47604A638CC4458 /* RuntimePaths.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8758370389738F3DA585BFF /* RuntimePaths.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		2F402E190520868986E5A4EF /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 7FCA799C1D05E8EDD5EFB2F3 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A6092EE1A3A6B688DD506396;
+			remoteInfo = ClashMax;
+		};
+		EF3E1E75316BDC1C416E0652 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 7FCA799C1D05E8EDD5EFB2F3 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 2EAAFCFED0B5B54550ECAAE5;
+			remoteInfo = ClashMaxHelper;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		071CA2908C95169B76DF5A8F /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		0B5452AC779C350D39717FD0 /* RulesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RulesView.swift; sourceTree = "<group>"; };
+		0D9E260500E476D9D4BDAF98 /* SystemProxyControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemProxyControllerTests.swift; sourceTree = "<group>"; };
+		102CFE841EECC431BA65A694 /* ProfileStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileStoreTests.swift; sourceTree = "<group>"; };
+		11BC6F6EFDDABB919C5C09FA /* TunnelHelperClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TunnelHelperClient.swift; sourceTree = "<group>"; };
+		1A8CDCCF51698651F78E0CD8 /* ClashMaxTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ClashMaxTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		1FB11E012D31B8CC33A511BD /* MihomoAPIClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MihomoAPIClientTests.swift; sourceTree = "<group>"; };
+		22AAFD1267E58A56D94592ED /* DashboardRuntimeStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardRuntimeStateTests.swift; sourceTree = "<group>"; };
+		2435F74711FCEE85D5058FC9 /* Formatters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Formatters.swift; sourceTree = "<group>"; };
+		2ACF34B3417EEFB4C13CB013 /* RunningDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunningDashboardView.swift; sourceTree = "<group>"; };
+		2B6DA1173C99B9FB4A163A2E /* DashboardRuntimeState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardRuntimeState.swift; sourceTree = "<group>"; };
+		33B5EAE971B5BB7B41079222 /* CoreRuntimePreflightTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreRuntimePreflightTests.swift; sourceTree = "<group>"; };
+		4294DDEF4FE7C6F6B5D92D11 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		47357CB3092C971F87BF7463 /* TunnelHelperClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TunnelHelperClientTests.swift; sourceTree = "<group>"; };
+		4A6EDC74EB42EB37E504DC43 /* ClashMaxHelper */ = {isa = PBXFileReference; includeInIndex = 0; path = ClashMaxHelper; sourceTree = BUILT_PRODUCTS_DIR; };
+		54DFA4FE364633A28C1ED410 /* DashboardComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardComponents.swift; sourceTree = "<group>"; };
+		5A31C178439DDE1DF4A02EDB /* ConfigNormalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigNormalizer.swift; sourceTree = "<group>"; };
+		608E910E0AB43ACEEB146E9D /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
+		6749AA04E814E55D0045AB86 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
+		6D6E012D514CB8CC83940BCB /* LaunchDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchDashboardView.swift; sourceTree = "<group>"; };
+		71A566E7FD4BA3634EEB1E5A /* CoreProcessControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreProcessControllerTests.swift; sourceTree = "<group>"; };
+		78EF9C7EFB9B051CE212A49B /* TunnelHelperValidationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TunnelHelperValidationTests.swift; sourceTree = "<group>"; };
+		7ED7AA0F377BF1BF367C2AC5 /* ClashMaxApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClashMaxApp.swift; sourceTree = "<group>"; };
+		8EE23FBD08FD740D82ABB9D6 /* MihomoAPIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MihomoAPIClient.swift; sourceTree = "<group>"; };
+		91B00EA27A396DAE5196B685 /* ClashMax.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ClashMax.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		93A93A1E61ED764914241456 /* SystemProxyController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemProxyController.swift; sourceTree = "<group>"; };
+		94791AE83711A844BABE209F /* CoreProcessController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreProcessController.swift; sourceTree = "<group>"; };
+		A3049F5E5929A9350DF21AB0 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		B38F8F5042460DDFC4142D6E /* ConfigNormalizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigNormalizerTests.swift; sourceTree = "<group>"; };
+		B4A2BEB4712640A482254EF3 /* LogsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogsView.swift; sourceTree = "<group>"; };
+		BBDCBD94E79A76CA63291C71 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		C6FB4802572E1217EBCEE7D7 /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
+		C8758370389738F3DA585BFF /* RuntimePaths.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimePaths.swift; sourceTree = "<group>"; };
+		C92D6C3C6B280CDDFC29470F /* ProfileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileStore.swift; sourceTree = "<group>"; };
+		CB63869696982BB828A172DE /* ProxiesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProxiesView.swift; sourceTree = "<group>"; };
+		CED4D40FA9519F3398CE1C96 /* AppSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSection.swift; sourceTree = "<group>"; };
+		D259E5B68D779085576EA21A /* ConnectionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionsView.swift; sourceTree = "<group>"; };
+		DD0BF20165DDA5CBA93D70BE /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
+		DF132FA46F43BF05B1C6DA56 /* ProfilesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfilesView.swift; sourceTree = "<group>"; };
+		E0BAFC3DD5F62E8FCA9AB88A /* RiveCoreVisualView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RiveCoreVisualView.swift; sourceTree = "<group>"; };
+		E7EE62DA4C3657653D44F922 /* HelperProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelperProtocol.swift; sourceTree = "<group>"; };
+		E935C963C504825DE6A4F8BF /* TestDoubles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestDoubles.swift; sourceTree = "<group>"; };
+		FD56AF5DDE11F6F2901B2E84 /* BoundedBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundedBuffer.swift; sourceTree = "<group>"; };
+		FE5860266615A0F87895E7A0 /* CoreModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreModels.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		38B9522BE5F20E556A47FA8F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BCCAD19625BA61056468BC2A /* Yams in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B0268F82A08F5814E33FD482 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6507627D59CE801909FBDF59 /* Yams in Frameworks */,
+				7833F2BEAAE74C3587715CB6 /* Pow in Frameworks */,
+				8CF16164DAAFD7ED31F7AA7C /* RiveRuntime in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		029F910ED10E7E709822AA72 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				CED4D40FA9519F3398CE1C96 /* AppSection.swift */,
+				D259E5B68D779085576EA21A /* ConnectionsView.swift */,
+				4294DDEF4FE7C6F6B5D92D11 /* ContentView.swift */,
+				B4A2BEB4712640A482254EF3 /* LogsView.swift */,
+				C6FB4802572E1217EBCEE7D7 /* MenuBarView.swift */,
+				DF132FA46F43BF05B1C6DA56 /* ProfilesView.swift */,
+				CB63869696982BB828A172DE /* ProxiesView.swift */,
+				0B5452AC779C350D39717FD0 /* RulesView.swift */,
+				071CA2908C95169B76DF5A8F /* SettingsView.swift */,
+				608E910E0AB43ACEEB146E9D /* SidebarView.swift */,
+				79349C3DD1B19593CEA14F64 /* Dashboard */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		0BF0F6D58692BCDB870D1643 /* ClashMaxHelper */ = {
+			isa = PBXGroup;
+			children = (
+				A3049F5E5929A9350DF21AB0 /* main.swift */,
+			);
+			path = ClashMaxHelper;
+			sourceTree = "<group>";
+		};
+		106BB2107ACE823AA0F85EE7 /* ClashMaxTests */ = {
+			isa = PBXGroup;
+			children = (
+				B38F8F5042460DDFC4142D6E /* ConfigNormalizerTests.swift */,
+				71A566E7FD4BA3634EEB1E5A /* CoreProcessControllerTests.swift */,
+				33B5EAE971B5BB7B41079222 /* CoreRuntimePreflightTests.swift */,
+				22AAFD1267E58A56D94592ED /* DashboardRuntimeStateTests.swift */,
+				1FB11E012D31B8CC33A511BD /* MihomoAPIClientTests.swift */,
+				102CFE841EECC431BA65A694 /* ProfileStoreTests.swift */,
+				0D9E260500E476D9D4BDAF98 /* SystemProxyControllerTests.swift */,
+				E935C963C504825DE6A4F8BF /* TestDoubles.swift */,
+				47357CB3092C971F87BF7463 /* TunnelHelperClientTests.swift */,
+				78EF9C7EFB9B051CE212A49B /* TunnelHelperValidationTests.swift */,
+			);
+			path = ClashMaxTests;
+			sourceTree = "<group>";
+		};
+		12F02476967127F83562EF0D = {
+			isa = PBXGroup;
+			children = (
+				B300DEB6237664F02AD89FEE /* ClashMax */,
+				0BF0F6D58692BCDB870D1643 /* ClashMaxHelper */,
+				106BB2107ACE823AA0F85EE7 /* ClashMaxTests */,
+				7A639C33F9E97ED14EE4149A /* Shared */,
+				D16467AF0FD0F7DAA29BC9E5 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		547F2A57F7DA612AB19D0A78 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				FE5860266615A0F87895E7A0 /* CoreModels.swift */,
+				2B6DA1173C99B9FB4A163A2E /* DashboardRuntimeState.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		66316FC5883A09813998CB2E /* Support */ = {
+			isa = PBXGroup;
+			children = (
+				2435F74711FCEE85D5058FC9 /* Formatters.swift */,
+				C8758370389738F3DA585BFF /* RuntimePaths.swift */,
+			);
+			path = Support;
+			sourceTree = "<group>";
+		};
+		7297F571A9E3D442BA5FA217 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				5A31C178439DDE1DF4A02EDB /* ConfigNormalizer.swift */,
+				94791AE83711A844BABE209F /* CoreProcessController.swift */,
+				DD0BF20165DDA5CBA93D70BE /* KeychainStore.swift */,
+				8EE23FBD08FD740D82ABB9D6 /* MihomoAPIClient.swift */,
+				93A93A1E61ED764914241456 /* SystemProxyController.swift */,
+				11BC6F6EFDDABB919C5C09FA /* TunnelHelperClient.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		79349C3DD1B19593CEA14F64 /* Dashboard */ = {
+			isa = PBXGroup;
+			children = (
+				54DFA4FE364633A28C1ED410 /* DashboardComponents.swift */,
+				6749AA04E814E55D0045AB86 /* DashboardView.swift */,
+				6D6E012D514CB8CC83940BCB /* LaunchDashboardView.swift */,
+				E0BAFC3DD5F62E8FCA9AB88A /* RiveCoreVisualView.swift */,
+				2ACF34B3417EEFB4C13CB013 /* RunningDashboardView.swift */,
+			);
+			path = Dashboard;
+			sourceTree = "<group>";
+		};
+		7A639C33F9E97ED14EE4149A /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				FD56AF5DDE11F6F2901B2E84 /* BoundedBuffer.swift */,
+				E7EE62DA4C3657653D44F922 /* HelperProtocol.swift */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
+		7B0E9FA841C52BCBB6055F41 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				7ED7AA0F377BF1BF367C2AC5 /* ClashMaxApp.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		B300DEB6237664F02AD89FEE /* ClashMax */ = {
+			isa = PBXGroup;
+			children = (
+				7B0E9FA841C52BCBB6055F41 /* App */,
+				547F2A57F7DA612AB19D0A78 /* Models */,
+				7297F571A9E3D442BA5FA217 /* Services */,
+				DA670D0E011EEF887F6033F1 /* Stores */,
+				66316FC5883A09813998CB2E /* Support */,
+				029F910ED10E7E709822AA72 /* Views */,
+			);
+			path = ClashMax;
+			sourceTree = "<group>";
+		};
+		D16467AF0FD0F7DAA29BC9E5 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				91B00EA27A396DAE5196B685 /* ClashMax.app */,
+				4A6EDC74EB42EB37E504DC43 /* ClashMaxHelper */,
+				1A8CDCCF51698651F78E0CD8 /* ClashMaxTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		DA670D0E011EEF887F6033F1 /* Stores */ = {
+			isa = PBXGroup;
+			children = (
+				BBDCBD94E79A76CA63291C71 /* AppModel.swift */,
+				C92D6C3C6B280CDDFC29470F /* ProfileStore.swift */,
+			);
+			path = Stores;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		2EAAFCFED0B5B54550ECAAE5 /* ClashMaxHelper */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 3C2108A976AAC8B822175D85 /* Build configuration list for PBXNativeTarget "ClashMaxHelper" */;
+			buildPhases = (
+				0DDAE11B9B271CCAE3C3734F /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ClashMaxHelper;
+			packageProductDependencies = (
+			);
+			productName = ClashMaxHelper;
+			productReference = 4A6EDC74EB42EB37E504DC43 /* ClashMaxHelper */;
+			productType = "com.apple.product-type.tool";
+		};
+		3DD43042EEDEE25EEA277860 /* ClashMaxTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B2A53EBE050A5F2E4D46AE94 /* Build configuration list for PBXNativeTarget "ClashMaxTests" */;
+			buildPhases = (
+				BB78F75C00D12FB3FD669C56 /* Sources */,
+				38B9522BE5F20E556A47FA8F /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				D5584C95F569E8B49F4D82CA /* PBXTargetDependency */,
+			);
+			name = ClashMaxTests;
+			packageProductDependencies = (
+				88FF56EB7BDC95E76EC245CF /* Yams */,
+			);
+			productName = ClashMaxTests;
+			productReference = 1A8CDCCF51698651F78E0CD8 /* ClashMaxTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		A6092EE1A3A6B688DD506396 /* ClashMax */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 98F94F27869B303584CB7EBE /* Build configuration list for PBXNativeTarget "ClashMax" */;
+			buildPhases = (
+				FA5D323DBCB23A8FC4E6E2AE /* Sources */,
+				FD4C75AEBC596A85273D77F7 /* Embed Helper */,
+				B0268F82A08F5814E33FD482 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				0E50E39492566CCA50AA7382 /* PBXTargetDependency */,
+			);
+			name = ClashMax;
+			packageProductDependencies = (
+				9FF6185A9B5F20B8664BA152 /* Yams */,
+				AC88EA016AB92CD58BDFAEC1 /* Pow */,
+				34214080213A992B3CAF212F /* RiveRuntime */,
+			);
+			productName = ClashMax;
+			productReference = 91B00EA27A396DAE5196B685 /* ClashMax.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		7FCA799C1D05E8EDD5EFB2F3 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					2EAAFCFED0B5B54550ECAAE5 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+					3DD43042EEDEE25EEA277860 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+					A6092EE1A3A6B688DD506396 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = C47A47060F8FF94B6ABB0DAC /* Build configuration list for PBXProject "ClashMax" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 12F02476967127F83562EF0D;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				917BF213BA1E34F0DF8815D1 /* XCRemoteSwiftPackageReference "Pow" */,
+				F7C60D8FE0E1C907DCE8487E /* XCRemoteSwiftPackageReference "rive-ios" */,
+				601C2B5DE33ECB99B22399CE /* XCRemoteSwiftPackageReference "Yams" */,
+			);
+			preferredProjectObjectVersion = 77;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A6092EE1A3A6B688DD506396 /* ClashMax */,
+				2EAAFCFED0B5B54550ECAAE5 /* ClashMaxHelper */,
+				3DD43042EEDEE25EEA277860 /* ClashMaxTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		FD4C75AEBC596A85273D77F7 /* Embed Helper */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Embed Helper";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Library/LaunchServices/ClashMaxHelper",
+				"$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Library/LaunchDaemons/io.github.clashmax.ClashMax.Helper.plist",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Core/mihomo-manifest.json",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -euo pipefail\nlaunch_services=\"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Library/LaunchServices\"\nlaunch_daemons=\"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Library/LaunchDaemons\"\ncore_resources=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Core\"\nmkdir -p \"$launch_services\" \"$launch_daemons\" \"$core_resources\"\ncp \"$BUILT_PRODUCTS_DIR/ClashMaxHelper\" \"$launch_services/ClashMaxHelper\"\ncp \"$SRCROOT/Config/io.github.clashmax.ClashMax.Helper.plist\" \"$launch_daemons/io.github.clashmax.ClashMax.Helper.plist\"\ncp -R \"$SRCROOT/Resources/Core/.\" \"$core_resources/\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		0DDAE11B9B271CCAE3C3734F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C9C79AC20DC2CAE61FFB29DA /* BoundedBuffer.swift in Sources */,
+				DBEC598D4B18752FCB871795 /* HelperProtocol.swift in Sources */,
+				B472275C65969F85A10A1180 /* main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BB78F75C00D12FB3FD669C56 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9F9BD79C3A92F49607A26D64 /* ConfigNormalizerTests.swift in Sources */,
+				B09DA1E8D5571B3D00E74431 /* CoreProcessControllerTests.swift in Sources */,
+				CD94E81AD8133D6E9396B91E /* CoreRuntimePreflightTests.swift in Sources */,
+				C17D266234459D3AD8FFEED7 /* DashboardRuntimeStateTests.swift in Sources */,
+				C5DA1F51557D61C4E1A7E6A1 /* MihomoAPIClientTests.swift in Sources */,
+				C91370422264FC1660896543 /* ProfileStoreTests.swift in Sources */,
+				C0456C1F18ADEE6DC65F28D3 /* SystemProxyControllerTests.swift in Sources */,
+				0CF9FEE27C87AE34882DC521 /* TestDoubles.swift in Sources */,
+				D625A914F25B58C627A234A4 /* TunnelHelperClientTests.swift in Sources */,
+				817C82AAB0C2BB01D0DDFA96 /* TunnelHelperValidationTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FA5D323DBCB23A8FC4E6E2AE /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				765BB58702FA82EAA03CDA95 /* AppModel.swift in Sources */,
+				C123B8F15E793C2B09520600 /* AppSection.swift in Sources */,
+				EFA791062B0C236B26E0F5B6 /* BoundedBuffer.swift in Sources */,
+				9435537B65D100571BA1DB93 /* ClashMaxApp.swift in Sources */,
+				C054AF00023F8C2AAFC76D11 /* ConfigNormalizer.swift in Sources */,
+				459B18A0DA1B260D3CAFA0C1 /* ConnectionsView.swift in Sources */,
+				2D0EEFA4792D38AC4BAF5290 /* ContentView.swift in Sources */,
+				F1E72D85621085912127922D /* CoreModels.swift in Sources */,
+				2E63AA5AE5083BD53BDCEA25 /* CoreProcessController.swift in Sources */,
+				4C499AC953D294AB0B1ED625 /* DashboardComponents.swift in Sources */,
+				18EC2C605AA61371B60EF1F4 /* DashboardRuntimeState.swift in Sources */,
+				3F626C87D97B6B83BBFB050F /* DashboardView.swift in Sources */,
+				8F30DCF7999D5EC70C40E8A6 /* Formatters.swift in Sources */,
+				82BED5A9B8D2DAD2714D431C /* HelperProtocol.swift in Sources */,
+				582338603DF2C43438BF0518 /* KeychainStore.swift in Sources */,
+				A663D8BE71B424A043DDF051 /* LaunchDashboardView.swift in Sources */,
+				B3C29A1240D3B5EBA9FE5A03 /* LogsView.swift in Sources */,
+				BA22256993B295697F6E4694 /* MenuBarView.swift in Sources */,
+				0786A610F48409C6706A09F9 /* MihomoAPIClient.swift in Sources */,
+				7BCB87E35CCF1CD745D33AFA /* ProfileStore.swift in Sources */,
+				E5D87BAE2859A358110D7152 /* ProfilesView.swift in Sources */,
+				534998D677D07CA075B79150 /* ProxiesView.swift in Sources */,
+				BEC85118460E6D6C220CE812 /* RiveCoreVisualView.swift in Sources */,
+				150793B689941D7F36C821B8 /* RulesView.swift in Sources */,
+				993E27377946D94ECEC6CA47 /* RunningDashboardView.swift in Sources */,
+				F232BA21F47604A638CC4458 /* RuntimePaths.swift in Sources */,
+				DFA6A6509657F3D972E73F03 /* SettingsView.swift in Sources */,
+				0726E0A274C59104498300B2 /* SidebarView.swift in Sources */,
+				D04B95E5009D49D3BA4FCFCA /* SystemProxyController.swift in Sources */,
+				B7F87955C7C14EA8E12691C4 /* TunnelHelperClient.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		0E50E39492566CCA50AA7382 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 2EAAFCFED0B5B54550ECAAE5 /* ClashMaxHelper */;
+			targetProxy = EF3E1E75316BDC1C416E0652 /* PBXContainerItemProxy */;
+		};
+		D5584C95F569E8B49F4D82CA /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A6092EE1A3A6B688DD506396 /* ClashMax */;
+			targetProxy = 2F402E190520868986E5A4EF /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		15EBDFFD53C524155268BFA2 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = "$(ARCHS_STANDARD)";
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = NO;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		38F8CE8705CF8726C5B4A216 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = "$(ARCHS_STANDARD)";
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = NO;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		4145A4FE7EAE87ABF97A5CC5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Config/ClashMaxHelper.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Config/ClashMaxHelper-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACH_O_TYPE = mh_execute;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.clashmax.ClashMax.Helper;
+				PRODUCT_NAME = ClashMaxHelper;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		4D9957CF24BC1CD78C907414 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.clashmax.ClashMaxTests;
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ClashMax.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ClashMax";
+			};
+			name = Debug;
+		};
+		B264B90C0A7209D1FAB7A146 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Config/ClashMax.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = ClashMax;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "GPL-3.0";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.clashmax.ClashMax;
+				PRODUCT_NAME = ClashMax;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		C9C831AB58284C3ABB9EE514 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Config/ClashMaxHelper.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Config/ClashMaxHelper-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACH_O_TYPE = mh_execute;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.clashmax.ClashMax.Helper;
+				PRODUCT_NAME = ClashMaxHelper;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		E32FF259D65487F6D48DBDB4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Config/ClashMax.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = ClashMax;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "GPL-3.0";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.clashmax.ClashMax;
+				PRODUCT_NAME = ClashMax;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		F919BB8B7F77AA16C45193F6 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.clashmax.ClashMaxTests;
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ClashMax.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ClashMax";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		3C2108A976AAC8B822175D85 /* Build configuration list for PBXNativeTarget "ClashMaxHelper" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C9C831AB58284C3ABB9EE514 /* Debug */,
+				4145A4FE7EAE87ABF97A5CC5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		98F94F27869B303584CB7EBE /* Build configuration list for PBXNativeTarget "ClashMax" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B264B90C0A7209D1FAB7A146 /* Debug */,
+				E32FF259D65487F6D48DBDB4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		B2A53EBE050A5F2E4D46AE94 /* Build configuration list for PBXNativeTarget "ClashMaxTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4D9957CF24BC1CD78C907414 /* Debug */,
+				F919BB8B7F77AA16C45193F6 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		C47A47060F8FF94B6ABB0DAC /* Build configuration list for PBXProject "ClashMax" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				38F8CE8705CF8726C5B4A216 /* Debug */,
+				15EBDFFD53C524155268BFA2 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		601C2B5DE33ECB99B22399CE /* XCRemoteSwiftPackageReference "Yams" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/jpsim/Yams.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 6.2.1;
+			};
+		};
+		917BF213BA1E34F0DF8815D1 /* XCRemoteSwiftPackageReference "Pow" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/EmergeTools/Pow.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.0.0;
+			};
+		};
+		F7C60D8FE0E1C907DCE8487E /* XCRemoteSwiftPackageReference "rive-ios" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/rive-app/rive-ios.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 6.19.2;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		34214080213A992B3CAF212F /* RiveRuntime */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F7C60D8FE0E1C907DCE8487E /* XCRemoteSwiftPackageReference "rive-ios" */;
+			productName = RiveRuntime;
+		};
+		88FF56EB7BDC95E76EC245CF /* Yams */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 601C2B5DE33ECB99B22399CE /* XCRemoteSwiftPackageReference "Yams" */;
+			productName = Yams;
+		};
+		9FF6185A9B5F20B8664BA152 /* Yams */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 601C2B5DE33ECB99B22399CE /* XCRemoteSwiftPackageReference "Yams" */;
+			productName = Yams;
+		};
+		AC88EA016AB92CD58BDFAEC1 /* Pow */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 917BF213BA1E34F0DF8815D1 /* XCRemoteSwiftPackageReference "Pow" */;
+			productName = Pow;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 7FCA799C1D05E8EDD5EFB2F3 /* Project object */;
+}

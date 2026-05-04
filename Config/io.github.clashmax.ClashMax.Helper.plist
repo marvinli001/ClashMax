@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>io.github.clashmax.ClashMax.Helper</string>
+  <key>MachServices</key>
+  <dict>
+    <key>io.github.clashmax.ClashMax.Helper</key>
+    <true/>
+  </dict>
+  <key>BundleProgram</key>
+  <string>Contents/Library/LaunchServices/ClashMaxHelper</string>
+  <key>RunAtLoad</key>
+  <false/>
+</dict>
+</plist>
+

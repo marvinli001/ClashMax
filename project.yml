@@ -1,0 +1,100 @@
+name: ClashMax
+options:
+  bundleIdPrefix: io.github.clashmax
+  deploymentTarget:
+    macOS: "26.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_HARDENED_RUNTIME: YES
+    ARCHS: "$(ARCHS_STANDARD)"
+    ONLY_ACTIVE_ARCH: NO
+packages:
+  Yams:
+    url: https://github.com/jpsim/Yams.git
+    from: "6.2.1"
+  Pow:
+    url: https://github.com/EmergeTools/Pow.git
+    from: "1.0.0"
+  RiveRuntime:
+    url: https://github.com/rive-app/rive-ios.git
+    from: "6.19.2"
+targets:
+  ClashMax:
+    type: application
+    platform: macOS
+    sources:
+      - path: Shared
+      - path: ClashMax
+    resources:
+      - path: Resources
+    dependencies:
+      - package: Yams
+      - package: Pow
+      - package: RiveRuntime
+        product: RiveRuntime
+      - target: ClashMaxHelper
+        embed: false
+        link: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.clashmax.ClashMax
+        PRODUCT_NAME: ClashMax
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: ClashMax
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
+        INFOPLIST_KEY_NSPrincipalClass: NSApplication
+        INFOPLIST_KEY_NSHumanReadableCopyright: GPL-3.0
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    entitlements:
+      path: Config/ClashMax.entitlements
+    postCompileScripts:
+      - name: Embed Helper
+        outputFiles:
+          - "$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Library/LaunchServices/ClashMaxHelper"
+          - "$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Library/LaunchDaemons/io.github.clashmax.ClashMax.Helper.plist"
+          - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Core/mihomo-manifest.json"
+          - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Animations/410-767-power-button.riv"
+        script: |
+          set -euo pipefail
+          launch_services="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Library/LaunchServices"
+          launch_daemons="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Library/LaunchDaemons"
+          core_resources="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Core"
+          animation_resources="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Animations"
+          mkdir -p "$launch_services" "$launch_daemons" "$core_resources" "$animation_resources"
+          cp "$BUILT_PRODUCTS_DIR/ClashMaxHelper" "$launch_services/ClashMaxHelper"
+          cp "$SRCROOT/Config/io.github.clashmax.ClashMax.Helper.plist" "$launch_daemons/io.github.clashmax.ClashMax.Helper.plist"
+          cp -R "$SRCROOT/Resources/Core/." "$core_resources/"
+          cp "$SRCROOT/Resources/Animations/410-767-power-button.riv" "$animation_resources/410-767-power-button.riv"
+  ClashMaxHelper:
+    type: tool
+    platform: macOS
+    sources:
+      - path: Shared
+      - path: ClashMaxHelper
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.clashmax.ClashMax.Helper
+        PRODUCT_NAME: ClashMaxHelper
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_FILE: Config/ClashMaxHelper-Info.plist
+        MACH_O_TYPE: mh_execute
+    entitlements:
+      path: Config/ClashMaxHelper.entitlements
+  ClashMaxTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: ClashMaxTests
+    dependencies:
+      - target: ClashMax
+      - package: Yams
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.clashmax.ClashMaxTests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/ClashMax.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ClashMax"
+        BUNDLE_LOADER: "$(TEST_HOST)"

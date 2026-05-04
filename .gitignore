@@ -1,0 +1,25 @@
+.DS_Store
+
+# Local Codex/agent context. These files are for this workstation only.
+.codex/
+AGENTS.md
+
+.build/
+.swiftpm/
+DerivedData/
+build/
+dist/
+*.xcresult
+*.xcuserdata/
+*.xcuserstate
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+
+# Local Mihomo binaries used for manual development and release packaging.
+Resources/Core/mihomo
+Resources/Core/mihomo-darwin-*
+Resources/Core/*.gz
+!Resources/Core/README.md
+!Resources/Core/mihomo-manifest.json
+ClashMax macOS MVP Plan.md
+THIRD_PARTY_NOTICES.md

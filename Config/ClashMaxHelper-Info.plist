@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>io.github.clashmax.ClashMax.Helper</string>
+  <key>CFBundleName</key>
+  <string>ClashMaxHelper</string>
+  <key>CFBundleDisplayName</key>
+  <string>ClashMax Helper</string>
+  <key>SMIsPrivilegedDaemon</key>
+  <true/>
+  <key>SMAuthorizedClients</key>
+  <array>
+    <string>identifier "io.github.clashmax.ClashMax" and anchor apple generic</string>
+  </array>
+</dict>
+</plist>
+
