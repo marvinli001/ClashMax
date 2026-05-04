@@ -27,12 +27,12 @@ final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Senda
   private var logs = BoundedBuffer<String>(limit: 200)
   private let lock = NSLock()
 
-  func status(withReply reply: @escaping (NSDictionary) -> Void) {
-    reply([
-      HelperResponseKey.ok: true,
-      HelperResponseKey.running: process?.isRunning ?? false,
-      HelperResponseKey.pid: process?.processIdentifier ?? 0
-    ])
+  func status(withReply reply: @escaping (NSString) -> Void) {
+    reply(HelperXPCPayload.response(
+      ok: true,
+      running: process?.isRunning ?? false,
+      pid: Int(process?.processIdentifier ?? 0)
+    ))
   }
 
   func startTunnel(
@@ -40,27 +40,24 @@ final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Senda
     configPath: NSString,
     workDirectoryPath: NSString,
     secret: NSString,
-    withReply reply: @escaping (NSDictionary) -> Void
+    withReply reply: @escaping (NSString) -> Void
   ) {
     do {
       try start(corePath: corePath as String, configPath: configPath as String, workDirectoryPath: workDirectoryPath as String, secret: secret as String)
-      reply([
-        HelperResponseKey.ok: true,
-        HelperResponseKey.running: true,
-        HelperResponseKey.pid: process?.processIdentifier ?? 0
-      ])
+      reply(HelperXPCPayload.response(
+        ok: true,
+        running: true,
+        pid: Int(process?.processIdentifier ?? 0)
+      ))
     } catch {
-      reply([
-        HelperResponseKey.ok: false,
-        HelperResponseKey.message: String(describing: error)
-      ])
+      reply(HelperXPCPayload.response(ok: false, message: String(describing: error)))
     }
   }
 
-  func stopTunnel(withReply reply: @escaping (NSDictionary) -> Void) {
+  func stopTunnel(withReply reply: @escaping (NSString) -> Void) {
     process?.terminate()
     process = nil
-    reply([HelperResponseKey.ok: true, HelperResponseKey.running: false])
+    reply(HelperXPCPayload.response(ok: true, running: false))
   }
 
   func restartTunnel(
@@ -68,18 +65,18 @@ final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Senda
     configPath: NSString,
     workDirectoryPath: NSString,
     secret: NSString,
-    withReply reply: @escaping (NSDictionary) -> Void
+    withReply reply: @escaping (NSString) -> Void
   ) {
     process?.terminate()
     process = nil
     startTunnel(corePath: corePath, configPath: configPath, workDirectoryPath: workDirectoryPath, secret: secret, withReply: reply)
   }
 
-  func recentLogs(withReply reply: @escaping (NSArray) -> Void) {
+  func recentLogs(withReply reply: @escaping (NSString) -> Void) {
     lock.lock()
     let snapshot = logs.elements
     lock.unlock()
-    reply(snapshot as NSArray)
+    reply(HelperXPCPayload.logs(snapshot))
   }
 
   private func start(corePath: String, configPath: String, workDirectoryPath: String, secret: String) throws {

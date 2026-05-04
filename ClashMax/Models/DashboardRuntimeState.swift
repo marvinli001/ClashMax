@@ -73,6 +73,17 @@ enum DashboardRuntimeState: Equatable {
     }
   }
 
+  var launchTitle: String {
+    switch self {
+    case .blocked:
+      return "ClashMax Needs Setup"
+    case .crashed:
+      return "Core Needs Attention"
+    default:
+      return "Ready"
+    }
+  }
+
   var detailMessage: String? {
     switch self {
     case let .blocked(reason):

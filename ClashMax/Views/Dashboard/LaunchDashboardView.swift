@@ -80,14 +80,7 @@ struct LaunchDashboardView: View {
   }
 
   private var launchTitle: String {
-    switch state {
-    case .blocked:
-      return "ClashMax Needs Setup"
-    case .crashed:
-      return "Core Needs Attention"
-    default:
-      return "ClashMax Ready"
-    }
+    state.launchTitle
   }
 
   private var stateSymbol: String {
@@ -243,7 +236,7 @@ private struct LaunchControlDeck: View {
         else {
           return
         }
-        try? appModel.profileStore.select(profile)
+        appModel.selectProfile(profile)
       }
     )
   }

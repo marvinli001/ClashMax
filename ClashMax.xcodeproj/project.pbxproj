@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 77;
+	objectVersion = 63;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -49,6 +49,7 @@
 		D04B95E5009D49D3BA4FCFCA /* SystemProxyController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93A93A1E61ED764914241456 /* SystemProxyController.swift */; };
 		D625A914F25B58C627A234A4 /* TunnelHelperClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47357CB3092C971F87BF7463 /* TunnelHelperClientTests.swift */; };
 		D66931B291EF6FBA51539318 /* AdaptivePage.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEF4310C18F9F06624F1ACE5 /* AdaptivePage.swift */; };
+		D6AF44A1E0B844248F4A612C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B8D3CB458E624B188F522B31 /* Assets.xcassets */; };
 		DBEC598D4B18752FCB871795 /* HelperProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7EE62DA4C3657653D44F922 /* HelperProtocol.swift */; };
 		DFA6A6509657F3D972E73F03 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 071CA2908C95169B76DF5A8F /* SettingsView.swift */; };
 		E5D87BAE2859A358110D7152 /* ProfilesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF132FA46F43BF05B1C6DA56 /* ProfilesView.swift */; };
@@ -89,7 +90,7 @@
 		33B5EAE971B5BB7B41079222 /* CoreRuntimePreflightTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreRuntimePreflightTests.swift; sourceTree = "<group>"; };
 		4294DDEF4FE7C6F6B5D92D11 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		47357CB3092C971F87BF7463 /* TunnelHelperClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TunnelHelperClientTests.swift; sourceTree = "<group>"; };
-		4A6EDC74EB42EB37E504DC43 /* ClashMaxHelper */ = {isa = PBXFileReference; includeInIndex = 0; path = ClashMaxHelper; sourceTree = BUILT_PRODUCTS_DIR; };
+		4A6EDC74EB42EB37E504DC43 /* ClashMaxHelper */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = ClashMaxHelper; sourceTree = BUILT_PRODUCTS_DIR; };
 		54DFA4FE364633A28C1ED410 /* DashboardComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardComponents.swift; sourceTree = "<group>"; };
 		5A31C178439DDE1DF4A02EDB /* ConfigNormalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigNormalizer.swift; sourceTree = "<group>"; };
 		608E910E0AB43ACEEB146E9D /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
@@ -105,6 +106,7 @@
 		A3049F5E5929A9350DF21AB0 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		B38F8F5042460DDFC4142D6E /* ConfigNormalizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigNormalizerTests.swift; sourceTree = "<group>"; };
 		B4A2BEB4712640A482254EF3 /* LogsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogsView.swift; sourceTree = "<group>"; };
+		B8D3CB458E624B188F522B31 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		BBDCBD94E79A76CA63291C71 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		C6FB4802572E1217EBCEE7D7 /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
 		C8758370389738F3DA585BFF /* RuntimePaths.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimePaths.swift; sourceTree = "<group>"; };
@@ -263,6 +265,7 @@
 			isa = PBXGroup;
 			children = (
 				7B0E9FA841C52BCBB6055F41 /* App */,
+				B8D3CB458E624B188F522B31 /* Assets.xcassets */,
 				547F2A57F7DA612AB19D0A78 /* Models */,
 				7297F571A9E3D442BA5FA217 /* Services */,
 				DA670D0E011EEF887F6033F1 /* Stores */,
@@ -336,6 +339,7 @@
 			buildConfigurationList = 98F94F27869B303584CB7EBE /* Build configuration list for PBXNativeTarget "ClashMax" */;
 			buildPhases = (
 				FA5D323DBCB23A8FC4E6E2AE /* Sources */,
+				7FA85B9E9D144F7EA4DE2B60 /* Resources */,
 				FD4C75AEBC596A85273D77F7 /* Embed Helper */,
 				B0268F82A08F5814E33FD482 /* Frameworks */,
 			);
@@ -361,7 +365,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 1430;
+				LastUpgradeCheck = 2640;
 				TargetAttributes = {
 					2EAAFCFED0B5B54550ECAAE5 = {
 						DevelopmentTeam = "";
@@ -392,7 +396,6 @@
 				F7C60D8FE0E1C907DCE8487E /* XCRemoteSwiftPackageReference "rive-ios" */,
 				601C2B5DE33ECB99B22399CE /* XCRemoteSwiftPackageReference "Yams" */,
 			);
-			preferredProjectObjectVersion = 77;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -403,6 +406,17 @@
 		};
 /* End PBXProject section */
 
+/* Begin PBXResourcesBuildPhase section */
+		7FA85B9E9D144F7EA4DE2B60 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D6AF44A1E0B844248F4A612C /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
 /* Begin PBXShellScriptBuildPhase section */
 		FD4C75AEBC596A85273D77F7 /* Embed Helper */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -412,6 +426,13 @@
 			inputFileListPaths = (
 			);
 			inputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/ClashMaxHelper",
+				"$(SRCROOT)/Config/io.github.clashmax.ClashMax.Helper.plist",
+				"$(SRCROOT)/Resources/Core/README.md",
+				"$(SRCROOT)/Resources/Core/mihomo-darwin-amd64",
+				"$(SRCROOT)/Resources/Core/mihomo-darwin-arm64",
+				"$(SRCROOT)/Resources/Core/mihomo-manifest.json",
+				"$(SRCROOT)/Resources/Animations/410-767-power-button.riv",
 			);
 			name = "Embed Helper";
 			outputFileListPaths = (
@@ -419,6 +440,10 @@
 			outputPaths = (
 				"$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Library/LaunchServices/ClashMaxHelper",
 				"$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Library/LaunchDaemons/io.github.clashmax.ClashMax.Helper.plist",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Core",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Core/README.md",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Core/mihomo-darwin-amd64",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Core/mihomo-darwin-arm64",
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Core/mihomo-manifest.json",
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Animations/410-767-power-button.riv",
 			);
@@ -546,11 +571,13 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -565,6 +592,7 @@
 				ONLY_ACTIVE_ARCH = NO;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 6.0;
@@ -607,11 +635,13 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -629,9 +659,10 @@
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
-				ONLY_ACTIVE_ARCH = NO;
+				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 6.0;
@@ -643,6 +674,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Config/ClashMaxHelper.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEAD_CODE_STRIPPING = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Config/ClashMaxHelper-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -661,6 +693,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				COMBINE_HIDPI_IMAGES = YES;
+				DEAD_CODE_STRIPPING = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -679,6 +712,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Config/ClashMax.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEAD_CODE_STRIPPING = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = ClashMax;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
@@ -699,6 +733,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Config/ClashMaxHelper.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEAD_CODE_STRIPPING = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Config/ClashMaxHelper-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -718,6 +753,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Config/ClashMax.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEAD_CODE_STRIPPING = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = ClashMax;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
@@ -738,6 +774,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				COMBINE_HIDPI_IMAGES = YES;
+				DEAD_CODE_STRIPPING = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

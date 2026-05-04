@@ -36,6 +36,15 @@ enum ProfileSource: Codable, Equatable {
   }
 }
 
+extension ProfileSource {
+  var displayName: String {
+    switch self {
+    case .localFile: "Local YAML"
+    case .subscription: "Subscription"
+    }
+  }
+}
+
 struct Profile: Identifiable, Codable, Equatable {
   var id: UUID
   var name: String
@@ -58,6 +67,13 @@ struct Profile: Identifiable, Codable, Equatable {
     self.originalConfigPath = originalConfigPath
     self.createdAt = createdAt
     self.updatedAt = updatedAt
+  }
+}
+
+extension Profile {
+  var isSubscription: Bool {
+    if case .subscription = source { return true }
+    return false
   }
 }
 
@@ -197,4 +213,3 @@ struct LogEntry: Identifiable, Codable, Equatable {
     self.message = message
   }
 }
-

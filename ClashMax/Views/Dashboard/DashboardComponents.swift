@@ -6,6 +6,11 @@ enum DashboardLayoutMetrics {
   static let launchProfileControlWidth: CGFloat = 178
   static let launchMixedPortControlWidth: CGFloat = 104
   static let launchStartButtonWidth: CGFloat = 156
+  static let dashboardGridSpacing: CGFloat = 12
+  static let metricTileMinimumColumnWidth: CGFloat = 118
+  static let metricTileSingleRowBreakpoint: CGFloat = 680
+  static let metricTileTwoColumnBreakpoint: CGFloat = 420
+  static let runningPairColumnsBreakpoint: CGFloat = 700
 
   static func pagePadding(for width: CGFloat) -> CGFloat {
     width < 760 ? 14 : 18
@@ -38,7 +43,7 @@ struct RunModePicker: View {
     }
     .labelsHidden()
     .pickerStyle(.segmented)
-    .frame(width: DashboardLayoutMetrics.runModePickerWidth, alignment: .leading)
+    .fixedSize(horizontal: true, vertical: false)
   }
 }
 
@@ -84,12 +89,12 @@ struct DashboardMetricTile: View {
   let tint: Color
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 14) {
+    VStack(alignment: .leading, spacing: 10) {
       HStack {
         Image(systemName: symbolName)
-          .font(.system(size: 16, weight: .semibold))
+          .font(.system(size: 15, weight: .semibold))
           .foregroundStyle(tint)
-          .frame(width: 30, height: 30)
+          .frame(width: 28, height: 28)
           .background(tint.opacity(0.13), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
 
         Spacer()
@@ -115,8 +120,8 @@ struct DashboardMetricTile: View {
         }
       }
     }
-    .padding(14)
-    .frame(minHeight: 118, alignment: .topLeading)
+    .padding(12)
+    .frame(maxWidth: .infinity, minHeight: 104, alignment: .topLeading)
     .dashboardCard()
   }
 }

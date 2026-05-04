@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 @MainActor
@@ -23,22 +24,30 @@ protocol CoreReadinessProbing {
 }
 
 @MainActor
+protocol CoreProcessReaping {
+  func reapOrphans(coreURL: URL, configURL: URL, workDirectory: URL) async
+}
+
+@MainActor
 final class CoreProcessController: ObservableObject {
   @Published private(set) var status: CoreStatus = .stopped
   private let launcher: CoreProcessLaunching
   private let validator: RuntimeConfigValidating
   private let readinessProbe: CoreReadinessProbing
+  private let reaper: CoreProcessReaping
   private var runningProcess: RunningCoreProcess?
   private var stopWasRequested = false
 
   init(
     launcher: CoreProcessLaunching = FoundationProcessLauncher(),
     validator: RuntimeConfigValidating = MihomoRuntimeConfigValidator(),
-    readinessProbe: CoreReadinessProbing = MihomoCoreReadinessProbe()
+    readinessProbe: CoreReadinessProbing = MihomoCoreReadinessProbe(),
+    reaper: CoreProcessReaping = MihomoOrphanProcessReaper()
   ) {
     self.launcher = launcher
     self.validator = validator
     self.readinessProbe = readinessProbe
+    self.reaper = reaper
   }
 
   func startUserMode(coreURL: URL, configURL: URL, workDirectory: URL, api: CoreAPIEndpoint) async throws {
@@ -53,6 +62,8 @@ final class CoreProcessController: ObservableObject {
       status = .crashed(message: message)
       throw error
     }
+
+    await reaper.reapOrphans(coreURL: coreURL, configURL: configURL, workDirectory: workDirectory)
 
     let process: RunningCoreProcess
     do {
@@ -72,8 +83,10 @@ final class CoreProcessController: ObservableObject {
       throw error
     }
 
+    let launchedProcessID = process.processIdentifier
     process.onTermination = { [weak self] exitCode in
       guard let self else { return }
+      guard self.runningProcess?.processIdentifier == launchedProcessID else { return }
       if self.stopWasRequested || exitCode == 0 {
         self.status = .stopped
       } else {
@@ -117,7 +130,96 @@ final class CoreProcessController: ObservableObject {
         return appError.description
       }
     }
-    return error.localizedDescription
+    return UserFacingError.message(for: error)
+  }
+}
+
+struct MihomoOrphanProcessReaper: CoreProcessReaping {
+  func reapOrphans(coreURL: URL, configURL: URL, workDirectory: URL) async {
+    await Task.detached(priority: .utility) {
+      let processRows = Self.processRows()
+      let currentPID = getpid()
+      let managedPIDs = processRows.compactMap { row -> Int32? in
+        guard row.pid != currentPID,
+              Self.isManagedCoreCommand(
+                row.command,
+                coreURL: coreURL,
+                configURL: configURL,
+                workDirectory: workDirectory
+              )
+        else {
+          return nil
+        }
+        return row.pid
+      }
+
+      guard !managedPIDs.isEmpty else { return }
+
+      managedPIDs.forEach { kill($0, SIGTERM) }
+      let deadline = Date().addingTimeInterval(1)
+      while Date() < deadline && managedPIDs.contains(where: Self.isProcessAlive) {
+        usleep(50_000)
+      }
+      managedPIDs.filter(Self.isProcessAlive).forEach { kill($0, SIGKILL) }
+    }.value
+  }
+
+  nonisolated static func isManagedCoreCommand(_ command: String, coreURL: URL, configURL: URL, workDirectory: URL) -> Bool {
+    let lowercasedCommand = command.lowercased()
+    guard lowercasedCommand.contains("mihomo") else {
+      return false
+    }
+
+    if command.contains(configURL.path) {
+      return true
+    }
+
+    let pathComponents = workDirectory.pathComponents
+    let isClashMaxRuntime = pathComponents.suffix(2) == ["ClashMax", "Runtime"]
+    if isClashMaxRuntime && command.contains(workDirectory.path) {
+      return true
+    }
+
+    return command.contains(coreURL.path) && command.contains(workDirectory.path)
+  }
+
+  private nonisolated static func processRows() -> [(pid: Int32, command: String)] {
+    let process = Process()
+    let pipe = Pipe()
+    process.executableURL = URL(fileURLWithPath: "/bin/ps")
+    process.arguments = ["-axo", "pid=,command="]
+    process.standardOutput = pipe
+    process.standardError = Pipe()
+
+    do {
+      try process.run()
+      process.waitUntilExit()
+    } catch {
+      return []
+    }
+
+    guard process.terminationStatus == 0 else {
+      return []
+    }
+
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    let output = String(data: data, encoding: .utf8) ?? ""
+    return output.split(separator: "\n").compactMap { line in
+      let trimmed = line.trimmingCharacters(in: .whitespaces)
+      guard let separator = trimmed.firstIndex(where: { $0.isWhitespace }) else {
+        return nil
+      }
+      let pidText = trimmed[..<separator]
+      let command = trimmed[separator...].trimmingCharacters(in: .whitespaces)
+      guard let pid = Int32(pidText), !command.isEmpty else {
+        return nil
+      }
+      return (pid, command)
+    }
+  }
+
+  private nonisolated static func isProcessAlive(_ pid: Int32) -> Bool {
+    kill(pid, 0) == 0 || errno == EPERM
   }
 }
 
@@ -170,7 +272,7 @@ struct MihomoCoreReadinessProbe: CoreReadinessProbing {
       }
     }
 
-    throw AppError.coreNotReady(lastError.map { String(describing: $0) } ?? "timed out")
+    throw AppError.coreNotReady(lastError.map { UserFacingError.message(for: $0) } ?? "Timed out waiting for controller response.")
   }
 }
 

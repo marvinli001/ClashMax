@@ -7,7 +7,8 @@ final class CoreRuntimePreflightTests: XCTestCase {
   func testGeneratedRuntimeConfigIsValidatedBeforeLaunch() async throws {
     let launcher = FakeProcessLauncher()
     let validator = RecordingRuntimeConfigValidator(result: .failure(AppError.configValidationFailed("bad config")))
-    let controller = CoreProcessController(launcher: launcher, validator: validator)
+    let reaper = RecordingCoreProcessReaper()
+    let controller = CoreProcessController(launcher: launcher, validator: validator, reaper: reaper)
 
     await XCTAssertThrowsErrorAsync {
       try await controller.startUserMode(
@@ -19,6 +20,7 @@ final class CoreRuntimePreflightTests: XCTestCase {
     }
 
     XCTAssertTrue(validator.didValidate)
+    XCTAssertFalse(reaper.didReap)
     XCTAssertTrue(launcher.lastArguments.isEmpty)
     XCTAssertEqual(controller.status, .crashed(message: "bad config"))
   }
@@ -26,10 +28,12 @@ final class CoreRuntimePreflightTests: XCTestCase {
   func testStartWaitsForControllerReadinessBeforeRunning() async throws {
     let launcher = FakeProcessLauncher()
     let readiness = RecordingCoreReadinessProbe()
+    let reaper = RecordingCoreProcessReaper()
     let controller = CoreProcessController(
       launcher: launcher,
       validator: RecordingRuntimeConfigValidator(result: .success(())),
-      readinessProbe: readiness
+      readinessProbe: readiness,
+      reaper: reaper
     )
 
     try await controller.startUserMode(
@@ -40,6 +44,8 @@ final class CoreRuntimePreflightTests: XCTestCase {
     )
 
     XCTAssertEqual(readiness.checkedEndpoint, CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc"))
+    XCTAssertEqual(reaper.reapedConfigURL, URL(fileURLWithPath: "/tmp/config.yaml"))
+    XCTAssertEqual(reaper.reapedWorkDirectory, URL(fileURLWithPath: "/tmp"))
     XCTAssertEqual(controller.status, .running(version: "v-test"))
   }
 }
@@ -64,5 +70,20 @@ final class RecordingCoreReadinessProbe: CoreReadinessProbing {
   func waitUntilReady(api: CoreAPIEndpoint) async throws -> String {
     checkedEndpoint = api
     return "v-test"
+  }
+}
+
+@MainActor
+final class RecordingCoreProcessReaper: CoreProcessReaping {
+  private(set) var didReap = false
+  private(set) var reapedCoreURL: URL?
+  private(set) var reapedConfigURL: URL?
+  private(set) var reapedWorkDirectory: URL?
+
+  func reapOrphans(coreURL: URL, configURL: URL, workDirectory: URL) async {
+    didReap = true
+    reapedCoreURL = coreURL
+    reapedConfigURL = configURL
+    reapedWorkDirectory = workDirectory
   }
 }

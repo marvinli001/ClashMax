@@ -16,10 +16,13 @@ struct HelperClientResponse: Sendable {
   var pid: Int
   var message: String
 
-  init(dictionary: NSDictionary) {
+  init(payload: NSString) {
+    let dictionary = HelperXPCPayload.responseDictionary(from: payload)
     ok = dictionary[HelperResponseKey.ok] as? Bool ?? false
     running = dictionary[HelperResponseKey.running] as? Bool ?? false
-    pid = dictionary[HelperResponseKey.pid] as? Int ?? 0
+    pid = (dictionary[HelperResponseKey.pid] as? NSNumber)?.intValue
+      ?? dictionary[HelperResponseKey.pid] as? Int
+      ?? 0
     message = dictionary[HelperResponseKey.message] as? String ?? ""
   }
 
@@ -115,7 +118,7 @@ struct PrivilegedHelperXPCTransport: HelperXPCTransport {
   }
 
   private func callResponse(
-    _ body: @escaping (ClashMaxHelperXPCProtocol, @escaping (NSDictionary) -> Void) -> Void
+    _ body: @escaping (ClashMaxHelperXPCProtocol, @escaping (NSString) -> Void) -> Void
   ) async throws -> HelperClientResponse {
     let connection = NSXPCConnection(machServiceName: clashMaxHelperMachServiceName, options: .privileged)
     connection.remoteObjectInterface = ClashMaxHelperXPCInterface.make()
@@ -131,14 +134,14 @@ struct PrivilegedHelperXPCTransport: HelperXPCTransport {
         continuation.resume(throwing: AppError.helperResponse("Unable to connect to ClashMax Helper."))
         return
       }
-      body(proxy) { dictionary in
-        continuation.resume(returning: HelperClientResponse(dictionary: dictionary))
+      body(proxy) { payload in
+        continuation.resume(returning: HelperClientResponse(payload: payload))
       }
     }
   }
 
   private func callLogs(
-    _ body: @escaping (ClashMaxHelperXPCProtocol, @escaping (NSArray) -> Void) -> Void
+    _ body: @escaping (ClashMaxHelperXPCProtocol, @escaping (NSString) -> Void) -> Void
   ) async throws -> [String] {
     let connection = NSXPCConnection(machServiceName: clashMaxHelperMachServiceName, options: .privileged)
     connection.remoteObjectInterface = ClashMaxHelperXPCInterface.make()
@@ -154,8 +157,8 @@ struct PrivilegedHelperXPCTransport: HelperXPCTransport {
         continuation.resume(throwing: AppError.helperResponse("Unable to connect to ClashMax Helper."))
         return
       }
-      body(proxy) { response in
-        continuation.resume(returning: response.compactMap { $0 as? String })
+      body(proxy) { payload in
+        continuation.resume(returning: HelperXPCPayload.logLines(from: payload))
       }
     }
   }

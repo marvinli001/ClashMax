@@ -3,6 +3,7 @@ import SwiftUI
 
 struct RunningDashboardView: View {
   @EnvironmentObject private var appModel: AppModel
+  @State private var selectedProxyGroupName: String?
   let state: DashboardRuntimeState
   let namespace: Namespace.ID
   let reduceMotion: Bool
@@ -17,7 +18,14 @@ struct RunningDashboardView: View {
         availableWidth: availableWidth
       )
 
-      LazyVGrid(columns: metricColumns, spacing: 12) {
+      CurrentProxyRuntimeCard(
+        state: state,
+        availableWidth: availableWidth,
+        selectedGroupName: $selectedProxyGroupName
+      )
+      .staggeredArrival(index: 0, reduceMotion: reduceMotion, trigger: state)
+
+      LazyVGrid(columns: metricColumns, spacing: DashboardLayoutMetrics.dashboardGridSpacing) {
         DashboardMetricTile(
           title: "Download",
           value: TrafficSample.format(appModel.trafficSample.download),
@@ -47,40 +55,46 @@ struct RunningDashboardView: View {
           tint: .green
         )
       }
-      .staggeredArrival(index: 0, reduceMotion: reduceMotion, trigger: state)
+      .staggeredArrival(index: 1, reduceMotion: reduceMotion, trigger: state)
 
       DashboardResponsivePair(availableWidth: availableWidth) {
         RunningStatusCard()
       } trailing: {
         NetworkStatusCard()
       }
-      .staggeredArrival(index: 1, reduceMotion: reduceMotion, trigger: state)
+      .staggeredArrival(index: 2, reduceMotion: reduceMotion, trigger: state)
 
       DashboardResponsivePair(availableWidth: availableWidth) {
         TrafficRuntimeCard(samples: chartSamples)
       } trailing: {
         ProxyGroupsRuntimeCard()
       }
-      .staggeredArrival(index: 2, reduceMotion: reduceMotion, trigger: state)
+      .staggeredArrival(index: 3, reduceMotion: reduceMotion, trigger: state)
 
       DashboardResponsivePair(availableWidth: availableWidth) {
         ConnectionsRulesRuntimeCard()
       } trailing: {
         RecentLogsRuntimeCard()
       }
-      .staggeredArrival(index: 3, reduceMotion: reduceMotion, trigger: state)
+      .staggeredArrival(index: 4, reduceMotion: reduceMotion, trigger: state)
     }
   }
 
   private var metricColumns: [GridItem] {
-    let count = if availableWidth < 700 {
+    let count = if availableWidth < DashboardLayoutMetrics.metricTileTwoColumnBreakpoint {
+      1
+    } else if availableWidth < DashboardLayoutMetrics.metricTileSingleRowBreakpoint {
       2
-    } else if availableWidth < 1020 {
-      3
     } else {
       4
     }
-    return Array(repeating: GridItem(.flexible(minimum: 150), spacing: 12), count: count)
+    return Array(
+      repeating: GridItem(
+        .flexible(minimum: DashboardLayoutMetrics.metricTileMinimumColumnWidth),
+        spacing: DashboardLayoutMetrics.dashboardGridSpacing
+      ),
+      count: count
+    )
   }
 
   private var trafficFootnote: String {
@@ -226,17 +240,235 @@ private struct DashboardResponsivePair<Leading: View, Trailing: View>: View {
   @ViewBuilder var trailing: Trailing
 
   var body: some View {
-    if availableWidth >= 860 {
-      HStack(alignment: .top, spacing: 12) {
+    if availableWidth >= DashboardLayoutMetrics.runningPairColumnsBreakpoint {
+      HStack(alignment: .top, spacing: DashboardLayoutMetrics.dashboardGridSpacing) {
         leading
         trailing
       }
     } else {
-      VStack(alignment: .leading, spacing: 12) {
+      VStack(alignment: .leading, spacing: DashboardLayoutMetrics.dashboardGridSpacing) {
         leading
         trailing
       }
     }
+  }
+}
+
+enum DashboardProxySelectionState {
+  static func selectableGroups(from groups: [ProxyGroup]) -> [ProxyGroup] {
+    groups.filter { !$0.nodes.filter(\.isSelectable).isEmpty }
+  }
+
+  static func resolvedGroup(from groups: [ProxyGroup], preferredName: String?) -> ProxyGroup? {
+    let groups = selectableGroups(from: groups)
+    if let preferredName,
+       let preferred = groups.first(where: { $0.name == preferredName }) {
+      return preferred
+    }
+    return groups.first
+  }
+
+  static func currentNode(in group: ProxyGroup) -> ProxyNode? {
+    if let selected = group.selected,
+       let node = group.nodes.first(where: { $0.name == selected }) {
+      return node
+    }
+    return group.nodes.first(where: \.isSelectable)
+  }
+
+  static func delayLabel(for node: ProxyNode?) -> String {
+    guard let delay = node?.delay else { return "No delay" }
+    return "\(delay) ms"
+  }
+
+  static func typeLabel(for node: ProxyNode?) -> String {
+    guard let type = node?.type, !type.isEmpty else { return "Proxy" }
+    switch type.lowercased() {
+    case "hysteria2":
+      return "Hysteria2"
+    case "vless":
+      return "VLESS"
+    case "direct":
+      return "Direct"
+    default:
+      return type.capitalized
+    }
+  }
+}
+
+private struct CurrentProxyRuntimeCard: View {
+  @EnvironmentObject private var appModel: AppModel
+  let state: DashboardRuntimeState
+  let availableWidth: CGFloat
+  @Binding var selectedGroupName: String?
+
+  var body: some View {
+    let groups = DashboardProxySelectionState.selectableGroups(from: appModel.proxyGroups)
+    let group = DashboardProxySelectionState.resolvedGroup(from: groups, preferredName: selectedGroupName)
+    let node = group.flatMap(DashboardProxySelectionState.currentNode)
+    let compact = availableWidth < 700
+
+    VStack(alignment: .leading, spacing: 14) {
+      HStack(spacing: 10) {
+        DashboardSectionHeader(
+          title: "Current Node",
+          symbolName: "location.circle",
+          trailing: appModel.canControlRuntimeProxies ? "Runtime" : nil
+        )
+
+        Button {
+          appModel.reloadRuntimeData()
+        } label: {
+          Image(systemName: "arrow.clockwise")
+        }
+        .buttonStyle(.borderless)
+        .disabled(!appModel.canControlRuntimeProxies || state.isStarting)
+        .help("Refresh runtime proxy groups")
+      }
+
+      if let group, let node {
+        currentNodeSummary(group: group, node: node)
+
+        if compact {
+          VStack(alignment: .leading, spacing: 10) {
+            groupControl(groups: groups)
+            nodeControl(group: group)
+          }
+        } else {
+          HStack(alignment: .bottom, spacing: 12) {
+            groupControl(groups: groups)
+            nodeControl(group: group)
+          }
+        }
+      } else {
+        DashboardEmptyRuntimeView(
+          title: state.isStarting ? "Waiting for runtime data" : "No selectable proxy groups",
+          symbolName: state.isStarting ? "hourglass" : "point.3.connected.trianglepath.dotted",
+          message: state.isStarting
+            ? "Node selection becomes available after the controller is ready."
+            : "Refresh runtime data or check the active profile's proxy-groups."
+        )
+      }
+    }
+    .padding(14)
+    .frame(maxWidth: .infinity, alignment: .topLeading)
+    .dashboardCard(interactive: true)
+  }
+
+  private func currentNodeSummary(group: ProxyGroup, node: ProxyNode) -> some View {
+    HStack(spacing: 12) {
+      Image(systemName: "shield.lefthalf.filled")
+        .font(.system(size: 20, weight: .semibold))
+        .foregroundStyle(.green)
+        .frame(width: 42, height: 42)
+        .background(.green.opacity(0.13), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+      VStack(alignment: .leading, spacing: 4) {
+        Text(node.name)
+          .font(.system(.title3, design: .rounded).weight(.semibold))
+          .lineLimit(1)
+          .minimumScaleFactor(0.68)
+        HStack(spacing: 6) {
+          Text(group.name)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+          Text(DashboardProxySelectionState.typeLabel(for: node))
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(.secondary.opacity(0.12), in: Capsule())
+        }
+      }
+
+      Spacer(minLength: 12)
+
+      Text(DashboardProxySelectionState.delayLabel(for: node))
+        .font(.system(.callout, design: .rounded).weight(.semibold))
+        .foregroundStyle(node.delay == nil ? Color.secondary : Color.green)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background((node.delay == nil ? Color.secondary : Color.green).opacity(0.13), in: Capsule())
+    }
+    .padding(12)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 8, style: .continuous)
+        .stroke(Color(nsColor: .separatorColor).opacity(0.22), lineWidth: 1)
+    }
+  }
+
+  private func groupControl(groups: [ProxyGroup]) -> some View {
+    DashboardLabeledControl(title: "Proxy Group") {
+      Picker("Proxy Group", selection: groupSelection(groups: groups)) {
+        ForEach(groups) { group in
+          Text(group.name).tag(Optional(group.name))
+        }
+      }
+      .labelsHidden()
+      .frame(maxWidth: .infinity, alignment: .leading)
+    }
+  }
+
+  private func nodeControl(group: ProxyGroup) -> some View {
+    DashboardLabeledControl(title: "Node") {
+      HStack(spacing: 8) {
+        Picker("Node", selection: nodeSelection(group: group)) {
+          ForEach(group.nodes.filter(\.isSelectable)) { node in
+            Text(node.name).tag(node.name)
+          }
+        }
+        .labelsHidden()
+        .frame(maxWidth: .infinity, alignment: .leading)
+
+        Button {
+          guard let node = DashboardProxySelectionState.currentNode(in: group) else { return }
+          appModel.testDelay(for: node)
+        } label: {
+          Image(systemName: "speedometer")
+        }
+        .buttonStyle(.borderless)
+        .disabled(!appModel.canControlRuntimeProxies)
+        .help(appModel.canControlRuntimeProxies ? "Test current node delay" : appModel.proxyRuntimeActionMessage)
+      }
+    }
+    .disabled(!appModel.canControlRuntimeProxies)
+  }
+
+  private func groupSelection(groups: [ProxyGroup]) -> Binding<String?> {
+    Binding(
+      get: {
+        DashboardProxySelectionState.resolvedGroup(from: groups, preferredName: selectedGroupName)?.name
+      },
+      set: { selectedGroupName = $0 }
+    )
+  }
+
+  private func nodeSelection(group: ProxyGroup) -> Binding<String> {
+    Binding(
+      get: { DashboardProxySelectionState.currentNode(in: group)?.name ?? "" },
+      set: { nodeName in
+        guard let node = group.nodes.first(where: { $0.name == nodeName }) else { return }
+        appModel.selectProxy(group: group, node: node)
+      }
+    )
+  }
+}
+
+private struct DashboardLabeledControl<Content: View>: View {
+  let title: String
+  @ViewBuilder var content: Content
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text(title)
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+      content
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 }
 

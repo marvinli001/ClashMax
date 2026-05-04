@@ -20,7 +20,9 @@ final class AppModel: ObservableObject {
   @Published var trafficSample: TrafficSample = .zero
   @Published var trafficHistory: [TrafficSample] = []
   @Published var lastError: String?
+  @Published private(set) var updatingProfileIDs: Set<Profile.ID> = []
   @Published private(set) var profileOperationMessage: String?
+  @Published private(set) var profilePreviewGroups: [ProxyGroup] = []
 
   let profileStore: ProfileStore
   let coreController: CoreProcessController
@@ -28,7 +30,8 @@ final class AppModel: ObservableObject {
   let helperClient: TunnelHelperClient
   private let paths: RuntimePaths
   private let normalizer = ConfigNormalizer()
-  private var apiClient: MihomoAPIClient?
+  private let profilePreviewBuilder = ProfilePreviewBuilder()
+  private var apiClient: (any MihomoAPIControlling)?
   private var startTask: Task<Void, Never>?
   private var pendingModeTask: Task<Void, Never>?
   private var streamTasks: [Task<Void, Never>] = []
@@ -50,7 +53,7 @@ final class AppModel: ObservableObject {
         logs: fallback.appendingPathComponent("Logs", isDirectory: true)
       )
       let model = AppModel(paths: paths)
-      model.lastError = String(describing: error)
+      model.lastError = UserFacingError.message(for: error)
       return model
     }
   }
@@ -60,13 +63,16 @@ final class AppModel: ObservableObject {
     profileStore: ProfileStore? = nil,
     coreController: CoreProcessController = CoreProcessController(),
     systemProxyController: SystemProxyController = SystemProxyController(),
-    helperClient: TunnelHelperClient = TunnelHelperClient()
+    helperClient: TunnelHelperClient = TunnelHelperClient(),
+    apiClient: (any MihomoAPIControlling)? = nil
   ) {
     self.paths = paths
     self.profileStore = profileStore ?? ProfileStore(paths: paths)
     self.coreController = coreController
     self.systemProxyController = systemProxyController
     self.helperClient = helperClient
+    self.apiClient = apiClient
+    refreshProfilePreview()
   }
 
   var isRunning: Bool {
@@ -116,9 +122,34 @@ final class AppModel: ObservableObject {
       return "Add or select a profile first."
     }
     if !isRunning {
-      return "Start the active profile to load proxy groups from Mihomo. Subscription protocols are parsed by the core at launch."
+      return "No proxy groups were found in the active profile. Start it to let Mihomo parse provider subscriptions."
     }
     return "No proxy groups were reported by Mihomo. Refresh runtime data or check the active profile's proxy-groups."
+  }
+
+  var visibleProxyGroups: [ProxyGroup] {
+    isRunning ? proxyGroups : profilePreviewGroups
+  }
+
+  var isShowingProxyPreview: Bool {
+    !isRunning && !profilePreviewGroups.isEmpty
+  }
+
+  var canControlRuntimeProxies: Bool {
+    isRunning && apiClient != nil
+  }
+
+  var proxyRuntimeActionMessage: String {
+    if profileStore.activeProfile == nil {
+      return "Add or select a profile before selecting proxies or testing delay."
+    }
+    if dashboardRuntimeState.isStarting {
+      return "Wait for the core to finish starting before selecting proxies or testing delay."
+    }
+    if !isRunning {
+      return "Start the core before selecting proxies or testing delay."
+    }
+    return "Runtime controller is unavailable. Restart the core before selecting proxies or testing delay."
   }
 
   func importLocalProfile() {
@@ -129,11 +160,12 @@ final class AppModel: ObservableObject {
     guard panel.runModal() == .OK, let url = panel.url else { return }
     do {
       let profile = try profileStore.importLocalConfig(from: url)
+      refreshProfilePreview()
       lastError = nil
       profileOperationMessage = "Imported profile \(profile.name)."
     } catch {
       profileOperationMessage = nil
-      lastError = String(describing: error)
+      lastError = UserFacingError.message(for: error)
     }
   }
 
@@ -159,11 +191,12 @@ final class AppModel: ObservableObject {
         url: url,
         session: session
       )
+      refreshProfilePreview()
       profileOperationMessage = "Added subscription \(profile.name)."
       return true
     } catch {
       profileOperationMessage = nil
-      lastError = String(describing: error)
+      lastError = UserFacingError.message(for: error)
       return false
     }
   }
@@ -171,26 +204,58 @@ final class AppModel: ObservableObject {
   func updateActiveSubscription() {
     guard let profile = profileStore.activeProfile else { return }
     Task {
-      do {
-        try await profileStore.updateSubscription(profile)
-        lastError = nil
-        profileOperationMessage = "Updated subscription \(profile.name)."
-      } catch {
-        profileOperationMessage = nil
-        lastError = String(describing: error)
-      }
+      await updateSubscription(profile)
+    }
+  }
+
+  @discardableResult
+  func updateSubscription(_ profile: Profile, session: URLSession = .shared) async -> Bool {
+    guard profile.isSubscription else {
+      profileOperationMessage = nil
+      lastError = "Only subscription profiles can be updated."
+      return false
+    }
+    guard !updatingProfileIDs.contains(profile.id) else { return false }
+
+    setProfile(profile.id, updating: true)
+    lastError = nil
+    profileOperationMessage = nil
+    defer { setProfile(profile.id, updating: false) }
+
+    do {
+      try await profileStore.updateSubscription(profile, session: session)
+      refreshProfilePreview()
+      let name = profileStore.profiles.first { $0.id == profile.id }?.name ?? profile.name
+      profileOperationMessage = "Updated subscription \(name)."
+      return true
+    } catch {
+      profileOperationMessage = nil
+      lastError = UserFacingError.message(for: error)
+      return false
     }
   }
 
   func renameActiveProfile(to name: String) {
     guard let profile = profileStore.activeProfile else { return }
+    renameProfile(profile, to: name)
+  }
+
+  func renameProfile(_ profile: Profile, to name: String) {
+    let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedName.isEmpty else {
+      profileOperationMessage = nil
+      lastError = "Profile name cannot be empty."
+      return
+    }
+
     do {
-      try profileStore.rename(profile, to: name)
+      try profileStore.rename(profile, to: trimmedName)
+      refreshProfilePreview()
       lastError = nil
-      profileOperationMessage = "Renamed profile to \(name)."
+      profileOperationMessage = "Renamed profile to \(trimmedName)."
     } catch {
       profileOperationMessage = nil
-      lastError = String(describing: error)
+      lastError = UserFacingError.message(for: error)
     }
   }
 
@@ -202,12 +267,35 @@ final class AppModel: ObservableObject {
   func deleteProfile(_ profile: Profile) {
     do {
       try profileStore.delete(profile)
+      refreshProfilePreview()
       lastError = nil
       profileOperationMessage = "Deleted profile \(profile.name)."
     } catch {
       profileOperationMessage = nil
-      lastError = String(describing: error)
+      lastError = UserFacingError.message(for: error)
     }
+  }
+
+  func selectProfile(_ profile: Profile) {
+    do {
+      try profileStore.select(profile)
+      proxyGroups = []
+      refreshProfilePreview()
+      lastError = nil
+    } catch {
+      profileOperationMessage = nil
+      lastError = UserFacingError.message(for: error)
+    }
+  }
+
+  private func setProfile(_ id: Profile.ID, updating isUpdating: Bool) {
+    var ids = updatingProfileIDs
+    if isUpdating {
+      ids.insert(id)
+    } else {
+      ids.remove(id)
+    }
+    updatingProfileIDs = ids
   }
 
   func start() {
@@ -261,9 +349,11 @@ final class AppModel: ObservableObject {
         try systemProxyController.apply(host: overrides.externalControllerHost, port: overrides.mixedPort)
       }
       sessionStartedAt = Date()
+      refreshProfilePreview()
       startStreams(client: client)
+      reloadRuntimeData()
     } catch {
-      lastError = String(describing: error)
+      lastError = UserFacingError.message(for: error)
     }
   }
 
@@ -271,15 +361,20 @@ final class AppModel: ObservableObject {
     startTask?.cancel()
     startTask = nil
     startInFlight = false
+    apiClient = nil
     Task {
       streamTasks.forEach { $0.cancel() }
       streamTasks.removeAll()
       coreController.stop()
+      proxyGroups = []
+      rules = []
+      connections = []
       if tunEnabled {
         _ = try? await helperClient.stopTunnel()
       }
       tunnelCoreRunning = false
       sessionStartedAt = nil
+      refreshProfilePreview()
       if systemProxyEnabled {
         try? systemProxyController.restore()
       }
@@ -294,11 +389,16 @@ final class AppModel: ObservableObject {
   func setMode(_ mode: RunMode) {
     guard overrides.mode != mode else { return }
     overrides.mode = mode
+    guard isRunning else { return }
+    guard let apiClient else {
+      lastError = proxyRuntimeActionMessage
+      return
+    }
     Task {
       do {
-        try await apiClient?.updateMode(mode)
+        try await apiClient.updateMode(mode)
       } catch {
-        lastError = String(describing: error)
+        lastError = UserFacingError.message(for: error)
       }
     }
   }
@@ -316,14 +416,22 @@ final class AppModel: ObservableObject {
   }
 
   func reloadRuntimeData() {
-    guard let apiClient else { return }
+    guard isRunning, let apiClient else {
+      proxyGroups = []
+      rules = []
+      connections = []
+      refreshProfilePreview()
+      return
+    }
     Task {
       do {
-        proxyGroups = try await apiClient.proxyGroups()
+        let knownDelays = proxyDelayMap(from: proxyGroups)
+        let runtimeGroups = try await apiClient.proxyGroups()
+        proxyGroups = runtimeGroups.preservingKnownDelays(knownDelays)
         rules = try await apiClient.rules()
         connections = try await apiClient.connections()
       } catch {
-        lastError = String(describing: error)
+        lastError = UserFacingError.message(for: error)
       }
     }
   }
@@ -346,29 +454,41 @@ final class AppModel: ObservableObject {
       do {
         helperLogs = try await helperClient.recentLogs()
       } catch {
-        lastError = String(describing: error)
+        lastError = UserFacingError.message(for: error)
       }
     }
   }
 
   func selectProxy(group: ProxyGroup, node: ProxyNode) {
+    guard node.isSelectable else {
+      lastError = "\(node.name) cannot be selected from the runtime."
+      return
+    }
+    guard let apiClient = runtimeAPIClientForProxyAction() else { return }
     Task {
       do {
-        try await apiClient?.selectProxy(group: group.name, proxy: node.name)
+        try await apiClient.selectProxy(group: group.name, proxy: node.name)
+        applySelectedProxy(groupName: group.name, nodeName: node.name)
         reloadRuntimeData()
       } catch {
-        lastError = String(describing: error)
+        lastError = UserFacingError.message(for: error)
       }
     }
   }
 
   func testDelay(for node: ProxyNode) {
+    guard node.isSelectable else {
+      lastError = "\(node.name) cannot be tested from the runtime."
+      return
+    }
+    guard let apiClient = runtimeAPIClientForProxyAction() else { return }
     Task {
       do {
-        _ = try await apiClient?.testDelay(proxy: node.name, testURL: AppConstants.defaultDelayTestURL, timeout: 5000)
+        let delay = try await apiClient.testDelay(proxy: node.name, testURL: AppConstants.defaultDelayTestURL, timeout: 5000)
+        applyDelay(delay, to: node.name)
         reloadRuntimeData()
       } catch {
-        lastError = String(describing: error)
+        lastError = UserFacingError.message(for: error)
       }
     }
   }
@@ -382,7 +502,7 @@ final class AppModel: ObservableObject {
         try systemProxyController.restore()
       }
     } catch {
-      lastError = String(describing: error)
+      lastError = UserFacingError.message(for: error)
     }
   }
 
@@ -391,6 +511,63 @@ final class AppModel: ObservableObject {
       throw AppError.noActiveProfile
     }
     return profile
+  }
+
+  private func refreshProfilePreview() {
+    guard let profile = profileStore.activeProfile else {
+      profilePreviewGroups = []
+      return
+    }
+
+    do {
+      let source = try String(contentsOfFile: profile.originalConfigPath, encoding: .utf8)
+      profilePreviewGroups = try profilePreviewBuilder.groups(from: source, profileName: profile.name)
+    } catch {
+      profilePreviewGroups = []
+    }
+  }
+
+  private func runtimeAPIClientForProxyAction() -> (any MihomoAPIControlling)? {
+    guard isRunning, let apiClient else {
+      lastError = proxyRuntimeActionMessage
+      return nil
+    }
+    return apiClient
+  }
+
+  private func applySelectedProxy(groupName: String, nodeName: String) {
+    updateRuntimeProxyGroups { groups in
+      guard let index = groups.firstIndex(where: { $0.name == groupName }) else { return }
+      groups[index].selected = nodeName
+    }
+  }
+
+  private func applyDelay(_ delay: Int, to nodeName: String) {
+    guard delay >= 0 else { return }
+    updateRuntimeProxyGroups { groups in
+      for groupIndex in groups.indices {
+        for nodeIndex in groups[groupIndex].nodes.indices where groups[groupIndex].nodes[nodeIndex].name == nodeName {
+          groups[groupIndex].nodes[nodeIndex].delay = delay
+        }
+      }
+    }
+  }
+
+  private func updateRuntimeProxyGroups(_ update: (inout [ProxyGroup]) -> Void) {
+    guard !proxyGroups.isEmpty else { return }
+    var groups = proxyGroups
+    update(&groups)
+    proxyGroups = groups
+  }
+
+  private func proxyDelayMap(from groups: [ProxyGroup]) -> [String: Int] {
+    groups.reduce(into: [String: Int]()) { result, group in
+      for node in group.nodes {
+        if let delay = node.delay {
+          result[node.name] = delay
+        }
+      }
+    }
   }
 
   private func generateRuntimeConfig(for profile: Profile) throws -> URL {
@@ -426,7 +603,7 @@ final class AppModel: ObservableObject {
     return core
   }
 
-  private func startStreams(client: MihomoAPIClient) {
+  private func startStreams(client: any MihomoAPIControlling) {
     streamTasks.forEach { $0.cancel() }
     let logLevel = overrides.logLevel
     streamTasks = [
@@ -452,7 +629,7 @@ final class AppModel: ObservableObject {
       },
       Task { [weak self] in
         do {
-          for try await snapshot in client.connectionStream() {
+          for try await snapshot in client.connectionStream(interval: 1000) {
             await MainActor.run {
               self?.connectionBuffer.replace(with: snapshot)
               self?.connections = self?.connectionBuffer.elements ?? []
@@ -491,5 +668,22 @@ extension UTType {
 
   static var yml: UTType {
     UTType(filenameExtension: "yml") ?? .text
+  }
+}
+
+private extension Array where Element == ProxyGroup {
+  func preservingKnownDelays(_ knownDelays: [String: Int]) -> [ProxyGroup] {
+    map { group in
+      var group = group
+      group.nodes = group.nodes.map { node in
+        guard node.delay == nil, let delay = knownDelays[node.name] else {
+          return node
+        }
+        var node = node
+        node.delay = delay
+        return node
+      }
+      return group
+    }
   }
 }

@@ -77,9 +77,62 @@ enum AppError: Error, CustomStringConvertible {
     case let .configValidationFailed(message):
       return "Mihomo config validation failed: \(message)"
     case let .coreNotReady(message):
-      return "Mihomo controller did not become ready: \(message)"
+      return "Mihomo controller did not become ready. \(message)"
     case let .helperResponse(message):
       return message
     }
+  }
+}
+
+enum UserFacingError {
+  static func message(for error: Error) -> String {
+    if let appError = error as? AppError {
+      return message(from: appError.description)
+    }
+
+    let nsError = error as NSError
+    if let networkMessage = networkMessage(for: nsError) {
+      return networkMessage
+    }
+
+    let localized = nsError.localizedDescription
+    let described = String(describing: error)
+    if localized.contains("The operation couldn") && !described.isEmpty {
+      return message(from: described)
+    }
+    return message(from: localized)
+  }
+
+  static func message(from rawMessage: String) -> String {
+    if rawMessage.contains("NSURLErrorDomain") || rawMessage.contains("Could not connect to the server") {
+      return "Could not connect to the Mihomo controller at 127.0.0.1:9097. The core may still be starting or failed to open its controller port."
+    }
+
+    let trimmed = rawMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard trimmed.count > 220 else { return trimmed }
+    return "\(trimmed.prefix(217))..."
+  }
+
+  private static func networkMessage(for error: NSError) -> String? {
+    guard error.domain == NSURLErrorDomain else { return nil }
+
+    switch error.code {
+    case NSURLErrorCannotConnectToHost, NSURLErrorTimedOut, NSURLErrorNetworkConnectionLost, NSURLErrorNotConnectedToInternet:
+      return "Could not connect to the Mihomo controller at \(controllerAddress(from: error)). The core may still be starting or failed to open its controller port."
+    default:
+      return nil
+    }
+  }
+
+  private static func controllerAddress(from error: NSError) -> String {
+    let url = error.userInfo[NSURLErrorFailingURLErrorKey] as? URL
+    guard let url, let host = url.host else {
+      return "127.0.0.1:9097"
+    }
+
+    if let port = url.port {
+      return "\(host):\(port)"
+    }
+    return host
   }
 }

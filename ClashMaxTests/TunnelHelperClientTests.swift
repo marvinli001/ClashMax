@@ -5,7 +5,7 @@ import XCTest
 @MainActor
 final class TunnelHelperClientTests: XCTestCase {
   func testRecentLogsAreMappedFromHelperResponse() async throws {
-    let transport = FakeHelperTransport(response: ["one", "two"] as NSArray)
+    let transport = FakeHelperTransport(response: ["one", "two"])
     let client = TunnelHelperClient(transport: transport)
 
     let logs = try await client.recentLogs()
@@ -13,38 +13,58 @@ final class TunnelHelperClientTests: XCTestCase {
     XCTAssertEqual(logs, ["one", "two"])
   }
 
-  func testHelperInterfaceRestrictsCollectionReplyClasses() {
+  func testHelperStringPayloadsDecodeResponsesAndLogs() {
+    let response = HelperClientResponse(payload: HelperXPCPayload.response(ok: true, running: true, pid: 42, message: "ready"))
+
+    XCTAssertTrue(response.ok)
+    XCTAssertTrue(response.running)
+    XCTAssertEqual(response.pid, 42)
+    XCTAssertEqual(response.message, "ready")
+    XCTAssertEqual(HelperXPCPayload.logLines(from: HelperXPCPayload.logs(["one", "two"])), ["one", "two"])
+  }
+
+  func testHelperInterfaceUsesStringPayloadReplies() throws {
     let interface = ClashMaxHelperXPCInterface.make()
-    let dictionaryReplySelectors = [
+    let replySelectors = [
       #selector(ClashMaxHelperXPCProtocol.status(withReply:)),
       #selector(ClashMaxHelperXPCProtocol.startTunnel(corePath:configPath:workDirectoryPath:secret:withReply:)),
       #selector(ClashMaxHelperXPCProtocol.stopTunnel(withReply:)),
+      #selector(ClashMaxHelperXPCProtocol.restartTunnel(corePath:configPath:workDirectoryPath:secret:withReply:)),
+      #selector(ClashMaxHelperXPCProtocol.recentLogs(withReply:))
+    ]
+
+    for selector in replySelectors {
+      let classes = try XCTUnwrap(interface.classes(for: selector, argumentIndex: 0, ofReply: true) as NSSet?)
+      XCTAssertTrue(classes.contains(NSString.self))
+      XCTAssertFalse(classes.contains(NSDictionary.self))
+      XCTAssertFalse(classes.contains(NSArray.self))
+      XCTAssertFalse(classes.contains(NSObject.self))
+    }
+  }
+
+  func testHelperInterfaceRestrictsTunnelRequestStringArguments() throws {
+    let interface = ClashMaxHelperXPCInterface.make()
+    let selectors = [
+      #selector(ClashMaxHelperXPCProtocol.startTunnel(corePath:configPath:workDirectoryPath:secret:withReply:)),
       #selector(ClashMaxHelperXPCProtocol.restartTunnel(corePath:configPath:workDirectoryPath:secret:withReply:))
     ]
 
-    for selector in dictionaryReplySelectors {
-      let classes = interface.classes(for: selector, argumentIndex: 0, ofReply: true) as NSSet
-      XCTAssertTrue(classes.contains(NSDictionary.self))
-      XCTAssertTrue(classes.contains(NSString.self))
-      XCTAssertTrue(classes.contains(NSNumber.self))
-      XCTAssertFalse(classes.contains(NSObject.self))
+    for selector in selectors {
+      for argumentIndex in 0..<4 {
+        let classes = try XCTUnwrap(
+          interface.classes(for: selector, argumentIndex: argumentIndex, ofReply: false) as NSSet?
+        )
+        XCTAssertEqual(classes, NSSet(object: NSString.self))
+        XCTAssertFalse(classes.contains(NSObject.self))
+      }
     }
-
-    let logClasses = interface.classes(
-      for: #selector(ClashMaxHelperXPCProtocol.recentLogs(withReply:)),
-      argumentIndex: 0,
-      ofReply: true
-    ) as NSSet
-    XCTAssertTrue(logClasses.contains(NSArray.self))
-    XCTAssertTrue(logClasses.contains(NSString.self))
-    XCTAssertFalse(logClasses.contains(NSObject.self))
   }
 }
 
 private final class FakeHelperTransport: HelperXPCTransport {
-  let response: NSArray
+  let response: [String]
 
-  init(response: NSArray) {
+  init(response: [String]) {
     self.response = response
   }
 
@@ -65,6 +85,6 @@ private final class FakeHelperTransport: HelperXPCTransport {
   }
 
   func recentLogs() async throws -> [String] {
-    response.compactMap { $0 as? String }
+    response
   }
 }

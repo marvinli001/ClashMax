@@ -53,9 +53,21 @@ targets:
       path: Config/ClashMax.entitlements
     postCompileScripts:
       - name: Embed Helper
+        inputFiles:
+          - "$(BUILT_PRODUCTS_DIR)/ClashMaxHelper"
+          - "$(SRCROOT)/Config/io.github.clashmax.ClashMax.Helper.plist"
+          - "$(SRCROOT)/Resources/Core/README.md"
+          - "$(SRCROOT)/Resources/Core/mihomo-darwin-amd64"
+          - "$(SRCROOT)/Resources/Core/mihomo-darwin-arm64"
+          - "$(SRCROOT)/Resources/Core/mihomo-manifest.json"
+          - "$(SRCROOT)/Resources/Animations/410-767-power-button.riv"
         outputFiles:
           - "$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Library/LaunchServices/ClashMaxHelper"
           - "$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Library/LaunchDaemons/io.github.clashmax.ClashMax.Helper.plist"
+          - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Core"
+          - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Core/README.md"
+          - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Core/mihomo-darwin-amd64"
+          - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Core/mihomo-darwin-arm64"
           - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Core/mihomo-manifest.json"
           - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Animations/410-767-power-button.riv"
         script: |

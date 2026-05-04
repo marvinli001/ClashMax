@@ -146,7 +146,7 @@ enum ProfileConfigFormatError: Error, CustomStringConvertible {
 }
 
 enum ProfileConfigInspector {
-  private static let supportedURISchemes: Set<String> = [
+  static let supportedURISchemes: Set<String> = [
     "ss",
     "ssr",
     "vmess",
@@ -219,7 +219,7 @@ enum ProfileConfigInspector {
       }
   }
 
-  private static func decodedBase64ProviderContent(from source: String) -> String? {
+  static func decodedBase64ProviderContent(from source: String) -> String? {
     let compact = source
       .components(separatedBy: .whitespacesAndNewlines)
       .joined()
@@ -237,5 +237,199 @@ enum ProfileConfigInspector {
       return nil
     }
     return String(data: data, encoding: .utf8)
+  }
+}
+
+struct ProfilePreviewBuilder {
+  func groups(from source: String, profileName: String) throws -> [ProxyGroup] {
+    if ProfileConfigInspector.isProxyProviderContent(source) {
+      return providerContentGroups(from: source)
+    }
+
+    let loaded: Any?
+    do {
+      loaded = try Yams.load(yaml: source)
+    } catch {
+      throw ConfigNormalizer.NormalizerError.yaml(String(describing: error))
+    }
+
+    guard let root = loaded as? [String: Any] else {
+      throw ConfigNormalizer.NormalizerError.rootIsNotMapping
+    }
+    return clashConfigGroups(from: root)
+  }
+
+  private func clashConfigGroups(from root: [String: Any]) -> [ProxyGroup] {
+    let proxyTypes = dictionaryArray(root["proxies"]).reduce(into: [String: String]()) { result, proxy in
+      guard let name = string(proxy["name"]) else { return }
+      result[name] = string(proxy["type"]) ?? "proxy"
+    }
+    let groupEntries = dictionaryArray(root["proxy-groups"])
+    let groupTypes = groupEntries.reduce(into: [String: String]()) { result, group in
+      guard let name = string(group["name"]) else { return }
+      result[name] = string(group["type"]) ?? "group"
+    }
+
+    return groupEntries.compactMap { group in
+      guard let name = string(group["name"]) else { return nil }
+      let groupType = string(group["type"]) ?? "Unknown"
+      var nodes = stringArray(group["proxies"]).map { proxyName in
+        ProxyNode(
+          name: proxyName,
+          type: proxyTypes[proxyName] ?? groupTypes[proxyName] ?? builtInProxyType(for: proxyName) ?? "proxy",
+          delay: nil,
+          isSelectable: true
+        )
+      }
+
+      if nodes.isEmpty {
+        nodes = stringArray(group["use"]).map { providerName in
+          ProxyNode(name: "Provider: \(providerName)", type: "provider", delay: nil, isSelectable: false)
+        }
+      }
+
+      return ProxyGroup(
+        name: name,
+        type: groupType,
+        selected: string(group["now"]),
+        nodes: nodes
+      )
+    }
+  }
+
+  private func providerContentGroups(from source: String) -> [ProxyGroup] {
+    let providerNodes = providerURINodes(from: source)
+    guard !providerNodes.isEmpty else { return [] }
+
+    let autoNode = ProxyNode(name: "Auto", type: "url-test", delay: nil, isSelectable: true)
+    let directNode = ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: true)
+    return [
+      ProxyGroup(
+        name: "Proxy",
+        type: "select",
+        selected: nil,
+        nodes: [autoNode] + providerNodes + [directNode]
+      ),
+      ProxyGroup(
+        name: "Auto",
+        type: "url-test",
+        selected: nil,
+        nodes: providerNodes
+      )
+    ]
+  }
+
+  private func providerURINodes(from source: String) -> [ProxyNode] {
+    let candidates = [
+      source,
+      ProfileConfigInspector.decodedBase64ProviderContent(from: source)
+    ].compactMap { $0 }
+
+    for candidate in candidates {
+      let nodes = candidate
+        .components(separatedBy: .newlines)
+        .compactMap(providerURINode)
+      if !nodes.isEmpty {
+        return nodes
+      }
+    }
+    return []
+  }
+
+  private func providerURINode(from line: String) -> ProxyNode? {
+    let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let schemeSeparator = trimmed.firstIndex(of: ":") else {
+      return nil
+    }
+    let scheme = String(trimmed[..<schemeSeparator]).lowercased()
+    guard ProfileConfigInspector.supportedURISchemes.contains(scheme),
+          trimmed[schemeSeparator...].hasPrefix("://")
+    else {
+      return nil
+    }
+
+    let type = normalizedProxyType(for: scheme)
+    return ProxyNode(
+      name: providerURIName(from: trimmed, scheme: type),
+      type: type,
+      delay: nil,
+      isSelectable: true
+    )
+  }
+
+  private func providerURIName(from uri: String, scheme: String) -> String {
+    if let fragmentStart = uri.firstIndex(of: "#") {
+      let encodedName = String(uri[uri.index(after: fragmentStart)...])
+      if let decoded = encodedName.removingPercentEncoding,
+         !decoded.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        return decoded
+      }
+    }
+
+    let host = providerURIHost(from: uri)
+    return host.map { "\(scheme.uppercased()) \($0)" } ?? scheme.uppercased()
+  }
+
+  private func providerURIHost(from uri: String) -> String? {
+    guard let schemeRange = uri.range(of: "://") else { return nil }
+    var remainder = String(uri[schemeRange.upperBound...])
+    if let fragmentStart = remainder.firstIndex(of: "#") {
+      remainder = String(remainder[..<fragmentStart])
+    }
+    if let queryStart = remainder.firstIndex(of: "?") {
+      remainder = String(remainder[..<queryStart])
+    }
+    if let at = remainder.lastIndex(of: "@") {
+      remainder = String(remainder[remainder.index(after: at)...])
+    }
+    if let colon = remainder.lastIndex(of: ":") {
+      remainder = String(remainder[..<colon])
+    }
+    let decoded = remainder.removingPercentEncoding ?? remainder
+    let trimmed = decoded.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+  }
+
+  private func normalizedProxyType(for scheme: String) -> String {
+    switch scheme {
+    case "hy2":
+      return "hysteria2"
+    case "hy":
+      return "hysteria"
+    case "wg":
+      return "wireguard"
+    default:
+      return scheme
+    }
+  }
+
+  private func builtInProxyType(for name: String) -> String? {
+    switch name.uppercased() {
+    case "DIRECT":
+      return "direct"
+    case "REJECT", "REJECT-DROP":
+      return "reject"
+    default:
+      return nil
+    }
+  }
+
+  private func dictionaryArray(_ value: Any?) -> [[String: Any]] {
+    (value as? [Any])?.compactMap { $0 as? [String: Any] } ?? []
+  }
+
+  private func stringArray(_ value: Any?) -> [String] {
+    (value as? [Any])?.compactMap(string) ?? []
+  }
+
+  private func string(_ value: Any?) -> String? {
+    switch value {
+    case let value as String:
+      return value
+    case let value as CustomStringConvertible:
+      return String(describing: value)
+    default:
+      return nil
+    }
   }
 }

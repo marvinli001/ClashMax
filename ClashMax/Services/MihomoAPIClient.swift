@@ -1,6 +1,18 @@
 import Foundation
 
-struct MihomoAPIClient {
+protocol MihomoAPIControlling: Sendable {
+  func updateMode(_ mode: RunMode) async throws
+  func proxyGroups() async throws -> [ProxyGroup]
+  func rules() async throws -> [String]
+  func connections() async throws -> [ConnectionSnapshot]
+  func selectProxy(group: String, proxy: String) async throws
+  func testDelay(proxy: String, testURL: URL, timeout: Int) async throws -> Int
+  func trafficStream() -> AsyncThrowingStream<TrafficSample, Error>
+  func logStream(level: String) -> AsyncThrowingStream<LogEntry, Error>
+  func connectionStream(interval: Int) -> AsyncThrowingStream<[ConnectionSnapshot], Error>
+}
+
+struct MihomoAPIClient: Sendable {
   enum ClientError: Error {
     case invalidResponse
     case httpStatus(Int)
@@ -49,6 +61,12 @@ struct MihomoAPIClient {
     let data = try await data(for: request(path: "/proxies"))
     let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
     let proxies = object?["proxies"] as? [String: Any] ?? [:]
+    let proxyTypes = proxies.reduce(into: [String: String]()) { result, item in
+      guard let proxy = item.value as? [String: Any],
+            let type = proxy["type"] as? String
+      else { return }
+      result[item.key] = type
+    }
 
     return proxies.compactMap { name, value in
       guard let item = value as? [String: Any] else { return nil }
@@ -59,7 +77,7 @@ struct MihomoAPIClient {
       let nodes = all.map { proxyName in
         ProxyNode(
           name: proxyName,
-          type: "proxy",
+          type: proxyTypes[proxyName] ?? "proxy",
           delay: Self.delay(for: proxyName, history: history),
           isSelectable: true
         )
@@ -239,3 +257,5 @@ struct MihomoAPIClient {
       .first { $0["name"] as? String == proxyName }?["delay"] as? Int
   }
 }
+
+extension MihomoAPIClient: MihomoAPIControlling {}

@@ -124,9 +124,13 @@ final class FakeProcessLauncher: CoreProcessLaunching {
 
 @MainActor
 final class FakeRunningProcess: RunningCoreProcess {
-  let processIdentifier: Int32 = 42
+  let processIdentifier: Int32
   var onTermination: ((Int32) -> Void)?
   private(set) var didTerminate = false
+
+  init(processIdentifier: Int32 = 42) {
+    self.processIdentifier = processIdentifier
+  }
 
   func terminate() {
     didTerminate = true

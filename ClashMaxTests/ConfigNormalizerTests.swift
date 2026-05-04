@@ -83,4 +83,38 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(proxyGroup["proxies"] as? [String], ["Auto", "DIRECT"])
     XCTAssertEqual(yaml["rules"] as? [String], ["MATCH,Proxy"])
   }
+
+  func testPreviewGroupsExtractXboardStyleInlineYaml() throws {
+    let source = """
+    mixed-port: 7890
+    proxies:
+        - { name: '[Hy2]HK Hysteria', server: example.com, port: 23006, skip-cert-verify: true, type: hysteria2, password: password }
+        - { name: '[vless]JP Nano', type: vless, server: example.net, port: 443, uuid: 00000000-0000-0000-0000-000000000000, tls: true }
+    proxy-groups:
+        - { name: Elite, type: select, proxies: [自动选择, '[Hy2]HK Hysteria', '[vless]JP Nano'] }
+        - { name: 自动选择, type: url-test, proxies: ['[Hy2]HK Hysteria', '[vless]JP Nano'], url: 'http://www.gstatic.com/generate_204', interval: 86400 }
+    rules:
+        - MATCH,Elite
+    """
+
+    let groups = try ProfilePreviewBuilder().groups(from: source, profileName: "Elite")
+
+    XCTAssertEqual(groups.map(\.name), ["Elite", "自动选择"])
+    XCTAssertEqual(groups.first?.nodes.map(\.name), ["自动选择", "[Hy2]HK Hysteria", "[vless]JP Nano"])
+    XCTAssertEqual(groups.first?.nodes.map(\.type), ["url-test", "hysteria2", "vless"])
+  }
+
+  func testPreviewGroupsExtractBase64URIProviderContent() throws {
+    let source = """
+    vless://00000000-0000-0000-0000-000000000000@example.com:443?security=tls&sni=example.com#VLESS%20Node
+    hysteria2://password@example.net:8443?sni=example.net&insecure=1#Hysteria2%20Node
+    """
+    let encoded = Data(source.utf8).base64EncodedString()
+
+    let groups = try ProfilePreviewBuilder().groups(from: encoded, profileName: "Xboard")
+
+    XCTAssertEqual(groups.map(\.name), ["Proxy", "Auto"])
+    XCTAssertEqual(groups.first?.nodes.map(\.name), ["Auto", "VLESS Node", "Hysteria2 Node", "DIRECT"])
+    XCTAssertEqual(groups.first?.nodes.map(\.type), ["url-test", "vless", "hysteria2", "direct"])
+  }
 }
