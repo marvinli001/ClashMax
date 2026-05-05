@@ -1,34 +1,5 @@
 import SwiftUI
 
-enum DashboardPowerButtonAsset {
-  static let fileName = "2773-5719-egg-radio-button-v2"
-  static let fileExtension = "riv"
-  static let bundleSubdirectory = "Animations"
-  static let stateMachineName = "Radiobutton"
-  static let hoverInputName = "isHover"
-  static let pressedInputName = "Pressed"
-  static let backInputName = "Back"
-
-  static func bundleURL(in bundle: Bundle = .main) -> URL? {
-    bundle.url(
-      forResource: fileName,
-      withExtension: fileExtension,
-      subdirectory: bundleSubdirectory
-    )
-  }
-
-  static func data(in bundle: Bundle = .main) -> Data? {
-    guard let url = bundleURL(in: bundle) else { return nil }
-    return try? Data(contentsOf: url)
-  }
-}
-
-enum DashboardPowerButtonSurfaceStyle {
-  static func surfaceID(for colorScheme: SwiftUI.ColorScheme) -> String {
-    colorScheme == .dark ? "dark-unframed-rive-visual" : "light-unframed-rive-visual"
-  }
-}
-
 struct CoreVisualView: View {
   let state: DashboardRuntimeState
   let reduceMotion: Bool

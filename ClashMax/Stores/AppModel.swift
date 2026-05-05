@@ -38,6 +38,7 @@ final class AppModel: ObservableObject {
   private var startTask: Task<Void, Never>?
   private var previewTask: Task<Void, Never>?
   private var pendingModeTask: Task<Void, Never>?
+  private var pendingRoutingModeTask: Task<Void, Never>?
   private var streamTasks: [Task<Void, Never>] = []
   private var logBuffer = BoundedBuffer<LogEntry>(limit: AppConstants.retainedLogLimit)
   private var connectionBuffer = BoundedBuffer<ConnectionSnapshot>(limit: AppConstants.retainedConnectionLimit)
@@ -480,6 +481,36 @@ final class AppModel: ObservableObject {
       setMode(mode)
       pendingModeTask = nil
     }
+  }
+
+  func requestProxyRoutingMode(_ mode: ProxyRoutingMode) {
+    pendingRoutingModeTask?.cancel()
+    pendingRoutingModeTask = nil
+    guard proxyRoutingMode != mode else { return }
+    pendingRoutingModeTask = Task { @MainActor [weak self] in
+      await Task.yield()
+      guard let self, !Task.isCancelled else { return }
+      setProxyRoutingMode(mode)
+      pendingRoutingModeTask = nil
+    }
+  }
+
+  func registerHelper() {
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      do {
+        lastError = nil
+        try helperClient.register()
+      } catch {
+        let message = UserFacingError.message(for: error)
+        helperClient.statusMessage = message
+        lastError = message
+      }
+    }
+  }
+
+  func refreshHelperRegistrationStatus() {
+    helperClient.refreshRegistrationStatus()
   }
 
   func reloadRuntimeData(clearAfterConfirmation: Bool = false) {

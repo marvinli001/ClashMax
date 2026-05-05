@@ -85,7 +85,8 @@ enum AppError: Error, CustomStringConvertible {
 }
 
 enum UserFacingError {
-  private static let helperCodeSigningRecovery = "TUN helper could not be registered because ClashMax or its helper is not code signed. Build and run with local code signing enabled, or switch Proxy Routing to System Proxy."
+  private static let helperCodeSigningRecovery = "TUN helper could not be registered because ClashMax or its helper is not correctly signed, notarized, or approved by macOS. Verify signing, approve the helper in System Settings, then retry."
+  private static let helperOperationNotPermittedRecovery = "macOS rejected TUN helper registration. LaunchDaemon helpers registered with SMAppService must come from a trusted signed and notarized app; Xcode Debug builds from DerivedData can be rejected with Operation not permitted."
 
   static func message(for error: Error) -> String {
     if let appError = error as? AppError {
@@ -95,8 +96,8 @@ enum UserFacingError {
     let nsError = error as NSError
     let localized = nsError.localizedDescription
     let described = String(describing: error)
-    if isHelperCodeSigningFailure(domain: nsError.domain, code: nsError.code, message: "\(localized) \(described)") {
-      return helperCodeSigningRecovery
+    if let helperMessage = helperRegistrationMessage(domain: nsError.domain, code: nsError.code, message: "\(localized) \(described)") {
+      return helperMessage
     }
 
     if let networkMessage = networkMessage(for: nsError) {
@@ -110,8 +111,8 @@ enum UserFacingError {
   }
 
   static func message(from rawMessage: String) -> String {
-    if isHelperCodeSigningFailure(domain: nil, code: nil, message: rawMessage) {
-      return helperCodeSigningRecovery
+    if let helperMessage = helperRegistrationMessage(domain: nil, code: nil, message: rawMessage) {
+      return helperMessage
     }
 
     if rawMessage.contains("NSURLErrorDomain") || rawMessage.contains("Could not connect to the server") {
@@ -123,11 +124,17 @@ enum UserFacingError {
     return "\(trimmed.prefix(217))..."
   }
 
-  private static func isHelperCodeSigningFailure(domain: String?, code: Int?, message: String) -> Bool {
+  private static func helperRegistrationMessage(domain: String?, code: Int?, message: String) -> String? {
+    if domain == "SMAppServiceErrorDomain" && code == 1 {
+      return helperOperationNotPermittedRecovery
+    }
     let helperRegistrationFailed = domain == "SMAppServiceErrorDomain" && code == 3
-    return helperRegistrationFailed
+    if helperRegistrationFailed
       || message.localizedCaseInsensitiveContains("Codesigning failure")
-      || message.contains("-67056")
+      || message.contains("-67056") {
+      return helperCodeSigningRecovery
+    }
+    return nil
   }
 
   private static func networkMessage(for error: NSError) -> String? {

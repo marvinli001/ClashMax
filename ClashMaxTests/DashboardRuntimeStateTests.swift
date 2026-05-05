@@ -1,5 +1,4 @@
 import Combine
-import RiveRuntime
 import XCTest
 @testable import ClashMax
 
@@ -537,6 +536,29 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertGreaterThan(changeCount, 0)
   }
 
+  func testRequestingProxyRoutingModeDefersPublishedChangesUntilNextActorTurn() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    )
+    var changeCount = 0
+    let cancellable = model.objectWillChange.sink { changeCount += 1 }
+    defer { cancellable.cancel() }
+
+    model.requestProxyRoutingMode(.tun)
+
+    XCTAssertEqual(model.proxyRoutingMode, .systemProxy)
+    XCTAssertEqual(changeCount, 0)
+
+    for _ in 0..<20 where model.proxyRoutingMode != .tun {
+      await Task.yield()
+    }
+
+    XCTAssertEqual(model.proxyRoutingMode, .tun)
+    XCTAssertGreaterThan(changeCount, 0)
+  }
+
   func testRunningCoversUserModeAndTunnelCore() {
     XCTAssertEqual(
       DashboardRuntimeState.resolve(
@@ -597,71 +619,18 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertGreaterThanOrEqual(restingLength, 68)
   }
 
-  func testPowerButtonRiveAssetIsBundled() {
-    XCTAssertEqual(DashboardPowerButtonAsset.fileName, "2773-5719-egg-radio-button-v2")
-    XCTAssertNotNil(
-      Bundle.main.url(
-        forResource: DashboardPowerButtonAsset.fileName,
-        withExtension: DashboardPowerButtonAsset.fileExtension,
-        subdirectory: DashboardPowerButtonAsset.bundleSubdirectory
-      )
-    )
-  }
-
-  func testPowerButtonRiveStateMachineInputsAreAvailable() throws {
-    XCTAssertEqual(DashboardPowerButtonAsset.stateMachineName, "Radiobutton")
-    XCTAssertEqual(DashboardPowerButtonAsset.hoverInputName, "isHover")
-    XCTAssertEqual(DashboardPowerButtonAsset.pressedInputName, "Pressed")
-    XCTAssertEqual(DashboardPowerButtonAsset.backInputName, "Back")
-
-    let url = try XCTUnwrap(DashboardPowerButtonAsset.bundleURL())
-    let data = try Data(contentsOf: url)
-    let file = try RiveFile(data: data, loadCdn: false)
-    let artboard = try file.artboard()
-    let stateMachine = try artboard.stateMachine(fromName: DashboardPowerButtonAsset.stateMachineName)
-    let inputNames = stateMachine.inputNames()
-
-    XCTAssertTrue(inputNames.contains(DashboardPowerButtonAsset.hoverInputName))
-    XCTAssertTrue(inputNames.contains(DashboardPowerButtonAsset.pressedInputName))
-    XCTAssertTrue(inputNames.contains(DashboardPowerButtonAsset.backInputName))
-  }
-
-  func testPowerButtonRivePressedTransitionIsNotMaskedByIdleState() throws {
-    try withPowerButtonStateMachine { stateMachine in
-      XCTAssertTrue(stateMachine.advance(by: 0))
-      XCTAssertEqual(stateMachine.stateChanges(), ["Idle"])
-
-      stateMachine.getTrigger(DashboardPowerButtonAsset.pressedInputName).fire()
-
-      XCTAssertTrue(stateMachine.advance(by: 0))
-      XCTAssertEqual(stateMachine.stateChanges(), ["Pressed"])
-    }
-  }
-
-  func testPowerButtonRiveHoverCanMaskPressedWhenAdvancedInSameFrame() throws {
-    try withPowerButtonStateMachine { stateMachine in
-      XCTAssertTrue(stateMachine.advance(by: 0))
-      XCTAssertEqual(stateMachine.stateChanges(), ["Idle"])
-
-      stateMachine.getBool(DashboardPowerButtonAsset.hoverInputName).setValue(true)
-      stateMachine.getTrigger(DashboardPowerButtonAsset.pressedInputName).fire()
-
-      XCTAssertTrue(stateMachine.advance(by: 0))
-      XCTAssertEqual(stateMachine.stateChanges(), ["Hover"])
-    }
-  }
-
   func testHomeBackgroundUsesSingleSystemFillAcrossStates() {
     XCTAssertEqual(DashboardHomeBackgroundStyle.fillID(for: .blocked(reason: "No profile")), "system-window")
     XCTAssertEqual(DashboardHomeBackgroundStyle.fillID(for: .running), "system-window")
     XCTAssertEqual(DashboardHomeBackgroundStyle.fillID(for: .crashed(message: "boom")), "system-window")
   }
 
-  func testPowerButtonSurfaceAdaptsToColorScheme() {
-    XCTAssertNotEqual(
-      DashboardPowerButtonSurfaceStyle.surfaceID(for: .light),
-      DashboardPowerButtonSurfaceStyle.surfaceID(for: .dark)
-    )
+  func testCoreVisualActiveOnlyForOperationalStates() {
+    XCTAssertFalse(DashboardRuntimeState.blocked(reason: "No profile").isVisualActive)
+    XCTAssertFalse(DashboardRuntimeState.stopped.isVisualActive)
+    XCTAssertFalse(DashboardRuntimeState.crashed(message: "boom").isVisualActive)
+    XCTAssertTrue(DashboardRuntimeState.starting.isVisualActive)
+    XCTAssertTrue(DashboardRuntimeState.running.isVisualActive)
   }
 
   func testDashboardCardSurfaceAdaptsToColorScheme() {
@@ -699,17 +668,23 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     XCTAssertEqual(
       UserFacingError.message(for: error),
-      "TUN helper could not be registered because ClashMax or its helper is not code signed. Build and run with local code signing enabled, or switch Proxy Routing to System Proxy."
+      "TUN helper could not be registered because ClashMax or its helper is not correctly signed, notarized, or approved by macOS. Verify signing, approve the helper in System Settings, then retry."
     )
   }
 
-  private func withPowerButtonStateMachine(_ body: (RiveStateMachineInstance) throws -> Void) throws {
-    let url = try XCTUnwrap(DashboardPowerButtonAsset.bundleURL())
-    let data = try Data(contentsOf: url)
-    let file = try RiveFile(data: data, loadCdn: false)
-    let artboard = try file.artboard()
-    let stateMachine = try artboard.stateMachine(fromName: DashboardPowerButtonAsset.stateMachineName)
-    try body(stateMachine)
+  func testHelperOperationNotPermittedExplainsDebugLaunchDaemonConstraint() {
+    let error = NSError(
+      domain: "SMAppServiceErrorDomain",
+      code: 1,
+      userInfo: [
+        NSLocalizedDescriptionKey: "Operation not permitted"
+      ]
+    )
+
+    XCTAssertEqual(
+      UserFacingError.message(for: error),
+      "macOS rejected TUN helper registration. LaunchDaemon helpers registered with SMAppService must come from a trusted signed and notarized app; Xcode Debug builds from DerivedData can be rejected with Operation not permitted."
+    )
   }
 
   private static func writeProxyConfig(named proxyName: String, to url: URL) throws {

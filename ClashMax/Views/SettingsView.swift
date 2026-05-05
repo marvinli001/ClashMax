@@ -41,7 +41,7 @@ struct SettingsView: View {
         Section("System") {
           Picker("Proxy Routing", selection: Binding(
             get: { appModel.proxyRoutingMode },
-            set: { appModel.setProxyRoutingMode($0) }
+            set: { appModel.requestProxyRoutingMode($0) }
           )) {
             ForEach(ProxyRoutingMode.allCases) { mode in
               Label(mode.displayName, systemImage: mode.symbolName).tag(mode)
@@ -50,29 +50,39 @@ struct SettingsView: View {
           .help("Start uses this routing mode.")
 
           if appModel.proxyRoutingMode == .tun {
-            HStack(alignment: .firstTextBaseline) {
-              Text(appModel.helperClient.statusMessage)
-                .foregroundStyle(.secondary)
-              Spacer()
-              Button {
-                appModel.refreshHelperStatus()
-              } label: {
-                Label("Status", systemImage: "waveform.path.ecg")
-              }
-              Button {
-                appModel.refreshHelperLogs()
-              } label: {
-                Label("Logs", systemImage: "text.alignleft")
-              }
-            }
-            if !appModel.helperLogs.isEmpty {
-              VStack(alignment: .leading, spacing: 6) {
-                ForEach(appModel.helperLogs.suffix(6), id: \.self) { line in
-                  Text(line)
-                    .font(.system(.caption, design: .monospaced))
-                    .lineLimit(2)
+            VStack(alignment: .leading, spacing: 8) {
+              HStack(alignment: .firstTextBaseline) {
+                Text(appModel.helperClient.statusMessage)
+                  .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                  appModel.registerHelper()
+                } label: {
+                  Label("Register", systemImage: "checkmark.shield")
+                }
+                Button {
+                  appModel.refreshHelperStatus()
+                } label: {
+                  Label("Status", systemImage: "waveform.path.ecg")
+                }
+                Button {
+                  appModel.refreshHelperLogs()
+                } label: {
+                  Label("Logs", systemImage: "text.alignleft")
                 }
               }
+              if !appModel.helperLogs.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                  ForEach(appModel.helperLogs.suffix(6), id: \.self) { line in
+                    Text(line)
+                      .font(.system(.caption, design: .monospaced))
+                      .lineLimit(2)
+                  }
+                }
+              }
+            }
+            .onAppear {
+              appModel.refreshHelperRegistrationStatus()
             }
           } else {
             Label(

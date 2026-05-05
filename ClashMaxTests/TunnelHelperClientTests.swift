@@ -1,4 +1,5 @@
 import Foundation
+import ServiceManagement
 import XCTest
 @testable import ClashMax
 
@@ -21,6 +22,25 @@ final class TunnelHelperClientTests: XCTestCase {
     XCTAssertEqual(response.pid, 42)
     XCTAssertEqual(response.message, "ready")
     XCTAssertEqual(HelperXPCPayload.logLines(from: HelperXPCPayload.logs(["one", "two"])), ["one", "two"])
+  }
+
+  func testHelperRegistrationStatusMessagesGuideRegistrationAndApproval() {
+    XCTAssertEqual(
+      TunnelHelperClient.statusMessage(for: .notRegistered),
+      "Helper not registered. Click Register or Start in TUN mode."
+    )
+    XCTAssertEqual(
+      TunnelHelperClient.statusMessage(for: .enabled),
+      "Helper registered and enabled."
+    )
+    XCTAssertEqual(
+      TunnelHelperClient.statusMessage(for: .requiresApproval),
+      "Helper registered. Approve ClashMax in System Settings > General > Login Items & Extensions."
+    )
+    XCTAssertEqual(
+      TunnelHelperClient.statusMessage(for: .notFound),
+      "Helper not found in the app bundle. Clean build and run ClashMax again."
+    )
   }
 
   func testHelperInterfaceUsesStringPayloadReplies() throws {
@@ -59,9 +79,22 @@ final class TunnelHelperClientTests: XCTestCase {
       }
     }
   }
+
+  func testUnavailablePrivilegedHelperStatusReturnsWithoutMainQueueAssertion() async {
+    let startedAt = Date()
+    do {
+      _ = try await withTimeout(seconds: 2) {
+        try await PrivilegedHelperXPCTransport().status()
+      }
+    } catch {
+      // Missing or unapproved helpers should surface as ordinary errors, not libdispatch assertions.
+    }
+
+    XCTAssertLessThan(Date().timeIntervalSince(startedAt), 3)
+  }
 }
 
-private final class FakeHelperTransport: HelperXPCTransport {
+private final class FakeHelperTransport: HelperXPCTransport, @unchecked Sendable {
   let response: [String]
 
   init(response: [String]) {

@@ -19,9 +19,6 @@ packages:
   Pow:
     url: https://github.com/EmergeTools/Pow.git
     from: "1.0.0"
-  RiveRuntime:
-    url: https://github.com/rive-app/rive-ios.git
-    from: "6.19.2"
 targets:
   ClashMax:
     type: application
@@ -34,8 +31,6 @@ targets:
     dependencies:
       - package: Yams
       - package: Pow
-      - package: RiveRuntime
-        product: RiveRuntime
       - target: ClashMaxHelper
         embed: false
         link: false
@@ -68,7 +63,6 @@ targets:
           - "$(SRCROOT)/Resources/Core/mihomo-darwin-amd64"
           - "$(SRCROOT)/Resources/Core/mihomo-darwin-arm64"
           - "$(SRCROOT)/Resources/Core/mihomo-manifest.json"
-          - "$(SRCROOT)/Resources/Animations/2773-5719-egg-radio-button-v2.riv"
         outputFiles:
           - "$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Library/LaunchServices/ClashMaxHelper"
           - "$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Library/LaunchDaemons/io.github.clashmax.ClashMax.Helper.plist"
@@ -77,18 +71,15 @@ targets:
           - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Core/mihomo-darwin-amd64"
           - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Core/mihomo-darwin-arm64"
           - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Core/mihomo-manifest.json"
-          - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Animations/2773-5719-egg-radio-button-v2.riv"
         script: |
           set -euo pipefail
           launch_services="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Library/LaunchServices"
           launch_daemons="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Library/LaunchDaemons"
           core_resources="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Core"
-          animation_resources="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Animations"
-          mkdir -p "$launch_services" "$launch_daemons" "$core_resources" "$animation_resources"
+          mkdir -p "$launch_services" "$launch_daemons" "$core_resources"
           cp "$BUILT_PRODUCTS_DIR/ClashMaxHelper" "$launch_services/ClashMaxHelper"
           cp "$SRCROOT/Config/io.github.clashmax.ClashMax.Helper.plist" "$launch_daemons/io.github.clashmax.ClashMax.Helper.plist"
           cp -R "$SRCROOT/Resources/Core/." "$core_resources/"
-          cp "$SRCROOT/Resources/Animations/2773-5719-egg-radio-button-v2.riv" "$animation_resources/2773-5719-egg-radio-button-v2.riv"
   ClashMaxHelper:
     type: tool
     platform: macOS
@@ -101,6 +92,7 @@ targets:
         PRODUCT_NAME: ClashMaxHelper
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_FILE: Config/ClashMaxHelper-Info.plist
+        CREATE_INFOPLIST_SECTION_IN_BINARY: YES
         MACH_O_TYPE: mh_execute
     entitlements:
       path: Config/ClashMaxHelper.entitlements

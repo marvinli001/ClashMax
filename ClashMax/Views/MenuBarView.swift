@@ -19,7 +19,7 @@ struct MenuBarView: View {
 
     Picker("Proxy", selection: Binding(
       get: { appModel.proxyRoutingMode },
-      set: { appModel.setProxyRoutingMode($0) }
+      set: { appModel.requestProxyRoutingMode($0) }
     )) {
       ForEach(ProxyRoutingMode.allCases) { mode in
         Text(mode.displayName).tag(mode)

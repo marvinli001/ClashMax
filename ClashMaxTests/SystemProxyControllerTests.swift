@@ -11,6 +11,11 @@ final class SystemProxyControllerTests: XCTestCase {
     XCTAssertFalse(script.contains("CODE_SIGNING_ALLOWED=NO"))
     XCTAssertTrue(script.contains("CLASHMAX_DERIVED_DATA"))
     XCTAssertTrue(script.contains("Library/Developer/Xcode/DerivedData/ClashMaxLocal"))
+    XCTAssertTrue(script.contains("security find-identity -v -p codesigning"))
+    XCTAssertTrue(script.contains("CLASHMAX_CODESIGN_IDENTITY"))
+    XCTAssertTrue(script.contains("Config/ClashMaxHelper.entitlements"))
+    XCTAssertTrue(script.contains("Config/ClashMax.entitlements"))
+    XCTAssertTrue(script.contains("TUN helper registration will not work with ad-hoc signing"))
   }
 
   func testAppBundleExtendedAttributesAreClearedBeforeSigning() throws {
@@ -22,6 +27,29 @@ final class SystemProxyControllerTests: XCTestCase {
     XCTAssertTrue(project.contains("Clean Bundle Extended Attributes"))
     XCTAssertTrue(project.contains("xattr -cr \\\"$TARGET_BUILD_DIR/$WRAPPER_NAME\\\""))
     XCTAssertTrue(project.contains("ENABLE_USER_SCRIPT_SANDBOXING = NO;"))
+  }
+
+  func testHelperEmbedsInfoPlistForPrivilegedServiceIdentity() throws {
+    let testFile = URL(fileURLWithPath: #filePath)
+    let projectRoot = testFile.deletingLastPathComponent().deletingLastPathComponent()
+    let projectFile = projectRoot.appendingPathComponent("ClashMax.xcodeproj/project.pbxproj")
+    let project = try String(contentsOf: projectFile, encoding: .utf8)
+
+    XCTAssertTrue(project.contains("CREATE_INFOPLIST_SECTION_IN_BINARY = YES;"))
+  }
+
+  func testProjectDoesNotReferenceUnusedRiveRuntimeArtifact() throws {
+    let testFile = URL(fileURLWithPath: #filePath)
+    let projectRoot = testFile.deletingLastPathComponent().deletingLastPathComponent()
+    let projectFile = projectRoot.appendingPathComponent("ClashMax.xcodeproj/project.pbxproj")
+    let projectSpecFile = projectRoot.appendingPathComponent("project.yml")
+    let project = try String(contentsOf: projectFile, encoding: .utf8)
+    let projectSpec = try String(contentsOf: projectSpecFile, encoding: .utf8)
+
+    XCTAssertFalse(project.contains("rive-ios"))
+    XCTAssertFalse(project.contains("RiveRuntime"))
+    XCTAssertFalse(projectSpec.contains("rive-ios"))
+    XCTAssertFalse(projectSpec.contains("RiveRuntime"))
   }
 
   func testProcessCommandRunnerTimesOutHangingCommands() async throws {

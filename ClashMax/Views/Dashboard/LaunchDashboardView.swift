@@ -233,7 +233,7 @@ private struct LaunchControlDeck: View {
         .foregroundStyle(.secondary)
       ProxyRoutingModePicker(selection: Binding(
         get: { appModel.proxyRoutingMode },
-        set: { appModel.setProxyRoutingMode($0) }
+        set: { appModel.requestProxyRoutingMode($0) }
       ))
     }
     .frame(width: DashboardLayoutMetrics.proxyRoutingModePickerWidth, alignment: .leading)
@@ -300,4 +300,3 @@ private struct LaunchStatusMessage: View {
     return .red
   }
 }
-

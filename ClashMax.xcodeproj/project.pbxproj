@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 77;
+	objectVersion = 63;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -26,7 +26,6 @@
 		7BCB87E35CCF1CD745D33AFA /* ProfileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C92D6C3C6B280CDDFC29470F /* ProfileStore.swift */; };
 		817C82AAB0C2BB01D0DDFA96 /* TunnelHelperValidationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78EF9C7EFB9B051CE212A49B /* TunnelHelperValidationTests.swift */; };
 		82BED5A9B8D2DAD2714D431C /* HelperProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7EE62DA4C3657653D44F922 /* HelperProtocol.swift */; };
-		8CF16164DAAFD7ED31F7AA7C /* RiveRuntime in Frameworks */ = {isa = PBXBuildFile; productRef = 34214080213A992B3CAF212F /* RiveRuntime */; };
 		8F30DCF7999D5EC70C40E8A6 /* Formatters.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2435F74711FCEE85D5058FC9 /* Formatters.swift */; };
 		90DB2815DE850A66BB7BB5F0 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = EAD76262FC60D7DD00B25639 /* Assets.xcassets */; };
 		9435537B65D100571BA1DB93 /* ClashMaxApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7ED7AA0F377BF1BF367C2AC5 /* ClashMaxApp.swift */; };
@@ -92,7 +91,7 @@
 		33B5EAE971B5BB7B41079222 /* CoreRuntimePreflightTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreRuntimePreflightTests.swift; sourceTree = "<group>"; };
 		4294DDEF4FE7C6F6B5D92D11 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		47357CB3092C971F87BF7463 /* TunnelHelperClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TunnelHelperClientTests.swift; sourceTree = "<group>"; };
-		4A6EDC74EB42EB37E504DC43 /* ClashMaxHelper */ = {isa = PBXFileReference; includeInIndex = 0; path = ClashMaxHelper; sourceTree = BUILT_PRODUCTS_DIR; };
+		4A6EDC74EB42EB37E504DC43 /* ClashMaxHelper */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = ClashMaxHelper; sourceTree = BUILT_PRODUCTS_DIR; };
 		54DFA4FE364633A28C1ED410 /* DashboardComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardComponents.swift; sourceTree = "<group>"; };
 		5A31C178439DDE1DF4A02EDB /* ConfigNormalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigNormalizer.swift; sourceTree = "<group>"; };
 		608E910E0AB43ACEEB146E9D /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
@@ -141,7 +140,6 @@
 			files = (
 				6507627D59CE801909FBDF59 /* Yams in Frameworks */,
 				7833F2BEAAE74C3587715CB6 /* Pow in Frameworks */,
-				8CF16164DAAFD7ED31F7AA7C /* RiveRuntime in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -364,7 +362,6 @@
 			packageProductDependencies = (
 				9FF6185A9B5F20B8664BA152 /* Yams */,
 				AC88EA016AB92CD58BDFAEC1 /* Pow */,
-				34214080213A992B3CAF212F /* RiveRuntime */,
 			);
 			productName = ClashMax;
 			productReference = 91B00EA27A396DAE5196B685 /* ClashMax.app */;
@@ -379,16 +376,11 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
-					2EAAFCFED0B5B54550ECAAE5 = {
-						DevelopmentTeam = "";
-						ProvisioningStyle = Automatic;
-					};
 					3DD43042EEDEE25EEA277860 = {
 						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
 					A6092EE1A3A6B688DD506396 = {
-						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -405,10 +397,8 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				917BF213BA1E34F0DF8815D1 /* XCRemoteSwiftPackageReference "Pow" */,
-				F7C60D8FE0E1C907DCE8487E /* XCRemoteSwiftPackageReference "rive-ios" */,
 				601C2B5DE33ECB99B22399CE /* XCRemoteSwiftPackageReference "Yams" */,
 			);
-			preferredProjectObjectVersion = 77;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -464,7 +454,6 @@
 				"$(SRCROOT)/Resources/Core/mihomo-darwin-amd64",
 				"$(SRCROOT)/Resources/Core/mihomo-darwin-arm64",
 				"$(SRCROOT)/Resources/Core/mihomo-manifest.json",
-				"$(SRCROOT)/Resources/Animations/2773-5719-egg-radio-button-v2.riv",
 			);
 			name = "Embed Helper";
 			outputFileListPaths = (
@@ -477,11 +466,10 @@
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Core/mihomo-darwin-amd64",
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Core/mihomo-darwin-arm64",
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Core/mihomo-manifest.json",
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Animations/2773-5719-egg-radio-button-v2.riv",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -euo pipefail\nlaunch_services=\"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Library/LaunchServices\"\nlaunch_daemons=\"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Library/LaunchDaemons\"\ncore_resources=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Core\"\nanimation_resources=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Animations\"\nmkdir -p \"$launch_services\" \"$launch_daemons\" \"$core_resources\" \"$animation_resources\"\ncp \"$BUILT_PRODUCTS_DIR/ClashMaxHelper\" \"$launch_services/ClashMaxHelper\"\ncp \"$SRCROOT/Config/io.github.clashmax.ClashMax.Helper.plist\" \"$launch_daemons/io.github.clashmax.ClashMax.Helper.plist\"\ncp -R \"$SRCROOT/Resources/Core/.\" \"$core_resources/\"\ncp \"$SRCROOT/Resources/Animations/2773-5719-egg-radio-button-v2.riv\" \"$animation_resources/2773-5719-egg-radio-button-v2.riv\"\n";
+			shellScript = "set -euo pipefail\nlaunch_services=\"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Library/LaunchServices\"\nlaunch_daemons=\"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Library/LaunchDaemons\"\ncore_resources=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Core\"\nmkdir -p \"$launch_services\" \"$launch_daemons\" \"$core_resources\"\ncp \"$BUILT_PRODUCTS_DIR/ClashMaxHelper\" \"$launch_services/ClashMaxHelper\"\ncp \"$SRCROOT/Config/io.github.clashmax.ClashMax.Helper.plist\" \"$launch_daemons/io.github.clashmax.ClashMax.Helper.plist\"\ncp -R \"$SRCROOT/Resources/Core/.\" \"$core_resources/\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -700,7 +688,10 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Config/ClashMaxHelper.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				COMBINE_HIDPI_IMAGES = YES;
+				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
+				DEVELOPMENT_TEAM = 678WA95W4U;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Config/ClashMaxHelper-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -711,6 +702,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = io.github.clashmax.ClashMax.Helper;
 				PRODUCT_NAME = ClashMaxHelper;
 				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
 			};
 			name = Release;
 		};
@@ -737,6 +729,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Config/ClashMax.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = 678WA95W4U;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = ClashMax;
@@ -747,6 +740,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				MARKETING_VERSION = 1.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = io.github.clashmax.ClashMax;
 				PRODUCT_NAME = ClashMax;
 				SDKROOT = macosx;
@@ -757,7 +751,12 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Config/ClashMaxHelper.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
+				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
+				DEVELOPMENT_TEAM = "";
+				"DEVELOPMENT_TEAM[sdk=macosx*]" = 678WA95W4U;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Config/ClashMaxHelper-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -767,7 +766,9 @@
 				MACH_O_TYPE = mh_execute;
 				PRODUCT_BUNDLE_IDENTIFIER = io.github.clashmax.ClashMax.Helper;
 				PRODUCT_NAME = ClashMaxHelper;
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
 			};
 			name = Debug;
 		};
@@ -776,7 +777,9 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Config/ClashMax.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = 678WA95W4U;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = ClashMax;
@@ -787,6 +790,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				MARKETING_VERSION = 1.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = io.github.clashmax.ClashMax;
 				PRODUCT_NAME = ClashMax;
 				SDKROOT = macosx;
@@ -868,22 +872,9 @@
 				minimumVersion = 1.0.0;
 			};
 		};
-		F7C60D8FE0E1C907DCE8487E /* XCRemoteSwiftPackageReference "rive-ios" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/rive-app/rive-ios.git";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 6.19.2;
-			};
-		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		34214080213A992B3CAF212F /* RiveRuntime */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = F7C60D8FE0E1C907DCE8487E /* XCRemoteSwiftPackageReference "rive-ios" */;
-			productName = RiveRuntime;
-		};
 		88FF56EB7BDC95E76EC245CF /* Yams */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 601C2B5DE33ECB99B22399CE /* XCRemoteSwiftPackageReference "Yams" */;

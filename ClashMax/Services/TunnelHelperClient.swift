@@ -1,8 +1,7 @@
 import Foundation
 import ServiceManagement
 
-@MainActor
-protocol HelperXPCTransport {
+protocol HelperXPCTransport: Sendable {
   func status() async throws -> HelperClientResponse
   func startTunnel(coreURL: URL, configURL: URL, workDirectory: URL, secret: String) async throws -> HelperClientResponse
   func stopTunnel() async throws -> HelperClientResponse
@@ -41,16 +40,47 @@ struct HelperClientResponse: Sendable {
 @MainActor
 final class TunnelHelperClient: ObservableObject {
   @Published var statusMessage: String = "Not registered"
-  private let transport: HelperXPCTransport
+  private let transport: any HelperXPCTransport
+  private static var service: SMAppService {
+    SMAppService.daemon(plistName: "io.github.clashmax.ClashMax.Helper.plist")
+  }
 
-  init(transport: HelperXPCTransport = PrivilegedHelperXPCTransport()) {
+  init(transport: any HelperXPCTransport = PrivilegedHelperXPCTransport()) {
     self.transport = transport
   }
 
   func register() throws {
-    let service = SMAppService.daemon(plistName: "io.github.clashmax.ClashMax.Helper.plist")
+    let service = Self.service
+    switch service.status {
+    case .enabled, .requiresApproval:
+      statusMessage = Self.statusMessage(for: service.status)
+      return
+    case .notRegistered, .notFound:
+      break
+    @unknown default:
+      break
+    }
     try service.register()
-    statusMessage = "Registered. Approve ClashMax Helper in System Settings if macOS asks."
+    statusMessage = Self.statusMessage(for: service.status)
+  }
+
+  func refreshRegistrationStatus() {
+    statusMessage = Self.statusMessage(for: Self.service.status)
+  }
+
+  static func statusMessage(for status: SMAppService.Status) -> String {
+    switch status {
+    case .notRegistered:
+      return "Helper not registered. Click Register or Start in TUN mode."
+    case .enabled:
+      return "Helper registered and enabled."
+    case .requiresApproval:
+      return "Helper registered. Approve ClashMax in System Settings > General > Login Items & Extensions."
+    case .notFound:
+      return "Helper not found in the app bundle. Clean build and run ClashMax again."
+    @unknown default:
+      return "Helper status is unknown. Clean build and run ClashMax again."
+    }
   }
 
   func status() async throws -> HelperClientResponse {
@@ -125,13 +155,14 @@ struct PrivilegedHelperXPCTransport: HelperXPCTransport {
     let box = ContinuationBox<HelperClientResponse>()
 
     connection.invalidationHandler = {
-      box.fail(AppError.helperResponse("Helper connection invalidated. The privileged helper may not be installed or approved."))
+      box.fail(
+        AppError.helperResponse("Helper connection invalidated. The privileged helper may not be installed or approved."),
+        runCleanup: false
+      )
     }
     connection.interruptionHandler = {
-      box.fail(AppError.helperResponse("Helper connection interrupted."))
+      box.fail(AppError.helperResponse("Helper connection interrupted."), runCleanup: false)
     }
-    connection.resume()
-
     return try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<HelperClientResponse, Error>) in
         box.attach(continuation) {
@@ -146,6 +177,7 @@ struct PrivilegedHelperXPCTransport: HelperXPCTransport {
           box.fail(AppError.helperResponse("Unable to connect to ClashMax Helper."))
           return
         }
+        connection.resume()
         body(proxy) { payload in
           box.succeed(HelperClientResponse(payload: payload))
         }
@@ -163,13 +195,14 @@ struct PrivilegedHelperXPCTransport: HelperXPCTransport {
     let box = ContinuationBox<[String]>()
 
     connection.invalidationHandler = {
-      box.fail(AppError.helperResponse("Helper connection invalidated. The privileged helper may not be installed or approved."))
+      box.fail(
+        AppError.helperResponse("Helper connection invalidated. The privileged helper may not be installed or approved."),
+        runCleanup: false
+      )
     }
     connection.interruptionHandler = {
-      box.fail(AppError.helperResponse("Helper connection interrupted."))
+      box.fail(AppError.helperResponse("Helper connection interrupted."), runCleanup: false)
     }
-    connection.resume()
-
     return try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[String], Error>) in
         box.attach(continuation) {
@@ -184,6 +217,7 @@ struct PrivilegedHelperXPCTransport: HelperXPCTransport {
           box.fail(AppError.helperResponse("Unable to connect to ClashMax Helper."))
           return
         }
+        connection.resume()
         body(proxy) { payload in
           box.succeed(HelperXPCPayload.logLines(from: payload))
         }
@@ -213,19 +247,14 @@ private final class ContinuationBox<Value: Sendable>: @unchecked Sendable {
   }
 
   func succeed(_ value: Value) {
-    lock.lock()
-    guard !settled else { lock.unlock(); return }
-    settled = true
-    let continuation = self.continuation
-    let cleanup = self.cleanup
-    self.continuation = nil
-    self.cleanup = nil
-    continuation?.resume(returning: value)
-    lock.unlock()
-    cleanup?()
+    settle(.success(value), runCleanup: true)
   }
 
-  func fail(_ error: Error) {
+  func fail(_ error: Error, runCleanup: Bool = true) {
+    settle(.failure(error), runCleanup: runCleanup)
+  }
+
+  private func settle(_ result: Result<Value, Error>, runCleanup: Bool) {
     lock.lock()
     guard !settled else { lock.unlock(); return }
     settled = true
@@ -233,8 +262,15 @@ private final class ContinuationBox<Value: Sendable>: @unchecked Sendable {
     let cleanup = self.cleanup
     self.continuation = nil
     self.cleanup = nil
-    continuation?.resume(throwing: error)
     lock.unlock()
-    cleanup?()
+    switch result {
+    case let .success(value):
+      continuation?.resume(returning: value)
+    case let .failure(error):
+      continuation?.resume(throwing: error)
+    }
+    if runCleanup {
+      cleanup?()
+    }
   }
 }
