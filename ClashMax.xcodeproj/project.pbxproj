@@ -32,6 +32,8 @@
 		993E27377946D94ECEC6CA47 /* RunningDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2ACF34B3417EEFB4C13CB013 /* RunningDashboardView.swift */; };
 		9A911B69CBA8BF15E532B579 /* Timeout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2ABDFBB270FD6C601117CA49 /* Timeout.swift */; };
 		9F9BD79C3A92F49607A26D64 /* ConfigNormalizerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B38F8F5042460DDFC4142D6E /* ConfigNormalizerTests.swift */; };
+		A0B1C2D3E4F5061728394051 /* SubscriptionFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B1C2D3E4F5061728394050 /* SubscriptionFetcher.swift */; };
+		A0B1C2D3E4F5061728394053 /* SubscriptionFetcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B1C2D3E4F5061728394052 /* SubscriptionFetcherTests.swift */; };
 		A663D8BE71B424A043DDF051 /* LaunchDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D6E012D514CB8CC83940BCB /* LaunchDashboardView.swift */; };
 		B09DA1E8D5571B3D00E74431 /* CoreProcessControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71A566E7FD4BA3634EEB1E5A /* CoreProcessControllerTests.swift */; };
 		B3C29A1240D3B5EBA9FE5A03 /* LogsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4A2BEB4712640A482254EF3 /* LogsView.swift */; };
@@ -104,6 +106,8 @@
 		91B00EA27A396DAE5196B685 /* ClashMax.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ClashMax.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		93A93A1E61ED764914241456 /* SystemProxyController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemProxyController.swift; sourceTree = "<group>"; };
 		94791AE83711A844BABE209F /* CoreProcessController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreProcessController.swift; sourceTree = "<group>"; };
+		A0B1C2D3E4F5061728394050 /* SubscriptionFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionFetcher.swift; sourceTree = "<group>"; };
+		A0B1C2D3E4F5061728394052 /* SubscriptionFetcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionFetcherTests.swift; sourceTree = "<group>"; };
 		A3049F5E5929A9350DF21AB0 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		B38F8F5042460DDFC4142D6E /* ConfigNormalizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigNormalizerTests.swift; sourceTree = "<group>"; };
 		B4A2BEB4712640A482254EF3 /* LogsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogsView.swift; sourceTree = "<group>"; };
@@ -182,6 +186,7 @@
 				22AAFD1267E58A56D94592ED /* DashboardRuntimeStateTests.swift */,
 				1FB11E012D31B8CC33A511BD /* MihomoAPIClientTests.swift */,
 				102CFE841EECC431BA65A694 /* ProfileStoreTests.swift */,
+				A0B1C2D3E4F5061728394052 /* SubscriptionFetcherTests.swift */,
 				0D9E260500E476D9D4BDAF98 /* SystemProxyControllerTests.swift */,
 				E935C963C504825DE6A4F8BF /* TestDoubles.swift */,
 				47357CB3092C971F87BF7463 /* TunnelHelperClientTests.swift */,
@@ -226,6 +231,7 @@
 				94791AE83711A844BABE209F /* CoreProcessController.swift */,
 				DD0BF20165DDA5CBA93D70BE /* KeychainStore.swift */,
 				8EE23FBD08FD740D82ABB9D6 /* MihomoAPIClient.swift */,
+				A0B1C2D3E4F5061728394050 /* SubscriptionFetcher.swift */,
 				93A93A1E61ED764914241456 /* SystemProxyController.swift */,
 				11BC6F6EFDDABB919C5C09FA /* TunnelHelperClient.swift */,
 			);
@@ -514,6 +520,7 @@
 				C17D266234459D3AD8FFEED7 /* DashboardRuntimeStateTests.swift in Sources */,
 				C5DA1F51557D61C4E1A7E6A1 /* MihomoAPIClientTests.swift in Sources */,
 				C91370422264FC1660896543 /* ProfileStoreTests.swift in Sources */,
+				A0B1C2D3E4F5061728394053 /* SubscriptionFetcherTests.swift in Sources */,
 				C0456C1F18ADEE6DC65F28D3 /* SystemProxyControllerTests.swift in Sources */,
 				0CF9FEE27C87AE34882DC521 /* TestDoubles.swift in Sources */,
 				D625A914F25B58C627A234A4 /* TunnelHelperClientTests.swift in Sources */,
@@ -554,6 +561,7 @@
 				F232BA21F47604A638CC4458 /* RuntimePaths.swift in Sources */,
 				DFA6A6509657F3D972E73F03 /* SettingsView.swift in Sources */,
 				0726E0A274C59104498300B2 /* SidebarView.swift in Sources */,
+				A0B1C2D3E4F5061728394051 /* SubscriptionFetcher.swift in Sources */,
 				D04B95E5009D49D3BA4FCFCA /* SystemProxyController.swift in Sources */,
 				9A911B69CBA8BF15E532B579 /* Timeout.swift in Sources */,
 				B7F87955C7C14EA8E12691C4 /* TunnelHelperClient.swift in Sources */,

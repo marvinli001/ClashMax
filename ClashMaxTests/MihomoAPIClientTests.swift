@@ -103,4 +103,63 @@ final class MihomoAPIClientTests: XCTestCase {
     XCTAssertEqual(request.httpMethod, "GET")
     XCTAssertEqual(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.percentEncodedPath, "/providers/proxies/remote%2Fsub/healthcheck")
   }
+
+  func testProxyProvidersAreDecodedIntoStructuredRows() async throws {
+    let recorder = URLProtocolRecorder(responseBody: """
+    {
+      "providers": {
+        "remote": {
+          "name": "remote",
+          "type": "Proxy",
+          "vehicleType": "HTTP",
+          "updatedAt": "2026-05-05T09:30:00Z",
+          "proxies": [
+            { "name": "Japan", "type": "Vless" },
+            { "name": "DIRECT", "type": "Direct" }
+          ]
+        }
+      }
+    }
+    """)
+    let session = URLSession(configuration: recorder.configuration)
+    let client = MihomoAPIClient(baseURL: URL(string: "http://127.0.0.1:9097")!, secret: "abc", session: session)
+
+    let providers = try await client.structuredProxyProviders()
+
+    XCTAssertEqual(providers, [
+      ProxyProvider(
+        name: "remote",
+        type: "Proxy",
+        vehicleType: "HTTP",
+        updatedAt: ISO8601DateFormatter().date(from: "2026-05-05T09:30:00Z"),
+        proxies: [
+          ProxyNode(name: "Japan", type: "Vless", delay: nil, isSelectable: true),
+          ProxyNode(name: "DIRECT", type: "Direct", delay: nil, isSelectable: true)
+        ]
+      )
+    ])
+  }
+
+  func testConnectionCloseAndReloadRequestsUseAuthenticatedControlEndpoints() async throws {
+    let recorder = URLProtocolRecorder()
+    let session = URLSession(configuration: recorder.configuration)
+    let client = MihomoAPIClient(baseURL: URL(string: "http://127.0.0.1:9097")!, secret: "abc", session: session)
+
+    try await client.closeConnection(id: "abc/123")
+    var request = try XCTUnwrap(recorder.lastRequest)
+    XCTAssertEqual(request.httpMethod, "DELETE")
+    XCTAssertEqual(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.percentEncodedPath, "/connections/abc%2F123")
+    XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer abc")
+
+    try await client.closeAllConnections()
+    request = try XCTUnwrap(recorder.lastRequest)
+    XCTAssertEqual(request.httpMethod, "DELETE")
+    XCTAssertEqual(request.url?.path, "/connections")
+
+    try await client.reloadConfig(path: "/tmp/runtime.yaml")
+    request = try XCTUnwrap(recorder.lastRequest)
+    XCTAssertEqual(request.httpMethod, "PUT")
+    XCTAssertEqual(request.url?.path, "/configs")
+    XCTAssertEqual(String(data: try XCTUnwrap(recorder.lastBody), encoding: .utf8), #"{"path":"/tmp/runtime.yaml"}"#)
+  }
 }

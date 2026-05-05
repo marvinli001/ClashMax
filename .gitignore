@@ -23,3 +23,5 @@ Resources/Core/*.gz
 !Resources/Core/mihomo-manifest.json
 ClashMax macOS MVP Plan.md
 THIRD_PARTY_NOTICES.md
+Clash Verge Rev 的 macOS 端核心思路.md
+Clash Verge Rev macOS In-depth technical implementation analysis report.md

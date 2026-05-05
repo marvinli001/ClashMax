@@ -1,4 +1,5 @@
 import Combine
+import ServiceManagement
 import XCTest
 @testable import ClashMax
 
@@ -286,7 +287,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
       launcher: FakeProcessLauncher(),
       validator: RecordingRuntimeConfigValidator(result: .success(())),
       readinessProbe: RecordingCoreReadinessProbe(),
-      reaper: RecordingCoreProcessReaper()
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
     )
     let model = AppModel(paths: paths, profileStore: store, coreController: controller)
 
@@ -312,7 +314,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
       launcher: FakeProcessLauncher(),
       validator: RecordingRuntimeConfigValidator(result: .success(())),
       readinessProbe: RecordingCoreReadinessProbe(),
-      reaper: RecordingCoreProcessReaper()
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
     )
     let group = ProxyGroup(
       name: "Elite",
@@ -346,6 +349,130 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let delayRequestCount = await client.delayRequestCount()
     XCTAssertEqual(delayRequestCount, 1)
     XCTAssertEqual(model.proxyGroups.first?.nodes.first?.delay, 73)
+  }
+
+  func testReloadRuntimeDataIncludesProxyProvidersAndConnections() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try store.importLocalConfig(from: configURL)
+    let controller = CoreProcessController(
+      launcher: FakeProcessLauncher(),
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let provider = ProxyProvider(
+      name: "Remote",
+      type: "http",
+      vehicleType: "HTTP",
+      updatedAt: Date(timeIntervalSince1970: 1_700_000_000),
+      proxies: [ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true)]
+    )
+    let connection = ConnectionSnapshot(
+      id: "conn-1",
+      network: "tcp",
+      host: "example.com",
+      upload: 4,
+      download: 8,
+      chain: ["Proxy", "Japan"],
+      rule: "MATCH",
+      startedAt: nil
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [
+        ProxyGroup(
+          name: "Proxy",
+          type: "select",
+          selected: "Japan",
+          nodes: [ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true)]
+        )
+      ],
+      proxyProvidersResponse: [provider],
+      connectionsResponse: [connection],
+      testDelayResult: 73
+    )
+    let model = AppModel(paths: paths, profileStore: store, coreController: controller, apiClient: client)
+
+    try await controller.startUserMode(
+      coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+      configURL: configURL,
+      workDirectory: paths.runtime,
+      api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+    )
+
+    model.reloadRuntimeData()
+
+    for _ in 0..<20 where model.proxyProviders.isEmpty || model.connections.isEmpty {
+      await Task.yield()
+    }
+
+    XCTAssertEqual(model.proxyProviders, [provider])
+    XCTAssertEqual(model.connections, [connection])
+  }
+
+  func testProviderHealthAndConnectionCloseUseRuntimeAPI() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let provider = ProxyProvider(
+      name: "Remote/sub",
+      type: "http",
+      vehicleType: "HTTP",
+      updatedAt: nil,
+      proxies: []
+    )
+    let connection = ConnectionSnapshot(
+      id: "abc/123",
+      network: "tcp",
+      host: "example.com",
+      upload: 4,
+      download: 8,
+      chain: ["Proxy"],
+      rule: nil,
+      startedAt: nil
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [],
+      proxyProvidersResponse: [provider],
+      connectionsResponse: [connection],
+      testDelayResult: 73
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      apiClient: client
+    )
+    model.connections = [connection]
+
+    model.healthCheckProvider(provider)
+    model.closeConnection(connection)
+
+    for _ in 0..<20 {
+      let healthCheckCount = await client.healthCheckRequestCount()
+      let closedConnectionIDs = await client.closedConnectionIDs()
+      if healthCheckCount > 0 && !closedConnectionIDs.isEmpty {
+        break
+      }
+      await Task.yield()
+    }
+
+    let healthCheckProviders = await client.healthCheckProviders()
+    let closedConnectionIDs = await client.closedConnectionIDs()
+    XCTAssertEqual(healthCheckProviders, ["Remote/sub"])
+    XCTAssertEqual(closedConnectionIDs, ["abc/123"])
+    XCTAssertTrue(model.connections.isEmpty)
+
+    model.connections = [connection]
+    model.closeAllRuntimeConnections()
+
+    for _ in 0..<20 where await client.closeAllRequestCount() == 0 {
+      await Task.yield()
+    }
+
+    let closeAllRequestCount = await client.closeAllRequestCount()
+    XCTAssertEqual(closeAllRequestCount, 1)
+    XCTAssertTrue(model.connections.isEmpty)
   }
 
   func testUpdatingSubscriptionRefreshesStoppedProxyPreview() async throws {
@@ -435,7 +562,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
       launcher: launcher,
       validator: RecordingRuntimeConfigValidator(result: .success(())),
       readinessProbe: RecordingCoreReadinessProbe(),
-      reaper: RecordingCoreProcessReaper()
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
     )
     let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
     let model = AppModel(
@@ -458,6 +586,43 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setwebproxy Wi-Fi 127.0.0.1 7890"))
   }
 
+  func testTunStartWaitsForControllerReadinessBeforePublishingRunningState() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try store.importLocalConfig(from: configURL)
+    let helperTransport = ReadyTunnelHelperTransport()
+    let helper = TunnelHelperClient(
+      transport: helperTransport,
+      service: StaticHelperService(status: .enabled),
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      helperClient: helper,
+      tunnelReadinessProbe: FailingCoreReadinessProbe(message: "controller refused connection")
+    )
+    model.proxyRoutingMode = .tun
+
+    model.start()
+
+    for _ in 0..<40 where model.startInFlight || model.lastError == nil {
+      await Task.yield()
+    }
+
+    let startCount = await helperTransport.startCount()
+    let stopCount = await helperTransport.stopCount()
+    XCTAssertEqual(startCount, 1)
+    XCTAssertEqual(stopCount, 1)
+    XCTAssertFalse(model.tunnelCoreRunning)
+    XCTAssertFalse(model.tunEnabled)
+    XCTAssertFalse(model.isRunning)
+    XCTAssertTrue(model.lastError?.contains("controller refused connection") == true)
+  }
+
   func testSelectingProfileWhileRunningRestartsRuntimeWithNewProfile() async throws {
     let paths = try Self.makeRuntimePaths()
     let firstConfigURL = paths.appSupport.appendingPathComponent("first.yaml")
@@ -473,7 +638,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
       launcher: launcher,
       validator: RecordingRuntimeConfigValidator(result: .success(())),
       readinessProbe: RecordingCoreReadinessProbe(),
-      reaper: RecordingCoreProcessReaper()
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
     )
     let model = AppModel(
       paths: paths,
@@ -727,11 +893,23 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
 private actor RecordingMihomoController: MihomoAPIControlling {
   private let proxyGroupsResponse: [ProxyGroup]
+  private let proxyProvidersResponse: [ProxyProvider]
+  private let connectionsResponse: [ConnectionSnapshot]
   private let testDelayResult: Int
   private var delayRequests: [String] = []
+  private var healthCheckRequests: [String] = []
+  private var closedConnections: [String] = []
+  private var closedAllRequestCount = 0
 
-  init(proxyGroupsResponse: [ProxyGroup], testDelayResult: Int) {
+  init(
+    proxyGroupsResponse: [ProxyGroup],
+    proxyProvidersResponse: [ProxyProvider] = [],
+    connectionsResponse: [ConnectionSnapshot] = [],
+    testDelayResult: Int
+  ) {
     self.proxyGroupsResponse = proxyGroupsResponse
+    self.proxyProvidersResponse = proxyProvidersResponse
+    self.connectionsResponse = connectionsResponse
     self.testDelayResult = testDelayResult
   }
 
@@ -741,12 +919,16 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     proxyGroupsResponse
   }
 
+  func structuredProxyProviders() async throws -> [ProxyProvider] {
+    proxyProvidersResponse
+  }
+
   func rules() async throws -> [String] {
     []
   }
 
   func connections() async throws -> [ConnectionSnapshot] {
-    []
+    connectionsResponse
   }
 
   func selectProxy(group: String, proxy: String) async throws {}
@@ -755,6 +937,22 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     delayRequests.append(proxy)
     return testDelayResult
   }
+
+  func healthCheckProvider(named provider: String) async throws {
+    healthCheckRequests.append(provider)
+  }
+
+  func closeConnection(id: String) async throws {
+    closedConnections.append(id)
+  }
+
+  func closeAllConnections() async throws {
+    closedAllRequestCount += 1
+  }
+
+  func reloadConfig(path: String) async throws {}
+
+  func restart(configPath: String?) async throws {}
 
   nonisolated func trafficStream() -> AsyncThrowingStream<TrafficSample, Error> {
     AsyncThrowingStream { _ in }
@@ -770,6 +968,103 @@ private actor RecordingMihomoController: MihomoAPIControlling {
 
   func delayRequestCount() -> Int {
     delayRequests.count
+  }
+
+  func healthCheckRequestCount() -> Int {
+    healthCheckRequests.count
+  }
+
+  func healthCheckProviders() -> [String] {
+    healthCheckRequests
+  }
+
+  func closedConnectionIDs() -> [String] {
+    closedConnections
+  }
+
+  func closeAllRequestCount() -> Int {
+    closedAllRequestCount
+  }
+}
+
+private struct EmptyRuntimePortChecker: RuntimePortChecking {
+  func listeners(on ports: [Int]) async -> [PortListener] {
+    []
+  }
+}
+
+private actor ReadyTunnelHelperTransport: HelperXPCTransport {
+  private var starts = 0
+  private var stops = 0
+
+  func status() async throws -> HelperClientResponse {
+    HelperClientResponse(payload: HelperXPCPayload.response(ok: true, running: false))
+  }
+
+  func startTunnel(coreURL: URL, configURL: URL, workDirectory: URL, secret: String) async throws -> HelperClientResponse {
+    starts += 1
+    return HelperClientResponse(payload: HelperXPCPayload.response(ok: true, running: true, pid: 99))
+  }
+
+  func stopTunnel() async throws -> HelperClientResponse {
+    stops += 1
+    return HelperClientResponse(payload: HelperXPCPayload.response(ok: true, running: false))
+  }
+
+  func restartTunnel(coreURL: URL, configURL: URL, workDirectory: URL, secret: String) async throws -> HelperClientResponse {
+    try await stopTunnel()
+    return try await startTunnel(coreURL: coreURL, configURL: configURL, workDirectory: workDirectory, secret: secret)
+  }
+
+  func recentLogs() async throws -> [String] {
+    []
+  }
+
+  func startCount() -> Int { starts }
+  func stopCount() -> Int { stops }
+}
+
+@MainActor
+private final class StaticHelperService: HelperServiceManaging {
+  var status: SMAppService.Status
+
+  init(status: SMAppService.Status) {
+    self.status = status
+  }
+
+  func register() throws {}
+  func unregister() async throws {}
+}
+
+private struct StaticFingerprintProvider: HelperFingerprintProviding {
+  let fingerprint: String
+
+  func currentFingerprint() throws -> String {
+    fingerprint
+  }
+}
+
+private final class InMemoryHelperRegistrationRecordStore: HelperRegistrationRecordStoring, @unchecked Sendable {
+  var storedFingerprint: String?
+
+  init(storedFingerprint: String?) {
+    self.storedFingerprint = storedFingerprint
+  }
+
+  func helperFingerprint() -> String? {
+    storedFingerprint
+  }
+
+  func setHelperFingerprint(_ fingerprint: String?) {
+    storedFingerprint = fingerprint
+  }
+}
+
+private struct FailingCoreReadinessProbe: CoreReadinessProbing {
+  let message: String
+
+  func waitUntilReady(api: CoreAPIEndpoint) async throws -> String {
+    throw AppError.coreNotReady(message)
   }
 }
 

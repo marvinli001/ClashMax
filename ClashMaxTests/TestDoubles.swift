@@ -37,10 +37,16 @@ final class URLProtocolRecorder: @unchecked Sendable {
   private var recordedRequest: URLRequest?
   private var recordedBody: Data?
   private let responseBody: String
+  private let responseHeaders: [String: String]
   private let responseDelay: TimeInterval
 
-  init(responseBody: String = #"{"delay":42}"#, responseDelay: TimeInterval = 0) {
+  init(
+    responseBody: String = #"{"delay":42}"#,
+    responseHeaders: [String: String] = ["Content-Type": "application/json"],
+    responseDelay: TimeInterval = 0
+  ) {
     self.responseBody = responseBody
+    self.responseHeaders = responseHeaders
     self.responseDelay = responseDelay
   }
 
@@ -83,6 +89,10 @@ final class URLProtocolRecorder: @unchecked Sendable {
     responseBody.data(using: .utf8)!
   }
 
+  fileprivate func headerFields() -> [String: String] {
+    responseHeaders
+  }
+
   fileprivate func delayResponseIfNeeded() {
     if responseDelay > 0 {
       Thread.sleep(forTimeInterval: responseDelay)
@@ -100,7 +110,7 @@ final class RecordingURLProtocol: URLProtocol, @unchecked Sendable {
 
     URLProtocolRecorder.current()?.record(request, body: body)
     URLProtocolRecorder.current()?.delayResponseIfNeeded()
-    let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+    let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: URLProtocolRecorder.current()?.headerFields())!
     client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
     client?.urlProtocol(self, didLoad: URLProtocolRecorder.current()?.responseData() ?? Data())
     client?.urlProtocolDidFinishLoading(self)

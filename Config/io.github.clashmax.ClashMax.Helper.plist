@@ -4,6 +4,10 @@
 <dict>
   <key>Label</key>
   <string>io.github.clashmax.ClashMax.Helper</string>
+  <key>AssociatedBundleIdentifiers</key>
+  <array>
+    <string>io.github.clashmax.ClashMax</string>
+  </array>
   <key>MachServices</key>
   <dict>
     <key>io.github.clashmax.ClashMax.Helper</key>
@@ -15,4 +19,3 @@
   <false/>
 </dict>
 </plist>
-

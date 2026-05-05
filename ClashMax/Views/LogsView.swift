@@ -2,22 +2,33 @@ import SwiftUI
 
 struct LogsView: View {
   @EnvironmentObject private var appModel: AppModel
+  @State private var levelFilter: LogLevelFilter = .all
 
   var body: some View {
+    let visibleLogs = filteredLogs
+
     AdaptivePage(
       title: "Logs",
-      subtitle: "\(appModel.logs.count) retained"
+      subtitle: "\(visibleLogs.count) visible / \(appModel.logs.count) retained"
     ) {
-      EmptyView()
+      Picker("Level", selection: $levelFilter) {
+        ForEach(LogLevelFilter.allCases) { filter in
+          Text(filter.displayName).tag(filter)
+        }
+      }
+      .pickerStyle(.segmented)
+      .frame(width: 320)
     } content: {
-      if appModel.logs.isEmpty {
+      if visibleLogs.isEmpty {
         CenteredUnavailableState(
-          title: "No logs yet",
+          title: appModel.logs.isEmpty ? "No logs yet" : "No matching logs",
           systemImage: "text.alignleft",
-          message: "Runtime and helper messages will be listed here."
+          message: appModel.logs.isEmpty
+            ? "Runtime and helper messages will be listed here."
+            : "No retained logs match the selected level."
         )
       } else {
-        List(appModel.logs) { entry in
+        List(visibleLogs) { entry in
           HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(DisplayFormatters.date.string(from: entry.date))
               .foregroundStyle(.secondary)
@@ -32,6 +43,41 @@ struct LogsView: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
       }
+    }
+  }
+
+  private var filteredLogs: [LogEntry] {
+    switch levelFilter {
+    case .all:
+      return appModel.logs
+    case .info:
+      return appModel.logs.filter { ["info", "information"].contains($0.level.lowercased()) }
+    case .warning:
+      return appModel.logs.filter { ["warn", "warning"].contains($0.level.lowercased()) }
+    case .error:
+      return appModel.logs.filter { ["error", "fatal"].contains($0.level.lowercased()) }
+    case .debug:
+      return appModel.logs.filter { ["debug", "trace"].contains($0.level.lowercased()) }
+    }
+  }
+}
+
+private enum LogLevelFilter: String, CaseIterable, Identifiable {
+  case all
+  case info
+  case warning
+  case error
+  case debug
+
+  var id: String { rawValue }
+
+  var displayName: String {
+    switch self {
+    case .all: "All"
+    case .info: "Info"
+    case .warning: "Warn"
+    case .error: "Error"
+    case .debug: "Debug"
     }
   }
 }

@@ -29,10 +29,18 @@ struct ProfilesView: View {
             message: "Profiles stay unchanged on disk; ClashMax generates a runtime copy when starting."
           )
         } else {
-          Table(appModel.profileStore.profiles, selection: profileSelection) {
-            TableColumn("Name") { profile in
-              Text(profile.name)
-            }
+            Table(appModel.profileStore.profiles, selection: profileSelection) {
+              TableColumn("Name") { profile in
+                VStack(alignment: .leading, spacing: 2) {
+                  Text(profile.name)
+                  if let remoteFileName = profile.subscriptionMetadata?.remoteFileName {
+                    Text(remoteFileName)
+                      .font(.caption)
+                      .foregroundStyle(.secondary)
+                      .lineLimit(1)
+                  }
+                }
+              }
             .width(min: 180, ideal: 260)
 
             TableColumn("Source") { profile in
@@ -40,6 +48,31 @@ struct ProfilesView: View {
                 .foregroundStyle(.secondary)
             }
             .width(min: 96, ideal: 120, max: 140)
+
+            TableColumn("Usage") { profile in
+              Text(profile.subscriptionMetadata?.trafficSummary ?? "-")
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
+            .width(min: 140, ideal: 180, max: 220)
+
+            TableColumn("Expires") { profile in
+              if let expireAt = profile.subscriptionMetadata?.traffic?.expireAt {
+                Text(expireAt, style: .date)
+                  .foregroundStyle(.secondary)
+              } else {
+                Text("-")
+                  .foregroundStyle(.secondary)
+              }
+            }
+            .width(min: 96, ideal: 116, max: 140)
+
+            TableColumn("Interval") { profile in
+              Text(updateIntervalLabel(profile.subscriptionMetadata?.updateIntervalMinutes))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
+            .width(min: 84, ideal: 104, max: 128)
 
             TableColumn("Updated") { profile in
               Text(profile.updatedAt, style: .date)
@@ -213,6 +246,17 @@ struct ProfilesView: View {
     }
     .buttonStyle(.borderless)
     .controlSize(.small)
+  }
+
+  private func updateIntervalLabel(_ minutes: Int?) -> String {
+    guard let minutes, minutes > 0 else { return "-" }
+    if minutes % 1_440 == 0 {
+      return "\(minutes / 1_440)d"
+    }
+    if minutes % 60 == 0 {
+      return "\(minutes / 60)h"
+    }
+    return "\(minutes)m"
   }
 
   private var deleteConfirmationPresented: Binding<Bool> {

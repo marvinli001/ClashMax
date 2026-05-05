@@ -17,6 +17,20 @@ struct MenuBarView: View {
       }
     }
 
+    Picker("Profile", selection: Binding<Profile.ID?>(
+      get: { appModel.profileStore.activeProfileID },
+      set: { id in
+        if let id, let profile = appModel.profileStore.profiles.first(where: { $0.id == id }) {
+          appModel.selectProfile(profile)
+        }
+      }
+    )) {
+      Text("No Profile").tag(Profile.ID?.none)
+      ForEach(appModel.profileStore.profiles) { profile in
+        Text(profile.name).tag(Profile.ID?.some(profile.id))
+      }
+    }
+
     Picker("Proxy", selection: Binding(
       get: { appModel.proxyRoutingMode },
       set: { appModel.requestProxyRoutingMode($0) }
@@ -29,12 +43,19 @@ struct MenuBarView: View {
     Divider()
 
     Text(appModel.statusSummary)
+    Text("Owner: \(appModel.runtimeOwner.rawValue)")
     Text(appModel.profileStore.activeProfile?.name ?? "No Profile")
     Text(appModel.trafficSample.shortLabel)
+
+    Button(appModel.systemProxyEnabled ? "Disable System Proxy" : "Enable System Proxy") {
+      appModel.setSystemProxyEnabled(!appModel.systemProxyEnabled)
+    }
+    .disabled(appModel.proxyRoutingMode == .tun)
 
     Button("Update Subscription") {
       appModel.updateActiveSubscription()
     }
+    .disabled(!(appModel.profileStore.activeProfile?.isSubscription ?? false))
 
     Button("Open Window") {
       NSApp.activate(ignoringOtherApps: true)

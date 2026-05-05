@@ -29,14 +29,26 @@ protocol CoreProcessReaping {
   func reapOrphans(coreURL: URL, configURL: URL, workDirectory: URL) async
 }
 
+struct PortListener: Equatable, Sendable {
+  var port: Int
+  var pid: Int32
+  var command: String
+}
+
+protocol RuntimePortChecking: Sendable {
+  func listeners(on ports: [Int]) async -> [PortListener]
+}
+
 @MainActor
 final class CoreProcessController: ObservableObject {
   @Published private(set) var status: CoreStatus = .stopped
   @Published private(set) var recentCoreLog: String = ""
+  @Published private(set) var startupDiagnostics: [String] = []
   private let launcher: CoreProcessLaunching
   private let validator: RuntimeConfigValidating
   private let readinessProbe: CoreReadinessProbing
   private let reaper: CoreProcessReaping
+  private let portChecker: RuntimePortChecking
   private var runningProcess: RunningCoreProcess?
   private var stopWasRequested = false
 
@@ -44,28 +56,51 @@ final class CoreProcessController: ObservableObject {
     launcher: CoreProcessLaunching = FoundationProcessLauncher(),
     validator: RuntimeConfigValidating = MihomoRuntimeConfigValidator(),
     readinessProbe: CoreReadinessProbing = MihomoCoreReadinessProbe(),
-    reaper: CoreProcessReaping = MihomoOrphanProcessReaper()
+    reaper: CoreProcessReaping = MihomoOrphanProcessReaper(),
+    portChecker: RuntimePortChecking = MihomoRuntimePortChecker()
   ) {
     self.launcher = launcher
     self.validator = validator
     self.readinessProbe = readinessProbe
     self.reaper = reaper
+    self.portChecker = portChecker
   }
 
-  func startUserMode(coreURL: URL, configURL: URL, workDirectory: URL, api: CoreAPIEndpoint) async throws {
+  func startUserMode(
+    coreURL: URL,
+    configURL: URL,
+    workDirectory: URL,
+    api: CoreAPIEndpoint,
+    proxyPort: Int? = nil
+  ) async throws {
     stop()
     stopWasRequested = false
     status = .starting
     recentCoreLog = ""
+    startupDiagnostics = []
 
     do {
       try Task.checkCancellation()
+      recordStartup("Validating runtime config: \(configURL.path)")
+      recordStartup("Using Mihomo core: \(coreURL.path)")
       try await validator.validate(coreURL: coreURL, configURL: configURL, workDirectory: workDirectory)
       try Task.checkCancellation()
 
+      recordStartup("Reaping stale ClashMax-managed Mihomo processes in \(workDirectory.path)")
       await reaper.reapOrphans(coreURL: coreURL, configURL: configURL, workDirectory: workDirectory)
       try Task.checkCancellation()
 
+      let portsToCheck = Array(Set(([api.port] + [proxyPort].compactMap { $0 }))).sorted()
+      recordStartup("Checking runtime ports: \(portsToCheck.map(String.init).joined(separator: ", "))")
+      let listeners = await portChecker.listeners(on: portsToCheck)
+      if !listeners.isEmpty {
+        for listener in listeners {
+          recordStartup("Port \(listener.port) is occupied by pid \(listener.pid): \(listener.command)")
+        }
+        throw AppError.portUnavailable(Self.portConflictMessage(for: listeners))
+      }
+
+      recordStartup("Launching Mihomo with config: \(configURL.path)")
       let process = try launcher.launch(
         executable: coreURL,
         arguments: ["-f", configURL.path, "-d", workDirectory.path],
@@ -78,6 +113,7 @@ final class CoreProcessController: ObservableObject {
       )
 
       let launchedProcessID = process.processIdentifier
+      recordStartup("Mihomo launch pid: \(launchedProcessID)")
       process.onTermination = { [weak self] exitCode in
         guard let self else { return }
         guard self.runningProcess?.processIdentifier == launchedProcessID else { return }
@@ -99,11 +135,14 @@ final class CoreProcessController: ObservableObject {
         guard !stopWasRequested, runningProcess?.processIdentifier == launchedProcessID else {
           throw CancellationError()
         }
+        recordStartup("Mihomo controller ready: \(api.host):\(api.port), version \(version)")
         status = .running(version: version)
       } catch let appError as AppError {
         if case let .coreNotReady(message) = appError {
           let tail = process.recentOutputTail(maxBytes: 4096)
+          recentCoreLog = tail
           let combined = tail.isEmpty ? message : "\(message)\n---\n\(tail)"
+          recordStartup("Readiness failed: \(combined)")
           throw AppError.coreNotReady(combined)
         }
         throw appError
@@ -119,6 +158,9 @@ final class CoreProcessController: ObservableObject {
       status = .crashed(message: message)
       if let runningProcess {
         recentCoreLog = runningProcess.recentOutputTail(maxBytes: 8192)
+        if !recentCoreLog.isEmpty {
+          recordStartup("Core tail: \(recentCoreLog)")
+        }
       }
       runningProcess?.terminate()
       runningProcess = nil
@@ -142,13 +184,83 @@ final class CoreProcessController: ObservableObject {
   private func userFacingMessage(for error: Error) -> String {
     if let appError = error as? AppError {
       switch appError {
-      case let .configValidationFailed(message), let .coreNotReady(message), let .helperResponse(message):
+      case let .configValidationFailed(message), let .coreNotReady(message), let .helperResponse(message), let .portUnavailable(message):
         return message
       default:
         return appError.description
       }
     }
     return UserFacingError.message(for: error)
+  }
+
+  private func recordStartup(_ message: String) {
+    startupDiagnostics.append(message)
+    if startupDiagnostics.count > 80 {
+      startupDiagnostics.removeFirst(startupDiagnostics.count - 80)
+    }
+  }
+
+  private static func portConflictMessage(for listeners: [PortListener]) -> String {
+    let details = listeners
+      .sorted { lhs, rhs in
+        lhs.port == rhs.port ? lhs.pid < rhs.pid : lhs.port < rhs.port
+      }
+      .map { "port \($0.port) is used by pid \($0.pid) (\($0.command))" }
+      .joined(separator: "; ")
+    return "Cannot start Mihomo because required runtime ports are already in use: \(details). Quit the conflicting process or change ClashMax's controller/mixed port settings."
+  }
+}
+
+struct MihomoRuntimePortChecker: RuntimePortChecking {
+  func listeners(on ports: [Int]) async -> [PortListener] {
+    await Task.detached(priority: .utility) {
+      ports.flatMap(Self.listenersSync(on:))
+    }.value
+  }
+
+  private static func listenersSync(on port: Int) -> [PortListener] {
+    guard let output = run("/usr/sbin/lsof", ["-nP", "-iTCP:\(port)", "-sTCP:LISTEN"]) else {
+      return []
+    }
+
+    return output
+      .split(separator: "\n")
+      .dropFirst()
+      .compactMap { line -> PortListener? in
+        let fields = line.split(whereSeparator: \.isWhitespace)
+        guard fields.count >= 2, let pid = Int32(fields[1]) else {
+          return nil
+        }
+        let command = processCommand(pid: pid) ?? String(fields[0])
+        return PortListener(port: port, pid: pid, command: command)
+      }
+  }
+
+  private static func processCommand(pid: Int32) -> String? {
+    run("/bin/ps", ["-p", String(pid), "-o", "command="])?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private static func run(_ executable: String, _ arguments: [String]) -> String? {
+    let process = Process()
+    let pipe = Pipe()
+    process.executableURL = URL(fileURLWithPath: executable)
+    process.arguments = arguments
+    process.standardOutput = pipe
+    process.standardError = Pipe()
+
+    do {
+      try process.run()
+      process.waitUntilExit()
+    } catch {
+      return nil
+    }
+
+    guard process.terminationStatus == 0 else {
+      return nil
+    }
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    return String(data: data, encoding: .utf8)
   }
 }
 

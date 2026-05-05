@@ -24,6 +24,102 @@ final class TunnelHelperClientTests: XCTestCase {
     XCTAssertEqual(HelperXPCPayload.logLines(from: HelperXPCPayload.logs(["one", "two"])), ["one", "two"])
   }
 
+  func testEnabledRegistrationIsReportedAsNotBootstrappedWhenXPCStatusFails() async throws {
+    let service = FakeHelperService(status: .enabled)
+    let transport = FakeHelperTransport(statusError: AppError.helperResponse("lookup failed"))
+    let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: "v1")
+    let client = TunnelHelperClient(
+      transport: transport,
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "v1"),
+      registrationRecordStore: recordStore
+    )
+
+    await client.refreshRegistrationStatus()
+
+    XCTAssertEqual(service.registerCount, 0)
+    XCTAssertEqual(service.unregisterCount, 0)
+    XCTAssertEqual(
+      client.statusMessage,
+      "Helper registered but not bootstrapped. Click Repair Helper, approve it in System Settings, or restart macOS."
+    )
+  }
+
+  func testEnabledRegistrationIsReportedAsNotBootstrappedWhenXPCStatusPayloadFails() async throws {
+    let service = FakeHelperService(status: .enabled)
+    let transport = FakeHelperTransport(statusResponse: .failure("status failed"))
+    let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: "v1")
+    let client = TunnelHelperClient(
+      transport: transport,
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "v1"),
+      registrationRecordStore: recordStore
+    )
+
+    await client.refreshRegistrationStatus()
+
+    XCTAssertEqual(
+      client.statusMessage,
+      "Helper registered but not bootstrapped. Click Repair Helper, approve it in System Settings, or restart macOS."
+    )
+  }
+
+  func testRegisterRepairsChangedHelperFingerprintBeforeVerifyingXPCStatus() async throws {
+    let service = FakeHelperService(status: .enabled)
+    let transport = FakeHelperTransport(statusResponse: HelperClientResponse(payload: HelperXPCPayload.response(ok: true)))
+    let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: "old")
+    let client = TunnelHelperClient(
+      transport: transport,
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "new"),
+      registrationRecordStore: recordStore
+    )
+
+    try await client.register()
+
+    XCTAssertEqual(service.unregisterCount, 1)
+    XCTAssertEqual(service.registerCount, 1)
+    XCTAssertEqual(recordStore.storedFingerprint, "new")
+    XCTAssertEqual(client.statusMessage, "Helper registered and bootstrapped.")
+  }
+
+  func testRegisterDoesNotReregisterUnchangedEnabledHelper() async throws {
+    let service = FakeHelperService(status: .enabled)
+    let transport = FakeHelperTransport(statusResponse: HelperClientResponse(payload: HelperXPCPayload.response(ok: true)))
+    let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: "same")
+    let client = TunnelHelperClient(
+      transport: transport,
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "same"),
+      registrationRecordStore: recordStore
+    )
+
+    try await client.register()
+
+    XCTAssertEqual(service.unregisterCount, 0)
+    XCTAssertEqual(service.registerCount, 0)
+    XCTAssertEqual(client.statusMessage, "Helper registered and bootstrapped.")
+  }
+
+  func testRepairHelperAlwaysUnregistersThenRegistersAndVerifies() async throws {
+    let service = FakeHelperService(status: .enabled)
+    let transport = FakeHelperTransport(statusResponse: HelperClientResponse(payload: HelperXPCPayload.response(ok: true)))
+    let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: "stale")
+    let client = TunnelHelperClient(
+      transport: transport,
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "current"),
+      registrationRecordStore: recordStore
+    )
+
+    try await client.repairRegistration()
+
+    XCTAssertEqual(service.unregisterCount, 1)
+    XCTAssertEqual(service.registerCount, 1)
+    XCTAssertEqual(recordStore.storedFingerprint, "current")
+    XCTAssertEqual(client.statusMessage, "Helper registered and bootstrapped.")
+  }
+
   func testHelperRegistrationStatusMessagesGuideRegistrationAndApproval() {
     XCTAssertEqual(
       TunnelHelperClient.statusMessage(for: .notRegistered),
@@ -31,7 +127,7 @@ final class TunnelHelperClientTests: XCTestCase {
     )
     XCTAssertEqual(
       TunnelHelperClient.statusMessage(for: .enabled),
-      "Helper registered and enabled."
+      "Helper registered. Verifying helper connection."
     )
     XCTAssertEqual(
       TunnelHelperClient.statusMessage(for: .requiresApproval),
@@ -96,13 +192,24 @@ final class TunnelHelperClientTests: XCTestCase {
 
 private final class FakeHelperTransport: HelperXPCTransport, @unchecked Sendable {
   let response: [String]
+  let statusResponse: HelperClientResponse
+  let statusError: Error?
 
-  init(response: [String]) {
+  init(
+    response: [String] = [],
+    statusResponse: HelperClientResponse = .failure("unused"),
+    statusError: Error? = nil
+  ) {
     self.response = response
+    self.statusResponse = statusResponse
+    self.statusError = statusError
   }
 
   func status() async throws -> HelperClientResponse {
-    .failure("unused")
+    if let statusError {
+      throw statusError
+    }
+    return statusResponse
   }
 
   func startTunnel(coreURL: URL, configURL: URL, workDirectory: URL, secret: String) async throws -> HelperClientResponse {
@@ -119,5 +226,50 @@ private final class FakeHelperTransport: HelperXPCTransport, @unchecked Sendable
 
   func recentLogs() async throws -> [String] {
     response
+  }
+}
+
+@MainActor
+private final class FakeHelperService: HelperServiceManaging {
+  var status: SMAppService.Status
+  private(set) var registerCount = 0
+  private(set) var unregisterCount = 0
+
+  init(status: SMAppService.Status) {
+    self.status = status
+  }
+
+  func register() throws {
+    registerCount += 1
+    status = .enabled
+  }
+
+  func unregister() async throws {
+    unregisterCount += 1
+    status = .notRegistered
+  }
+}
+
+private struct StaticHelperFingerprintProvider: HelperFingerprintProviding {
+  let fingerprint: String
+
+  func currentFingerprint() throws -> String {
+    fingerprint
+  }
+}
+
+private final class InMemoryHelperRegistrationRecordStore: HelperRegistrationRecordStoring, @unchecked Sendable {
+  var storedFingerprint: String?
+
+  init(storedFingerprint: String?) {
+    self.storedFingerprint = storedFingerprint
+  }
+
+  func helperFingerprint() -> String? {
+    storedFingerprint
+  }
+
+  func setHelperFingerprint(_ fingerprint: String?) {
+    storedFingerprint = fingerprint
   }
 }

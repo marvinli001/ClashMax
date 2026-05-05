@@ -10,10 +10,5 @@
   <string>ClashMax Helper</string>
   <key>SMIsPrivilegedDaemon</key>
   <true/>
-  <key>SMAuthorizedClients</key>
-  <array>
-    <string>identifier "io.github.clashmax.ClashMax" and anchor apple generic</string>
-  </array>
 </dict>
 </plist>
-

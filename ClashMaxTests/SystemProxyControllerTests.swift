@@ -38,6 +38,30 @@ final class SystemProxyControllerTests: XCTestCase {
     XCTAssertTrue(project.contains("CREATE_INFOPLIST_SECTION_IN_BINARY = YES;"))
   }
 
+  func testLaunchDaemonAssociatesHelperWithMainAppForSMAppService() throws {
+    let testFile = URL(fileURLWithPath: #filePath)
+    let projectRoot = testFile.deletingLastPathComponent().deletingLastPathComponent()
+    let launchDaemonPlist = projectRoot
+      .appendingPathComponent("Config/io.github.clashmax.ClashMax.Helper.plist")
+    let plist = try String(contentsOf: launchDaemonPlist, encoding: .utf8)
+
+    XCTAssertTrue(plist.contains("<key>BundleProgram</key>"))
+    XCTAssertTrue(plist.contains("Contents/Library/LaunchServices/ClashMaxHelper"))
+    XCTAssertTrue(plist.contains("<key>AssociatedBundleIdentifiers</key>"))
+    XCTAssertTrue(plist.contains("<string>io.github.clashmax.ClashMax</string>"))
+  }
+
+  func testHelperInfoPlistUsesSMAppServiceDaemonIdentityWithoutLegacyBlessClientRules() throws {
+    let testFile = URL(fileURLWithPath: #filePath)
+    let projectRoot = testFile.deletingLastPathComponent().deletingLastPathComponent()
+    let helperInfoPlist = projectRoot.appendingPathComponent("Config/ClashMaxHelper-Info.plist")
+    let plist = try String(contentsOf: helperInfoPlist, encoding: .utf8)
+
+    XCTAssertTrue(plist.contains("<key>SMIsPrivilegedDaemon</key>"))
+    XCTAssertFalse(plist.contains("SMAuthorizedClients"))
+    XCTAssertFalse(plist.contains("SMPrivilegedExecutables"))
+  }
+
   func testProjectDoesNotReferenceUnusedRiveRuntimeArtifact() throws {
     let testFile = URL(fileURLWithPath: #filePath)
     let projectRoot = testFile.deletingLastPathComponent().deletingLastPathComponent()
@@ -95,6 +119,36 @@ final class SystemProxyControllerTests: XCTestCase {
     XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setsecurewebproxy Wi-Fi 127.0.0.1 7890"))
     XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setsocksfirewallproxy Wi-Fi 127.0.0.1 7890"))
     XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setproxybypassdomains Wi-Fi localhost 127.0.0.1 ::1 *.local 169.254/16 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"))
+  }
+
+  func testApplySystemProxyAcceptsCustomBypassDomains() async throws {
+    let runner = RecordingCommandRunner(outputs: [
+      "/usr/sbin/networksetup -listallnetworkservices": "Wi-Fi\n"
+    ])
+    let controller = SystemProxyController(commandRunner: runner)
+
+    try await controller.apply(host: "127.0.0.1", port: 7890, bypassDomains: ["localhost", "*.corp"])
+
+    XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setproxybypassdomains Wi-Fi localhost *.corp"))
+  }
+
+  func testProxyGuardRepairsServicesThatNoLongerMatchExpectedProxy() async throws {
+    let runner = RecordingCommandRunner(outputs: [
+      "/usr/sbin/networksetup -listallnetworkservices": "Wi-Fi\n",
+      "/usr/sbin/networksetup -getwebproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
+      "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi": "Enabled: Yes\nServer: other.proxy\nPort: 8080\n",
+      "/usr/sbin/networksetup -getsocksfirewallproxy Wi-Fi": "Enabled: Yes\nServer: 127.0.0.1\nPort: 7890\n",
+      "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": "Exceptions List\nlocalhost\n"
+    ])
+    let controller = SystemProxyController(commandRunner: runner)
+
+    try await controller.enableGuard(host: "127.0.0.1", port: 7890, bypassDomains: ["localhost"])
+    let didRepair = try await controller.verifyGuardOnce()
+
+    XCTAssertEqual(controller.guardState, .active)
+    XCTAssertTrue(didRepair)
+    XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setwebproxy Wi-Fi 127.0.0.1 7890"))
+    XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setsecurewebproxy Wi-Fi 127.0.0.1 7890"))
   }
 
   func testRestoreTurnsProxyStatesOff() async throws {

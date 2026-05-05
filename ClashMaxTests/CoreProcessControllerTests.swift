@@ -33,7 +33,8 @@ final class CoreProcessControllerTests: XCTestCase {
       launcher: launcher,
       validator: RecordingRuntimeConfigValidator(result: .success(())),
       readinessProbe: readiness,
-      reaper: RecordingCoreProcessReaper()
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: FakePortChecker(listeners: [])
     )
     let api = CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
 
@@ -122,6 +123,45 @@ final class CoreProcessControllerTests: XCTestCase {
     XCTAssertEqual(controller.status, .running(version: "v-test"))
     XCTAssertTrue(firstProcess.didTerminate)
   }
+
+  func testStartFailsBeforeLaunchWhenControllerOrProxyPortIsOccupiedByExternalProcess() async throws {
+    let launcher = FakeProcessLauncher()
+    let portChecker = FakePortChecker(listeners: [
+      PortListener(port: 9097, pid: 1234, command: "/opt/homebrew/bin/mihomo -f /tmp/other.yaml"),
+      PortListener(port: 7890, pid: 4321, command: "/usr/local/bin/proxy")
+    ])
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: portChecker
+    )
+
+    do {
+      try await controller.startUserMode(
+        coreURL: URL(fileURLWithPath: "/Applications/ClashMax.app/Contents/Resources/Core/mihomo-darwin-arm64"),
+        configURL: URL(fileURLWithPath: "/tmp/config.yaml"),
+        workDirectory: URL(fileURLWithPath: "/tmp"),
+        api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc"),
+        proxyPort: 7890
+      )
+      XCTFail("Expected occupied port failure")
+    } catch let error as AppError {
+      guard case let .portUnavailable(message) = error else {
+        XCTFail("Expected portUnavailable, got \(error)")
+        return
+      }
+      XCTAssertTrue(message.contains("9097"))
+      XCTAssertTrue(message.contains("pid 1234"))
+      XCTAssertTrue(message.contains("/opt/homebrew/bin/mihomo"))
+      XCTAssertTrue(message.contains("7890"))
+      XCTAssertTrue(message.contains("pid 4321"))
+    }
+
+    XCTAssertEqual(launcher.lastArguments, [])
+    XCTAssertTrue(controller.startupDiagnostics.contains { $0.contains("Port 9097 is occupied by pid 1234") })
+  }
 }
 
 @MainActor
@@ -145,5 +185,13 @@ private final class CancellableCoreReadinessProbe: CoreReadinessProbing {
     didStart = true
     try await Task.sleep(nanoseconds: 10_000_000_000)
     return "v-test"
+  }
+}
+
+private struct FakePortChecker: RuntimePortChecking {
+  let listeners: [PortListener]
+
+  func listeners(on ports: [Int]) async -> [PortListener] {
+    listeners.filter { ports.contains($0.port) }
   }
 }

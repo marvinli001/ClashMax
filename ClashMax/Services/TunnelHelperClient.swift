@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import ServiceManagement
 
@@ -7,6 +8,96 @@ protocol HelperXPCTransport: Sendable {
   func stopTunnel() async throws -> HelperClientResponse
   func restartTunnel(coreURL: URL, configURL: URL, workDirectory: URL, secret: String) async throws -> HelperClientResponse
   func recentLogs() async throws -> [String]
+}
+
+@MainActor
+protocol HelperServiceManaging: AnyObject {
+  var status: SMAppService.Status { get }
+  func register() throws
+  func unregister() async throws
+}
+
+@MainActor
+final class SMAppServiceHelperService: HelperServiceManaging {
+  private let service: SMAppService
+
+  init(service: SMAppService = SMAppService.daemon(plistName: "io.github.clashmax.ClashMax.Helper.plist")) {
+    self.service = service
+  }
+
+  var status: SMAppService.Status {
+    service.status
+  }
+
+  func register() throws {
+    try service.register()
+  }
+
+  func unregister() async throws {
+    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+      service.unregister { error in
+        if let error {
+          continuation.resume(throwing: error)
+        } else {
+          continuation.resume()
+        }
+      }
+    }
+  }
+}
+
+protocol HelperFingerprintProviding: Sendable {
+  func currentFingerprint() throws -> String
+}
+
+struct AppBundleHelperFingerprintProvider: HelperFingerprintProviding {
+  let helperURL: URL
+  let launchDaemonPlistURL: URL
+
+  init(bundleURL: URL = Bundle.main.bundleURL) {
+    helperURL = bundleURL.appendingPathComponent("Contents/Library/LaunchServices/ClashMaxHelper")
+    launchDaemonPlistURL = bundleURL
+      .appendingPathComponent("Contents/Library/LaunchDaemons/io.github.clashmax.ClashMax.Helper.plist")
+  }
+
+  func currentFingerprint() throws -> String {
+    var data = Data()
+    for url in [helperURL, launchDaemonPlistURL] {
+      let fileData = try Data(contentsOf: url)
+      data.append(url.path.data(using: .utf8) ?? Data())
+      data.append(0)
+      data.append(fileData)
+      data.append(0)
+    }
+    let digest = SHA256.hash(data: data)
+    return digest.map { String(format: "%02x", $0) }.joined()
+  }
+}
+
+protocol HelperRegistrationRecordStoring: Sendable {
+  func helperFingerprint() -> String?
+  func setHelperFingerprint(_ fingerprint: String?)
+}
+
+final class UserDefaultsHelperRegistrationRecordStore: HelperRegistrationRecordStoring, @unchecked Sendable {
+  private let defaults: UserDefaults
+  private let key = "io.github.clashmax.helper.registrationFingerprint"
+
+  init(defaults: UserDefaults = .standard) {
+    self.defaults = defaults
+  }
+
+  func helperFingerprint() -> String? {
+    defaults.string(forKey: key)
+  }
+
+  func setHelperFingerprint(_ fingerprint: String?) {
+    if let fingerprint {
+      defaults.set(fingerprint, forKey: key)
+    } else {
+      defaults.removeObject(forKey: key)
+    }
+  }
 }
 
 struct HelperClientResponse: Sendable {
@@ -41,31 +132,61 @@ struct HelperClientResponse: Sendable {
 final class TunnelHelperClient: ObservableObject {
   @Published var statusMessage: String = "Not registered"
   private let transport: any HelperXPCTransport
-  private static var service: SMAppService {
-    SMAppService.daemon(plistName: "io.github.clashmax.ClashMax.Helper.plist")
-  }
+  private let service: any HelperServiceManaging
+  private let fingerprintProvider: any HelperFingerprintProviding
+  private let registrationRecordStore: any HelperRegistrationRecordStoring
 
-  init(transport: any HelperXPCTransport = PrivilegedHelperXPCTransport()) {
+  init(
+    transport: any HelperXPCTransport = PrivilegedHelperXPCTransport(),
+    service: any HelperServiceManaging = SMAppServiceHelperService(),
+    fingerprintProvider: any HelperFingerprintProviding = AppBundleHelperFingerprintProvider(),
+    registrationRecordStore: any HelperRegistrationRecordStoring = UserDefaultsHelperRegistrationRecordStore()
+  ) {
     self.transport = transport
+    self.service = service
+    self.fingerprintProvider = fingerprintProvider
+    self.registrationRecordStore = registrationRecordStore
   }
 
-  func register() throws {
-    let service = Self.service
+  func register() async throws {
+    let fingerprint = try fingerprintProvider.currentFingerprint()
     switch service.status {
-    case .enabled, .requiresApproval:
+    case .enabled:
+      if registrationRecordStore.helperFingerprint().map({ $0 != fingerprint }) == true {
+        try await repairRegistration(fingerprint: fingerprint)
+        return
+      }
+      registrationRecordStore.setHelperFingerprint(fingerprint)
+      try await verifyBootstrapped()
+    case .requiresApproval:
       statusMessage = Self.statusMessage(for: service.status)
-      return
+      registrationRecordStore.setHelperFingerprint(fingerprint)
     case .notRegistered, .notFound:
-      break
+      try service.register()
+      registrationRecordStore.setHelperFingerprint(fingerprint)
+      try await updateStatusAfterRegistration()
     @unknown default:
-      break
+      try service.register()
+      registrationRecordStore.setHelperFingerprint(fingerprint)
+      try await updateStatusAfterRegistration()
     }
-    try service.register()
-    statusMessage = Self.statusMessage(for: service.status)
   }
 
-  func refreshRegistrationStatus() {
-    statusMessage = Self.statusMessage(for: Self.service.status)
+  func repairRegistration() async throws {
+    try await repairRegistration(fingerprint: fingerprintProvider.currentFingerprint())
+  }
+
+  func refreshRegistrationStatus() async {
+    switch service.status {
+    case .enabled:
+      do {
+        try await verifyBootstrapped()
+      } catch {
+        statusMessage = Self.notBootstrappedMessage
+      }
+    default:
+      statusMessage = Self.statusMessage(for: service.status)
+    }
   }
 
   static func statusMessage(for status: SMAppService.Status) -> String {
@@ -73,13 +194,52 @@ final class TunnelHelperClient: ObservableObject {
     case .notRegistered:
       return "Helper not registered. Click Register or Start in TUN mode."
     case .enabled:
-      return "Helper registered and enabled."
+      return "Helper registered. Verifying helper connection."
     case .requiresApproval:
       return "Helper registered. Approve ClashMax in System Settings > General > Login Items & Extensions."
     case .notFound:
       return "Helper not found in the app bundle. Clean build and run ClashMax again."
     @unknown default:
       return "Helper status is unknown. Clean build and run ClashMax again."
+    }
+  }
+
+  static let bootstrappedMessage = "Helper registered and bootstrapped."
+  static let notBootstrappedMessage = "Helper registered but not bootstrapped. Click Repair Helper, approve it in System Settings, or restart macOS."
+
+  private func repairRegistration(fingerprint: String) async throws {
+    switch service.status {
+    case .notRegistered, .notFound:
+      break
+    default:
+      try await service.unregister()
+    }
+    try service.register()
+    registrationRecordStore.setHelperFingerprint(fingerprint)
+    try await updateStatusAfterRegistration()
+  }
+
+  private func updateStatusAfterRegistration() async throws {
+    switch service.status {
+    case .enabled:
+      try await verifyBootstrapped()
+    case .requiresApproval, .notRegistered, .notFound:
+      statusMessage = Self.statusMessage(for: service.status)
+    @unknown default:
+      statusMessage = Self.statusMessage(for: service.status)
+    }
+  }
+
+  private func verifyBootstrapped() async throws {
+    do {
+      let response = try await status()
+      guard response.ok else {
+        throw AppError.helperResponse(response.message.isEmpty ? Self.notBootstrappedMessage : response.message)
+      }
+      statusMessage = Self.bootstrappedMessage
+    } catch {
+      statusMessage = Self.notBootstrappedMessage
+      throw AppError.helperResponse(Self.notBootstrappedMessage)
     }
   }
 

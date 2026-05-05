@@ -8,7 +8,7 @@ final class ProfileStore: ObservableObject {
   private let paths: RuntimePaths
   private let keychain: SecretStoring
   private let fileManager: FileManager
-  private static let subscriptionUserAgent = "clash.meta"
+  private let subscriptionFetcher = SubscriptionFetcher()
 
   init(paths: RuntimePaths, keychain: SecretStoring = KeychainStore(), fileManager: FileManager = .default) {
     self.paths = paths
@@ -43,25 +43,19 @@ final class ProfileStore: ObservableObject {
 
   @discardableResult
   func addSubscription(name: String, url: URL, session: URLSession = .shared) async throws -> Profile {
-    let (data, response) = try await session.data(for: subscriptionRequest(url: url))
-    if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-      throw AppError.invalidSubscriptionResponse
-    }
-    guard let source = String(data: data, encoding: .utf8) else {
-      throw AppError.invalidSubscriptionResponse
-    }
-    try ProfileConfigValidator.validateProfileSource(source)
+    let result = try await fetchSubscription(url: url, session: session)
 
     let id = UUID()
     let destination = paths.profiles.appendingPathComponent("\(id.uuidString).yaml")
-    try source.write(to: destination, atomically: true, encoding: .utf8)
+    try result.source.write(to: destination, atomically: true, encoding: .utf8)
     try keychain.save(url.absoluteString, account: subscriptionAccount(for: id))
 
     let profile = Profile(
       id: id,
       name: name.isEmpty ? url.host(percentEncoded: false) ?? "Subscription" : name,
       source: .subscription(id: id),
-      originalConfigPath: destination.path
+      originalConfigPath: destination.path,
+      subscriptionMetadata: result.metadata
     )
     profiles.append(profile)
     activeProfileID = profile.id
@@ -75,16 +69,9 @@ final class ProfileStore: ObservableObject {
           let url = URL(string: rawURL)
     else { return }
 
-    let (data, response) = try await session.data(for: subscriptionRequest(url: url))
-    if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-      throw AppError.invalidSubscriptionResponse
-    }
-    guard let source = String(data: data, encoding: .utf8) else {
-      throw AppError.invalidSubscriptionResponse
-    }
-    try ProfileConfigValidator.validateProfileSource(source)
-    try source.write(to: URL(fileURLWithPath: profile.originalConfigPath), atomically: true, encoding: .utf8)
-    touch(profile.id)
+    let result = try await fetchSubscription(url: url, session: session)
+    try result.source.write(to: URL(fileURLWithPath: profile.originalConfigPath), atomically: true, encoding: .utf8)
+    updateMetadata(result.metadata, for: profile.id)
     try saveManifest()
   }
 
@@ -119,16 +106,24 @@ final class ProfileStore: ObservableObject {
     }
   }
 
+  private func updateMetadata(_ metadata: SubscriptionMetadata, for id: UUID) {
+    if let index = profiles.firstIndex(where: { $0.id == id }) {
+      profiles[index].subscriptionMetadata = metadata
+      profiles[index].updatedAt = Date()
+    }
+  }
+
   private func subscriptionAccount(for id: UUID) -> String {
     "subscription.\(id.uuidString)"
   }
 
-  private func subscriptionRequest(url: URL) -> URLRequest {
-    var request = URLRequest(url: url)
-    request.httpMethod = "GET"
-    request.setValue(Self.subscriptionUserAgent, forHTTPHeaderField: "User-Agent")
-    request.setValue("text/yaml, application/yaml, text/plain, */*", forHTTPHeaderField: "Accept")
-    return request
+  private func fetchSubscription(url: URL, session: URLSession) async throws -> SubscriptionFetchResult {
+    guard session !== URLSession.shared else {
+      return try await subscriptionFetcher.fetch(url: url)
+    }
+    return try await subscriptionFetcher.fetch(url: url) { _ in
+      try await session.data(for: subscriptionFetcher.request(url: url))
+    }
   }
 
   private func loadManifest() {
@@ -154,7 +149,7 @@ private struct ProfileManifest: Codable {
   var activeProfileID: Profile.ID?
 }
 
-private enum ProfileConfigValidator {
+enum ProfileConfigValidator {
   static func validate(_ source: String) throws {
     try validateProfileSource(source, allowProviderContent: false)
   }

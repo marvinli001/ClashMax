@@ -3,10 +3,16 @@ import Foundation
 protocol MihomoAPIControlling: Sendable {
   func updateMode(_ mode: RunMode) async throws
   func proxyGroups() async throws -> [ProxyGroup]
+  func structuredProxyProviders() async throws -> [ProxyProvider]
   func rules() async throws -> [String]
   func connections() async throws -> [ConnectionSnapshot]
   func selectProxy(group: String, proxy: String) async throws
   func testDelay(proxy: String, testURL: URL, timeout: Int) async throws -> Int
+  func healthCheckProvider(named provider: String) async throws
+  func closeConnection(id: String) async throws
+  func closeAllConnections() async throws
+  func reloadConfig(path: String) async throws
+  func restart(configPath: String?) async throws
   func trafficStream() -> AsyncThrowingStream<TrafficSample, Error>
   func logStream(level: String) -> AsyncThrowingStream<LogEntry, Error>
   func connectionStream(interval: Int) -> AsyncThrowingStream<[ConnectionSnapshot], Error>
@@ -53,9 +59,17 @@ struct MihomoAPIClient: Sendable {
     var request = request(path: "/restart")
     request.httpMethod = "POST"
     if let configPath {
-      request.httpBody = try JSONSerialization.data(withJSONObject: ["path": configPath])
+      request.httpBody = try JSONSerialization.data(withJSONObject: ["path": configPath], options: [.withoutEscapingSlashes])
       request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     }
+    _ = try await data(for: request)
+  }
+
+  func reloadConfig(path: String) async throws {
+    var request = request(path: "/configs")
+    request.httpMethod = "PUT"
+    request.httpBody = try JSONSerialization.data(withJSONObject: ["path": path], options: [.withoutEscapingSlashes])
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     _ = try await data(for: request)
   }
 
@@ -92,6 +106,31 @@ struct MihomoAPIClient: Sendable {
   func proxyProviders() async throws -> [String: Any] {
     let data = try await data(for: request(path: "/providers/proxies"))
     return (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+  }
+
+  func structuredProxyProviders() async throws -> [ProxyProvider] {
+    let object = try await proxyProviders()
+    let providers = object["providers"] as? [String: Any] ?? object
+    return providers.compactMap { name, value in
+      guard let provider = value as? [String: Any] else { return nil }
+      let proxies = (provider["proxies"] as? [[String: Any]] ?? []).compactMap { proxy -> ProxyNode? in
+        guard let name = proxy["name"] as? String else { return nil }
+        return ProxyNode(
+          name: name,
+          type: proxy["type"] as? String ?? "proxy",
+          delay: nil,
+          isSelectable: true
+        )
+      }
+      return ProxyProvider(
+        name: provider["name"] as? String ?? name,
+        type: provider["type"] as? String ?? "Provider",
+        vehicleType: provider["vehicleType"] as? String,
+        updatedAt: Self.date(from: provider["updatedAt"]),
+        proxies: proxies
+      )
+    }
+    .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
   }
 
   func rules() async throws -> [String] {
@@ -132,6 +171,18 @@ struct MihomoAPIClient: Sendable {
 
   func healthCheckProvider(named provider: String) async throws {
     _ = try await data(for: request(path: apiPath("providers", "proxies", provider, "healthcheck")))
+  }
+
+  func closeConnection(id: String) async throws {
+    var request = request(path: apiPath("connections", id))
+    request.httpMethod = "DELETE"
+    _ = try await data(for: request)
+  }
+
+  func closeAllConnections() async throws {
+    var request = request(path: "/connections")
+    request.httpMethod = "DELETE"
+    _ = try await data(for: request)
   }
 
   func trafficStream() -> AsyncThrowingStream<TrafficSample, Error> {
@@ -260,6 +311,11 @@ struct MihomoAPIClient: Sendable {
   private static func delay(for proxyName: String, history: [[String: Any]]) -> Int? {
     history
       .first { $0["name"] as? String == proxyName }?["delay"] as? Int
+  }
+
+  private static func date(from value: Any?) -> Date? {
+    guard let string = value as? String else { return nil }
+    return ISO8601DateFormatter().date(from: string)
   }
 }
 

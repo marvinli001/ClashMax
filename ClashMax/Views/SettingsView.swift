@@ -61,6 +61,11 @@ struct SettingsView: View {
                   Label("Register", systemImage: "checkmark.shield")
                 }
                 Button {
+                  appModel.repairHelperRegistration()
+                } label: {
+                  Label("Repair", systemImage: "wrench.and.screwdriver")
+                }
+                Button {
                   appModel.refreshHelperStatus()
                 } label: {
                   Label("Status", systemImage: "waveform.path.ecg")

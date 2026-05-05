@@ -7,6 +7,7 @@ final class AppModel: ObservableObject {
   @Published var selectedSection: AppSection = .home
   @Published var overrides = RuntimeOverrides.defaultForLaunch()
   @Published var proxyRoutingMode: ProxyRoutingMode = .systemProxy
+  @Published private(set) var runtimeOwner: RuntimeOwner = .stopped
   @Published var systemProxyEnabled = false
   @Published var tunEnabled = false
   @Published var tunnelCoreRunning = false
@@ -14,6 +15,7 @@ final class AppModel: ObservableObject {
   @Published private(set) var startInFlight = false
   @Published private(set) var sessionStartedAt: Date?
   @Published var proxyGroups: [ProxyGroup] = []
+  @Published var proxyProviders: [ProxyProvider] = []
   @Published var rules: [String] = []
   @Published var connections: [ConnectionSnapshot] = []
   @Published var logs: [LogEntry] = []
@@ -26,11 +28,15 @@ final class AppModel: ObservableObject {
   @Published private(set) var profilePreviewGroups: [ProxyGroup] = []
   @Published private(set) var previewRuntimeActive = false
   @Published private(set) var previewSelections: [String: String] = [:]
+  @Published private(set) var providerHealthChecksInFlight: Set<ProxyProvider.ID> = []
+  @Published private(set) var closingConnectionIDs: Set<ConnectionSnapshot.ID> = []
+  @Published private(set) var closingAllConnections = false
 
   let profileStore: ProfileStore
   let coreController: CoreProcessController
   let systemProxyController: SystemProxyController
   let helperClient: TunnelHelperClient
+  private let tunnelReadinessProbe: CoreReadinessProbing
   private let paths: RuntimePaths
   private let normalizer = ConfigNormalizer()
   private let profilePreviewBuilder = ProfilePreviewBuilder()
@@ -72,6 +78,7 @@ final class AppModel: ObservableObject {
     coreController: CoreProcessController = CoreProcessController(),
     systemProxyController: SystemProxyController = SystemProxyController(),
     helperClient: TunnelHelperClient = TunnelHelperClient(),
+    tunnelReadinessProbe: CoreReadinessProbing = MihomoCoreReadinessProbe(),
     apiClient: (any MihomoAPIControlling)? = nil,
     defaults: UserDefaults = .standard
   ) {
@@ -80,6 +87,7 @@ final class AppModel: ObservableObject {
     self.coreController = coreController
     self.systemProxyController = systemProxyController
     self.helperClient = helperClient
+    self.tunnelReadinessProbe = tunnelReadinessProbe
     self.apiClient = apiClient
     self.defaults = defaults
     refreshProfilePreview()
@@ -336,6 +344,26 @@ final class AppModel: ObservableObject {
     updatingProfileIDs = ids
   }
 
+  private func setProvider(_ id: ProxyProvider.ID, healthCheckInFlight isRunning: Bool) {
+    var ids = providerHealthChecksInFlight
+    if isRunning {
+      ids.insert(id)
+    } else {
+      ids.remove(id)
+    }
+    providerHealthChecksInFlight = ids
+  }
+
+  private func setConnection(_ id: ConnectionSnapshot.ID, closing isClosing: Bool) {
+    var ids = closingConnectionIDs
+    if isClosing {
+      ids.insert(id)
+    } else {
+      ids.remove(id)
+    }
+    closingConnectionIDs = ids
+  }
+
   func start() {
     guard startTask == nil, !startInFlight else { return }
     startTask = Task { [weak self] in
@@ -360,9 +388,12 @@ final class AppModel: ObservableObject {
     } catch is CancellationError {
       await stopRuntime()
     } catch let error as OperationTimedOutError {
+      publishStartupDiagnostics(level: "error")
+      let diagnostics = startupDiagnosticsSummary()
       await stopRuntime()
-      lastError = "ClashMax could not start within \(Int(error.seconds))s. Check Network preferences for a stuck networksetup, or review the latest mihomo log."
+      lastError = "ClashMax could not start within \(Int(error.seconds))s.\(diagnostics.isEmpty ? "" : "\n\(diagnostics)")"
     } catch {
+      publishStartupDiagnostics(level: "error")
       await stopRuntime()
       lastError = UserFacingError.message(for: error)
     }
@@ -381,14 +412,17 @@ final class AppModel: ObservableObject {
     systemProxyEnabled = false
     tunEnabled = false
     let runtimeConfig = try generateRuntimeConfig(for: profile, selections: previewSelections)
+    let coreURL = try bundledCoreURL()
+    appendAppLog(level: "info", message: "Runtime config path: \(runtimeConfig.path)")
+    appendAppLog(level: "info", message: "Mihomo core path: \(coreURL.path)")
     let client = MihomoAPIClient(baseURL: overrides.endpoint.baseURL, secret: overrides.secret)
     apiClient = client
     try Task.checkCancellation()
 
     if shouldUseTun {
-      try helperClient.register()
+      try await helperClient.register()
       let response = try await helperClient.startTunnel(
-        coreURL: try bundledCoreURL(),
+        coreURL: coreURL,
         configURL: runtimeConfig,
         workDirectory: paths.runtime,
         secret: overrides.secret
@@ -400,17 +434,31 @@ final class AppModel: ObservableObject {
       guard response.running else {
         throw AppError.helperResponse("Helper reported success but TUN is not running.")
       }
-      tunnelCoreRunning = response.running
+      do {
+        let version = try await tunnelReadinessProbe.waitUntilReady(api: overrides.endpoint)
+        appendAppLog(level: "info", message: "TUN Mihomo controller ready: \(overrides.endpoint.host):\(overrides.endpoint.port), version \(version)")
+      } catch {
+        _ = try? await helperClient.stopTunnel()
+        tunnelCoreRunning = false
+        tunEnabled = false
+        runtimeOwner = .stopped
+        throw error
+      }
+      tunnelCoreRunning = true
       tunEnabled = true
+      runtimeOwner = .tunnel
       coreController.stop()
     } else {
       tunnelCoreRunning = false
       try await coreController.startUserMode(
-        coreURL: try bundledCoreURL(),
+        coreURL: coreURL,
         configURL: runtimeConfig,
         workDirectory: paths.runtime,
-        api: overrides.endpoint
+        api: overrides.endpoint,
+        proxyPort: overrides.mixedPort
       )
+      runtimeOwner = .user
+      publishStartupDiagnostics()
     }
     try Task.checkCancellation()
 
@@ -500,7 +548,7 @@ final class AppModel: ObservableObject {
       guard let self else { return }
       do {
         lastError = nil
-        try helperClient.register()
+        try await helperClient.register()
       } catch {
         let message = UserFacingError.message(for: error)
         helperClient.statusMessage = message
@@ -510,12 +558,29 @@ final class AppModel: ObservableObject {
   }
 
   func refreshHelperRegistrationStatus() {
-    helperClient.refreshRegistrationStatus()
+    Task { @MainActor [weak self] in
+      await self?.helperClient.refreshRegistrationStatus()
+    }
+  }
+
+  func repairHelperRegistration() {
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      do {
+        lastError = nil
+        try await helperClient.repairRegistration()
+      } catch {
+        let message = UserFacingError.message(for: error)
+        helperClient.statusMessage = message
+        lastError = message
+      }
+    }
   }
 
   func reloadRuntimeData(clearAfterConfirmation: Bool = false) {
     guard isCoreRunning, let apiClient else {
       proxyGroups = []
+      proxyProviders = []
       rules = []
       connections = []
       refreshProfilePreview()
@@ -526,6 +591,11 @@ final class AppModel: ObservableObject {
         let knownDelays = proxyDelayMap(from: proxyGroups)
         let runtimeGroups = try await apiClient.proxyGroups()
         proxyGroups = runtimeGroups.preservingKnownDelays(knownDelays)
+        do {
+          proxyProviders = try await apiClient.structuredProxyProviders()
+        } catch {
+          proxyProviders = []
+        }
         rules = try await apiClient.rules()
         connections = try await apiClient.connections()
         if clearAfterConfirmation, let activeID = profileStore.activeProfileID {
@@ -618,6 +688,53 @@ final class AppModel: ObservableObject {
     }
   }
 
+  func healthCheckProvider(_ provider: ProxyProvider) {
+    guard let apiClient = runtimeAPIClientForProxyAction() else { return }
+    setProvider(provider.id, healthCheckInFlight: true)
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer { self.setProvider(provider.id, healthCheckInFlight: false) }
+      do {
+        try await apiClient.healthCheckProvider(named: provider.name)
+        self.reloadRuntimeData()
+      } catch {
+        self.lastError = UserFacingError.message(for: error)
+      }
+    }
+  }
+
+  func closeConnection(_ connection: ConnectionSnapshot) {
+    guard let apiClient = runtimeAPIClientForProxyAction() else { return }
+    setConnection(connection.id, closing: true)
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer { self.setConnection(connection.id, closing: false) }
+      do {
+        try await apiClient.closeConnection(id: connection.id)
+        self.removeConnection(id: connection.id)
+      } catch {
+        self.lastError = UserFacingError.message(for: error)
+      }
+    }
+  }
+
+  func closeAllRuntimeConnections() {
+    guard let apiClient = runtimeAPIClientForProxyAction() else { return }
+    guard !closingAllConnections else { return }
+    closingAllConnections = true
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer { self.closingAllConnections = false }
+      do {
+        try await apiClient.closeAllConnections()
+        self.connectionBuffer.replace(with: [])
+        self.connections = []
+      } catch {
+        self.lastError = UserFacingError.message(for: error)
+      }
+    }
+  }
+
   func setSystemProxyEnabled(_ enabled: Bool) {
     Task { [self] in
       do {
@@ -659,7 +776,9 @@ final class AppModel: ObservableObject {
     streamTasks.removeAll()
     coreController.stop()
     proxyGroups = []
+    proxyProviders = []
     previewRuntimeActive = false
+    runtimeOwner = .stopped
   }
 
   private func startPreviewRuntime() async {
@@ -679,6 +798,7 @@ final class AppModel: ObservableObject {
       )
       let client = MihomoAPIClient(baseURL: quietOverrides.endpoint.baseURL, secret: quietOverrides.secret)
       previewRuntimeActive = true
+      runtimeOwner = .preview
       try Task.checkCancellation()
       try await coreController.startUserMode(
         coreURL: try bundledCoreURL(),
@@ -700,10 +820,12 @@ final class AppModel: ObservableObject {
       previewRuntimeActive = false
       coreController.stop()
       apiClient = nil
+      runtimeOwner = .stopped
     } catch {
       previewRuntimeActive = false
       coreController.stop()
       apiClient = nil
+      runtimeOwner = .stopped
       lastError = UserFacingError.message(for: error)
     }
   }
@@ -714,8 +836,12 @@ final class AppModel: ObservableObject {
     streamTasks.removeAll()
     coreController.stop()
     proxyGroups = []
+    proxyProviders = []
     rules = []
     connections = []
+    closingConnectionIDs = []
+    closingAllConnections = false
+    providerHealthChecksInFlight = []
     trafficSample = .zero
     trafficHistory = []
     if tunEnabled || tunnelCoreRunning {
@@ -724,6 +850,7 @@ final class AppModel: ObservableObject {
     tunnelCoreRunning = false
     sessionStartedAt = nil
     previewRuntimeActive = false
+    runtimeOwner = .stopped
     refreshProfilePreview()
     if systemProxyEnabled {
       try? await systemProxyController.restore()
@@ -797,6 +924,12 @@ final class AppModel: ObservableObject {
       update(&preview)
       profilePreviewGroups = preview
     }
+  }
+
+  private func removeConnection(id: ConnectionSnapshot.ID) {
+    let remaining = connections.filter { $0.id != id }
+    connectionBuffer.replace(with: remaining)
+    connections = remaining
   }
 
   private func proxyDelayMap(from groups: [ProxyGroup]) -> [String: Int] {
@@ -891,6 +1024,28 @@ final class AppModel: ObservableObject {
     if trafficHistory.count > 72 {
       trafficHistory.removeFirst(trafficHistory.count - 72)
     }
+  }
+
+  private func appendAppLog(level: String, message: String) {
+    logBuffer.append(LogEntry(level: level, message: message))
+    logs = logBuffer.elements
+  }
+
+  private func publishStartupDiagnostics(level: String = "info") {
+    for diagnostic in coreController.startupDiagnostics {
+      appendAppLog(level: level, message: diagnostic)
+    }
+    if !coreController.recentCoreLog.isEmpty {
+      appendAppLog(level: "error", message: "Core tail: \(coreController.recentCoreLog)")
+    }
+  }
+
+  private func startupDiagnosticsSummary() -> String {
+    var lines = coreController.startupDiagnostics
+    if !coreController.recentCoreLog.isEmpty {
+      lines.append("Core tail:\n\(coreController.recentCoreLog)")
+    }
+    return lines.joined(separator: "\n")
   }
 
   private func mergedPreviewSelections(into groups: [ProxyGroup]) -> [ProxyGroup] {
