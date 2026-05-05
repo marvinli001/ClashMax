@@ -1,6 +1,3 @@
-import AppKit
-import Metal
-import RiveRuntime
 import SwiftUI
 
 enum DashboardPowerButtonAsset {
@@ -38,16 +35,13 @@ struct CoreVisualView: View {
   var activationTrigger = 0
 
   var body: some View {
-    if state.isVisualActive,
-       let data = DashboardPowerButtonAsset.data(),
-       let riveVisual = RivePowerButtonVisualView(
-        data: data,
+    if state.isVisualActive {
+      ActiveCorePowerSymbol(
         state: state,
         reduceMotion: reduceMotion,
         activationTrigger: activationTrigger
-       ) {
-      riveVisual
-        .transition(.opacity.combined(with: .scale(scale: 0.6)))
+      )
+      .transition(.opacity.combined(with: .scale(scale: 0.92)))
     } else {
       RestingCoreSymbol(state: state, reduceMotion: reduceMotion)
         .transition(.opacity)
@@ -100,134 +94,82 @@ private struct RestingCoreSymbol: View {
   }
 }
 
-private struct RivePowerButtonVisualView: View {
-  @StateObject private var viewModel: RiveViewModel
-  @State private var isHovering = false
+private struct ActiveCorePowerSymbol: View {
+  @Environment(\.colorScheme) private var colorScheme
   let state: DashboardRuntimeState
   let reduceMotion: Bool
   let activationTrigger: Int
 
-  init?(data: Data, state: DashboardRuntimeState, reduceMotion: Bool, activationTrigger: Int) {
-    guard let file = try? RiveFile(data: data, loadCdn: false) else {
-      return nil
-    }
-    let model = RiveModel(riveFile: file)
-    _viewModel = StateObject(
-      wrappedValue: RiveViewModel(
-        model,
-        stateMachineName: DashboardPowerButtonAsset.stateMachineName,
-        fit: .contain,
-        autoPlay: false
-      )
-    )
-    self.state = state
-    self.reduceMotion = reduceMotion
-    self.activationTrigger = activationTrigger
-  }
+  @State private var pulsing = false
+  @State private var pressDip = false
 
   var body: some View {
     GeometryReader { proxy in
       let side = min(proxy.size.width, proxy.size.height)
 
-      TransparentRiveView(viewModel: viewModel)
-        .aspectRatio(1, contentMode: .fit)
-        .frame(width: side, height: side)
-        .clipShape(Circle())
-        .scaleEffect(isHovering && !state.isVisualActive ? 1.04 : 1)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: isHovering)
-        .allowsHitTesting(false)
-        .frame(width: proxy.size.width, height: proxy.size.height)
+      ZStack {
+        Circle()
+          .fill(tint.opacity(haloOpacity))
+          .blur(radius: side * 0.20)
+          .scaleEffect(pulsing ? 1.08 : 0.94)
+
+        Circle()
+          .stroke(tint.opacity(0.36), lineWidth: max(1.0, side * 0.012))
+          .frame(width: side * 0.80, height: side * 0.80)
+          .opacity(pulsing ? 0.95 : 0.65)
+
+        Image(systemName: "power.circle.fill")
+          .font(.system(size: side * 0.62, weight: .regular))
+          .symbolRenderingMode(.hierarchical)
+          .foregroundStyle(tint)
+          .shadow(color: tint.opacity(colorScheme == .dark ? 0.55 : 0.40), radius: side * 0.08)
+          .scaleEffect(pressDip ? 0.92 : 1.0)
+      }
+      .frame(width: proxy.size.width, height: proxy.size.height)
     }
     .aspectRatio(1, contentMode: .fit)
-    .onAppear {
-      syncAnimation(previousRuntimeActive: state.isVisualActive ? false : nil)
-    }
-    .onHover { hovering in
-      isHovering = hovering
-      syncHoverInput()
-    }
-    .onChange(of: state) { oldState, _ in
-      syncAnimation(previousRuntimeActive: oldState.isVisualActive)
-    }
-    .onChange(of: activationTrigger) { _, _ in
-      triggerPressedAnimation()
-    }
-    .onChange(of: reduceMotion) { _, _ in
-      syncAnimation(previousRuntimeActive: nil)
-    }
+    .onAppear { syncPulse() }
+    .onChange(of: state) { _, _ in syncPulse() }
+    .onChange(of: reduceMotion) { _, _ in syncPulse() }
+    .onChange(of: activationTrigger) { _, _ in flashPress() }
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(Text("ClashMax power button"))
     .accessibilityValue(Text(state.displayTitle))
   }
 
-  private func syncAnimation(previousRuntimeActive: Bool?) {
-    if reduceMotion {
-      viewModel.reset()
-      viewModel.pause()
-      return
-    }
-
-    syncHoverInput()
-
-    if let previousRuntimeActive, previousRuntimeActive != state.isVisualActive {
-      state.isVisualActive ? triggerPressedAnimation() : triggerBackAnimation()
-    }
+  private var tint: Color {
+    state.isStarting ? .cyan : .green
   }
 
-  private func syncHoverInput() {
-    guard !reduceMotion else { return }
-    viewModel.setInput(DashboardPowerButtonAsset.hoverInputName, value: isHovering)
+  private var haloOpacity: Double {
+    state.isStarting ? 0.42 : 0.30
   }
 
-  private func triggerPressedAnimation() {
-    guard !reduceMotion else { return }
-    viewModel.triggerInput(DashboardPowerButtonAsset.pressedInputName)
-  }
-
-  private func triggerBackAnimation() {
-    guard !reduceMotion else { return }
-    viewModel.triggerInput(DashboardPowerButtonAsset.backInputName)
-  }
-}
-
-private struct TransparentRiveView: NSViewRepresentable {
-  let viewModel: RiveViewModel
-
-  func makeNSView(context _: Context) -> RiveView {
-    let view = viewModel.createRiveView()
-    configureTransparency(on: view)
-    return view
-  }
-
-  func updateNSView(_ view: RiveView, context _: Context) {
-    viewModel.update(view: view)
-    configureTransparency(on: view)
-  }
-
-  static func dismantleNSView(_: RiveView, coordinator: Coordinator) {
-    coordinator.viewModel.stop()
-    coordinator.viewModel.deregisterView()
-  }
-
-  func makeCoordinator() -> Coordinator {
-    Coordinator(viewModel: viewModel)
-  }
-
-  final class Coordinator {
-    let viewModel: RiveViewModel
-
-    init(viewModel: RiveViewModel) {
-      self.viewModel = viewModel
+  private func syncPulse() {
+    Task { @MainActor in
+      pulsing = false
+      guard !reduceMotion else { return }
+      try? await Task.sleep(nanoseconds: 16_000_000)
+      withAnimation(
+        .easeInOut(duration: state.isStarting ? 1.1 : 1.7)
+          .repeatForever(autoreverses: true)
+      ) {
+        pulsing = true
+      }
     }
   }
 
-  private func configureTransparency(on view: RiveView) {
-    view.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
-    view.wantsLayer = true
-    view.layer?.isOpaque = false
-    view.layer?.backgroundColor = NSColor.clear.cgColor
-    (view.layer as? CAMetalLayer)?.isOpaque = false
-    view.layer?.filters = nil
+  private func flashPress() {
+    guard !reduceMotion else { return }
+    Task { @MainActor in
+      withAnimation(.spring(response: 0.20, dampingFraction: 0.6)) {
+        pressDip = true
+      }
+      try? await Task.sleep(nanoseconds: 140_000_000)
+      withAnimation(.spring(response: 0.34, dampingFraction: 0.7)) {
+        pressDip = false
+      }
+    }
   }
 }
 

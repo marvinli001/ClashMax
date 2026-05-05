@@ -13,8 +13,18 @@ struct SettingsView: View {
     } content: {
       Form {
         Section("Runtime") {
-          Stepper("Mixed Port: \(appModel.overrides.mixedPort)", value: $appModel.overrides.mixedPort, in: 1024...65535)
-          Stepper("Controller Port: \(appModel.overrides.externalControllerPort)", value: $appModel.overrides.externalControllerPort, in: 1024...65535)
+          HStack {
+            Text("Mixed Port")
+            Spacer()
+            Stepper("\(appModel.overrides.mixedPort)", value: $appModel.overrides.mixedPort, in: 1024...65535)
+              .labelsHidden()
+          }
+          HStack {
+            Text("Controller Port")
+            Spacer()
+            Stepper("\(appModel.overrides.externalControllerPort)", value: $appModel.overrides.externalControllerPort, in: 1024...65535)
+              .labelsHidden()
+          }
           Toggle("Allow LAN", isOn: $appModel.overrides.allowLan)
           Toggle("Enable DNS Override", isOn: Binding(
             get: { appModel.overrides.dnsEnabled ?? false },

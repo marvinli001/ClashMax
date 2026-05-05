@@ -513,24 +513,35 @@ final class AppModel: ObservableObject {
   }
 
   func refreshHelperStatus() {
-    Task {
+    Task { @MainActor [weak self] in
+      guard let self else { return }
       do {
-        let response = try await helperClient.status()
-        helperClient.statusMessage = response.running
+        let response = try await withTimeout(seconds: 4) { @Sendable [helperClient] in
+          try await helperClient.status()
+        }
+        self.helperClient.statusMessage = response.running
           ? "Helper running with pid \(response.pid)"
           : "Helper registered but not running"
+      } catch is OperationTimedOutError {
+        self.helperClient.statusMessage = "Helper not responding. Register it from System Settings or switch to System Proxy."
       } catch {
-        helperClient.statusMessage = "Helper unavailable: \(error.localizedDescription)"
+        self.helperClient.statusMessage = "Helper unavailable: \(error.localizedDescription)"
       }
     }
   }
 
   func refreshHelperLogs() {
-    Task {
+    Task { @MainActor [weak self] in
+      guard let self else { return }
       do {
-        helperLogs = try await helperClient.recentLogs()
+        let lines = try await withTimeout(seconds: 4) { @Sendable [helperClient] in
+          try await helperClient.recentLogs()
+        }
+        self.helperLogs = lines
+      } catch is OperationTimedOutError {
+        self.helperClient.statusMessage = "Helper not responding. Register it from System Settings or switch to System Proxy."
       } catch {
-        lastError = UserFacingError.message(for: error)
+        self.lastError = UserFacingError.message(for: error)
       }
     }
   }
@@ -720,7 +731,7 @@ final class AppModel: ObservableObject {
   }
 
   private func applySelectedProxy(groupName: String, nodeName: String) {
-    updateRuntimeProxyGroups { groups in
+    updateProxyGroupCollections { groups in
       guard let index = groups.firstIndex(where: { $0.name == groupName }) else { return }
       groups[index].selected = nodeName
     }
@@ -728,7 +739,7 @@ final class AppModel: ObservableObject {
 
   private func applyDelay(_ delay: Int, to nodeName: String) {
     guard delay >= 0 else { return }
-    updateRuntimeProxyGroups { groups in
+    updateProxyGroupCollections { groups in
       for groupIndex in groups.indices {
         for nodeIndex in groups[groupIndex].nodes.indices where groups[groupIndex].nodes[nodeIndex].name == nodeName {
           groups[groupIndex].nodes[nodeIndex].delay = delay
@@ -742,6 +753,19 @@ final class AppModel: ObservableObject {
     var groups = proxyGroups
     update(&groups)
     proxyGroups = groups
+  }
+
+  private func updateProxyGroupCollections(_ update: (inout [ProxyGroup]) -> Void) {
+    if !proxyGroups.isEmpty {
+      var runtime = proxyGroups
+      update(&runtime)
+      proxyGroups = runtime
+    }
+    if !profilePreviewGroups.isEmpty {
+      var preview = profilePreviewGroups
+      update(&preview)
+      profilePreviewGroups = preview
+    }
   }
 
   private func proxyDelayMap(from groups: [ProxyGroup]) -> [String: Int] {

@@ -122,21 +122,36 @@ struct PrivilegedHelperXPCTransport: HelperXPCTransport {
   ) async throws -> HelperClientResponse {
     let connection = NSXPCConnection(machServiceName: clashMaxHelperMachServiceName, options: .privileged)
     connection.remoteObjectInterface = ClashMaxHelperXPCInterface.make()
+    let box = ContinuationBox<HelperClientResponse>()
+
+    connection.invalidationHandler = {
+      box.fail(AppError.helperResponse("Helper connection invalidated. The privileged helper may not be installed or approved."))
+    }
+    connection.interruptionHandler = {
+      box.fail(AppError.helperResponse("Helper connection interrupted."))
+    }
     connection.resume()
-    defer { connection.invalidate() }
 
-    return try await withCheckedThrowingContinuation { continuation in
-      let proxy = connection.remoteObjectProxyWithErrorHandler { error in
-        continuation.resume(throwing: error)
-      } as? ClashMaxHelperXPCProtocol
+    return try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<HelperClientResponse, Error>) in
+        box.attach(continuation) {
+          connection.invalidate()
+        }
 
-      guard let proxy else {
-        continuation.resume(throwing: AppError.helperResponse("Unable to connect to ClashMax Helper."))
-        return
+        let proxy = connection.remoteObjectProxyWithErrorHandler { error in
+          box.fail(error)
+        } as? ClashMaxHelperXPCProtocol
+
+        guard let proxy else {
+          box.fail(AppError.helperResponse("Unable to connect to ClashMax Helper."))
+          return
+        }
+        body(proxy) { payload in
+          box.succeed(HelperClientResponse(payload: payload))
+        }
       }
-      body(proxy) { payload in
-        continuation.resume(returning: HelperClientResponse(payload: payload))
-      }
+    } onCancel: {
+      box.fail(CancellationError())
     }
   }
 
@@ -145,21 +160,81 @@ struct PrivilegedHelperXPCTransport: HelperXPCTransport {
   ) async throws -> [String] {
     let connection = NSXPCConnection(machServiceName: clashMaxHelperMachServiceName, options: .privileged)
     connection.remoteObjectInterface = ClashMaxHelperXPCInterface.make()
-    connection.resume()
-    defer { connection.invalidate() }
+    let box = ContinuationBox<[String]>()
 
-    return try await withCheckedThrowingContinuation { continuation in
-      let proxy = connection.remoteObjectProxyWithErrorHandler { error in
-        continuation.resume(throwing: error)
-      } as? ClashMaxHelperXPCProtocol
-
-      guard let proxy else {
-        continuation.resume(throwing: AppError.helperResponse("Unable to connect to ClashMax Helper."))
-        return
-      }
-      body(proxy) { payload in
-        continuation.resume(returning: HelperXPCPayload.logLines(from: payload))
-      }
+    connection.invalidationHandler = {
+      box.fail(AppError.helperResponse("Helper connection invalidated. The privileged helper may not be installed or approved."))
     }
+    connection.interruptionHandler = {
+      box.fail(AppError.helperResponse("Helper connection interrupted."))
+    }
+    connection.resume()
+
+    return try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[String], Error>) in
+        box.attach(continuation) {
+          connection.invalidate()
+        }
+
+        let proxy = connection.remoteObjectProxyWithErrorHandler { error in
+          box.fail(error)
+        } as? ClashMaxHelperXPCProtocol
+
+        guard let proxy else {
+          box.fail(AppError.helperResponse("Unable to connect to ClashMax Helper."))
+          return
+        }
+        body(proxy) { payload in
+          box.succeed(HelperXPCPayload.logLines(from: payload))
+        }
+      }
+    } onCancel: {
+      box.fail(CancellationError())
+    }
+  }
+}
+
+private final class ContinuationBox<Value: Sendable>: @unchecked Sendable {
+  private let lock = NSLock()
+  private var continuation: CheckedContinuation<Value, Error>?
+  private var cleanup: (() -> Void)?
+  private var settled = false
+
+  func attach(_ continuation: CheckedContinuation<Value, Error>, cleanup: @escaping () -> Void) {
+    lock.lock()
+    if settled {
+      lock.unlock()
+      cleanup()
+      return
+    }
+    self.continuation = continuation
+    self.cleanup = cleanup
+    lock.unlock()
+  }
+
+  func succeed(_ value: Value) {
+    lock.lock()
+    guard !settled else { lock.unlock(); return }
+    settled = true
+    let continuation = self.continuation
+    let cleanup = self.cleanup
+    self.continuation = nil
+    self.cleanup = nil
+    continuation?.resume(returning: value)
+    lock.unlock()
+    cleanup?()
+  }
+
+  func fail(_ error: Error) {
+    lock.lock()
+    guard !settled else { lock.unlock(); return }
+    settled = true
+    let continuation = self.continuation
+    let cleanup = self.cleanup
+    self.continuation = nil
+    self.cleanup = nil
+    continuation?.resume(throwing: error)
+    lock.unlock()
+    cleanup?()
   }
 }
