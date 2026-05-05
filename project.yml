@@ -80,6 +80,49 @@ targets:
           cp "$BUILT_PRODUCTS_DIR/ClashMaxHelper" "$launch_services/ClashMaxHelper"
           cp "$SRCROOT/Config/io.github.clashmax.ClashMax.Helper.plist" "$launch_daemons/io.github.clashmax.ClashMax.Helper.plist"
           cp -R "$SRCROOT/Resources/Core/." "$core_resources/"
+      - name: Sign Nested Core Binaries
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+
+          core_resources="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Core"
+          sign_identity="${EXPANDED_CODE_SIGN_IDENTITY:-}"
+          sign_identity_name="${EXPANDED_CODE_SIGN_IDENTITY_NAME:-}"
+          sign_identity_label="${sign_identity_name:-${CODE_SIGN_IDENTITY:-}}"
+          if [ -z "$sign_identity" ]; then
+            sign_identity="$sign_identity_label"
+          fi
+
+          should_sign="YES"
+          if [ "${CODE_SIGNING_ALLOWED:-NO}" != "YES" ]; then
+            should_sign="NO"
+          fi
+          if [ -z "$sign_identity" ] || [ "$sign_identity" = "-" ]; then
+            should_sign="NO"
+          fi
+
+          for core_binary in "$core_resources"/mihomo-darwin-*; do
+            if [ ! -f "$core_binary" ]; then
+              continue
+            fi
+
+            chmod +x "$core_binary"
+            xattr -cr "$core_binary" || true
+
+            if [ "$should_sign" != "YES" ]; then
+              echo "Skipping nested core signing for $core_binary because code signing is disabled or no identity is available."
+              continue
+            fi
+
+            timestamp_arg="--timestamp=none"
+            case "$sign_identity_label" in
+              Developer\ ID\ Application:*) timestamp_arg="--timestamp" ;;
+            esac
+
+            echo "Signing nested core binary with hardened runtime: $core_binary"
+            /usr/bin/codesign --force --options runtime "$timestamp_arg" --sign "$sign_identity" "$core_binary"
+            /usr/bin/codesign --verify --strict --verbose=2 "$core_binary"
+          done
   ClashMaxHelper:
     type: tool
     platform: macOS

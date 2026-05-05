@@ -350,6 +350,7 @@
 				FA5D323DBCB23A8FC4E6E2AE /* Sources */,
 				6C3A8AF3C885C4663F97D8EA /* Clean Bundle Extended Attributes */,
 				FD4C75AEBC596A85273D77F7 /* Embed Helper */,
+				58BA3D232FA9D543002EBDF4 /* Sign Nested Core Binaries */,
 				55A829CAB414EE8DF5422195 /* Resources */,
 				B0268F82A08F5814E33FD482 /* Frameworks */,
 			);
@@ -421,6 +422,25 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		58BA3D232FA9D543002EBDF4 /* Sign Nested Core Binaries */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Sign Nested Core Binaries";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -euo pipefail\n\ncore_resources=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Core\"\nsign_identity=\"${EXPANDED_CODE_SIGN_IDENTITY:-}\"\nsign_identity_name=\"${EXPANDED_CODE_SIGN_IDENTITY_NAME:-}\"\nsign_identity_label=\"${sign_identity_name:-${CODE_SIGN_IDENTITY:-}}\"\nif [ -z \"$sign_identity\" ]; then\n  sign_identity=\"$sign_identity_label\"\nfi\n\nshould_sign=\"YES\"\nif [ \"${CODE_SIGNING_ALLOWED:-NO}\" != \"YES\" ]; then\n  should_sign=\"NO\"\nfi\nif [ -z \"$sign_identity\" ] || [ \"$sign_identity\" = \"-\" ]; then\n  should_sign=\"NO\"\nfi\n\nfor core_binary in \"$core_resources\"/mihomo-darwin-*; do\n  if [ ! -f \"$core_binary\" ]; then\n    continue\n  fi\n\n  chmod +x \"$core_binary\"\n  xattr -cr \"$core_binary\" || true\n\n  if [ \"$should_sign\" != \"YES\" ]; then\n    echo \"Skipping nested core signing for $core_binary because code signing is disabled or no identity is available.\"\n    continue\n  fi\n\n  timestamp_arg=\"--timestamp=none\"\n  case \"$sign_identity_label\" in\n    Developer\\ ID\\ Application:*) timestamp_arg=\"--timestamp\" ;;\n  esac\n\n  echo \"Signing nested core binary with hardened runtime: $core_binary\"\n  /usr/bin/codesign --force --options runtime \"$timestamp_arg\" --sign \"$sign_identity\" \"$core_binary\"\n  /usr/bin/codesign --verify --strict --verbose=2 \"$core_binary\"\ndone\n";
+		};
 		6C3A8AF3C885C4663F97D8EA /* Clean Bundle Extended Attributes */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
@@ -728,6 +748,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Config/ClashMax.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = 678WA95W4U;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -752,6 +773,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Config/ClashMaxHelper.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
@@ -778,6 +800,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Config/ClashMax.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = 678WA95W4U;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;

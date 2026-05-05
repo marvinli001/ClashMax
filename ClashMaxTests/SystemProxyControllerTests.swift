@@ -52,6 +52,24 @@ final class SystemProxyControllerTests: XCTestCase {
     XCTAssertFalse(projectSpec.contains("RiveRuntime"))
   }
 
+  func testArchiveSignsNestedCoreBinariesWithHardenedRuntime() throws {
+    let testFile = URL(fileURLWithPath: #filePath)
+    let projectRoot = testFile.deletingLastPathComponent().deletingLastPathComponent()
+    let projectFile = projectRoot.appendingPathComponent("ClashMax.xcodeproj/project.pbxproj")
+    let projectSpecFile = projectRoot.appendingPathComponent("project.yml")
+    let project = try String(contentsOf: projectFile, encoding: .utf8)
+    let projectSpec = try String(contentsOf: projectSpecFile, encoding: .utf8)
+
+    for content in [project, projectSpec] {
+      XCTAssertTrue(content.contains("Sign Nested Core Binaries"))
+      XCTAssertTrue(content.contains("mihomo-darwin-*"))
+      XCTAssertTrue(content.contains("EXPANDED_CODE_SIGN_IDENTITY"))
+      XCTAssertTrue(content.contains("--options runtime"))
+      XCTAssertTrue(content.contains("--timestamp"))
+      XCTAssertTrue(content.contains("codesign --verify --strict"))
+    }
+  }
+
   func testProcessCommandRunnerTimesOutHangingCommands() async throws {
     let runner = ProcessCommandRunner(timeout: 0.1)
     let startedAt = Date()
