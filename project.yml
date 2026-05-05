@@ -54,6 +54,7 @@ targets:
       path: Config/ClashMax.entitlements
     postCompileScripts:
       - name: Clean Bundle Extended Attributes
+        basedOnDependencyAnalysis: false
         script: |
           set -euo pipefail
           if [ -d "$TARGET_BUILD_DIR/$WRAPPER_NAME" ]; then

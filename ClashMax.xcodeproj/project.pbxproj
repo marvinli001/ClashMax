@@ -433,6 +433,7 @@
 /* Begin PBXShellScriptBuildPhase section */
 		6C3A8AF3C885C4663F97D8EA /* Clean Bundle Extended Attributes */ = {
 			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
 			files = (
 			);
