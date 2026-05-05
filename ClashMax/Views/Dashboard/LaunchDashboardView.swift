@@ -3,6 +3,7 @@ import SwiftUI
 
 struct LaunchDashboardView: View {
   @EnvironmentObject private var appModel: AppModel
+  @State private var coreActivationTrigger = 0
   let state: DashboardRuntimeState
   let namespace: Namespace.ID
   let reduceMotion: Bool
@@ -11,60 +12,76 @@ struct LaunchDashboardView: View {
   var body: some View {
     let visualSide = DashboardLayoutMetrics.launchVisualSideLength(
       availableWidth: availableSize.width,
-      availableHeight: availableSize.height
+      availableHeight: availableSize.height,
+      isVisualActive: state.isVisualActive
     )
-    let compactHeight = availableSize.height < 620
 
-    VStack(spacing: compactHeight ? 12 : 18) {
-      VStack(spacing: compactHeight ? 10 : 14) {
-        Button {
-          startRuntime()
-        } label: {
-          CoreVisualView(state: state, reduceMotion: reduceMotion)
-            .frame(width: visualSide, height: visualSide)
-            .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .disabled(startDisabled)
-        .help(startDisabled ? launchTitle : "Start ClashMax")
-        .matchedGeometryEffect(id: "core-visual", in: namespace)
+    VStack(spacing: 0) {
+      Spacer(minLength: 0)
 
-        VStack(spacing: 6) {
-          HStack(spacing: 8) {
-            Image(systemName: stateSymbol)
-              .foregroundStyle(stateTint)
-            Text(launchTitle)
-              .font(.system(size: 28, weight: .semibold, design: .rounded))
-              .lineLimit(1)
-              .minimumScaleFactor(0.72)
-          }
+      VStack(spacing: 22) {
+        headerRow(visualSide: visualSide)
 
-          Text(appModel.profileStore.activeProfile?.name ?? "Select a profile to start ClashMax")
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-            .minimumScaleFactor(0.72)
-            .matchedGeometryEffect(id: "profile-summary", in: namespace)
-        }
+        LaunchControlDeck(
+          state: state,
+          namespace: namespace,
+          reduceMotion: reduceMotion,
+          availableWidth: availableSize.width,
+          startDisabled: startDisabled,
+          startAction: startRuntime
+        )
+          .frame(maxWidth: DashboardLayoutMetrics.launchControlsMaxWidth(availableWidth: availableSize.width))
+          .frame(maxWidth: .infinity)
+          .transition(.movingParts.blur)
+
+        LaunchStatusMessage(state: state)
+          .frame(maxWidth: DashboardLayoutMetrics.launchControlsMaxWidth(availableWidth: availableSize.width))
+          .frame(maxWidth: .infinity)
       }
-      .padding(.top, compactHeight ? 2 : 12)
 
-      LaunchControlDeck(
-        state: state,
-        namespace: namespace,
-        reduceMotion: reduceMotion,
-        availableWidth: availableSize.width,
-        startDisabled: startDisabled,
-        startAction: startRuntime
-      )
-        .frame(maxWidth: DashboardLayoutMetrics.launchControlsMaxWidth(availableWidth: availableSize.width))
-        .transition(.movingParts.blur)
+      Spacer(minLength: 0)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+  }
 
-      LaunchStatusMessage(state: state)
-        .frame(maxWidth: DashboardLayoutMetrics.launchControlsMaxWidth(availableWidth: availableSize.width))
+  private func headerRow(visualSide: CGFloat) -> some View {
+    HStack(alignment: .center, spacing: 18) {
+      Button {
+        startRuntime()
+      } label: {
+        CoreVisualView(
+          state: state,
+          reduceMotion: reduceMotion,
+          activationTrigger: coreActivationTrigger
+        )
+          .frame(width: visualSide, height: visualSide)
+          .contentShape(Circle())
+      }
+      .buttonStyle(.plain)
+      .disabled(startDisabled)
+      .help(startDisabled ? launchTitle : "Start ClashMax")
+      .matchedGeometryEffect(id: "core-visual", in: namespace)
+
+      VStack(alignment: .leading, spacing: 4) {
+        HStack(spacing: 8) {
+          Image(systemName: stateSymbol)
+            .foregroundStyle(stateTint)
+            .font(.system(size: 22, weight: .semibold))
+          Text(launchTitle)
+            .font(.system(size: 34, weight: .semibold, design: .rounded))
+            .lineLimit(1)
+            .minimumScaleFactor(0.6)
+        }
+
+        Text(appModel.profileStore.activeProfile?.name ?? "Select a profile to start ClashMax")
+          .font(.callout)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+          .minimumScaleFactor(0.72)
+          .matchedGeometryEffect(id: "profile-summary", in: namespace)
+      }
     }
     .frame(maxWidth: .infinity)
-    .frame(minHeight: max(420, availableSize.height - 36), alignment: .center)
   }
 
   private var startDisabled: Bool {
@@ -74,6 +91,7 @@ struct LaunchDashboardView: View {
 
   private func startRuntime() {
     guard !startDisabled else { return }
+    coreActivationTrigger += 1
     withAnimation(.spring(response: 0.52, dampingFraction: 0.82)) {
       appModel.start()
     }
@@ -126,6 +144,7 @@ private struct LaunchControlDeck: View {
             modeControl
             mixedPortControl
           }
+          routingControl
         }
       } else {
         HStack(alignment: .bottom, spacing: 30) {
@@ -140,12 +159,11 @@ private struct LaunchControlDeck: View {
 
       if compact {
         VStack(alignment: .leading, spacing: 12) {
-          toggleControls
           startButton
         }
       } else {
         HStack(spacing: 14) {
-          toggleControls
+          routingControl
           Spacer(minLength: 0)
           startButton
         }
@@ -161,17 +179,37 @@ private struct LaunchControlDeck: View {
       Text("Profile")
         .font(.caption2)
         .foregroundStyle(.secondary)
-      Picker("Profile", selection: profileSelection) {
-        Text("None").tag(Profile.ID?.none)
+
+      Picker("Profile", selection: profilePickerBinding) {
+        if appModel.profileStore.profiles.isEmpty {
+          Text("No Profiles").tag(Optional<Profile.ID>.none)
+        }
         ForEach(appModel.profileStore.profiles) { profile in
           Text(profile.name).tag(Optional(profile.id))
         }
       }
+      .pickerStyle(.menu)
       .labelsHidden()
+      .controlSize(.regular)
+      .fixedSize()
+      .disabled(appModel.profileStore.profiles.isEmpty)
       .frame(width: DashboardLayoutMetrics.launchProfileControlWidth, alignment: .leading)
       .matchedGeometryEffect(id: "profile-control", in: namespace)
     }
     .frame(width: DashboardLayoutMetrics.launchProfileControlWidth, alignment: .leading)
+  }
+
+  private var profilePickerBinding: Binding<Profile.ID?> {
+    Binding(
+      get: { appModel.profileStore.activeProfileID },
+      set: { newID in
+        guard let newID,
+              newID != appModel.profileStore.activeProfileID,
+              let profile = appModel.profileStore.profiles.first(where: { $0.id == newID })
+        else { return }
+        appModel.selectProfile(profile)
+      }
+    )
   }
 
   private var modeControl: some View {
@@ -188,6 +226,19 @@ private struct LaunchControlDeck: View {
     .frame(width: DashboardLayoutMetrics.runModePickerWidth, alignment: .leading)
   }
 
+  private var routingControl: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text("Proxy")
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+      ProxyRoutingModePicker(selection: Binding(
+        get: { appModel.proxyRoutingMode },
+        set: { appModel.setProxyRoutingMode($0) }
+      ))
+    }
+    .frame(width: DashboardLayoutMetrics.proxyRoutingModePickerWidth, alignment: .leading)
+  }
+
   private var mixedPortControl: some View {
     VStack(alignment: .leading, spacing: 6) {
       Text("Mixed Port")
@@ -197,19 +248,6 @@ private struct LaunchControlDeck: View {
         .frame(width: DashboardLayoutMetrics.launchMixedPortControlWidth, alignment: .leading)
     }
     .frame(width: DashboardLayoutMetrics.launchMixedPortControlWidth, alignment: .leading)
-  }
-
-  private var toggleControls: some View {
-    HStack(spacing: 16) {
-      Toggle("System Proxy", isOn: Binding(
-        get: { appModel.systemProxyEnabled },
-        set: { appModel.setSystemProxyEnabled($0) }
-      ))
-      .toggleStyle(.switch)
-
-      Toggle("TUN Mode", isOn: $appModel.tunEnabled)
-        .toggleStyle(.switch)
-    }
   }
 
   private var startButton: some View {
@@ -225,20 +263,6 @@ private struct LaunchControlDeck: View {
     .disabled(startDisabled)
     .matchedGeometryEffect(id: "primary-run-control", in: namespace)
     .changeEffect(.shine(duration: reduceMotion ? 0.18 : 0.72), value: state)
-  }
-
-  private var profileSelection: Binding<Profile.ID?> {
-    Binding(
-      get: { appModel.profileStore.activeProfileID },
-      set: { id in
-        guard let id,
-              let profile = appModel.profileStore.profiles.first(where: { $0.id == id })
-        else {
-          return
-        }
-        appModel.selectProfile(profile)
-      }
-    )
   }
 }
 
@@ -276,3 +300,4 @@ private struct LaunchStatusMessage: View {
     return .red
   }
 }
+

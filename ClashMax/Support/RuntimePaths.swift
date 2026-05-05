@@ -85,18 +85,24 @@ enum AppError: Error, CustomStringConvertible {
 }
 
 enum UserFacingError {
+  private static let helperCodeSigningRecovery = "TUN helper could not be registered because ClashMax or its helper is not code signed. Build and run with local code signing enabled, or switch Proxy Routing to System Proxy."
+
   static func message(for error: Error) -> String {
     if let appError = error as? AppError {
       return message(from: appError.description)
     }
 
     let nsError = error as NSError
+    let localized = nsError.localizedDescription
+    let described = String(describing: error)
+    if isHelperCodeSigningFailure(domain: nsError.domain, code: nsError.code, message: "\(localized) \(described)") {
+      return helperCodeSigningRecovery
+    }
+
     if let networkMessage = networkMessage(for: nsError) {
       return networkMessage
     }
 
-    let localized = nsError.localizedDescription
-    let described = String(describing: error)
     if localized.contains("The operation couldn") && !described.isEmpty {
       return message(from: described)
     }
@@ -104,6 +110,10 @@ enum UserFacingError {
   }
 
   static func message(from rawMessage: String) -> String {
+    if isHelperCodeSigningFailure(domain: nil, code: nil, message: rawMessage) {
+      return helperCodeSigningRecovery
+    }
+
     if rawMessage.contains("NSURLErrorDomain") || rawMessage.contains("Could not connect to the server") {
       return "Could not connect to the Mihomo controller at 127.0.0.1:9097. The core may still be starting or failed to open its controller port."
     }
@@ -111,6 +121,13 @@ enum UserFacingError {
     let trimmed = rawMessage.trimmingCharacters(in: .whitespacesAndNewlines)
     guard trimmed.count > 220 else { return trimmed }
     return "\(trimmed.prefix(217))..."
+  }
+
+  private static func isHelperCodeSigningFailure(domain: String?, code: Int?, message: String) -> Bool {
+    let helperRegistrationFailed = domain == "SMAppServiceErrorDomain" && code == 3
+    return helperRegistrationFailed
+      || message.localizedCaseInsensitiveContains("Codesigning failure")
+      || message.contains("-67056")
   }
 
   private static func networkMessage(for error: NSError) -> String? {

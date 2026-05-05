@@ -4,8 +4,8 @@ struct MenuBarView: View {
   @EnvironmentObject private var appModel: AppModel
 
   var body: some View {
-    Button(appModel.isRunning ? "Stop Core" : "Start Core") {
-      appModel.isRunning ? appModel.stop() : appModel.start()
+    Button(canStopRuntime ? "Stop Core" : "Start Core") {
+      canStopRuntime ? appModel.stop() : appModel.start()
     }
 
     Picker("Mode", selection: Binding(
@@ -17,12 +17,14 @@ struct MenuBarView: View {
       }
     }
 
-    Toggle("System Proxy", isOn: Binding(
-      get: { appModel.systemProxyEnabled },
-      set: { appModel.setSystemProxyEnabled($0) }
-    ))
-
-    Toggle("TUN", isOn: $appModel.tunEnabled)
+    Picker("Proxy", selection: Binding(
+      get: { appModel.proxyRoutingMode },
+      set: { appModel.setProxyRoutingMode($0) }
+    )) {
+      ForEach(ProxyRoutingMode.allCases) { mode in
+        Text(mode.displayName).tag(mode)
+      }
+    }
 
     Divider()
 
@@ -43,5 +45,9 @@ struct MenuBarView: View {
     Button("Quit") {
       NSApp.terminate(nil)
     }
+  }
+
+  private var canStopRuntime: Bool {
+    appModel.isRunning || appModel.dashboardRuntimeState.isStarting
   }
 }

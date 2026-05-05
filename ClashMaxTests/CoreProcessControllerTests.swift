@@ -26,6 +26,41 @@ final class CoreProcessControllerTests: XCTestCase {
     XCTAssertEqual(controller.status, .crashed(message: "mihomo exited with code 2"))
   }
 
+  func testCancellingStartWhileWaitingForReadinessStopsWithoutCrash() async throws {
+    let launcher = FakeProcessLauncher()
+    let readiness = CancellableCoreReadinessProbe()
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: readiness,
+      reaper: RecordingCoreProcessReaper()
+    )
+    let api = CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+
+    let startTask = Task { @MainActor in
+      try await controller.startUserMode(
+        coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+        configURL: URL(fileURLWithPath: "/tmp/config.yaml"),
+        workDirectory: URL(fileURLWithPath: "/tmp"),
+        api: api
+      )
+    }
+
+    for _ in 0..<20 where !readiness.didStart {
+      await Task.yield()
+    }
+    XCTAssertTrue(readiness.didStart)
+    XCTAssertEqual(controller.status, .starting)
+
+    startTask.cancel()
+    await XCTAssertThrowsCancellationErrorAsync {
+      try await startTask.value
+    }
+
+    XCTAssertTrue(launcher.process.didTerminate)
+    XCTAssertEqual(controller.status, .stopped)
+  }
+
   func testOrphanReaperMatchesOnlyClashMaxManagedMihomoCommands() {
     let coreURL = URL(fileURLWithPath: "/Applications/ClashMax.app/Contents/Resources/Core/mihomo-darwin-arm64")
     let configURL = URL(fileURLWithPath: "/Users/test/Library/Application Support/ClashMax/Runtime/profile.runtime.yaml")
@@ -99,5 +134,16 @@ private final class SequencedProcessLauncher: CoreProcessLaunching {
 
   func launch(executable: URL, arguments: [String], environment: [String: String], workDirectory: URL) throws -> RunningCoreProcess {
     processes.removeFirst()
+  }
+}
+
+@MainActor
+private final class CancellableCoreReadinessProbe: CoreReadinessProbing {
+  private(set) var didStart = false
+
+  func waitUntilReady(api: CoreAPIEndpoint) async throws -> String {
+    didStart = true
+    try await Task.sleep(nanoseconds: 10_000_000_000)
+    return "v-test"
   }
 }

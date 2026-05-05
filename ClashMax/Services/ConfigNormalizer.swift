@@ -23,7 +23,8 @@ struct ConfigNormalizer {
     from source: String,
     providerContentPath: String? = nil,
     profileName: String = "Subscription",
-    overrides: RuntimeOverrides
+    overrides: RuntimeOverrides,
+    selectionOverrides: [String: String] = [:]
   ) throws -> String {
     var root: [String: Any]
 
@@ -62,7 +63,26 @@ struct ConfigNormalizer {
     }
     root["tun"] = tun
 
+    if !selectionOverrides.isEmpty,
+       var groups = root["proxy-groups"] as? [Any] {
+      for index in groups.indices {
+        guard var group = groups[index] as? [String: Any],
+              let groupName = group["name"] as? String,
+              let selected = selectionOverrides[groupName],
+              proxyNames(in: group).contains(selected)
+        else { continue }
+        group["now"] = selected
+        groups[index] = group
+      }
+      root["proxy-groups"] = groups
+    }
+
     return try Yams.dump(object: root, sortKeys: false)
+  }
+
+  private func proxyNames(in group: [String: Any]) -> Set<String> {
+    let entries = group["proxies"] as? [Any] ?? []
+    return Set(entries.compactMap { $0 as? String })
   }
 
   private func loadMapping(from source: String) throws -> [String: Any] {

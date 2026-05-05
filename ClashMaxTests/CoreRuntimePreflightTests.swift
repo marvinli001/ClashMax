@@ -48,6 +48,47 @@ final class CoreRuntimePreflightTests: XCTestCase {
     XCTAssertEqual(reaper.reapedWorkDirectory, URL(fileURLWithPath: "/tmp"))
     XCTAssertEqual(controller.status, .running(version: "v-test"))
   }
+
+  func testReadinessProbeUsesShortVersionRequestTimeout() async throws {
+    let recorder = URLProtocolRecorder(responseBody: #"{"version":"v-ready"}"#)
+    let session = URLSession(configuration: recorder.configuration)
+    let probe = MihomoCoreReadinessProbe(
+      attempts: 1,
+      delayNanoseconds: 0,
+      requestTimeout: 0.5,
+      session: session
+    )
+
+    let version = try await probe.waitUntilReady(api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc"))
+
+    XCTAssertEqual(version, "v-ready")
+    let request = try XCTUnwrap(recorder.lastRequest)
+    XCTAssertEqual(request.timeoutInterval, 0.5, accuracy: 0.01)
+  }
+
+  func testRuntimeConfigValidationTimesOutHangingCoreTestMode() async throws {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxValidatorTests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let hangingCore = directory.appendingPathComponent("mihomo-hang")
+    let configURL = directory.appendingPathComponent("config.yaml")
+    try "#!/bin/sh\nexec sleep 2\n".write(to: hangingCore, atomically: true, encoding: .utf8)
+    try "mixed-port: 7890\n".write(to: configURL, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hangingCore.path)
+
+    let validator = MihomoRuntimeConfigValidator(timeout: 0.1)
+    let startedAt = Date()
+
+    do {
+      try await validator.validate(coreURL: hangingCore, configURL: configURL, workDirectory: directory)
+      XCTFail("Expected runtime config validation to time out.")
+    } catch {
+      XCTAssertTrue(error.localizedDescription.contains("timed out"))
+    }
+    XCTAssertLessThan(Date().timeIntervalSince(startedAt), 1)
+  }
 }
 
 final class RecordingRuntimeConfigValidator: RuntimeConfigValidating {

@@ -209,21 +209,15 @@ private struct RunningHeaderCard: View {
       }
       .buttonStyle(.borderedProminent)
       .controlSize(.large)
-      .disabled(state.isStarting)
+      .help(state.isStarting ? "Stop starting runtime" : "Stop ClashMax")
       .matchedGeometryEffect(id: "primary-run-control", in: namespace)
 
       HStack(spacing: 8) {
         DashboardStatusPill(
-          title: "System Proxy",
-          value: appModel.systemProxyEnabled ? "On" : "Off",
-          symbolName: "network.badge.shield.half.filled",
-          tint: appModel.systemProxyEnabled ? .green : .secondary
-        )
-        DashboardStatusPill(
-          title: "TUN",
-          value: appModel.tunEnabled ? "On" : "Off",
-          symbolName: "point.topleft.down.curvedto.point.bottomright.up",
-          tint: appModel.tunEnabled ? .green : .secondary
+          title: "Proxy",
+          value: appModel.proxyRoutingMode.displayName,
+          symbolName: appModel.proxyRoutingMode.symbolName,
+          tint: appModel.systemProxyEnabled || appModel.tunEnabled ? .green : .secondary
         )
       }
     }
@@ -517,12 +511,20 @@ private struct NetworkStatusCard: View {
         .opacity(0.24)
 
       RuntimeLine(title: "Controller", value: "\(appModel.overrides.externalControllerHost):\(appModel.overrides.externalControllerPort)")
-      RuntimeLine(title: "System Proxy", value: appModel.systemProxyEnabled ? "127.0.0.1:\(appModel.overrides.mixedPort)" : "Off")
-      RuntimeLine(title: "TUN", value: appModel.tunEnabled ? "Helper controlled" : "Off")
+      RuntimeLine(title: "Proxy", value: proxyRoutingDetail)
     }
     .padding(14)
     .frame(maxWidth: .infinity, minHeight: 210, alignment: .topLeading)
     .dashboardCard()
+  }
+
+  private var proxyRoutingDetail: String {
+    switch appModel.proxyRoutingMode {
+    case .systemProxy:
+      appModel.systemProxyEnabled ? "System Proxy 127.0.0.1:\(appModel.overrides.mixedPort)" : "System Proxy ready"
+    case .tun:
+      appModel.tunEnabled ? "TUN helper controlled" : "TUN ready"
+    }
   }
 }
 

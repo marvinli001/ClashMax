@@ -3,6 +3,7 @@ import SwiftUI
 
 enum DashboardLayoutMetrics {
   static let runModePickerWidth: CGFloat = 214
+  static let proxyRoutingModePickerWidth: CGFloat = 232
   static let launchProfileControlWidth: CGFloat = 178
   static let launchMixedPortControlWidth: CGFloat = 104
   static let launchStartButtonWidth: CGFloat = 156
@@ -16,11 +17,18 @@ enum DashboardLayoutMetrics {
     width < 760 ? 14 : 18
   }
 
-  static func launchVisualSideLength(availableWidth: CGFloat, availableHeight: CGFloat) -> CGFloat {
+  static func launchVisualSideLength(
+    availableWidth: CGFloat,
+    availableHeight: CGFloat,
+    isVisualActive: Bool = false
+  ) -> CGFloat {
     let width = max(0, availableWidth)
     let height = max(0, availableHeight)
     let candidate = min(width * 0.22, height * 0.26)
-    return min(max(candidate, 112), 220)
+    let active = min(max(candidate, 112), 220)
+    if isVisualActive { return active }
+    let resting = min(active * 0.55, 96)
+    return max(resting, 68)
   }
 
   static func launchControlsMaxWidth(availableWidth: CGFloat) -> CGFloat {
@@ -39,6 +47,21 @@ struct RunModePicker: View {
     Picker("Mode", selection: selection) {
       ForEach(RunMode.allCases) { mode in
         Text(mode.displayName).tag(mode)
+      }
+    }
+    .labelsHidden()
+    .pickerStyle(.segmented)
+    .fixedSize(horizontal: true, vertical: false)
+  }
+}
+
+struct ProxyRoutingModePicker: View {
+  let selection: Binding<ProxyRoutingMode>
+
+  var body: some View {
+    Picker("Proxy Routing", selection: selection) {
+      ForEach(ProxyRoutingMode.allCases) { mode in
+        Label(mode.displayName, systemImage: mode.symbolName).tag(mode)
       }
     }
     .labelsHidden()
@@ -172,20 +195,50 @@ struct DashboardEmptyRuntimeView: View {
   }
 }
 
+enum DashboardCardSurfaceStyle {
+  static func surfaceID(for colorScheme: ColorScheme) -> String {
+    colorScheme == .dark ? "dark-material-dashboard-card" : "light-flat-dashboard-card"
+  }
+
+  static func shadowOpacity(for colorScheme: ColorScheme) -> Double {
+    colorScheme == .dark ? 0.16 : 0.04
+  }
+
+  static func strokeOpacity(for colorScheme: ColorScheme) -> Double {
+    colorScheme == .dark ? 0.30 : 0.55
+  }
+}
+
 struct DashboardCardModifier: ViewModifier {
   @Environment(\.colorScheme) private var colorScheme
   var interactive = false
 
   func body(content: Content) -> some View {
-    let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
-    content
-      .background(.regularMaterial, in: shape)
-      .background(Color.primary.opacity(colorScheme == .dark ? 0.040 : 0.018), in: shape)
-      .overlay {
-        shape.stroke(Color(nsColor: .separatorColor).opacity(colorScheme == .dark ? 0.30 : 0.18), lineWidth: 1)
+    let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+    let card = content
+      .background {
+        if colorScheme == .dark {
+          ZStack {
+            shape.fill(.regularMaterial)
+            shape.fill(Color.primary.opacity(0.040))
+          }
+        } else {
+          shape.fill(Color(nsColor: .windowBackgroundColor))
+        }
       }
-      .shadow(color: .black.opacity(colorScheme == .dark ? 0.16 : 0.06), radius: 18, x: 0, y: 10)
-      .glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
+      .overlay {
+        shape.stroke(
+          Color(nsColor: .separatorColor).opacity(DashboardCardSurfaceStyle.strokeOpacity(for: colorScheme)),
+          lineWidth: 1
+        )
+      }
+      .shadow(color: .black.opacity(DashboardCardSurfaceStyle.shadowOpacity(for: colorScheme)), radius: colorScheme == .dark ? 16 : 10, x: 0, y: colorScheme == .dark ? 8 : 2)
+
+    if colorScheme == .dark {
+      card.glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
+    } else {
+      card
+    }
   }
 }
 

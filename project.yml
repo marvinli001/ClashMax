@@ -49,9 +49,16 @@ targets:
         INFOPLIST_KEY_NSPrincipalClass: NSApplication
         INFOPLIST_KEY_NSHumanReadableCopyright: GPL-3.0
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
     entitlements:
       path: Config/ClashMax.entitlements
     postCompileScripts:
+      - name: Clean Bundle Extended Attributes
+        script: |
+          set -euo pipefail
+          if [ -d "$TARGET_BUILD_DIR/$WRAPPER_NAME" ]; then
+            xattr -cr "$TARGET_BUILD_DIR/$WRAPPER_NAME"
+          fi
       - name: Embed Helper
         inputFiles:
           - "$(BUILT_PRODUCTS_DIR)/ClashMaxHelper"
@@ -60,7 +67,7 @@ targets:
           - "$(SRCROOT)/Resources/Core/mihomo-darwin-amd64"
           - "$(SRCROOT)/Resources/Core/mihomo-darwin-arm64"
           - "$(SRCROOT)/Resources/Core/mihomo-manifest.json"
-          - "$(SRCROOT)/Resources/Animations/410-767-power-button.riv"
+          - "$(SRCROOT)/Resources/Animations/2773-5719-egg-radio-button-v2.riv"
         outputFiles:
           - "$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Library/LaunchServices/ClashMaxHelper"
           - "$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Library/LaunchDaemons/io.github.clashmax.ClashMax.Helper.plist"
@@ -69,7 +76,7 @@ targets:
           - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Core/mihomo-darwin-amd64"
           - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Core/mihomo-darwin-arm64"
           - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Core/mihomo-manifest.json"
-          - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Animations/410-767-power-button.riv"
+          - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Animations/2773-5719-egg-radio-button-v2.riv"
         script: |
           set -euo pipefail
           launch_services="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Library/LaunchServices"
@@ -80,7 +87,7 @@ targets:
           cp "$BUILT_PRODUCTS_DIR/ClashMaxHelper" "$launch_services/ClashMaxHelper"
           cp "$SRCROOT/Config/io.github.clashmax.ClashMax.Helper.plist" "$launch_daemons/io.github.clashmax.ClashMax.Helper.plist"
           cp -R "$SRCROOT/Resources/Core/." "$core_resources/"
-          cp "$SRCROOT/Resources/Animations/410-767-power-button.riv" "$animation_resources/410-767-power-button.riv"
+          cp "$SRCROOT/Resources/Animations/2773-5719-egg-radio-button-v2.riv" "$animation_resources/2773-5719-egg-radio-button-v2.riv"
   ClashMaxHelper:
     type: tool
     platform: macOS

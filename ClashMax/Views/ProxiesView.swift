@@ -15,9 +15,7 @@ struct ProxiesView: View {
 
     AdaptivePage(
       title: "Proxies",
-      subtitle: groups.isEmpty
-        ? "Proxy groups load from the active profile and runtime."
-        : appModel.isShowingProxyPreview ? "\(groups.count) preview groups" : "\(groups.count) groups"
+      subtitle: subtitle(for: groups)
     ) {
       if !appModel.isRunning, appModel.profileStore.activeProfile != nil {
         Button {
@@ -42,48 +40,23 @@ struct ProxiesView: View {
         )
       } else {
         VStack(alignment: .leading, spacing: 10) {
-          if appModel.isShowingProxyPreview {
-            ProxyPreviewNotice(message: appModel.proxyRuntimeActionMessage)
+          if appModel.previewRuntimeActive {
+            ProxyPreviewNotice(
+              icon: "wand.and.stars",
+              message: "Preview core is running on loopback for delay testing. Hit Start on Home to redirect traffic."
+            )
+          } else if appModel.isShowingProxyPreview {
+            ProxyPreviewNotice(
+              icon: "info.circle",
+              message: "Pick a node and we'll remember it. Tests start a quiet preview core automatically."
+            )
           }
 
           List {
             ForEach(groups) { group in
               Section(group.name) {
                 ForEach(group.nodes) { node in
-                  let canUseRuntimeAction = appModel.canControlRuntimeProxies && node.isSelectable
-
-                  HStack(spacing: 10) {
-                    Button {
-                      appModel.selectProxy(group: group, node: node)
-                    } label: {
-                      HStack(spacing: 10) {
-                        Image(systemName: group.selected == node.name ? "checkmark.circle.fill" : "circle")
-                          .foregroundStyle(group.selected == node.name ? .green : .secondary)
-                        VStack(alignment: .leading, spacing: 2) {
-                          Text(node.name)
-                            .foregroundStyle(node.isSelectable ? .primary : .secondary)
-                          Text(node.delay.map { "\($0) ms" } ?? "No delay")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        }
-                        Spacer(minLength: 12)
-                      }
-                      .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!canUseRuntimeAction)
-                    .help(canUseRuntimeAction ? "Select \(node.name)" : appModel.proxyRuntimeActionMessage)
-
-                    Button {
-                      appModel.testDelay(for: node)
-                    } label: {
-                      Image(systemName: "speedometer")
-                    }
-                    .buttonStyle(.borderless)
-                    .disabled(!canUseRuntimeAction)
-                    .help(canUseRuntimeAction ? "Test delay" : appModel.proxyRuntimeActionMessage)
-                    .accessibilityLabel("Test delay for \(node.name)")
-                  }
+                  ProxyNodeRow(group: group, node: node)
                 }
               }
             }
@@ -91,6 +64,71 @@ struct ProxiesView: View {
           .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
       }
+    }
+    .onAppear {
+      appModel.enterPreviewRuntime()
+    }
+    .onDisappear {
+      Task { @MainActor in
+        await appModel.leavePreviewRuntime()
+      }
+    }
+  }
+
+  private func subtitle(for groups: [ProxyGroup]) -> String {
+    if groups.isEmpty {
+      return "Proxy groups load from the active profile and runtime."
+    }
+    if appModel.previewRuntimeActive {
+      return "\(groups.count) groups · preview core"
+    }
+    if appModel.isShowingProxyPreview {
+      return "\(groups.count) preview groups"
+    }
+    return "\(groups.count) groups"
+  }
+}
+
+private struct ProxyNodeRow: View {
+  @EnvironmentObject private var appModel: AppModel
+  let group: ProxyGroup
+  let node: ProxyNode
+
+  var body: some View {
+    let canSelect = node.isSelectable && (appModel.canControlRuntimeProxies || appModel.canSelectProxyOffline)
+    let canTest = node.isSelectable && appModel.canControlRuntimeProxies
+
+    HStack(spacing: 10) {
+      Button {
+        appModel.selectProxy(group: group, node: node)
+      } label: {
+        HStack(spacing: 10) {
+          Image(systemName: group.selected == node.name ? "checkmark.circle.fill" : "circle")
+            .foregroundStyle(group.selected == node.name ? .green : .secondary)
+          VStack(alignment: .leading, spacing: 2) {
+            Text(node.name)
+              .foregroundStyle(node.isSelectable ? .primary : .secondary)
+            Text(node.delay.map { "\($0) ms" } ?? "No delay")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+          Spacer(minLength: 12)
+        }
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .disabled(!canSelect)
+      .help(canSelect ? "Select \(node.name)" : appModel.proxyRuntimeActionMessage)
+
+      Button {
+        appModel.testDelay(for: node)
+      } label: {
+        Image(systemName: "speedometer")
+      }
+      .buttonStyle(.borderless)
+      .disabled(!canTest)
+      .help(canTest ? "Test delay" : "Preview core needs a moment to come up before delay testing.")
+      .accessibilityLabel("Test delay for \(node.name)")
     }
   }
 }
@@ -106,10 +144,11 @@ enum ProxiesPageActionState {
 }
 
 private struct ProxyPreviewNotice: View {
+  let icon: String
   let message: String
 
   var body: some View {
-    Label(message, systemImage: "info.circle")
+    Label(message, systemImage: icon)
       .font(.callout)
       .foregroundStyle(.secondary)
       .lineLimit(2)

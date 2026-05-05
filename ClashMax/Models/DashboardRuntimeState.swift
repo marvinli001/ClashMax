@@ -54,6 +54,10 @@ enum DashboardRuntimeState: Equatable {
     return false
   }
 
+  var isVisualActive: Bool {
+    isStarting || isRunning
+  }
+
   var usesOperationalLayout: Bool {
     isStarting || isRunning
   }

@@ -21,11 +21,13 @@ struct MihomoAPIClient: Sendable {
   let baseURL: URL
   let secret: String
   let session: URLSession
+  let requestTimeout: TimeInterval?
 
-  init(baseURL: URL, secret: String, session: URLSession = .shared) {
+  init(baseURL: URL, secret: String, session: URLSession = .shared, requestTimeout: TimeInterval? = nil) {
     self.baseURL = baseURL
     self.secret = secret
     self.session = session
+    self.requestTimeout = requestTimeout
   }
 
   func version() async throws -> String {
@@ -160,6 +162,9 @@ struct MihomoAPIClient: Sendable {
     }
     var request = URLRequest(url: components.url!)
     request.httpMethod = "GET"
+    if let requestTimeout {
+      request.timeoutInterval = requestTimeout
+    }
     request.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")
     return request
   }

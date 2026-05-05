@@ -1,10 +1,16 @@
+import AppKit
+import Metal
 import RiveRuntime
 import SwiftUI
 
 enum DashboardPowerButtonAsset {
-  static let fileName = "410-767-power-button"
+  static let fileName = "2773-5719-egg-radio-button-v2"
   static let fileExtension = "riv"
   static let bundleSubdirectory = "Animations"
+  static let stateMachineName = "Radiobutton"
+  static let hoverInputName = "isHover"
+  static let pressedInputName = "Pressed"
+  static let backInputName = "Back"
 
   static func bundleURL(in bundle: Bundle = .main) -> URL? {
     bundle.url(
@@ -22,55 +28,86 @@ enum DashboardPowerButtonAsset {
 
 enum DashboardPowerButtonSurfaceStyle {
   static func surfaceID(for colorScheme: SwiftUI.ColorScheme) -> String {
-    colorScheme == .dark ? "dark-elevated-power-surface" : "light-elevated-power-surface"
-  }
-
-  static func outerFill(for colorScheme: SwiftUI.ColorScheme) -> SwiftUI.Color {
-    colorScheme == .dark
-      ? SwiftUI.Color(nsColor: .controlBackgroundColor).opacity(0.22)
-      : SwiftUI.Color(nsColor: .controlBackgroundColor)
-  }
-
-  static func innerFill(for colorScheme: SwiftUI.ColorScheme) -> SwiftUI.Color {
-    colorScheme == .dark
-      ? SwiftUI.Color(red: 0.055, green: 0.070, blue: 0.072)
-      : SwiftUI.Color(red: 0.100, green: 0.115, blue: 0.112)
-  }
-
-  static func stroke(for colorScheme: SwiftUI.ColorScheme) -> SwiftUI.Color {
-    colorScheme == .dark
-      ? SwiftUI.Color.white.opacity(0.10)
-      : SwiftUI.Color.black.opacity(0.10)
-  }
-
-  static func shadow(for colorScheme: SwiftUI.ColorScheme) -> SwiftUI.Color {
-    colorScheme == .dark
-      ? SwiftUI.Color.black.opacity(0.22)
-      : SwiftUI.Color.black.opacity(0.08)
+    colorScheme == .dark ? "dark-unframed-rive-visual" : "light-unframed-rive-visual"
   }
 }
 
 struct CoreVisualView: View {
   let state: DashboardRuntimeState
   let reduceMotion: Bool
+  var activationTrigger = 0
 
   var body: some View {
-    if let data = DashboardPowerButtonAsset.data(),
-       let riveVisual = RivePowerButtonVisualView(data: data, state: state, reduceMotion: reduceMotion) {
+    if state.isVisualActive,
+       let data = DashboardPowerButtonAsset.data(),
+       let riveVisual = RivePowerButtonVisualView(
+        data: data,
+        state: state,
+        reduceMotion: reduceMotion,
+        activationTrigger: activationTrigger
+       ) {
       riveVisual
+        .transition(.opacity.combined(with: .scale(scale: 0.6)))
     } else {
-      FallbackCoreVisualView(state: state, reduceMotion: reduceMotion)
+      RestingCoreSymbol(state: state, reduceMotion: reduceMotion)
+        .transition(.opacity)
+    }
+  }
+}
+
+private struct RestingCoreSymbol: View {
+  @Environment(\.colorScheme) private var colorScheme
+  let state: DashboardRuntimeState
+  let reduceMotion: Bool
+
+  var body: some View {
+    GeometryReader { proxy in
+      let side = min(proxy.size.width, proxy.size.height)
+      ZStack {
+        Image(systemName: symbolName)
+          .font(.system(size: side * 0.62, weight: .regular))
+          .foregroundStyle(tint)
+          .symbolRenderingMode(.hierarchical)
+      }
+      .frame(width: proxy.size.width, height: proxy.size.height)
+    }
+    .aspectRatio(1, contentMode: .fit)
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(Text("ClashMax core"))
+    .accessibilityValue(Text(state.displayTitle))
+  }
+
+  private var symbolName: String {
+    switch state {
+    case .blocked:
+      return "exclamationmark.circle"
+    case .crashed:
+      return "exclamationmark.triangle.fill"
+    default:
+      return "power.circle"
+    }
+  }
+
+  private var tint: SwiftUI.Color {
+    switch state {
+    case .blocked:
+      return .secondary
+    case .crashed:
+      return .red
+    default:
+      return .accentColor
     }
   }
 }
 
 private struct RivePowerButtonVisualView: View {
-  @Environment(\.colorScheme) private var colorScheme
   @StateObject private var viewModel: RiveViewModel
+  @State private var isHovering = false
   let state: DashboardRuntimeState
   let reduceMotion: Bool
+  let activationTrigger: Int
 
-  init?(data: Data, state: DashboardRuntimeState, reduceMotion: Bool) {
+  init?(data: Data, state: DashboardRuntimeState, reduceMotion: Bool, activationTrigger: Int) {
     guard let file = try? RiveFile(data: data, loadCdn: false) else {
       return nil
     }
@@ -78,71 +115,119 @@ private struct RivePowerButtonVisualView: View {
     _viewModel = StateObject(
       wrappedValue: RiveViewModel(
         model,
+        stateMachineName: DashboardPowerButtonAsset.stateMachineName,
         fit: .contain,
         autoPlay: false
       )
     )
     self.state = state
     self.reduceMotion = reduceMotion
+    self.activationTrigger = activationTrigger
   }
 
   var body: some View {
     GeometryReader { proxy in
       let side = min(proxy.size.width, proxy.size.height)
-      let outerCorner = max(22, side * 0.20)
-      let innerCorner = max(18, side * 0.17)
-      let innerSide = side * 0.86
-      let shellShape = RoundedRectangle(cornerRadius: outerCorner, style: .continuous)
-      let riveShape = RoundedRectangle(cornerRadius: innerCorner, style: .continuous)
 
-      ZStack {
-        shellShape
-          .fill(DashboardPowerButtonSurfaceStyle.outerFill(for: colorScheme))
-          .overlay {
-            shellShape.stroke(DashboardPowerButtonSurfaceStyle.stroke(for: colorScheme), lineWidth: 1)
-          }
-          .shadow(color: DashboardPowerButtonSurfaceStyle.shadow(for: colorScheme), radius: 18, x: 0, y: 10)
-
-        riveShape
-          .fill(DashboardPowerButtonSurfaceStyle.innerFill(for: colorScheme))
-          .frame(width: innerSide, height: innerSide)
-          .overlay {
-            viewModel.view()
-              .aspectRatio(1, contentMode: .fit)
-              .clipShape(riveShape)
-          }
-      }
-      .frame(width: proxy.size.width, height: proxy.size.height)
+      TransparentRiveView(viewModel: viewModel)
+        .aspectRatio(1, contentMode: .fit)
+        .frame(width: side, height: side)
+        .clipShape(Circle())
+        .scaleEffect(isHovering && !state.isVisualActive ? 1.04 : 1)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: isHovering)
+        .allowsHitTesting(false)
+        .frame(width: proxy.size.width, height: proxy.size.height)
     }
     .aspectRatio(1, contentMode: .fit)
     .onAppear {
-      syncAnimation()
+      syncAnimation(previousRuntimeActive: state.isVisualActive ? false : nil)
     }
-    .onChange(of: state) { _, _ in
-      syncAnimation()
+    .onHover { hovering in
+      isHovering = hovering
+      syncHoverInput()
+    }
+    .onChange(of: state) { oldState, _ in
+      syncAnimation(previousRuntimeActive: oldState.isVisualActive)
+    }
+    .onChange(of: activationTrigger) { _, _ in
+      triggerPressedAnimation()
     }
     .onChange(of: reduceMotion) { _, _ in
-      syncAnimation()
+      syncAnimation(previousRuntimeActive: nil)
     }
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(Text("ClashMax power button"))
     .accessibilityValue(Text(state.displayTitle))
   }
 
-  private func syncAnimation() {
+  private func syncAnimation(previousRuntimeActive: Bool?) {
     if reduceMotion {
       viewModel.reset()
       viewModel.pause()
       return
     }
 
-    if state.isStarting || state.isRunning {
-      viewModel.reset()
-      viewModel.play(loop: .oneShot)
-    } else {
-      viewModel.reset()
-      viewModel.pause()
+    syncHoverInput()
+
+    if let previousRuntimeActive, previousRuntimeActive != state.isVisualActive {
+      state.isVisualActive ? triggerPressedAnimation() : triggerBackAnimation()
     }
+  }
+
+  private func syncHoverInput() {
+    guard !reduceMotion else { return }
+    viewModel.setInput(DashboardPowerButtonAsset.hoverInputName, value: isHovering)
+  }
+
+  private func triggerPressedAnimation() {
+    guard !reduceMotion else { return }
+    viewModel.triggerInput(DashboardPowerButtonAsset.pressedInputName)
+  }
+
+  private func triggerBackAnimation() {
+    guard !reduceMotion else { return }
+    viewModel.triggerInput(DashboardPowerButtonAsset.backInputName)
+  }
+}
+
+private struct TransparentRiveView: NSViewRepresentable {
+  let viewModel: RiveViewModel
+
+  func makeNSView(context _: Context) -> RiveView {
+    let view = viewModel.createRiveView()
+    configureTransparency(on: view)
+    return view
+  }
+
+  func updateNSView(_ view: RiveView, context _: Context) {
+    viewModel.update(view: view)
+    configureTransparency(on: view)
+  }
+
+  static func dismantleNSView(_: RiveView, coordinator: Coordinator) {
+    coordinator.viewModel.stop()
+    coordinator.viewModel.deregisterView()
+  }
+
+  func makeCoordinator() -> Coordinator {
+    Coordinator(viewModel: viewModel)
+  }
+
+  final class Coordinator {
+    let viewModel: RiveViewModel
+
+    init(viewModel: RiveViewModel) {
+      self.viewModel = viewModel
+    }
+  }
+
+  private func configureTransparency(on view: RiveView) {
+    view.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+    view.wantsLayer = true
+    view.layer?.isOpaque = false
+    view.layer?.backgroundColor = NSColor.clear.cgColor
+    (view.layer as? CAMetalLayer)?.isOpaque = false
+    view.layer?.filters = nil
   }
 }
 

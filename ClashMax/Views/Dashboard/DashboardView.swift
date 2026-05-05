@@ -10,30 +10,34 @@ struct DashboardView: View {
     let state = appModel.dashboardRuntimeState
 
     GeometryReader { proxy in
-      ScrollView {
-        VStack(spacing: 16) {
-          if state.usesOperationalLayout {
-            RunningDashboardView(
-              state: state,
-              namespace: dashboardNamespace,
-              reduceMotion: reduceMotion,
-              availableWidth: proxy.size.width
-            )
-            .transition(.movingParts.blur.combined(with: .opacity))
-          } else {
-            LaunchDashboardView(
-              state: state,
-              namespace: dashboardNamespace,
-              reduceMotion: reduceMotion,
-              availableSize: proxy.size
-            )
-            .transition(.movingParts.blur.combined(with: .opacity))
+      Group {
+        if state.usesOperationalLayout {
+          ScrollView {
+            VStack(spacing: 16) {
+              RunningDashboardView(
+                state: state,
+                namespace: dashboardNamespace,
+                reduceMotion: reduceMotion,
+                availableWidth: proxy.size.width
+              )
+              .transition(.movingParts.blur.combined(with: .opacity))
+            }
+            .padding(DashboardLayoutMetrics.pagePadding(for: proxy.size.width))
+            .frame(maxWidth: DashboardLayoutMetrics.dashboardMaxWidth(for: proxy.size.width))
+            .frame(maxWidth: .infinity)
           }
+        } else {
+          LaunchDashboardView(
+            state: state,
+            namespace: dashboardNamespace,
+            reduceMotion: reduceMotion,
+            availableSize: proxy.size
+          )
+          .transition(.movingParts.blur.combined(with: .opacity))
+          .padding(DashboardLayoutMetrics.pagePadding(for: proxy.size.width))
+          .frame(maxWidth: DashboardLayoutMetrics.dashboardMaxWidth(for: proxy.size.width))
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .padding(DashboardLayoutMetrics.pagePadding(for: proxy.size.width))
-        .frame(maxWidth: DashboardLayoutMetrics.dashboardMaxWidth(for: proxy.size.width))
-        .frame(maxWidth: .infinity)
-        .frame(minHeight: proxy.size.height, alignment: .center)
       }
     }
     .background {
@@ -57,6 +61,6 @@ private struct DashboardSceneBackground: View {
 
   var body: some View {
     Color(nsColor: .windowBackgroundColor)
-    .ignoresSafeArea()
+      .ignoresSafeArea()
   }
 }

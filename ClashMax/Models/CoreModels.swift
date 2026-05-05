@@ -93,6 +93,27 @@ enum RunMode: String, Codable, CaseIterable, Identifiable {
   }
 }
 
+enum ProxyRoutingMode: String, Codable, CaseIterable, Identifiable {
+  case systemProxy
+  case tun
+
+  var id: String { rawValue }
+
+  var displayName: String {
+    switch self {
+    case .systemProxy: "System Proxy"
+    case .tun: "TUN"
+    }
+  }
+
+  var symbolName: String {
+    switch self {
+    case .systemProxy: "network.badge.shield.half.filled"
+    case .tun: "point.topleft.down.curvedto.point.bottomright.up"
+    }
+  }
+}
+
 struct RuntimeOverrides: Codable, Equatable {
   var mixedPort: Int
   var externalControllerHost: String

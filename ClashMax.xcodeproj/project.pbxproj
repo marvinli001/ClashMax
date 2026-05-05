@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 63;
+	objectVersion = 77;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -28,8 +28,10 @@
 		82BED5A9B8D2DAD2714D431C /* HelperProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7EE62DA4C3657653D44F922 /* HelperProtocol.swift */; };
 		8CF16164DAAFD7ED31F7AA7C /* RiveRuntime in Frameworks */ = {isa = PBXBuildFile; productRef = 34214080213A992B3CAF212F /* RiveRuntime */; };
 		8F30DCF7999D5EC70C40E8A6 /* Formatters.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2435F74711FCEE85D5058FC9 /* Formatters.swift */; };
+		90DB2815DE850A66BB7BB5F0 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = EAD76262FC60D7DD00B25639 /* Assets.xcassets */; };
 		9435537B65D100571BA1DB93 /* ClashMaxApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7ED7AA0F377BF1BF367C2AC5 /* ClashMaxApp.swift */; };
 		993E27377946D94ECEC6CA47 /* RunningDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2ACF34B3417EEFB4C13CB013 /* RunningDashboardView.swift */; };
+		9A911B69CBA8BF15E532B579 /* Timeout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2ABDFBB270FD6C601117CA49 /* Timeout.swift */; };
 		9F9BD79C3A92F49607A26D64 /* ConfigNormalizerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B38F8F5042460DDFC4142D6E /* ConfigNormalizerTests.swift */; };
 		A663D8BE71B424A043DDF051 /* LaunchDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D6E012D514CB8CC83940BCB /* LaunchDashboardView.swift */; };
 		B09DA1E8D5571B3D00E74431 /* CoreProcessControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71A566E7FD4BA3634EEB1E5A /* CoreProcessControllerTests.swift */; };
@@ -49,7 +51,6 @@
 		D04B95E5009D49D3BA4FCFCA /* SystemProxyController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93A93A1E61ED764914241456 /* SystemProxyController.swift */; };
 		D625A914F25B58C627A234A4 /* TunnelHelperClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47357CB3092C971F87BF7463 /* TunnelHelperClientTests.swift */; };
 		D66931B291EF6FBA51539318 /* AdaptivePage.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEF4310C18F9F06624F1ACE5 /* AdaptivePage.swift */; };
-		D6AF44A1E0B844248F4A612C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B8D3CB458E624B188F522B31 /* Assets.xcassets */; };
 		DBEC598D4B18752FCB871795 /* HelperProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7EE62DA4C3657653D44F922 /* HelperProtocol.swift */; };
 		DFA6A6509657F3D972E73F03 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 071CA2908C95169B76DF5A8F /* SettingsView.swift */; };
 		E5D87BAE2859A358110D7152 /* ProfilesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF132FA46F43BF05B1C6DA56 /* ProfilesView.swift */; };
@@ -85,12 +86,13 @@
 		1FB11E012D31B8CC33A511BD /* MihomoAPIClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MihomoAPIClientTests.swift; sourceTree = "<group>"; };
 		22AAFD1267E58A56D94592ED /* DashboardRuntimeStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardRuntimeStateTests.swift; sourceTree = "<group>"; };
 		2435F74711FCEE85D5058FC9 /* Formatters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Formatters.swift; sourceTree = "<group>"; };
+		2ABDFBB270FD6C601117CA49 /* Timeout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Timeout.swift; sourceTree = "<group>"; };
 		2ACF34B3417EEFB4C13CB013 /* RunningDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunningDashboardView.swift; sourceTree = "<group>"; };
 		2B6DA1173C99B9FB4A163A2E /* DashboardRuntimeState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardRuntimeState.swift; sourceTree = "<group>"; };
 		33B5EAE971B5BB7B41079222 /* CoreRuntimePreflightTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreRuntimePreflightTests.swift; sourceTree = "<group>"; };
 		4294DDEF4FE7C6F6B5D92D11 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		47357CB3092C971F87BF7463 /* TunnelHelperClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TunnelHelperClientTests.swift; sourceTree = "<group>"; };
-		4A6EDC74EB42EB37E504DC43 /* ClashMaxHelper */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = ClashMaxHelper; sourceTree = BUILT_PRODUCTS_DIR; };
+		4A6EDC74EB42EB37E504DC43 /* ClashMaxHelper */ = {isa = PBXFileReference; includeInIndex = 0; path = ClashMaxHelper; sourceTree = BUILT_PRODUCTS_DIR; };
 		54DFA4FE364633A28C1ED410 /* DashboardComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardComponents.swift; sourceTree = "<group>"; };
 		5A31C178439DDE1DF4A02EDB /* ConfigNormalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigNormalizer.swift; sourceTree = "<group>"; };
 		608E910E0AB43ACEEB146E9D /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
@@ -106,7 +108,6 @@
 		A3049F5E5929A9350DF21AB0 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		B38F8F5042460DDFC4142D6E /* ConfigNormalizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigNormalizerTests.swift; sourceTree = "<group>"; };
 		B4A2BEB4712640A482254EF3 /* LogsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogsView.swift; sourceTree = "<group>"; };
-		B8D3CB458E624B188F522B31 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		BBDCBD94E79A76CA63291C71 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		C6FB4802572E1217EBCEE7D7 /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
 		C8758370389738F3DA585BFF /* RuntimePaths.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimePaths.swift; sourceTree = "<group>"; };
@@ -120,6 +121,7 @@
 		DF132FA46F43BF05B1C6DA56 /* ProfilesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfilesView.swift; sourceTree = "<group>"; };
 		E7EE62DA4C3657653D44F922 /* HelperProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelperProtocol.swift; sourceTree = "<group>"; };
 		E935C963C504825DE6A4F8BF /* TestDoubles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestDoubles.swift; sourceTree = "<group>"; };
+		EAD76262FC60D7DD00B25639 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		FD56AF5DDE11F6F2901B2E84 /* BoundedBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundedBuffer.swift; sourceTree = "<group>"; };
 		FE5860266615A0F87895E7A0 /* CoreModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreModels.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -264,8 +266,9 @@
 		B300DEB6237664F02AD89FEE /* ClashMax */ = {
 			isa = PBXGroup;
 			children = (
+				EAD76262FC60D7DD00B25639 /* Assets.xcassets */,
 				7B0E9FA841C52BCBB6055F41 /* App */,
-				B8D3CB458E624B188F522B31 /* Assets.xcassets */,
+				B6BAAE0E13561A288E34296B /* Concurrency */,
 				547F2A57F7DA612AB19D0A78 /* Models */,
 				7297F571A9E3D442BA5FA217 /* Services */,
 				DA670D0E011EEF887F6033F1 /* Stores */,
@@ -273,6 +276,14 @@
 				029F910ED10E7E709822AA72 /* Views */,
 			);
 			path = ClashMax;
+			sourceTree = "<group>";
+		};
+		B6BAAE0E13561A288E34296B /* Concurrency */ = {
+			isa = PBXGroup;
+			children = (
+				2ABDFBB270FD6C601117CA49 /* Timeout.swift */,
+			);
+			path = Concurrency;
 			sourceTree = "<group>";
 		};
 		D16467AF0FD0F7DAA29BC9E5 /* Products */ = {
@@ -339,8 +350,9 @@
 			buildConfigurationList = 98F94F27869B303584CB7EBE /* Build configuration list for PBXNativeTarget "ClashMax" */;
 			buildPhases = (
 				FA5D323DBCB23A8FC4E6E2AE /* Sources */,
-				7FA85B9E9D144F7EA4DE2B60 /* Resources */,
+				6C3A8AF3C885C4663F97D8EA /* Clean Bundle Extended Attributes */,
 				FD4C75AEBC596A85273D77F7 /* Embed Helper */,
+				55A829CAB414EE8DF5422195 /* Resources */,
 				B0268F82A08F5814E33FD482 /* Frameworks */,
 			);
 			buildRules = (
@@ -365,7 +377,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 2640;
+				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					2EAAFCFED0B5B54550ECAAE5 = {
 						DevelopmentTeam = "";
@@ -396,6 +408,7 @@
 				F7C60D8FE0E1C907DCE8487E /* XCRemoteSwiftPackageReference "rive-ios" */,
 				601C2B5DE33ECB99B22399CE /* XCRemoteSwiftPackageReference "Yams" */,
 			);
+			preferredProjectObjectVersion = 77;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -407,17 +420,35 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		7FA85B9E9D144F7EA4DE2B60 /* Resources */ = {
+		55A829CAB414EE8DF5422195 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				D6AF44A1E0B844248F4A612C /* Assets.xcassets in Resources */,
+				90DB2815DE850A66BB7BB5F0 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		6C3A8AF3C885C4663F97D8EA /* Clean Bundle Extended Attributes */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Clean Bundle Extended Attributes";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -euo pipefail\nif [ -d \"$TARGET_BUILD_DIR/$WRAPPER_NAME\" ]; then\n  xattr -cr \"$TARGET_BUILD_DIR/$WRAPPER_NAME\"\nfi\n";
+		};
 		FD4C75AEBC596A85273D77F7 /* Embed Helper */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
@@ -432,7 +463,7 @@
 				"$(SRCROOT)/Resources/Core/mihomo-darwin-amd64",
 				"$(SRCROOT)/Resources/Core/mihomo-darwin-arm64",
 				"$(SRCROOT)/Resources/Core/mihomo-manifest.json",
-				"$(SRCROOT)/Resources/Animations/410-767-power-button.riv",
+				"$(SRCROOT)/Resources/Animations/2773-5719-egg-radio-button-v2.riv",
 			);
 			name = "Embed Helper";
 			outputFileListPaths = (
@@ -445,11 +476,11 @@
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Core/mihomo-darwin-amd64",
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Core/mihomo-darwin-arm64",
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Core/mihomo-manifest.json",
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Animations/410-767-power-button.riv",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Animations/2773-5719-egg-radio-button-v2.riv",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -euo pipefail\nlaunch_services=\"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Library/LaunchServices\"\nlaunch_daemons=\"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Library/LaunchDaemons\"\ncore_resources=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Core\"\nanimation_resources=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Animations\"\nmkdir -p \"$launch_services\" \"$launch_daemons\" \"$core_resources\" \"$animation_resources\"\ncp \"$BUILT_PRODUCTS_DIR/ClashMaxHelper\" \"$launch_services/ClashMaxHelper\"\ncp \"$SRCROOT/Config/io.github.clashmax.ClashMax.Helper.plist\" \"$launch_daemons/io.github.clashmax.ClashMax.Helper.plist\"\ncp -R \"$SRCROOT/Resources/Core/.\" \"$core_resources/\"\ncp \"$SRCROOT/Resources/Animations/410-767-power-button.riv\" \"$animation_resources/410-767-power-button.riv\"\n";
+			shellScript = "set -euo pipefail\nlaunch_services=\"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Library/LaunchServices\"\nlaunch_daemons=\"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Library/LaunchDaemons\"\ncore_resources=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Core\"\nanimation_resources=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Animations\"\nmkdir -p \"$launch_services\" \"$launch_daemons\" \"$core_resources\" \"$animation_resources\"\ncp \"$BUILT_PRODUCTS_DIR/ClashMaxHelper\" \"$launch_services/ClashMaxHelper\"\ncp \"$SRCROOT/Config/io.github.clashmax.ClashMax.Helper.plist\" \"$launch_daemons/io.github.clashmax.ClashMax.Helper.plist\"\ncp -R \"$SRCROOT/Resources/Core/.\" \"$core_resources/\"\ncp \"$SRCROOT/Resources/Animations/2773-5719-egg-radio-button-v2.riv\" \"$animation_resources/2773-5719-egg-radio-button-v2.riv\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -515,6 +546,7 @@
 				DFA6A6509657F3D972E73F03 /* SettingsView.swift in Sources */,
 				0726E0A274C59104498300B2 /* SidebarView.swift in Sources */,
 				D04B95E5009D49D3BA4FCFCA /* SystemProxyController.swift in Sources */,
+				9A911B69CBA8BF15E532B579 /* Timeout.swift in Sources */,
 				B7F87955C7C14EA8E12691C4 /* TunnelHelperClient.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -571,13 +603,11 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -592,7 +622,6 @@
 				ONLY_ACTIVE_ARCH = NO;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 6.0;
@@ -635,13 +664,11 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -659,10 +686,9 @@
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
-				ONLY_ACTIVE_ARCH = YES;
+				ONLY_ACTIVE_ARCH = NO;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 6.0;
@@ -674,7 +700,6 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Config/ClashMaxHelper.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEAD_CODE_STRIPPING = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Config/ClashMaxHelper-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -693,7 +718,6 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				COMBINE_HIDPI_IMAGES = YES;
-				DEAD_CODE_STRIPPING = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -712,7 +736,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Config/ClashMax.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEAD_CODE_STRIPPING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = ClashMax;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
@@ -733,7 +757,6 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Config/ClashMaxHelper.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEAD_CODE_STRIPPING = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Config/ClashMaxHelper-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -753,7 +776,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Config/ClashMax.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEAD_CODE_STRIPPING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = ClashMax;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
@@ -774,7 +797,6 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				COMBINE_HIDPI_IMAGES = YES;
-				DEAD_CODE_STRIPPING = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

@@ -85,10 +85,7 @@ private struct StatusStrip: View {
         .lineLimit(1)
         .minimumScaleFactor(0.78)
 
-      Text(appModel.systemProxyEnabled ? "System Proxy On" : "System Proxy Off")
-        .foregroundStyle(.secondary)
-
-      Text(appModel.tunEnabled ? "TUN On" : "TUN Off")
+      Text(proxyRoutingStatus)
         .foregroundStyle(.secondary)
 
       Spacer()
@@ -139,5 +136,10 @@ private struct StatusStrip: View {
     case .stopped:
       return .secondary
     }
+  }
+
+  private var proxyRoutingStatus: String {
+    let isActive = appModel.systemProxyEnabled || appModel.tunEnabled
+    return "\(appModel.proxyRoutingMode.displayName) \(isActive ? "On" : "Ready")"
   }
 }

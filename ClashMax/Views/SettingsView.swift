@@ -29,34 +29,48 @@ struct SettingsView: View {
         }
 
         Section("System") {
-          Toggle("System Proxy", isOn: Binding(
-            get: { appModel.systemProxyEnabled },
-            set: { appModel.setSystemProxyEnabled($0) }
-          ))
-          Toggle("TUN Mode", isOn: $appModel.tunEnabled)
-          HStack {
-            Text(appModel.helperClient.statusMessage)
-              .foregroundStyle(.secondary)
-            Spacer()
-            Button {
-              appModel.refreshHelperStatus()
-            } label: {
-              Label("Status", systemImage: "waveform.path.ecg")
-            }
-            Button {
-              appModel.refreshHelperLogs()
-            } label: {
-              Label("Logs", systemImage: "text.alignleft")
+          Picker("Proxy Routing", selection: Binding(
+            get: { appModel.proxyRoutingMode },
+            set: { appModel.setProxyRoutingMode($0) }
+          )) {
+            ForEach(ProxyRoutingMode.allCases) { mode in
+              Label(mode.displayName, systemImage: mode.symbolName).tag(mode)
             }
           }
-          if !appModel.helperLogs.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-              ForEach(appModel.helperLogs.suffix(6), id: \.self) { line in
-                Text(line)
-                  .font(.system(.caption, design: .monospaced))
-                  .lineLimit(2)
+          .help("Start uses this routing mode.")
+
+          if appModel.proxyRoutingMode == .tun {
+            HStack(alignment: .firstTextBaseline) {
+              Text(appModel.helperClient.statusMessage)
+                .foregroundStyle(.secondary)
+              Spacer()
+              Button {
+                appModel.refreshHelperStatus()
+              } label: {
+                Label("Status", systemImage: "waveform.path.ecg")
+              }
+              Button {
+                appModel.refreshHelperLogs()
+              } label: {
+                Label("Logs", systemImage: "text.alignleft")
               }
             }
+            if !appModel.helperLogs.isEmpty {
+              VStack(alignment: .leading, spacing: 6) {
+                ForEach(appModel.helperLogs.suffix(6), id: \.self) { line in
+                  Text(line)
+                    .font(.system(.caption, design: .monospaced))
+                    .lineLimit(2)
+                }
+              }
+            }
+          } else {
+            Label(
+              "System Proxy mode does not need a privileged helper. Switch to TUN if you want VPN-style routing for non-HTTP traffic.",
+              systemImage: "checkmark.shield"
+            )
+            .font(.callout)
+            .foregroundStyle(.secondary)
           }
         }
       }

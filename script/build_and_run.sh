@@ -5,7 +5,8 @@ MODE="${1:-run}"
 APP_NAME="ClashMax"
 BUNDLE_ID="io.github.clashmax.ClashMax"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DERIVED_DATA="$ROOT_DIR/DerivedData"
+DEFAULT_DERIVED_DATA="$HOME/Library/Developer/Xcode/DerivedData/ClashMaxLocal"
+DERIVED_DATA="${CLASHMAX_DERIVED_DATA:-$DEFAULT_DERIVED_DATA}"
 APP_BUNDLE="$DERIVED_DATA/Build/Products/Debug/$APP_NAME.app"
 DESTINATION="${CLASHMAX_BUILD_DESTINATION:-generic/platform=macOS}"
 
@@ -17,7 +18,6 @@ xcodebuild \
   -scheme "$APP_NAME" \
   -destination "$DESTINATION" \
   -derivedDataPath "$DERIVED_DATA" \
-  CODE_SIGNING_ALLOWED=NO \
   build
 
 open_app() {

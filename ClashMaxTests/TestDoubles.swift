@@ -15,6 +15,22 @@ func XCTAssertThrowsErrorAsync<T>(
   } catch {}
 }
 
+@MainActor
+func XCTAssertThrowsCancellationErrorAsync<T>(
+  _ expression: () async throws -> T,
+  _ message: @autoclosure () -> String = "",
+  file: StaticString = #filePath,
+  line: UInt = #line
+) async {
+  do {
+    _ = try await expression()
+    XCTFail(message(), file: file, line: line)
+  } catch is CancellationError {
+  } catch {
+    XCTFail("Expected CancellationError, got \(error)", file: file, line: line)
+  }
+}
+
 final class URLProtocolRecorder: @unchecked Sendable {
   nonisolated(unsafe) private static var active: URLProtocolRecorder?
   private let lock = NSLock()
@@ -127,6 +143,7 @@ final class FakeRunningProcess: RunningCoreProcess {
   let processIdentifier: Int32
   var onTermination: ((Int32) -> Void)?
   private(set) var didTerminate = false
+  var stubbedOutputTail = ""
 
   init(processIdentifier: Int32 = 42) {
     self.processIdentifier = processIdentifier
@@ -139,19 +156,30 @@ final class FakeRunningProcess: RunningCoreProcess {
   func finish(exitCode: Int32) {
     onTermination?(exitCode)
   }
+
+  func recentOutputTail(maxBytes: Int) -> String {
+    stubbedOutputTail
+  }
 }
 
-final class RecordingCommandRunner: CommandRunning {
+final class RecordingCommandRunner: CommandRunning, @unchecked Sendable {
   let outputs: [String: String]
-  private(set) var commands: [String] = []
+  private let queue = DispatchQueue(label: "io.github.clashmax.tests.RecordingCommandRunner")
+  private var _commands: [String] = []
 
   init(outputs: [String: String]) {
     self.outputs = outputs
   }
 
-  func run(_ executable: String, _ arguments: [String]) throws -> String {
+  var commands: [String] {
+    queue.sync { _commands }
+  }
+
+  func run(_ executable: String, _ arguments: [String]) async throws -> String {
     let command = ([executable] + arguments).joined(separator: " ")
-    commands.append(command)
+    queue.sync {
+      _commands.append(command)
+    }
     return outputs[command] ?? ""
   }
 }

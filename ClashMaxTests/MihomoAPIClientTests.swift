@@ -2,6 +2,23 @@ import XCTest
 @testable import ClashMax
 
 final class MihomoAPIClientTests: XCTestCase {
+  func testVersionRequestUsesConfiguredTimeout() async throws {
+    let recorder = URLProtocolRecorder(responseBody: #"{"version":"v-test"}"#)
+    let session = URLSession(configuration: recorder.configuration)
+    let client = MihomoAPIClient(
+      baseURL: URL(string: "http://127.0.0.1:9097")!,
+      secret: "abc",
+      session: session,
+      requestTimeout: 0.75
+    )
+
+    let version = try await client.version()
+    XCTAssertEqual(version, "v-test")
+
+    let request = try XCTUnwrap(recorder.lastRequest)
+    XCTAssertEqual(request.timeoutInterval, 0.75, accuracy: 0.01)
+  }
+
   func testSwitchProxyBuildsAuthenticatedPutRequest() async throws {
     let recorder = URLProtocolRecorder()
     let session = URLSession(configuration: recorder.configuration)
