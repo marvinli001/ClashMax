@@ -2,6 +2,16 @@ import XCTest
 @testable import ClashMax
 
 final class TunnelHelperValidationTests: XCTestCase {
+  func testBundledCoreRootUsesExecutableURLWhenLaunchDaemonProgramIsRelative() {
+    let root = HelperBundleLocator.bundledCoreRoot(
+      executableURL: URL(fileURLWithPath: "/Applications/ClashMax.app/Contents/Library/LaunchServices/ClashMaxHelper"),
+      commandPath: "Contents/Library/LaunchServices/ClashMaxHelper",
+      currentDirectoryURL: URL(fileURLWithPath: "/Users/test/Developer/ClashMax", isDirectory: true)
+    )
+
+    XCTAssertEqual(root.path, "/Applications/ClashMax.app/Contents/Resources/Core")
+  }
+
   func testHelperRejectsPathsOutsideAllowedRoots() {
     let validator = HelperPathValidator(
       appSupportRoot: URL(fileURLWithPath: "/Users/test/Library/Application Support/ClashMax"),
@@ -32,4 +42,3 @@ final class TunnelHelperValidationTests: XCTestCase {
     )
   }
 }
-

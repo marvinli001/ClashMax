@@ -128,11 +128,6 @@ final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Senda
   }
 
   private func bundledCoreRoot() -> URL {
-    let executable = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
-    return executable
-      .deletingLastPathComponent()
-      .deletingLastPathComponent()
-      .deletingLastPathComponent()
-      .appendingPathComponent("Resources/Core", isDirectory: true)
+    HelperBundleLocator.bundledCoreRoot()
   }
 }

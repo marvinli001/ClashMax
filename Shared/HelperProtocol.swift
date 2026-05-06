@@ -106,6 +106,67 @@ enum HelperXPCPayload {
   }
 }
 
+struct HelperBundleLocator {
+  static func bundledCoreRoot(
+    executableURL: URL? = Bundle.main.executableURL,
+    commandPath: String = CommandLine.arguments.first ?? "",
+    currentDirectoryURL: URL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+  ) -> URL {
+    let candidates = executableCandidates(
+      executableURL: executableURL,
+      commandPath: commandPath,
+      currentDirectoryURL: currentDirectoryURL
+    )
+
+    for candidate in candidates {
+      if let contents = contentsDirectory(containing: candidate) {
+        return contents.appendingPathComponent("Resources/Core", isDirectory: true).standardizedFileURL
+      }
+    }
+
+    return currentDirectoryURL
+      .appendingPathComponent(commandPath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .appendingPathComponent("Resources/Core", isDirectory: true)
+      .standardizedFileURL
+  }
+
+  private static func executableCandidates(
+    executableURL: URL?,
+    commandPath: String,
+    currentDirectoryURL: URL
+  ) -> [URL] {
+    var candidates: [URL] = []
+    if let executableURL {
+      candidates.append(executableURL.standardizedFileURL)
+    }
+    if !commandPath.isEmpty {
+      let commandURL = commandPath.hasPrefix("/")
+        ? URL(fileURLWithPath: commandPath)
+        : currentDirectoryURL.appendingPathComponent(commandPath)
+      candidates.append(commandURL.standardizedFileURL)
+    }
+    return candidates
+  }
+
+  private static func contentsDirectory(containing executableURL: URL) -> URL? {
+    var cursor = executableURL.standardizedFileURL.deletingLastPathComponent()
+    while cursor.path != "/" {
+      if cursor.lastPathComponent == "Contents" {
+        return cursor
+      }
+      let parent = cursor.deletingLastPathComponent()
+      if parent.path == cursor.path {
+        break
+      }
+      cursor = parent
+    }
+    return nil
+  }
+}
+
 struct HelperPathValidator {
   enum ValidationError: Error, CustomStringConvertible {
     case pathEscapesAllowedRoots(String)
