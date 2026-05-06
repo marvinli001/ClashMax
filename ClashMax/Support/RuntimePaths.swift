@@ -87,9 +87,15 @@ enum AppError: Error, CustomStringConvertible {
   }
 }
 
+extension AppError: LocalizedError {
+  var errorDescription: String? {
+    description
+  }
+}
+
 enum UserFacingError {
   private static let helperCodeSigningRecovery = "TUN helper could not be registered because ClashMax or its helper is not correctly signed, notarized, or approved by macOS. Verify signing, approve the helper in System Settings, then retry."
-  private static let helperOperationNotPermittedRecovery = "macOS rejected TUN helper registration. LaunchDaemon helpers registered with SMAppService must come from a trusted signed and notarized app; Xcode Debug builds from DerivedData can be rejected with Operation not permitted."
+  private static let helperOperationNotPermittedRecovery = "macOS rejected TUN helper registration. LaunchDaemon helpers registered with SMAppService must come from a trusted signed and notarized app. Run the exported/notarized app instead of a Debug or Products archive build, approve ClashMax in System Settings, then retry."
 
   static func message(for error: Error) -> String {
     if let appError = error as? AppError {

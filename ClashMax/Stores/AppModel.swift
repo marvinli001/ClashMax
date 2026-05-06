@@ -577,6 +577,10 @@ final class AppModel: ObservableObject {
     }
   }
 
+  func openHelperApprovalSettings() {
+    helperClient.openApprovalSettings()
+  }
+
   func reloadRuntimeData(clearAfterConfirmation: Bool = false) {
     guard isCoreRunning, let apiClient else {
       proxyGroups = []
@@ -624,9 +628,13 @@ final class AppModel: ObservableObject {
           ? "Helper running with pid \(response.pid)"
           : "Helper registered but not running"
       } catch is OperationTimedOutError {
-        self.helperClient.statusMessage = "Helper not responding. Register it from System Settings or switch to System Proxy."
+        let message = "Helper not responding. Open System Settings > General > Login Items & Extensions, approve ClashMax, then click Repair or switch to System Proxy."
+        self.helperClient.statusMessage = message
+        self.lastError = message
       } catch {
-        self.helperClient.statusMessage = "Helper unavailable: \(error.localizedDescription)"
+        let message = UserFacingError.message(for: error)
+        self.helperClient.statusMessage = message
+        self.lastError = message
       }
     }
   }
@@ -640,9 +648,13 @@ final class AppModel: ObservableObject {
         }
         self.helperLogs = lines
       } catch is OperationTimedOutError {
-        self.helperClient.statusMessage = "Helper not responding. Register it from System Settings or switch to System Proxy."
+        let message = "Helper not responding. Open System Settings > General > Login Items & Extensions, approve ClashMax, then click Repair or switch to System Proxy."
+        self.helperClient.statusMessage = message
+        self.lastError = message
       } catch {
-        self.lastError = UserFacingError.message(for: error)
+        let message = UserFacingError.message(for: error)
+        self.helperClient.statusMessage = message
+        self.lastError = message
       }
     }
   }

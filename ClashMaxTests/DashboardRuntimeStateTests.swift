@@ -849,7 +849,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     XCTAssertEqual(
       UserFacingError.message(for: error),
-      "macOS rejected TUN helper registration. LaunchDaemon helpers registered with SMAppService must come from a trusted signed and notarized app; Xcode Debug builds from DerivedData can be rejected with Operation not permitted."
+      "macOS rejected TUN helper registration. LaunchDaemon helpers registered with SMAppService must come from a trusted signed and notarized app. Run the exported/notarized app instead of a Debug or Products archive build, approve ClashMax in System Settings, then retry."
     )
   }
 
@@ -1034,6 +1034,7 @@ private final class StaticHelperService: HelperServiceManaging {
 
   func register() throws {}
   func unregister() async throws {}
+  func openSystemSettingsLoginItems() {}
 }
 
 private struct StaticFingerprintProvider: HelperFingerprintProviding {

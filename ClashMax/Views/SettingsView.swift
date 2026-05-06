@@ -51,31 +51,24 @@ struct SettingsView: View {
 
           if appModel.proxyRoutingMode == .tun {
             VStack(alignment: .leading, spacing: 8) {
-              HStack(alignment: .firstTextBaseline) {
+              Label {
                 Text(appModel.helperClient.statusMessage)
                   .foregroundStyle(.secondary)
-                Spacer()
-                Button {
-                  appModel.registerHelper()
-                } label: {
-                  Label("Register", systemImage: "checkmark.shield")
-                }
-                Button {
-                  appModel.repairHelperRegistration()
-                } label: {
-                  Label("Repair", systemImage: "wrench.and.screwdriver")
-                }
-                Button {
-                  appModel.refreshHelperStatus()
-                } label: {
-                  Label("Status", systemImage: "waveform.path.ecg")
-                }
-                Button {
-                  appModel.refreshHelperLogs()
-                } label: {
-                  Label("Logs", systemImage: "text.alignleft")
-                }
+                  .lineLimit(3)
+                  .fixedSize(horizontal: false, vertical: true)
+              } icon: {
+                Image(systemName: "checkmark.shield")
               }
+
+              ViewThatFits(in: .horizontal) {
+                helperActionButtons
+                helperActionButtonRows
+              }
+
+              Text("LaunchDaemon approval is managed by macOS. Registering may open System Settings instead of showing an app permission sheet.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
               if !appModel.helperLogs.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                   ForEach(appModel.helperLogs.suffix(6), id: \.self) { line in
@@ -101,6 +94,71 @@ struct SettingsView: View {
       }
       .formStyle(.grouped)
       .scrollContentBackground(.hidden)
+    }
+  }
+
+  private var helperActionButtons: some View {
+    HStack(spacing: 8) {
+      helperRegisterButton
+      helperOpenSettingsButton
+      helperRepairButton
+      helperStatusButton
+      helperLogsButton
+    }
+  }
+
+  private var helperActionButtonRows: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(spacing: 8) {
+        helperRegisterButton
+        helperOpenSettingsButton
+        helperRepairButton
+      }
+      HStack(spacing: 8) {
+        helperStatusButton
+        helperLogsButton
+      }
+    }
+  }
+
+  private var helperRegisterButton: some View {
+    Button {
+      appModel.registerHelper()
+    } label: {
+      Label("Register", systemImage: "checkmark.shield")
+    }
+  }
+
+  private var helperOpenSettingsButton: some View {
+    Button {
+      appModel.openHelperApprovalSettings()
+    } label: {
+      Label("Open Settings", systemImage: "gearshape")
+    }
+    .help("Open System Settings > General > Login Items & Extensions.")
+  }
+
+  private var helperRepairButton: some View {
+    Button {
+      appModel.repairHelperRegistration()
+    } label: {
+      Label("Repair", systemImage: "wrench.and.screwdriver")
+    }
+  }
+
+  private var helperStatusButton: some View {
+    Button {
+      appModel.refreshHelperStatus()
+    } label: {
+      Label("Status", systemImage: "waveform.path.ecg")
+    }
+  }
+
+  private var helperLogsButton: some View {
+    Button {
+      appModel.refreshHelperLogs()
+    } label: {
+      Label("Logs", systemImage: "text.alignleft")
     }
   }
 }

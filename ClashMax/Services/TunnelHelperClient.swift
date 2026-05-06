@@ -15,6 +15,7 @@ protocol HelperServiceManaging: AnyObject {
   var status: SMAppService.Status { get }
   func register() throws
   func unregister() async throws
+  func openSystemSettingsLoginItems()
 }
 
 @MainActor
@@ -43,6 +44,10 @@ final class SMAppServiceHelperService: HelperServiceManaging {
         }
       }
     }
+  }
+
+  func openSystemSettingsLoginItems() {
+    SMAppService.openSystemSettingsLoginItems()
   }
 }
 
@@ -161,6 +166,7 @@ final class TunnelHelperClient: ObservableObject {
     case .requiresApproval:
       statusMessage = Self.statusMessage(for: service.status)
       registrationRecordStore.setHelperFingerprint(fingerprint)
+      openApprovalSettings()
     case .notRegistered, .notFound:
       try service.register()
       registrationRecordStore.setHelperFingerprint(fingerprint)
@@ -170,6 +176,10 @@ final class TunnelHelperClient: ObservableObject {
       registrationRecordStore.setHelperFingerprint(fingerprint)
       try await updateStatusAfterRegistration()
     }
+  }
+
+  func openApprovalSettings() {
+    service.openSystemSettingsLoginItems()
   }
 
   func repairRegistration() async throws {
@@ -196,7 +206,7 @@ final class TunnelHelperClient: ObservableObject {
     case .enabled:
       return "Helper registered. Verifying helper connection."
     case .requiresApproval:
-      return "Helper registered. Approve ClashMax in System Settings > General > Login Items & Extensions."
+      return "Helper registered. Approve ClashMax in System Settings > General > Login Items & Extensions, then click Status."
     case .notFound:
       return "Helper not found in the app bundle. Clean build and run ClashMax again."
     @unknown default:
@@ -205,7 +215,7 @@ final class TunnelHelperClient: ObservableObject {
   }
 
   static let bootstrappedMessage = "Helper registered and bootstrapped."
-  static let notBootstrappedMessage = "Helper registered but not bootstrapped. Click Repair Helper, approve it in System Settings, or restart macOS."
+  static let notBootstrappedMessage = "Helper registered but not bootstrapped. Open System Settings > General > Login Items & Extensions, approve ClashMax, then click Repair or restart macOS."
 
   private func repairRegistration(fingerprint: String) async throws {
     switch service.status {
@@ -225,6 +235,9 @@ final class TunnelHelperClient: ObservableObject {
       try await verifyBootstrapped()
     case .requiresApproval, .notRegistered, .notFound:
       statusMessage = Self.statusMessage(for: service.status)
+      if service.status == .requiresApproval {
+        openApprovalSettings()
+      }
     @unknown default:
       statusMessage = Self.statusMessage(for: service.status)
     }
@@ -315,10 +328,7 @@ struct PrivilegedHelperXPCTransport: HelperXPCTransport {
     let box = ContinuationBox<HelperClientResponse>()
 
     connection.invalidationHandler = {
-      box.fail(
-        AppError.helperResponse("Helper connection invalidated. The privileged helper may not be installed or approved."),
-        runCleanup: false
-      )
+      box.fail(AppError.helperResponse(HelperXPCConnectionMessage.invalidated), runCleanup: false)
     }
     connection.interruptionHandler = {
       box.fail(AppError.helperResponse("Helper connection interrupted."), runCleanup: false)
@@ -355,10 +365,7 @@ struct PrivilegedHelperXPCTransport: HelperXPCTransport {
     let box = ContinuationBox<[String]>()
 
     connection.invalidationHandler = {
-      box.fail(
-        AppError.helperResponse("Helper connection invalidated. The privileged helper may not be installed or approved."),
-        runCleanup: false
-      )
+      box.fail(AppError.helperResponse(HelperXPCConnectionMessage.invalidated), runCleanup: false)
     }
     connection.interruptionHandler = {
       box.fail(AppError.helperResponse("Helper connection interrupted."), runCleanup: false)
@@ -386,6 +393,10 @@ struct PrivilegedHelperXPCTransport: HelperXPCTransport {
       box.fail(CancellationError())
     }
   }
+}
+
+private enum HelperXPCConnectionMessage {
+  static let invalidated = "Helper connection invalidated. Open System Settings > General > Login Items & Extensions, approve ClashMax, then click Repair Helper or restart macOS."
 }
 
 private final class ContinuationBox<Value: Sendable>: @unchecked Sendable {

@@ -41,7 +41,7 @@ final class TunnelHelperClientTests: XCTestCase {
     XCTAssertEqual(service.unregisterCount, 0)
     XCTAssertEqual(
       client.statusMessage,
-      "Helper registered but not bootstrapped. Click Repair Helper, approve it in System Settings, or restart macOS."
+      "Helper registered but not bootstrapped. Open System Settings > General > Login Items & Extensions, approve ClashMax, then click Repair or restart macOS."
     )
   }
 
@@ -60,7 +60,7 @@ final class TunnelHelperClientTests: XCTestCase {
 
     XCTAssertEqual(
       client.statusMessage,
-      "Helper registered but not bootstrapped. Click Repair Helper, approve it in System Settings, or restart macOS."
+      "Helper registered but not bootstrapped. Open System Settings > General > Login Items & Extensions, approve ClashMax, then click Repair or restart macOS."
     )
   }
 
@@ -101,6 +101,48 @@ final class TunnelHelperClientTests: XCTestCase {
     XCTAssertEqual(client.statusMessage, "Helper registered and bootstrapped.")
   }
 
+  func testRegisterOpensSystemSettingsWhenHelperRequiresApproval() async throws {
+    let service = FakeHelperService(status: .requiresApproval)
+    let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
+    let client = TunnelHelperClient(
+      transport: FakeHelperTransport(),
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "current"),
+      registrationRecordStore: recordStore
+    )
+
+    try await client.register()
+
+    XCTAssertEqual(service.registerCount, 0)
+    XCTAssertEqual(service.openSettingsCount, 1)
+    XCTAssertEqual(recordStore.storedFingerprint, "current")
+    XCTAssertEqual(
+      client.statusMessage,
+      "Helper registered. Approve ClashMax in System Settings > General > Login Items & Extensions, then click Status."
+    )
+  }
+
+  func testRegisterOpensSystemSettingsAfterRegistrationRequiresApproval() async throws {
+    let service = FakeHelperService(status: .notRegistered, statusAfterRegister: .requiresApproval)
+    let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
+    let client = TunnelHelperClient(
+      transport: FakeHelperTransport(),
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "current"),
+      registrationRecordStore: recordStore
+    )
+
+    try await client.register()
+
+    XCTAssertEqual(service.registerCount, 1)
+    XCTAssertEqual(service.openSettingsCount, 1)
+    XCTAssertEqual(recordStore.storedFingerprint, "current")
+    XCTAssertEqual(
+      client.statusMessage,
+      "Helper registered. Approve ClashMax in System Settings > General > Login Items & Extensions, then click Status."
+    )
+  }
+
   func testRepairHelperAlwaysUnregistersThenRegistersAndVerifies() async throws {
     let service = FakeHelperService(status: .enabled)
     let transport = FakeHelperTransport(statusResponse: HelperClientResponse(payload: HelperXPCPayload.response(ok: true)))
@@ -131,7 +173,7 @@ final class TunnelHelperClientTests: XCTestCase {
     )
     XCTAssertEqual(
       TunnelHelperClient.statusMessage(for: .requiresApproval),
-      "Helper registered. Approve ClashMax in System Settings > General > Login Items & Extensions."
+      "Helper registered. Approve ClashMax in System Settings > General > Login Items & Extensions, then click Status."
     )
     XCTAssertEqual(
       TunnelHelperClient.statusMessage(for: .notFound),
@@ -232,21 +274,28 @@ private final class FakeHelperTransport: HelperXPCTransport, @unchecked Sendable
 @MainActor
 private final class FakeHelperService: HelperServiceManaging {
   var status: SMAppService.Status
+  var statusAfterRegister: SMAppService.Status
   private(set) var registerCount = 0
   private(set) var unregisterCount = 0
+  private(set) var openSettingsCount = 0
 
-  init(status: SMAppService.Status) {
+  init(status: SMAppService.Status, statusAfterRegister: SMAppService.Status = .enabled) {
     self.status = status
+    self.statusAfterRegister = statusAfterRegister
   }
 
   func register() throws {
     registerCount += 1
-    status = .enabled
+    status = statusAfterRegister
   }
 
   func unregister() async throws {
     unregisterCount += 1
     status = .notRegistered
+  }
+
+  func openSystemSettingsLoginItems() {
+    openSettingsCount += 1
   }
 }
 
