@@ -1,132 +1,64 @@
 <div align="center">
   <img src="ClashMax/Assets.xcassets/AppIcon.appiconset/icon_256x256.png" width="128" height="128" alt="ClashMax icon">
   <h1>ClashMax</h1>
-  <p>面向 macOS 的原生 Mihomo 代理客户端，聚焦配置、代理组、连接、规则、日志和系统集成。</p>
+  <p>面向 macOS 的原生 Mihomo 代理客户端，聚焦配置管理、运行控制、代理组、连接、规则、日志和系统集成。</p>
   <p>
     <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%2026%2B-111111?logo=apple&logoColor=white">
     <img alt="Swift" src="https://img.shields.io/badge/Swift-6.0-F05138?logo=swift&logoColor=white">
     <img alt="Mihomo" src="https://img.shields.io/badge/core-Mihomo%20v1.19.24-2f6fed">
-    <img alt="License" src="https://img.shields.io/badge/license-GPL--3.0--compatible-2563eb">
+    <img alt="License" src="https://img.shields.io/badge/license-GPL--3.0-2563eb">
   </p>
 </div>
 
 ## 简介
 
-ClashMax 是一个使用 SwiftUI 构建的原生 macOS Mihomo 图形客户端。它的目标不是做跨平台外壳，而是做一个符合 macOS 使用习惯的代理控制台：导入配置、启动核心、切换代理组、查看连接和规则、跟踪日志，并在系统代理模式和 TUN 模式之间切换。
+ClashMax 是一个使用 SwiftUI 构建的原生 macOS Mihomo 图形客户端。它不是跨平台外壳，而是围绕 macOS 工作流设计的代理控制台：导入配置、启动核心、切换代理组、查看连接和规则、跟踪日志，并在系统代理模式和 TUN 模式之间快速切换。
 
-项目当前处于 MVP 开发阶段。README 里的能力说明以当前代码和 MVP 目标为准，未把尚未验证的发布能力包装成已完成能力。
+应用界面保持克制、紧凑、可扫描。第一屏就是实际代理控制台，常用状态和操作直接呈现，不通过营销页或冗长引导阻断使用。
 
-## 功能
+## 核心能力
 
-- 原生 SwiftUI 应用壳，包含 Dashboard、Profiles、Proxies、Connections、Rules、Logs、Settings 和菜单栏控制。
-- 支持导入本地 Clash/Mihomo YAML 配置。
-- 支持添加、更新、重命名、删除订阅配置。
-- 原始 YAML 保持不变，启动前由 ClashMax 生成应用托管的 runtime YAML。
-- 运行时覆盖 `mixed-port`、`external-controller`、`secret`、`mode`、`log-level`、DNS 和 TUN。
-- Mihomo controller 默认绑定到 `127.0.0.1`，每次运行生成新的 secret，并使用 Bearer 认证。
-- 用户态核心负责普通系统代理模式。
-- 通过 macOS `networksetup` 设置和恢复 HTTP、HTTPS、SOCKS 代理与 bypass domains。
-- 通过 `SMAppService` 和 `ClashMaxHelper` 支持 privileged TUN 路径。
-- 接入 Mihomo REST 和 WebSocket 控制面，覆盖 version、configs、proxies、providers、rules、connections、traffic、logs。
-- 支持代理组切换、延迟测试、provider health check、模式切换、关闭连接和 runtime restart hooks。
+- 原生 macOS 应用体验，覆盖 Dashboard、Profiles、Proxies、Connections、Rules、Logs、Settings 和菜单栏控制。
+- 支持导入本地 Clash/Mihomo YAML 配置，并支持订阅配置的添加、更新、重命名和删除。
+- 保留原始 YAML 不变，启动前生成 ClashMax 托管的 runtime YAML，便于安全注入端口、controller、secret、DNS、TUN 和运行模式。
+- 内置 Mihomo sidecar core，并在设置中分别呈现 App 版本、构建号和内置 Mihomo 资源版本。
+- 支持普通系统代理模式，由用户态核心负责 HTTP、HTTPS、SOCKS 代理设置与恢复。
+- 支持 privileged helper 驱动的 TUN 路径，适配 macOS 的系统批准和权限模型。
+- 接入 Mihomo REST 与 WebSocket 控制面，覆盖版本、配置、代理组、provider、规则、连接、流量和日志。
+- 支持代理组切换、延迟测试、provider health check、模式切换、连接关闭、运行时重启和实时日志观察。
+- 菜单栏提供轻量运行控制，适合日常快速查看状态、切换代理和检查更新。
 
-## 当前状态
+## 使用场景
 
-ClashMax 可以作为开发构建运行，但还不是完整公开发行版。TUN 模式依赖 helper 注册、签名和 macOS 系统批准流程，仍需要真实机器验证。App 包更新已接入 Sparkle 框架入口，但正式发布前必须生成并配置真实 Sparkle EdDSA public key、完成 Developer ID 签名/公证，并发布 appcast。
+- 日常代理控制：选择配置，启动 Mihomo，按需切换 Rule、Global、Direct 等运行模式。
+- 节点与代理组管理：查看代理组状态，手动切换节点，执行延迟测试和 provider health check。
+- 连接排查：查看当前连接、目标地址、规则命中和流量变化，必要时关闭指定连接。
+- 规则与日志追踪：快速检查规则列表和 runtime 日志，定位配置或网络异常。
+- 系统集成：在普通系统代理和 TUN 模式之间切换，并在停止运行时恢复系统代理状态。
 
-## 环境要求
+## 系统要求
 
 - macOS 26+
-- Xcode 26+
-- Swift 6.0, 以当前工程配置为准
 - Apple Silicon 或 Intel Mac
-- `Resources/Core/` 下存在 Mihomo sidecar binaries
+- 首次使用 TUN 模式时，需要按系统提示批准 helper 权限
 
-期望的核心文件：
-
-```text
-Resources/Core/mihomo-darwin-arm64
-Resources/Core/mihomo-darwin-amd64
-Resources/Core/mihomo-manifest.json
-```
-
-当前 manifest 固定 Mihomo `v1.19.24`。发布前应保证 core binary 来自可信来源，并按 manifest 校验 checksum。
-
-## 从源码构建
-
-克隆项目后，用 Xcode 打开 `ClashMax.xcodeproj`，选择 `ClashMax` scheme 构建 macOS app。
-
-命令行测试：
-
-```sh
-xcodebuild test -project ClashMax.xcodeproj -scheme ClashMax -destination 'platform=macOS' -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO
-```
-
-本地构建并运行：
-
-```sh
-./script/build_and_run.sh
-```
-
-TUN 模式需要 helper 被正确嵌入、签名、注册，并在系统设置中获批。普通系统代理模式由用户态 app process 负责。
-
-## App 更新发布
-
-ClashMax 使用 Sparkle 做 `.app` 包更新，更新源默认是：
-
-```text
-https://marvinli001.github.io/ClashMax/appcast.xml
-```
-
-首次公开发布前，先按 `docs/APP_UPDATES.md` 生成 Sparkle EdDSA key，把 public key 写入 `project.yml` 的 `SUPublicEDKey`，并妥善保存 private key。资源包更新例如 Mihomo core 更新不走 Sparkle appcast，会作为独立资源更新通道实现。
-
-## 项目结构
-
-```text
-ClashMax/
-  App/                 App 入口
-  Assets.xcassets/     App icon 和资源目录
-  Models/              Runtime、profile、proxy、traffic、connection 数据模型
-  Services/            Mihomo API、配置生成、核心进程、系统代理、TUN helper
-  Stores/              AppModel 和 ProfileStore
-  Views/               SwiftUI 页面
-ClashMaxHelper/        Privileged helper 入口
-ClashMaxTests/         XCTest 测试
-Resources/Core/        Mihomo sidecar binaries 和 checksum manifest
-Config/                Entitlements 和 LaunchDaemon plist
-```
-
-## 设计方向
-
-ClashMax 的界面方向是安静、紧凑、可操作的 macOS 工具：
-
-- 第一屏就是代理客户端本身，而不是介绍页。
-- 核心状态、当前配置、路由模式、系统代理/TUN 状态、流量和最新错误应直接可见。
-- 操作视图优先使用原生列表、表格、segmented controls、toggles、menus 和 SF Symbols。
-- 缺少 profile、缺少 core、core crash、helper 不可用、配置校验失败等状态必须明确可恢复。
-
-## 安全模型
+## 安全与隐私
 
 - 导入的 YAML profile 保持原样并存储在本地。
 - 订阅 URL 按 profile ID 存入 Keychain。
 - runtime config 写入 ClashMax 托管的 Application Support 路径。
 - Mihomo controller 默认只监听 `127.0.0.1`。
-- 每次启动生成新的 controller secret。
-- TUN 模式由 privileged helper 负责，helper 校验 app-owned core/config paths，不使用 shell interpolation 处理 app 提供的路径。
+- 每次启动生成新的 controller secret，并使用 Bearer 认证访问控制面。
+- TUN 模式由 privileged helper 负责，helper 校验 app-owned core/config paths。
 - macOS TUN runtime config 不写入 Linux-only `auto-redirect`。
 
-## 路线图
+## 下载与更新
 
-- 补齐正式发布所需的 license 文件和分发打包流程。
-- 使用 `mihomo -t` 强化 runtime config 校验。
-- 完成 signed helper approval 和 TUN 真机验证流程。
-- 增加可在缺少本地 core 时 clean skip 的 Mihomo integration tests。
-- 完善订阅 metadata、profile validation 和 provider update 视图。
-- 继续打磨 dashboard、proxy group table、logs 和 connection 工作流。
+发布版通过 GitHub Releases 提供。安装后，ClashMax 可在应用内检查 App 更新；Mihomo 资源版本会在设置中独立展示，避免把 App 包版本和内置核心资源版本混在一起。
 
 ## 许可证
 
-ClashMax 计划保持 GPL-3.0-compatible，因为它分发或控制 Mihomo。打包和分发前请检查 `LICENSE` 与 `THIRD_PARTY_NOTICES.md`。
+ClashMax 使用 GPL-3.0 许可证发布。项目分发并控制 Mihomo，因此保留与 Mihomo 生态兼容的开源授权边界。
 
 ## 致谢
 
