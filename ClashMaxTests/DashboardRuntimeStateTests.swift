@@ -386,6 +386,54 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
   }
 
+  func testProxyGroupExpansionDefaultsToSelectedGroup() {
+    let groups = [
+      ProxyGroup(name: "General", type: "select", selected: nil, nodes: []),
+      ProxyGroup(name: "Streaming", type: "select", selected: "Japan", nodes: [])
+    ]
+
+    XCTAssertEqual(
+      ProxyGroupExpansionPolicy.resolvedExpansion(current: nil, groups: groups, searchQuery: ""),
+      Set(["Streaming"])
+    )
+  }
+
+  func testProxyGroupExpansionDefaultsToFirstGroupWithoutSelection() {
+    let groups = [
+      ProxyGroup(name: "General", type: "select", selected: nil, nodes: []),
+      ProxyGroup(name: "Streaming", type: "select", selected: nil, nodes: [])
+    ]
+
+    XCTAssertEqual(
+      ProxyGroupExpansionPolicy.resolvedExpansion(current: nil, groups: groups, searchQuery: ""),
+      Set(["General"])
+    )
+  }
+
+  func testProxyGroupExpansionRetainsExistingGroupsAfterRefresh() {
+    let refreshedGroups = [
+      ProxyGroup(name: "General", type: "select", selected: nil, nodes: []),
+      ProxyGroup(name: "Auto", type: "url-test", selected: nil, nodes: [])
+    ]
+
+    XCTAssertEqual(
+      ProxyGroupExpansionPolicy.retainedExpansion(current: Set(["General", "Missing"]), groups: refreshedGroups),
+      Set(["General"])
+    )
+  }
+
+  func testProxyGroupExpansionOpensSearchResults() {
+    let groups = [
+      ProxyGroup(name: "General", type: "select", selected: nil, nodes: []),
+      ProxyGroup(name: "Streaming", type: "select", selected: nil, nodes: [])
+    ]
+
+    XCTAssertEqual(
+      ProxyGroupExpansionPolicy.resolvedExpansion(current: Set(["General"]), groups: groups, searchQuery: "jp"),
+      Set(["General", "Streaming"])
+    )
+  }
+
   func testDashboardProxySelectionUsesPreferredGroupAndSelectedNode() throws {
     let groups = [
       ProxyGroup(
