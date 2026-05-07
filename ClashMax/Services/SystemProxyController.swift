@@ -6,16 +6,7 @@ protocol CommandRunning: Sendable {
 }
 
 final class SystemProxyController: @unchecked Sendable {
-  static let defaultBypassDomains = [
-    "localhost",
-    "127.0.0.1",
-    "::1",
-    "*.local",
-    "169.254/16",
-    "10.0.0.0/8",
-    "172.16.0.0/12",
-    "192.168.0.0/16"
-  ]
+  static let defaultBypassDomains = SystemProxySettings.defaultBypassDomains
 
   static let applyBudgetSeconds: TimeInterval = 8
 
@@ -137,6 +128,22 @@ final class SystemProxyController: @unchecked Sendable {
   }
 
   private func networkServices() async throws -> [String] {
+    let orderedOutput = try? await commandRunner.run("/usr/sbin/networksetup", ["-listnetworkserviceorder"])
+    let activeOutput = try? await commandRunner.run("/usr/sbin/scutil", ["--nwi"])
+    let orderedServices = orderedOutput.map(OrderedNetworkService.parse) ?? []
+    let activeInterfaces = activeOutput.map(ActiveNetworkInterfaces.parse) ?? []
+    if !orderedServices.isEmpty, !activeInterfaces.isEmpty {
+      let activeServices = orderedServices
+        .filter { service in
+          guard let device = service.device else { return false }
+          return activeInterfaces.contains(device)
+        }
+        .map(\.name)
+      if !activeServices.isEmpty {
+        return activeServices
+      }
+    }
+
     let output = try await commandRunner.run("/usr/sbin/networksetup", ["-listallnetworkservices"])
     return output
       .split(separator: "\n")
@@ -192,6 +199,58 @@ private struct ExpectedSystemProxyConfiguration: Equatable {
   var host: String
   var port: Int
   var bypassDomains: [String]
+}
+
+private struct OrderedNetworkService {
+  var name: String
+  var device: String?
+
+  static func parse(_ output: String) -> [OrderedNetworkService] {
+    var services: [OrderedNetworkService] = []
+    var pendingName: String?
+
+    for rawLine in output.split(separator: "\n") {
+      let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+      if line.hasPrefix("(Hardware Port:"), let name = pendingName {
+        services.append(OrderedNetworkService(name: name, device: parseDevice(from: line)))
+        pendingName = nil
+      } else if line.hasPrefix("("), let closingIndex = line.firstIndex(of: ")") {
+        let nameStart = line.index(after: closingIndex)
+        let name = line[nameStart...].trimmingCharacters(in: .whitespacesAndNewlines)
+        pendingName = name.hasPrefix("*") ? nil : name
+      }
+    }
+
+    return services
+  }
+
+  private static func parseDevice(from line: String) -> String? {
+    guard let deviceRange = line.range(of: "Device:") else { return nil }
+    let rawDevice = line[deviceRange.upperBound...]
+      .trimmingCharacters(in: CharacterSet(charactersIn: " )"))
+    return rawDevice.isEmpty ? nil : rawDevice
+  }
+}
+
+private struct ActiveNetworkInterfaces {
+  static func parse(_ output: String) -> Set<String> {
+    var interfaces = Set<String>()
+    for rawLine in output.split(separator: "\n") {
+      let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+      if line.hasPrefix("Network interfaces:"), let separator = line.firstIndex(of: ":") {
+        let valuesStart = line.index(after: separator)
+        for value in line[valuesStart...].split(whereSeparator: \.isWhitespace) {
+          interfaces.insert(String(value))
+        }
+      } else if let flagsRange = line.range(of: " : flags") {
+        let interface = String(line[..<flagsRange.lowerBound])
+        if interface != "REACH" {
+          interfaces.insert(interface)
+        }
+      }
+    }
+    return interfaces
+  }
 }
 
 private struct ServiceProxySnapshot {

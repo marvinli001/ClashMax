@@ -3,7 +3,7 @@ import SwiftUI
 
 enum DashboardLayoutMetrics {
   static let runModePickerWidth: CGFloat = 214
-  static let proxyRoutingModePickerWidth: CGFloat = 232
+  static let proxyRoutingModePickerWidth: CGFloat = 272
   static let launchProfileControlWidth: CGFloat = 178
   static let launchMixedPortControlWidth: CGFloat = 104
   static let launchStartButtonWidth: CGFloat = 156
@@ -67,6 +67,296 @@ struct ProxyRoutingModePicker: View {
     .labelsHidden()
     .pickerStyle(.segmented)
     .fixedSize(horizontal: true, vertical: false)
+  }
+}
+
+struct ProxyRoutingSettingsButton: View {
+  @EnvironmentObject private var appModel: AppModel
+  @State private var isPresented = false
+  @State private var systemDraft = SystemProxySettings.default
+  @State private var tunDraft = TunSettings.default
+  @State private var settingsError: String?
+
+  var body: some View {
+    Button {
+      syncDrafts()
+      isPresented = true
+    } label: {
+      Image(systemName: "gearshape")
+        .frame(width: 18, height: 18)
+    }
+    .buttonStyle(.borderless)
+    .controlSize(.regular)
+    .help("Configure \(appModel.proxyRoutingMode.displayName)")
+    .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+      popoverContent
+        .frame(width: 480)
+        .padding(18)
+    }
+  }
+
+  @ViewBuilder
+  private var popoverContent: some View {
+    switch appModel.proxyRoutingMode {
+    case .systemProxy:
+      SystemProxySettingsPopover(
+        settings: $systemDraft,
+        isActive: appModel.systemProxyEnabled,
+        serviceAddress: "\(systemDraft.normalizedProxyHost):\(appModel.overrides.mixedPort)",
+        error: settingsError,
+        onCancel: { isPresented = false },
+        onSave: saveSystemProxySettings
+      )
+    case .tun:
+      TunSettingsPopover(
+        settings: $tunDraft,
+        error: settingsError,
+        onCancel: { isPresented = false },
+        onReset: { tunDraft = .default },
+        onSave: saveTunSettings
+      )
+    }
+  }
+
+  private func syncDrafts() {
+    systemDraft = appModel.systemProxySettings
+    tunDraft = appModel.tunSettings
+    settingsError = nil
+  }
+
+  private func saveSystemProxySettings() {
+    if let validationError = systemDraft.validationError {
+      settingsError = validationError
+      return
+    }
+    guard appModel.updateSystemProxySettings(systemDraft) else {
+      settingsError = appModel.lastError
+      return
+    }
+    isPresented = false
+  }
+
+  private func saveTunSettings() {
+    appModel.updateTunSettings(tunDraft)
+    isPresented = false
+  }
+}
+
+private struct SystemProxySettingsPopover: View {
+  @Binding var settings: SystemProxySettings
+  let isActive: Bool
+  let serviceAddress: String
+  let error: String?
+  let onCancel: () -> Void
+  let onSave: () -> Void
+  @State private var bypassDraft = ""
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      popoverHeader("System Proxy Settings", systemImage: "network.badge.shield.half.filled")
+
+      GroupBox("Current System Proxy") {
+        VStack(alignment: .leading, spacing: 6) {
+          LabeledContent("Status") {
+            Text(isActive ? "Enabled" : "Not Enabled")
+              .foregroundStyle(isActive ? Color.green : Color.secondary)
+          }
+          LabeledContent("Service Address") {
+            Text(serviceAddress)
+              .monospacedDigit()
+              .foregroundStyle(.secondary)
+          }
+        }
+        .padding(.vertical, 2)
+      }
+
+      Form {
+        TextField("Proxy Host", text: $settings.proxyHost)
+        Toggle("Use Default Bypass", isOn: $settings.useDefaultBypass)
+        Toggle("Validate Bypass Entries", isOn: $settings.validateBypass)
+        Toggle("Proxy Guard", isOn: $settings.guardEnabled)
+        Stepper("Guard Interval \(settings.normalizedGuardIntervalSeconds)s", value: $settings.guardIntervalSeconds, in: SystemProxySettings.minimumGuardIntervalSeconds...SystemProxySettings.maximumGuardIntervalSeconds, step: 5)
+          .disabled(!settings.guardEnabled)
+      }
+
+      EditableStringList(
+        title: "Custom Bypass",
+        placeholder: "192.168.0.0/16",
+        values: $settings.customBypassDomains,
+        draft: $bypassDraft,
+        validator: SystemProxySettings.isValidBypassDomain
+      )
+
+      if settings.useDefaultBypass {
+        WrappingTokenList(title: "Default Bypass", values: SystemProxySettings.defaultBypassDomains)
+      }
+
+      if let error {
+        Label(error, systemImage: "exclamationmark.triangle.fill")
+          .font(.callout)
+          .foregroundStyle(.red)
+          .lineLimit(2)
+      }
+
+      popoverActions(onCancel: onCancel, onSave: onSave, saveDisabled: settings.validationError != nil)
+    }
+  }
+}
+
+private struct TunSettingsPopover: View {
+  @Binding var settings: TunSettings
+  let error: String?
+  let onCancel: () -> Void
+  let onReset: () -> Void
+  let onSave: () -> Void
+  @State private var dnsDraft = ""
+  @State private var routeDraft = ""
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      HStack {
+        popoverHeader("TUN Settings", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
+        Spacer()
+        Button("Reset Defaults", action: onReset)
+      }
+
+      Form {
+        Picker("TUN Stack", selection: $settings.stack) {
+          ForEach(TunStack.allCases) { stack in
+            Text(stack.displayName).tag(stack)
+          }
+        }
+        .pickerStyle(.segmented)
+
+        TextField("Device", text: $settings.device)
+        Toggle("Auto Route", isOn: $settings.autoRoute)
+        Toggle("Strict Route", isOn: $settings.strictRoute)
+        Toggle("Auto Detect Interface", isOn: $settings.autoDetectInterface)
+        Stepper("MTU \(settings.normalizedMTU)", value: $settings.mtu, in: 576...9_000, step: 10)
+      }
+
+      EditableStringList(
+        title: "DNS Hijack",
+        placeholder: "any:53",
+        values: $settings.dnsHijack,
+        draft: $dnsDraft,
+        validator: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !$0.contains(" ") }
+      )
+
+      EditableStringList(
+        title: "Route Exclude Address",
+        placeholder: "192.168.0.0/16",
+        values: $settings.routeExcludeAddresses,
+        draft: $routeDraft,
+        validator: SystemProxySettings.isValidBypassDomain
+      )
+
+      if let error {
+        Label(error, systemImage: "exclamationmark.triangle.fill")
+          .font(.callout)
+          .foregroundStyle(.red)
+          .lineLimit(2)
+      }
+
+      popoverActions(onCancel: onCancel, onSave: onSave, saveDisabled: false)
+    }
+  }
+}
+
+private struct EditableStringList: View {
+  let title: String
+  let placeholder: String
+  @Binding var values: [String]
+  @Binding var draft: String
+  let validator: (String) -> Bool
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text(title)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+
+      WrappingTokenList(title: nil, values: values, removeAction: remove)
+
+      HStack(spacing: 8) {
+        TextField(placeholder, text: $draft)
+          .textFieldStyle(.roundedBorder)
+          .onSubmit(add)
+        Button("Add", action: add)
+          .disabled(!validator(draft))
+      }
+    }
+  }
+
+  private func add() {
+    let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard validator(trimmed) else { return }
+    values = SystemProxySettings.normalizedBypassDomains(values + [trimmed])
+    draft = ""
+  }
+
+  private func remove(_ value: String) {
+    values.removeAll { $0 == value }
+  }
+}
+
+private struct WrappingTokenList: View {
+  let title: String?
+  let values: [String]
+  var removeAction: ((String) -> Void)?
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      if let title {
+        Text(title)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+      if values.isEmpty {
+        Text("Empty")
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+      } else {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 86), spacing: 6)], alignment: .leading, spacing: 6) {
+          ForEach(values, id: \.self) { value in
+            HStack(spacing: 4) {
+              Text(value)
+                .font(.caption)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+              if let removeAction {
+                Button {
+                  removeAction(value)
+                } label: {
+                  Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                }
+                .buttonStyle(.plain)
+              }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(.quaternary, in: Capsule())
+          }
+        }
+      }
+    }
+  }
+}
+
+private func popoverHeader(_ title: String, systemImage: String) -> some View {
+  Label(title, systemImage: systemImage)
+    .font(.title3.weight(.semibold))
+}
+
+private func popoverActions(onCancel: @escaping () -> Void, onSave: @escaping () -> Void, saveDisabled: Bool) -> some View {
+  HStack {
+    Spacer()
+    Button("Cancel", action: onCancel)
+      .keyboardShortcut(.cancelAction)
+    Button("Save", action: onSave)
+      .keyboardShortcut(.defaultAction)
+      .disabled(saveDisabled)
   }
 }
 

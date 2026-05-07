@@ -118,7 +118,55 @@ final class SystemProxyControllerTests: XCTestCase {
     XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setwebproxy Wi-Fi 127.0.0.1 7890"))
     XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setsecurewebproxy Wi-Fi 127.0.0.1 7890"))
     XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setsocksfirewallproxy Wi-Fi 127.0.0.1 7890"))
-    XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setproxybypassdomains Wi-Fi localhost 127.0.0.1 ::1 *.local 169.254/16 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"))
+    XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setproxybypassdomains Wi-Fi \(SystemProxySettings.defaultBypassDomains.joined(separator: " "))"))
+  }
+
+  func testApplySystemProxySkipsInactiveBridgeAndVPNServicesWhenActiveInterfacesAreKnown() async throws {
+    let runner = RecordingCommandRunner(outputs: [
+      "/usr/sbin/networksetup -listallnetworkservices": """
+      An asterisk (*) denotes that a network service is disabled.
+      Ethernet
+      Thunderbolt Bridge
+      USB 10/100/1G/2.5G LAN
+      Wi-Fi
+      Tailscale
+      """,
+      "/usr/sbin/networksetup -listnetworkserviceorder": """
+      An asterisk (*) denotes that a network service is disabled.
+      (1) Ethernet
+      (Hardware Port: Ethernet, Device: en0)
+
+      (2) Thunderbolt Bridge
+      (Hardware Port: Thunderbolt Bridge, Device: bridge0)
+
+      (3) USB 10/100/1G/2.5G LAN
+      (Hardware Port: USB 10/100/1G/2.5G LAN, Device: en8)
+
+      (4) Wi-Fi
+      (Hardware Port: Wi-Fi, Device: en1)
+
+      (5) Tailscale
+      (Hardware Port: io.tailscale.ipn.macsys, Device: )
+      """,
+      "/usr/sbin/scutil --nwi": """
+      Network information
+
+      IPv4 network interface information
+           en0 : flags      : 0x5 (IPv4,DNS)
+           en1 : flags      : 0x5 (IPv4,DNS)
+
+      Network interfaces: en0 en1
+      """
+    ])
+    let controller = SystemProxyController(commandRunner: runner)
+
+    try await controller.apply(host: "127.0.0.1", port: 7890)
+
+    XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setwebproxy Ethernet 127.0.0.1 7890"))
+    XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setwebproxy Wi-Fi 127.0.0.1 7890"))
+    XCTAssertFalse(runner.commands.contains { $0.contains("-setsecurewebproxy Thunderbolt Bridge") })
+    XCTAssertFalse(runner.commands.contains { $0.contains("-setsecurewebproxy USB 10/100/1G/2.5G LAN") })
+    XCTAssertFalse(runner.commands.contains { $0.contains("-setsecurewebproxy Tailscale") })
   }
 
   func testApplySystemProxyAcceptsCustomBypassDomains() async throws {

@@ -44,16 +44,12 @@ struct ProxiesView: View {
         VStack(alignment: .leading, spacing: 10) {
           proxyControls
 
-          if appModel.previewRuntimeActive {
-            ProxyPreviewNotice(
-              icon: "wand.and.stars",
-              message: "Preview core is running on loopback for delay testing. Hit Start on Home to redirect traffic."
-            )
-          } else if appModel.isShowingProxyPreview {
-            ProxyPreviewNotice(
-              icon: "info.circle",
-              message: "Pick a node and we'll remember it. Tests start a quiet preview core automatically."
-            )
+          if let notice = ProxyPreviewNoticeKind.resolve(
+            developerMode: appModel.developerMode,
+            previewRuntimeActive: appModel.previewRuntimeActive,
+            isShowingProxyPreview: appModel.isShowingProxyPreview
+          ) {
+            ProxyPreviewNotice(icon: notice.icon, message: notice.message)
           }
 
           if !appModel.proxyProviders.isEmpty {
@@ -239,6 +235,7 @@ private struct ProxyNodeRow: View {
   var body: some View {
     let canSelect = node.isSelectable && (appModel.canControlRuntimeProxies || appModel.canSelectProxyOffline)
     let canTest = node.isSelectable && appModel.canControlRuntimeProxies
+    let delayDisplay = ProxyDelayDisplay(delay: node.delay)
 
     HStack(spacing: 10) {
       Button {
@@ -247,13 +244,9 @@ private struct ProxyNodeRow: View {
         HStack(spacing: 10) {
           Image(systemName: group.selected == node.name ? "checkmark.circle.fill" : "circle")
             .foregroundStyle(group.selected == node.name ? .green : .secondary)
-          VStack(alignment: .leading, spacing: 2) {
-            Text(node.name)
-              .foregroundStyle(node.isSelectable ? .primary : .secondary)
-            Text(node.delay.map { "\($0) ms" } ?? "No delay")
-              .font(.caption)
-              .foregroundStyle(.secondary)
-          }
+          Text(node.name)
+            .foregroundStyle(node.isSelectable ? .primary : .secondary)
+            .lineLimit(1)
           Spacer(minLength: 12)
         }
         .contentShape(Rectangle())
@@ -261,6 +254,13 @@ private struct ProxyNodeRow: View {
       .buttonStyle(.plain)
       .disabled(!canSelect)
       .help(canSelect ? "Select \(node.name)" : appModel.proxyRuntimeActionMessage)
+
+      Text(delayDisplay.label)
+        .font(.callout)
+        .foregroundStyle(delayDisplay.tone.color)
+        .monospacedDigit()
+        .lineLimit(1)
+        .frame(minWidth: 64, alignment: .trailing)
 
       Button {
         appModel.testDelay(for: node)
@@ -271,6 +271,92 @@ private struct ProxyNodeRow: View {
       .disabled(!canTest)
       .help(canTest ? "Test delay" : "Preview core needs a moment to come up before delay testing.")
       .accessibilityLabel("Test delay for \(node.name)")
+    }
+  }
+}
+
+struct ProxyDelayDisplay: Equatable {
+  let label: String
+  let tone: ProxyDelayTone
+
+  init(delay: Int?) {
+    guard let delay else {
+      label = "No delay"
+      tone = .unavailable
+      return
+    }
+
+    label = "\(delay) ms"
+    tone = ProxyDelayTone(delay: delay)
+  }
+}
+
+enum ProxyDelayTone: Equatable {
+  case unavailable
+  case fast
+  case good
+  case moderate
+  case slow
+
+  init(delay: Int) {
+    switch delay {
+    case ...100:
+      self = .fast
+    case 101...150:
+      self = .good
+    case 151...250:
+      self = .moderate
+    default:
+      self = .slow
+    }
+  }
+
+  var color: Color {
+    switch self {
+    case .unavailable:
+      return .secondary
+    case .fast:
+      return .green
+    case .good:
+      return .mint
+    case .moderate:
+      return .yellow
+    case .slow:
+      return .red
+    }
+  }
+}
+
+enum ProxyPreviewNoticeKind: Equatable {
+  case previewRuntime
+  case offlinePreview
+
+  static func resolve(
+    developerMode: Bool,
+    previewRuntimeActive: Bool,
+    isShowingProxyPreview: Bool
+  ) -> ProxyPreviewNoticeKind? {
+    guard developerMode else { return nil }
+    if previewRuntimeActive { return .previewRuntime }
+    if isShowingProxyPreview { return .offlinePreview }
+    return nil
+  }
+
+  var icon: String {
+    switch self {
+    case .previewRuntime:
+      return "wand.and.stars"
+    case .offlinePreview:
+      return "info.circle"
+    }
+  }
+
+  var message: String {
+    switch self {
+    case .previewRuntime:
+      return "Preview core is running on loopback for delay testing. Hit Start on Home to redirect traffic."
+    case .offlinePreview:
+      return "Pick a node and we'll remember it. Tests start a quiet preview core automatically."
     }
   }
 }

@@ -162,6 +162,58 @@ final class CoreProcessControllerTests: XCTestCase {
     XCTAssertEqual(launcher.lastArguments, [])
     XCTAssertTrue(controller.startupDiagnostics.contains { $0.contains("Port 9097 is occupied by pid 1234") })
   }
+
+  func testProcessExitBeforeTerminationHandlerIsInstalledFailsStartupImmediately() async throws {
+    let process = AlreadyTerminatedRunningProcess(exitCode: 7, outputTail: "fatal: bind failed")
+    let controller = CoreProcessController(
+      launcher: SingleProcessLauncher(process: process),
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: CancellableCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: FakePortChecker(listeners: [])
+    )
+
+    do {
+      try await controller.startUserMode(
+        coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+        configURL: URL(fileURLWithPath: "/tmp/config.yaml"),
+        workDirectory: URL(fileURLWithPath: "/tmp"),
+        api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+      )
+      XCTFail("Expected early core termination to fail startup.")
+    } catch let error as AppError {
+      guard case let .coreNotReady(message) = error else {
+        XCTFail("Expected coreNotReady, got \(error)")
+        return
+      }
+      XCTAssertTrue(message.contains("mihomo exited with code 7"))
+      XCTAssertTrue(message.contains("fatal: bind failed"))
+    }
+
+    XCTAssertEqual(controller.status, .crashed(message: "mihomo exited with code 7\nfatal: bind failed"))
+  }
+
+  func testFoundationRunningProcessDeliversCachedTerminationWhenHandlerIsInstalledLate() async throws {
+    let launcher = FoundationProcessLauncher()
+    let process = try launcher.launch(
+      executable: URL(fileURLWithPath: "/bin/sh"),
+      arguments: ["-c", "exit 7"],
+      environment: [:],
+      workDirectory: URL(fileURLWithPath: "/tmp")
+    )
+    try await Task.sleep(nanoseconds: 100_000_000)
+
+    var receivedExitCode: Int32?
+    process.onTermination = { exitCode in
+      receivedExitCode = exitCode
+    }
+
+    for _ in 0..<20 where receivedExitCode == nil {
+      await Task.yield()
+    }
+
+    XCTAssertEqual(receivedExitCode, 7)
+  }
 }
 
 @MainActor
@@ -193,5 +245,42 @@ private struct FakePortChecker: RuntimePortChecking {
 
   func listeners(on ports: [Int]) async -> [PortListener] {
     listeners.filter { ports.contains($0.port) }
+  }
+}
+
+@MainActor
+private final class SingleProcessLauncher: CoreProcessLaunching {
+  private let process: RunningCoreProcess
+
+  init(process: RunningCoreProcess) {
+    self.process = process
+  }
+
+  func launch(executable: URL, arguments: [String], environment: [String: String], workDirectory: URL) throws -> RunningCoreProcess {
+    process
+  }
+}
+
+@MainActor
+private final class AlreadyTerminatedRunningProcess: RunningCoreProcess {
+  let processIdentifier: Int32 = 777
+  private let exitCode: Int32
+  private let outputTail: String
+
+  init(exitCode: Int32, outputTail: String) {
+    self.exitCode = exitCode
+    self.outputTail = outputTail
+  }
+
+  var onTermination: ((Int32) -> Void)? {
+    didSet {
+      onTermination?(exitCode)
+    }
+  }
+
+  func terminate() {}
+
+  func recentOutputTail(maxBytes: Int) -> String {
+    outputTail
   }
 }

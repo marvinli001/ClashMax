@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import ServiceManagement
 import UniformTypeIdentifiers
 
 @MainActor
@@ -7,6 +8,18 @@ final class AppModel: ObservableObject {
   @Published var selectedSection: AppSection = .home
   @Published var overrides = RuntimeOverrides.defaultForLaunch()
   @Published var proxyRoutingMode: ProxyRoutingMode = .systemProxy
+  @Published var systemProxySettings = SystemProxySettings.default {
+    didSet {
+      saveCodable(systemProxySettings, forKey: Self.systemProxySettingsDefaultsKey)
+    }
+  }
+  @Published var tunSettings = TunSettings.default {
+    didSet {
+      overrides.tunSettings = tunSettings
+      saveCodable(tunSettings, forKey: Self.tunSettingsDefaultsKey)
+    }
+  }
+  @Published private(set) var launchSettings = LaunchSettings.default
   @Published private(set) var runtimeOwner: RuntimeOwner = .stopped
   @Published var systemProxyEnabled = false
   @Published var tunEnabled = false
@@ -31,11 +44,17 @@ final class AppModel: ObservableObject {
   @Published private(set) var providerHealthChecksInFlight: Set<ProxyProvider.ID> = []
   @Published private(set) var closingConnectionIDs: Set<ConnectionSnapshot.ID> = []
   @Published private(set) var closingAllConnections = false
+  @Published var developerMode = false {
+    didSet {
+      defaults.set(developerMode, forKey: Self.developerModeDefaultsKey)
+    }
+  }
 
   let profileStore: ProfileStore
   let coreController: CoreProcessController
   let systemProxyController: SystemProxyController
   let helperClient: TunnelHelperClient
+  private let loginItemService: any LoginItemManaging
   private let tunnelReadinessProbe: CoreReadinessProbing
   private let paths: RuntimePaths
   private let normalizer = ConfigNormalizer()
@@ -45,11 +64,16 @@ final class AppModel: ObservableObject {
   private var previewTask: Task<Void, Never>?
   private var pendingModeTask: Task<Void, Never>?
   private var pendingRoutingModeTask: Task<Void, Never>?
+  private var systemProxyGuardTask: Task<Void, Never>?
   private var streamTasks: [Task<Void, Never>] = []
   private var logBuffer = BoundedBuffer<LogEntry>(limit: AppConstants.retainedLogLimit)
   private var connectionBuffer = BoundedBuffer<ConnectionSnapshot>(limit: AppConstants.retainedConnectionLimit)
   private let defaults: UserDefaults
   private static let previewSelectionsDefaultsKey = "io.github.clashmax.previewSelections"
+  private static let developerModeDefaultsKey = "io.github.clashmax.developerMode"
+  private static let systemProxySettingsDefaultsKey = "io.github.clashmax.systemProxySettings"
+  private static let tunSettingsDefaultsKey = "io.github.clashmax.tunSettings"
+  static let silentStartDefaultsKey = "io.github.clashmax.silentStart"
   static let startWallClockSeconds: TimeInterval = 22
 
   static func bootstrap() -> AppModel {
@@ -78,6 +102,7 @@ final class AppModel: ObservableObject {
     coreController: CoreProcessController = CoreProcessController(),
     systemProxyController: SystemProxyController = SystemProxyController(),
     helperClient: TunnelHelperClient = TunnelHelperClient(),
+    loginItemService: any LoginItemManaging = MainAppLoginItemService(),
     tunnelReadinessProbe: CoreReadinessProbing = MihomoCoreReadinessProbe(),
     apiClient: (any MihomoAPIControlling)? = nil,
     defaults: UserDefaults = .standard
@@ -87,9 +112,23 @@ final class AppModel: ObservableObject {
     self.coreController = coreController
     self.systemProxyController = systemProxyController
     self.helperClient = helperClient
+    self.loginItemService = loginItemService
     self.tunnelReadinessProbe = tunnelReadinessProbe
     self.apiClient = apiClient
     self.defaults = defaults
+    developerMode = defaults.bool(forKey: Self.developerModeDefaultsKey)
+    systemProxySettings = Self.loadCodable(
+      SystemProxySettings.self,
+      forKey: Self.systemProxySettingsDefaultsKey,
+      defaults: defaults
+    ) ?? .default
+    tunSettings = Self.loadCodable(
+      TunSettings.self,
+      forKey: Self.tunSettingsDefaultsKey,
+      defaults: defaults
+    ) ?? .default
+    overrides.tunSettings = tunSettings
+    refreshLaunchSettings()
     refreshProfilePreview()
     loadPreviewSelectionsForActiveProfile()
   }
@@ -205,7 +244,7 @@ final class AppModel: ObservableObject {
   }
 
   @discardableResult
-  func addSubscription(name: String, urlString: String, session: URLSession = .shared) async -> Bool {
+  func addSubscription(name: String = "", urlString: String, session: URLSession = .shared) async -> Bool {
     guard !isAddingSubscription else { return false }
 
     let trimmedURLString = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -271,6 +310,40 @@ final class AppModel: ObservableObject {
     }
   }
 
+  @discardableResult
+  func updateSubscriptionSource(_ profile: Profile, urlString: String, session: URLSession = .shared) async -> Bool {
+    guard profile.isSubscription else {
+      profileOperationMessage = nil
+      lastError = "Only subscription profiles can update their source URL."
+      return false
+    }
+    guard !updatingProfileIDs.contains(profile.id) else { return false }
+    let trimmedURLString = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let url = URL(string: trimmedURLString) else {
+      profileOperationMessage = nil
+      lastError = "Invalid subscription URL."
+      return false
+    }
+
+    setProfile(profile.id, updating: true)
+    lastError = nil
+    profileOperationMessage = nil
+    defer { setProfile(profile.id, updating: false) }
+
+    do {
+      try await profileStore.updateSubscriptionSource(profile, url: url, session: session)
+      refreshProfilePreview()
+      loadPreviewSelectionsForActiveProfile()
+      let name = profileStore.profiles.first { $0.id == profile.id }?.name ?? profile.name
+      profileOperationMessage = "Updated subscription source for \(name)."
+      return true
+    } catch {
+      profileOperationMessage = nil
+      lastError = UserFacingError.message(for: error)
+      return false
+    }
+  }
+
   func renameActiveProfile(to name: String) {
     guard let profile = profileStore.activeProfile else { return }
     renameProfile(profile, to: name)
@@ -289,6 +362,20 @@ final class AppModel: ObservableObject {
       refreshProfilePreview()
       lastError = nil
       profileOperationMessage = "Renamed profile to \(trimmedName)."
+    } catch {
+      profileOperationMessage = nil
+      lastError = UserFacingError.message(for: error)
+    }
+  }
+
+  func resetSubscriptionName(_ profile: Profile) {
+    do {
+      try profileStore.resetSubscriptionName(profile)
+      refreshProfilePreview()
+      lastError = nil
+      if let name = profileStore.profiles.first(where: { $0.id == profile.id })?.name {
+        profileOperationMessage = "Restored subscription name to \(name)."
+      }
     } catch {
       profileOperationMessage = nil
       lastError = UserFacingError.message(for: error)
@@ -409,6 +496,7 @@ final class AppModel: ObservableObject {
     let shouldUseTun = routingMode == .tun
     overrides.secret = UUID().uuidString.replacingOccurrences(of: "-", with: "")
     overrides.tunEnabled = shouldUseTun
+    overrides.tunSettings = tunSettings
     systemProxyEnabled = false
     tunEnabled = false
     let runtimeConfig = try generateRuntimeConfig(for: profile, selections: previewSelections)
@@ -463,8 +551,9 @@ final class AppModel: ObservableObject {
     try Task.checkCancellation()
 
     if routingMode == .systemProxy {
-      try await systemProxyController.apply(host: overrides.externalControllerHost, port: overrides.mixedPort)
+      try await applySystemProxySettings()
       systemProxyEnabled = true
+      try await activateSystemProxyGuardIfNeeded()
     }
     try Task.checkCancellation()
     sessionStartedAt = Date()
@@ -496,6 +585,13 @@ final class AppModel: ObservableObject {
 
   func setProxyRoutingMode(_ mode: ProxyRoutingMode) {
     guard proxyRoutingMode != mode else { return }
+    if mode == .tun, systemProxyEnabled {
+      stopSystemProxyGuard()
+      Task { [systemProxyController] in
+        try? await systemProxyController.restore()
+      }
+      systemProxyEnabled = false
+    }
     proxyRoutingMode = mode
     if isRunning || startInFlight {
       restart()
@@ -579,6 +675,50 @@ final class AppModel: ObservableObject {
 
   func openHelperApprovalSettings() {
     helperClient.openApprovalSettings()
+  }
+
+  func refreshLaunchSettings() {
+    launchSettings = LaunchSettings(
+      launchAtLogin: Self.isLoginItemRegistered(loginItemService.status),
+      silentStart: defaults.bool(forKey: Self.silentStartDefaultsKey),
+      statusMessage: Self.loginItemStatusMessage(for: loginItemService.status)
+    )
+  }
+
+  func setLaunchAtLogin(_ enabled: Bool) {
+    Task { @MainActor [weak self] in
+      await self?.updateLaunchAtLogin(enabled)
+    }
+  }
+
+  @discardableResult
+  func updateLaunchAtLogin(_ enabled: Bool) async -> Bool {
+    do {
+      lastError = nil
+      if enabled {
+        try loginItemService.register()
+      } else {
+        try await loginItemService.unregister()
+      }
+      refreshLaunchSettings()
+      if loginItemService.status == .requiresApproval {
+        loginItemService.openSystemSettingsLoginItems()
+      }
+      return true
+    } catch {
+      refreshLaunchSettings()
+      lastError = UserFacingError.message(for: error)
+      return false
+    }
+  }
+
+  func setSilentStart(_ enabled: Bool) {
+    defaults.set(enabled, forKey: Self.silentStartDefaultsKey)
+    refreshLaunchSettings()
+  }
+
+  func openLoginItemsSettings() {
+    loginItemService.openSystemSettingsLoginItems()
   }
 
   func reloadRuntimeData(clearAfterConfirmation: Bool = false) {
@@ -752,9 +892,11 @@ final class AppModel: ObservableObject {
       do {
         if enabled {
           proxyRoutingMode = .systemProxy
-          try await systemProxyController.apply(host: overrides.externalControllerHost, port: overrides.mixedPort)
+          try await applySystemProxySettings()
           systemProxyEnabled = true
+          try await activateSystemProxyGuardIfNeeded()
         } else {
+          stopSystemProxyGuard()
           try await systemProxyController.restore()
           systemProxyEnabled = false
         }
@@ -762,6 +904,80 @@ final class AppModel: ObservableObject {
         lastError = UserFacingError.message(for: error)
       }
     }
+  }
+
+  func updateSystemProxySettings(_ settings: SystemProxySettings) -> Bool {
+    if let validationError = settings.validationError {
+      lastError = validationError
+      return false
+    }
+    systemProxySettings = settings
+    if systemProxyEnabled {
+      Task { @MainActor [weak self] in
+        guard let self else { return }
+        do {
+          try await applySystemProxySettings()
+          try await activateSystemProxyGuardIfNeeded()
+          lastError = nil
+        } catch {
+          lastError = UserFacingError.message(for: error)
+        }
+      }
+    }
+    return true
+  }
+
+  func updateTunSettings(_ settings: TunSettings) {
+    tunSettings = settings
+    if proxyRoutingMode == .tun, isRunning {
+      restart()
+    }
+  }
+
+  private func applySystemProxySettings() async throws {
+    if let validationError = systemProxySettings.validationError {
+      throw AppError.invalidProfileConfig(validationError)
+    }
+    try await systemProxyController.apply(
+      host: systemProxySettings.normalizedProxyHost,
+      port: overrides.mixedPort,
+      bypassDomains: systemProxySettings.effectiveBypassDomains
+    )
+  }
+
+  private func activateSystemProxyGuardIfNeeded() async throws {
+    stopSystemProxyGuard()
+    guard systemProxySettings.guardEnabled else { return }
+    try await systemProxyController.enableGuard(
+      host: systemProxySettings.normalizedProxyHost,
+      port: overrides.mixedPort,
+      bypassDomains: systemProxySettings.effectiveBypassDomains
+    )
+    startSystemProxyGuardLoop(intervalSeconds: systemProxySettings.normalizedGuardIntervalSeconds)
+  }
+
+  private func startSystemProxyGuardLoop(intervalSeconds: Int) {
+    systemProxyGuardTask?.cancel()
+    systemProxyGuardTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      while !Task.isCancelled {
+        do {
+          _ = try await self.systemProxyController.verifyGuardOnce()
+        } catch is CancellationError {
+          return
+        } catch {
+          self.lastError = UserFacingError.message(for: error)
+        }
+        let delay = UInt64(intervalSeconds) * 1_000_000_000
+        try? await Task.sleep(nanoseconds: delay)
+      }
+    }
+  }
+
+  private func stopSystemProxyGuard() {
+    systemProxyGuardTask?.cancel()
+    systemProxyGuardTask = nil
+    systemProxyController.disableGuard()
   }
 
   func enterPreviewRuntime() {
@@ -865,6 +1081,7 @@ final class AppModel: ObservableObject {
     runtimeOwner = .stopped
     refreshProfilePreview()
     if systemProxyEnabled {
+      stopSystemProxyGuard()
       try? await systemProxyController.restore()
     }
     systemProxyEnabled = false
@@ -1091,6 +1308,82 @@ final class AppModel: ObservableObject {
       store[id.uuidString] = previewSelections
     }
     defaults.set(store, forKey: Self.previewSelectionsDefaultsKey)
+  }
+
+  private func saveCodable<T: Encodable>(_ value: T, forKey key: String) {
+    guard let data = try? JSONEncoder().encode(value) else { return }
+    defaults.set(data, forKey: key)
+  }
+
+  private static func loadCodable<T: Decodable>(_ type: T.Type, forKey key: String, defaults: UserDefaults) -> T? {
+    guard let data = defaults.data(forKey: key) else { return nil }
+    return try? JSONDecoder().decode(type, from: data)
+  }
+
+  private static func isLoginItemRegistered(_ status: SMAppService.Status) -> Bool {
+    switch status {
+    case .enabled, .requiresApproval:
+      return true
+    case .notRegistered, .notFound:
+      return false
+    @unknown default:
+      return false
+    }
+  }
+
+  private static func loginItemStatusMessage(for status: SMAppService.Status) -> String {
+    switch status {
+    case .enabled:
+      return "ClashMax will launch when you log in."
+    case .requiresApproval:
+      return "Approve ClashMax in System Settings > General > Login Items & Extensions."
+    case .notRegistered:
+      return "Launch at login is not registered."
+    case .notFound:
+      return "macOS could not find the ClashMax login item service."
+    @unknown default:
+      return "macOS reported an unknown login item state."
+    }
+  }
+}
+
+@MainActor
+protocol LoginItemManaging: AnyObject {
+  var status: SMAppService.Status { get }
+  func register() throws
+  func unregister() async throws
+  func openSystemSettingsLoginItems()
+}
+
+final class MainAppLoginItemService: LoginItemManaging {
+  private let service: SMAppService
+
+  init(service: SMAppService = .mainApp) {
+    self.service = service
+  }
+
+  var status: SMAppService.Status {
+    service.status
+  }
+
+  func register() throws {
+    try service.register()
+  }
+
+  func unregister() async throws {
+    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+      service.unregister { error in
+        if let error {
+          continuation.resume(throwing: error)
+        } else {
+          continuation.resume()
+        }
+      }
+    }
+  }
+
+  func openSystemSettingsLoginItems() {
+    SMAppService.openSystemSettingsLoginItems()
   }
 }
 

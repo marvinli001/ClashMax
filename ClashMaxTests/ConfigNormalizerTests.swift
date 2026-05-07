@@ -53,6 +53,55 @@ final class ConfigNormalizerTests: XCTestCase {
     }
   }
 
+  func testTunSettingsAreAppliedOnlyWhenTunIsEnabled() throws {
+    let source = """
+    proxies:
+      - name: DIRECT
+        type: direct
+    tun:
+      enable: false
+      stack: system
+      auto-redirect: true
+      route-exclude-address: [10.0.0.0/8]
+    """
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.tunEnabled = true
+    overrides.tunSettings = TunSettings(
+      stack: .gvisor,
+      device: "utun9",
+      autoRoute: false,
+      strictRoute: true,
+      autoDetectInterface: false,
+      dnsHijack: ["any:53"],
+      mtu: 1400,
+      routeExcludeAddresses: ["192.168.0.0/16"]
+    )
+
+    let enabledOutput = try ConfigNormalizer().runtimeConfig(from: source, overrides: overrides)
+    let enabledYAML = try XCTUnwrap(Yams.load(yaml: enabledOutput) as? [String: Any])
+    let enabledTun = try XCTUnwrap(enabledYAML["tun"] as? [String: Any])
+
+    XCTAssertEqual(enabledTun["enable"] as? Bool, true)
+    XCTAssertEqual(enabledTun["stack"] as? String, "gvisor")
+    XCTAssertEqual(enabledTun["device"] as? String, "utun9")
+    XCTAssertEqual(enabledTun["auto-route"] as? Bool, false)
+    XCTAssertEqual(enabledTun["strict-route"] as? Bool, true)
+    XCTAssertEqual(enabledTun["auto-detect-interface"] as? Bool, false)
+    XCTAssertEqual(enabledTun["dns-hijack"] as? [String], ["any:53"])
+    XCTAssertEqual(enabledTun["mtu"] as? Int, 1400)
+    XCTAssertEqual(enabledTun["route-exclude-address"] as? [String], ["192.168.0.0/16"])
+    XCTAssertNil(enabledTun["auto-redirect"])
+
+    overrides.tunEnabled = false
+    let disabledOutput = try ConfigNormalizer().runtimeConfig(from: source, overrides: overrides)
+    let disabledYAML = try XCTUnwrap(Yams.load(yaml: disabledOutput) as? [String: Any])
+    let disabledTun = try XCTUnwrap(disabledYAML["tun"] as? [String: Any])
+
+    XCTAssertEqual(disabledTun["enable"] as? Bool, false)
+    XCTAssertEqual(disabledTun["stack"] as? String, "system")
+    XCTAssertNil(disabledTun["auto-redirect"])
+  }
+
   func testURIProviderContentBuildsRuntimeConfigWithFileProvider() throws {
     let source = """
     vless://00000000-0000-0000-0000-000000000000@example.com:443?security=tls&sni=example.com#VLESS%20Node

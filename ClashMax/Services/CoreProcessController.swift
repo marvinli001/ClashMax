@@ -113,29 +113,44 @@ final class CoreProcessController: ObservableObject {
       )
 
       let launchedProcessID = process.processIdentifier
+      var startupCompleted = false
+      var startupTerminationMessage: String?
       recordStartup("Mihomo launch pid: \(launchedProcessID)")
+      runningProcess = process
       process.onTermination = { [weak self] exitCode in
         guard let self else { return }
         guard self.runningProcess?.processIdentifier == launchedProcessID else { return }
-        if self.stopWasRequested || exitCode == 0 {
+        if self.stopWasRequested || (startupCompleted && exitCode == 0) {
           self.status = .stopped
         } else {
           let tail = process.recentOutputTail(maxBytes: 4096)
-          let detail = tail.isEmpty ? "" : "\n\(tail)"
-          self.status = .crashed(message: "mihomo exited with code \(exitCode)\(detail)")
+          let message = Self.processExitMessage(exitCode: exitCode, outputTail: tail)
+          if !startupCompleted {
+            startupTerminationMessage = message
+            self.recentCoreLog = tail
+          }
+          self.status = .crashed(message: message)
         }
         self.runningProcess = nil
       }
-      runningProcess = process
+      if let startupTerminationMessage {
+        recordStartup("Mihomo exited before controller readiness: \(startupTerminationMessage)")
+        throw AppError.coreNotReady(startupTerminationMessage)
+      }
 
       try Task.checkCancellation()
       do {
         let version = try await readinessProbe.waitUntilReady(api: api)
         try Task.checkCancellation()
+        if let startupTerminationMessage {
+          recordStartup("Mihomo exited before controller readiness: \(startupTerminationMessage)")
+          throw AppError.coreNotReady(startupTerminationMessage)
+        }
         guard !stopWasRequested, runningProcess?.processIdentifier == launchedProcessID else {
           throw CancellationError()
         }
         recordStartup("Mihomo controller ready: \(api.host):\(api.port), version \(version)")
+        startupCompleted = true
         status = .running(version: version)
       } catch let appError as AppError {
         if case let .coreNotReady(message) = appError {
@@ -209,6 +224,11 @@ final class CoreProcessController: ObservableObject {
       .joined(separator: "; ")
     return "Cannot start Mihomo because required runtime ports are already in use: \(details). Quit the conflicting process or change ClashMax's controller/mixed port settings."
   }
+
+  private static func processExitMessage(exitCode: Int32, outputTail: String) -> String {
+    let detail = outputTail.isEmpty ? "" : "\n\(outputTail)"
+    return "mihomo exited with code \(exitCode)\(detail)"
+  }
 }
 
 struct MihomoRuntimePortChecker: RuntimePortChecking {
@@ -242,25 +262,38 @@ struct MihomoRuntimePortChecker: RuntimePortChecking {
   }
 
   private static func run(_ executable: String, _ arguments: [String]) -> String? {
-    let process = Process()
-    let pipe = Pipe()
-    process.executableURL = URL(fileURLWithPath: executable)
-    process.arguments = arguments
-    process.standardOutput = pipe
-    process.standardError = Pipe()
-
     do {
-      try process.run()
-      process.waitUntilExit()
+      let output = try ProcessOutputCapture.run(executable: URL(fileURLWithPath: executable), arguments: arguments)
+      guard output.terminationStatus == 0 else {
+        return nil
+      }
+      return output.text
     } catch {
       return nil
     }
+  }
+}
 
-    guard process.terminationStatus == 0 else {
-      return nil
-    }
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-    return String(data: data, encoding: .utf8)
+struct ProcessOutputCapture: Sendable {
+  let terminationStatus: Int32
+  let text: String
+
+  static func run(executable: URL, arguments: [String]) throws -> ProcessOutputCapture {
+    let process = Process()
+    let outputPipe = Pipe()
+    process.executableURL = executable
+    process.arguments = arguments
+    process.standardOutput = outputPipe
+    process.standardError = outputPipe
+
+    try process.run()
+    let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+
+    return ProcessOutputCapture(
+      terminationStatus: process.terminationStatus,
+      text: String(data: data, encoding: .utf8) ?? ""
+    )
   }
 }
 
@@ -314,37 +347,28 @@ struct MihomoOrphanProcessReaper: CoreProcessReaping {
   }
 
   private nonisolated static func processRows() -> [(pid: Int32, command: String)] {
-    let process = Process()
-    let pipe = Pipe()
-    process.executableURL = URL(fileURLWithPath: "/bin/ps")
-    process.arguments = ["-axo", "pid=,command="]
-    process.standardOutput = pipe
-    process.standardError = Pipe()
-
     do {
-      try process.run()
-      process.waitUntilExit()
+      let output = try ProcessOutputCapture.run(
+        executable: URL(fileURLWithPath: "/bin/ps"),
+        arguments: ["-axo", "pid=,command="]
+      )
+      guard output.terminationStatus == 0 else {
+        return []
+      }
+      return output.text.split(separator: "\n").compactMap { line in
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard let separator = trimmed.firstIndex(where: { $0.isWhitespace }) else {
+          return nil
+        }
+        let pidText = trimmed[..<separator]
+        let command = trimmed[separator...].trimmingCharacters(in: .whitespaces)
+        guard let pid = Int32(pidText), !command.isEmpty else {
+          return nil
+        }
+        return (pid, command)
+      }
     } catch {
       return []
-    }
-
-    guard process.terminationStatus == 0 else {
-      return []
-    }
-
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-    let output = String(data: data, encoding: .utf8) ?? ""
-    return output.split(separator: "\n").compactMap { line in
-      let trimmed = line.trimmingCharacters(in: .whitespaces)
-      guard let separator = trimmed.firstIndex(where: { $0.isWhitespace }) else {
-        return nil
-      }
-      let pidText = trimmed[..<separator]
-      let command = trimmed[separator...].trimmingCharacters(in: .whitespaces)
-      guard let pid = Int32(pidText), !command.isEmpty else {
-        return nil
-      }
-      return (pid, command)
     }
   }
 
@@ -477,7 +501,7 @@ final class FoundationProcessLauncher: CoreProcessLaunching {
     process.terminationHandler = { process in
       let exitCode = process.terminationStatus
       Task { @MainActor in
-        wrapper.onTermination?(exitCode)
+        wrapper.notifyTermination(exitCode: exitCode)
       }
     }
 
@@ -490,7 +514,15 @@ final class FoundationProcessLauncher: CoreProcessLaunching {
 final class FoundationRunningProcess: RunningCoreProcess {
   private let process: Process
   private let drain: LiveOutputDrain
-  var onTermination: ((Int32) -> Void)?
+  private var pendingTerminationStatus: Int32?
+  var onTermination: ((Int32) -> Void)? {
+    didSet {
+      if let pendingTerminationStatus {
+        self.pendingTerminationStatus = nil
+        onTermination?(pendingTerminationStatus)
+      }
+    }
+  }
 
   init(process: Process, drain: LiveOutputDrain) {
     self.process = process
@@ -508,6 +540,14 @@ final class FoundationRunningProcess: RunningCoreProcess {
 
   func recentOutputTail(maxBytes: Int) -> String {
     drain.tail(maxBytes: maxBytes)
+  }
+
+  func notifyTermination(exitCode: Int32) {
+    if let onTermination {
+      onTermination(exitCode)
+    } else {
+      pendingTerminationStatus = exitCode
+    }
   }
 }
 

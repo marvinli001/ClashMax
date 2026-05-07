@@ -77,6 +77,100 @@ final class ProfileStoreTests: XCTestCase {
     XCTAssertEqual(store.profiles.first?.subscriptionMetadata?.traffic?.download, 5)
   }
 
+  func testSubscriptionNameUsesRemoteNameThenYamlThenHostFallback() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let store = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
+    let remoteSession = URLSession(configuration: URLProtocolRecorder(
+      responseBody: "proxy-groups:\n  - name: YAML Group\n    type: select\n    proxies: [DIRECT]\nproxies:\n  - name: DIRECT\n    type: direct\n",
+      responseHeaders: ["content-disposition": "attachment; filename*=UTF-8''Elite.yaml"]
+    ).configuration)
+
+    let remoteProfile = try await store.addSubscription(
+      url: URL(string: "https://example.com/sub")!,
+      session: remoteSession
+    )
+
+    XCTAssertEqual(remoteProfile.name, "Elite")
+    XCTAssertFalse(remoteProfile.nameIsUserCustomized)
+
+    let yamlSession = URLSession(configuration: URLProtocolRecorder.configurationReturning("proxy-groups:\n  - name: YAML Group\n    type: select\n    proxies: [DIRECT]\nproxies:\n  - name: DIRECT\n    type: direct\n"))
+    let yamlProfile = try await store.addSubscription(
+      url: URL(string: "https://yaml.example/sub")!,
+      session: yamlSession
+    )
+
+    XCTAssertEqual(yamlProfile.name, "YAML Group")
+
+    let hostSession = URLSession(configuration: URLProtocolRecorder.configurationReturning("proxies:\n  - name: DIRECT\n    type: direct\n"))
+    let hostProfile = try await store.addSubscription(
+      url: URL(string: "https://host.example/sub")!,
+      session: hostSession
+    )
+
+    XCTAssertEqual(hostProfile.name, "host.example")
+  }
+
+  func testSubscriptionUpdateDoesNotOverwriteCustomizedName() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let store = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
+    let initialSession = URLSession(configuration: URLProtocolRecorder(
+      responseBody: "proxies:\n  - name: DIRECT\n    type: direct\n",
+      responseHeaders: ["content-disposition": "attachment; filename=Remote.yaml"]
+    ).configuration)
+    let profile = try await store.addSubscription(
+      url: URL(string: "https://example.com/sub.yaml")!,
+      session: initialSession
+    )
+
+    try store.rename(profile, to: "Custom")
+
+    let updateSession = URLSession(configuration: URLProtocolRecorder(
+      responseBody: "proxies:\n  - name: DIRECT\n    type: direct\n",
+      responseHeaders: ["content-disposition": "attachment; filename=Updated.yaml"]
+    ).configuration)
+    try await store.updateSubscription(profile, session: updateSession)
+
+    XCTAssertEqual(store.profiles.first?.name, "Custom")
+    XCTAssertEqual(store.profiles.first?.subscriptionMetadata?.remoteFileName, "Updated.yaml")
+  }
+
+  func testEditingSubscriptionSourceValidatesBeforeMutatingStoredURLAndConfig() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let secrets = InMemorySecretStore()
+    let store = ProfileStore(paths: fixture.paths, keychain: secrets)
+    let initialSession = URLSession(configuration: URLProtocolRecorder.configurationReturning("proxies:\n  - name: DIRECT\n    type: direct\n"))
+    let profile = try await store.addSubscription(
+      url: URL(string: "https://example.com/old")!,
+      session: initialSession
+    )
+    let originalConfig = try String(contentsOfFile: profile.originalConfigPath, encoding: .utf8)
+
+    let invalidSession = URLSession(configuration: URLProtocolRecorder.configurationReturning("rules: []\n"))
+    await XCTAssertThrowsErrorAsync {
+      try await store.updateSubscriptionSource(
+        profile,
+        url: URL(string: "https://example.com/bad")!,
+        session: invalidSession
+      )
+    }
+
+    XCTAssertEqual(try secrets.load(account: "subscription.\(profile.id.uuidString)"), "https://example.com/old")
+    XCTAssertEqual(try String(contentsOfFile: profile.originalConfigPath, encoding: .utf8), originalConfig)
+
+    let validSession = URLSession(configuration: URLProtocolRecorder(
+      responseBody: "proxies:\n  - name: DIRECT\n    type: direct\n",
+      responseHeaders: ["content-disposition": "attachment; filename=New.yaml"]
+    ).configuration)
+    try await store.updateSubscriptionSource(
+      profile,
+      url: URL(string: "https://example.com/new")!,
+      session: validSession
+    )
+
+    XCTAssertEqual(try secrets.load(account: "subscription.\(profile.id.uuidString)"), "https://example.com/new")
+    XCTAssertEqual(store.profiles.first?.name, "New")
+  }
+
   func testSubscriptionAcceptsBase64URIProviderContentAndStoresRawSource() async throws {
     let fixture = try TemporaryProfileFixture()
     let secrets = InMemorySecretStore()

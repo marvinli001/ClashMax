@@ -17,7 +17,7 @@ struct ClashMaxApp: App {
     .commands {
       CommandGroup(after: .appInfo) {
         Button("Open Main Window") {
-          NSApp.activate(ignoringOtherApps: true)
+          AppDelegate.showMainWindow()
         }
         .keyboardShortcut("0", modifiers: [.command])
       }
@@ -43,6 +43,21 @@ struct ClashMaxApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.regular)
+    if UserDefaults.standard.bool(forKey: AppModel.silentStartDefaultsKey) {
+      DispatchQueue.main.async {
+        NSApp.windows.forEach { $0.orderOut(nil) }
+      }
+    } else {
+      Self.showMainWindow()
+    }
+  }
+
+  @MainActor
+  static func showMainWindow() {
+    NSApp.setActivationPolicy(.regular)
     NSApp.activate(ignoringOtherApps: true)
+    for window in NSApp.windows where window.canBecomeMain {
+      window.makeKeyAndOrderFront(nil)
+    }
   }
 }

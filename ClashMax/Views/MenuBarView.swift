@@ -58,7 +58,7 @@ struct MenuBarView: View {
     .disabled(!(appModel.profileStore.activeProfile?.isSubscription ?? false))
 
     Button("Open Window") {
-      NSApp.activate(ignoringOtherApps: true)
+      AppDelegate.showMainWindow()
     }
 
     Divider()

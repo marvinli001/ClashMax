@@ -64,9 +64,12 @@ struct LaunchDashboardView: View {
 
       VStack(alignment: .leading, spacing: 4) {
         HStack(spacing: 8) {
-          Image(systemName: stateSymbol)
-            .foregroundStyle(stateTint)
-            .font(.system(size: 22, weight: .semibold))
+          if showsStateSymbol {
+            Image(systemName: stateSymbol)
+              .foregroundStyle(stateTint)
+              .font(.system(size: 22, weight: .semibold))
+          }
+
           Text(launchTitle)
             .font(.system(size: 34, weight: .semibold, design: .rounded))
             .lineLimit(1)
@@ -109,6 +112,15 @@ struct LaunchDashboardView: View {
       return "xmark.octagon.fill"
     default:
       return "power.circle.fill"
+    }
+  }
+
+  private var showsStateSymbol: Bool {
+    switch state {
+    case .stopped:
+      return false
+    default:
+      return true
     }
   }
 
@@ -231,10 +243,13 @@ private struct LaunchControlDeck: View {
       Text("Proxy")
         .font(.caption2)
         .foregroundStyle(.secondary)
-      ProxyRoutingModePicker(selection: Binding(
-        get: { appModel.proxyRoutingMode },
-        set: { appModel.requestProxyRoutingMode($0) }
-      ))
+      HStack(spacing: 6) {
+        ProxyRoutingModePicker(selection: Binding(
+          get: { appModel.proxyRoutingMode },
+          set: { appModel.requestProxyRoutingMode($0) }
+        ))
+        ProxyRoutingSettingsButton()
+      }
     }
     .frame(width: DashboardLayoutMetrics.proxyRoutingModePickerWidth, alignment: .leading)
   }

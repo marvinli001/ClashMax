@@ -54,11 +54,18 @@ struct ConfigNormalizer {
     tun["enable"] = overrides.tunEnabled
     tun.removeValue(forKey: "auto-redirect")
     if overrides.tunEnabled {
-      tun["stack"] = "mixed"
-      tun["auto-route"] = true
-      tun["auto-detect-interface"] = true
-      if tun["dns-hijack"] == nil {
-        tun["dns-hijack"] = ["any:53", "tcp://any:53"]
+      let settings = overrides.tunSettings
+      tun["stack"] = settings.stack.rawValue
+      tun["device"] = settings.normalizedDevice
+      tun["auto-route"] = settings.autoRoute
+      tun["strict-route"] = settings.strictRoute
+      tun["auto-detect-interface"] = settings.autoDetectInterface
+      tun["dns-hijack"] = settings.normalizedDNSHijack
+      tun["mtu"] = settings.normalizedMTU
+      if !settings.normalizedRouteExcludeAddresses.isEmpty {
+        tun["route-exclude-address"] = settings.normalizedRouteExcludeAddresses
+      } else {
+        tun.removeValue(forKey: "route-exclude-address")
       }
     }
     root["tun"] = tun

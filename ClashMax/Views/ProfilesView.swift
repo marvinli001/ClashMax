@@ -2,10 +2,10 @@ import SwiftUI
 
 struct ProfilesView: View {
   @EnvironmentObject private var appModel: AppModel
-  @State private var subscriptionName = ""
   @State private var subscriptionURL = ""
   @State private var profileBeingEdited: Profile?
   @State private var editProfileName = ""
+  @State private var editSubscriptionURL = ""
   @State private var profilePendingDeletion: Profile?
 
   var body: some View {
@@ -29,63 +29,27 @@ struct ProfilesView: View {
             message: "Profiles stay unchanged on disk; ClashMax generates a runtime copy when starting."
           )
         } else {
-            Table(appModel.profileStore.profiles, selection: profileSelection) {
-              TableColumn("Name") { profile in
-                VStack(alignment: .leading, spacing: 2) {
-                  Text(profile.name)
-                  if let remoteFileName = profile.subscriptionMetadata?.remoteFileName {
-                    Text(remoteFileName)
-                      .font(.caption)
-                      .foregroundStyle(.secondary)
-                      .lineLimit(1)
-                  }
-                }
-              }
-            .width(min: 180, ideal: 260)
-
-            TableColumn("Source") { profile in
-              Text(profile.source.displayName)
-                .foregroundStyle(.secondary)
-            }
-            .width(min: 96, ideal: 120, max: 140)
-
-            TableColumn("Usage") { profile in
-              Text(profile.subscriptionMetadata?.trafficSummary ?? "-")
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            }
-            .width(min: 140, ideal: 180, max: 220)
-
-            TableColumn("Expires") { profile in
-              if let expireAt = profile.subscriptionMetadata?.traffic?.expireAt {
-                Text(expireAt, style: .date)
-                  .foregroundStyle(.secondary)
-              } else {
-                Text("-")
-                  .foregroundStyle(.secondary)
+          ScrollView {
+            LazyVStack(alignment: .leading, spacing: 10) {
+              ForEach(appModel.profileStore.profiles) { profile in
+                ProfileCard(
+                  profile: profile,
+                  isActive: appModel.profileStore.activeProfileID == profile.id,
+                  isUpdating: appModel.updatingProfileIDs.contains(profile.id),
+                  sourceURLString: appModel.profileStore.subscriptionURLString(for: profile),
+                  selectAction: { appModel.selectProfile(profile) },
+                  editAction: { beginEditing(profile) },
+                  updateAction: {
+                    Task { @MainActor in
+                      await appModel.updateSubscription(profile)
+                    }
+                  },
+                  deleteAction: { profilePendingDeletion = profile }
+                )
               }
             }
-            .width(min: 96, ideal: 116, max: 140)
-
-            TableColumn("Interval") { profile in
-              Text(updateIntervalLabel(profile.subscriptionMetadata?.updateIntervalMinutes))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            }
-            .width(min: 84, ideal: 104, max: 128)
-
-            TableColumn("Updated") { profile in
-              Text(profile.updatedAt, style: .date)
-                .foregroundStyle(.secondary)
-            }
-            .width(min: 96, ideal: 120, max: 140)
-
-            TableColumn("Actions") { profile in
-              profileActions(profile)
-            }
-            .width(min: 220, ideal: 248, max: 280)
+            .padding(.vertical, 2)
           }
-          .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
 
         if let message = appModel.profileOperationMessage {
@@ -105,9 +69,13 @@ struct ProfilesView: View {
     }
     .sheet(item: $profileBeingEdited) { profile in
       ProfileEditSheet(
-        profile: profile,
+        profile: currentProfile(matching: profile) ?? profile,
         name: $editProfileName,
+        subscriptionURL: $editSubscriptionURL,
         onCancel: closeEditSheet,
+        onResetRemoteName: {
+          resetRemoteName(profile)
+        },
         onSave: {
           saveProfileEdits(profile)
         }
@@ -130,12 +98,12 @@ struct ProfilesView: View {
       VStack(alignment: .leading, spacing: 8) {
         ViewThatFits(in: .horizontal) {
           HStack(spacing: 10) {
-            subscriptionFields
+            subscriptionField
             addSubscriptionButton
           }
 
           VStack(alignment: .leading, spacing: 10) {
-            subscriptionFields
+            subscriptionField
             addSubscriptionButton
           }
         }
@@ -149,24 +117,19 @@ struct ProfilesView: View {
     }
   }
 
-  private var subscriptionFields: some View {
-    HStack(spacing: 10) {
-      TextField("Name", text: $subscriptionName)
-        .frame(width: 180)
-      TextField("Subscription URL", text: $subscriptionURL)
-        .frame(minWidth: 260)
-    }
-    .disabled(appModel.isAddingSubscription)
+  private var subscriptionField: some View {
+    TextField("Subscription URL", text: $subscriptionURL)
+      .textFieldStyle(.roundedBorder)
+      .frame(minWidth: 320)
+      .disabled(appModel.isAddingSubscription)
   }
 
   private var addSubscriptionButton: some View {
     Button {
-      let name = subscriptionName
       let urlString = subscriptionURL
       Task { @MainActor in
-        let didAdd = await appModel.addSubscription(name: name, urlString: urlString)
+        let didAdd = await appModel.addSubscription(urlString: urlString)
         if didAdd {
-          subscriptionName = ""
           subscriptionURL = ""
         }
       }
@@ -197,68 +160,6 @@ struct ProfilesView: View {
     .transition(.opacity)
   }
 
-  private var profileSelection: Binding<Profile.ID?> {
-    Binding(
-      get: { appModel.profileStore.activeProfileID },
-      set: { id in
-        if let id, let profile = appModel.profileStore.profiles.first(where: { $0.id == id }) {
-          appModel.selectProfile(profile)
-        }
-      }
-    )
-  }
-
-  private func profileActions(_ profile: Profile) -> some View {
-    let isUpdating = appModel.updatingProfileIDs.contains(profile.id)
-
-    return HStack(spacing: 6) {
-      Button {
-        beginEditing(profile)
-      } label: {
-        Label("Edit", systemImage: "pencil")
-      }
-      .help("Edit profile")
-
-      Button {
-        Task { @MainActor in
-          await appModel.updateSubscription(profile)
-        }
-      } label: {
-        HStack(spacing: 5) {
-          if isUpdating {
-            ProgressView()
-              .controlSize(.small)
-          } else {
-            Image(systemName: "arrow.triangle.2.circlepath")
-          }
-          Text(isUpdating ? "Updating" : "Update")
-        }
-      }
-      .disabled(!profile.isSubscription || isUpdating)
-      .help(profile.isSubscription ? "Refresh nodes from the subscription URL" : "Only subscription profiles can be updated")
-
-      Button(role: .destructive) {
-        profilePendingDeletion = profile
-      } label: {
-        Label("Delete", systemImage: "trash")
-      }
-      .help("Delete profile")
-    }
-    .buttonStyle(.borderless)
-    .controlSize(.small)
-  }
-
-  private func updateIntervalLabel(_ minutes: Int?) -> String {
-    guard let minutes, minutes > 0 else { return "-" }
-    if minutes % 1_440 == 0 {
-      return "\(minutes / 1_440)d"
-    }
-    if minutes % 60 == 0 {
-      return "\(minutes / 60)h"
-    }
-    return "\(minutes)m"
-  }
-
   private var deleteConfirmationPresented: Binding<Bool> {
     Binding(
       get: { profilePendingDeletion != nil },
@@ -278,24 +179,240 @@ struct ProfilesView: View {
 
   private func beginEditing(_ profile: Profile) {
     editProfileName = profile.name
+    editSubscriptionURL = appModel.profileStore.subscriptionURLString(for: profile) ?? ""
     profileBeingEdited = profile
   }
 
   private func closeEditSheet() {
     profileBeingEdited = nil
     editProfileName = ""
+    editSubscriptionURL = ""
+  }
+
+  private func currentProfile(matching profile: Profile) -> Profile? {
+    appModel.profileStore.profiles.first { $0.id == profile.id }
   }
 
   private func saveProfileEdits(_ profile: Profile) {
-    appModel.renameProfile(profile, to: editProfileName)
+    let trimmedName = editProfileName.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedName.isEmpty else { return }
+    let trimmedURL = editSubscriptionURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    let originalURL = appModel.profileStore.subscriptionURLString(for: profile)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+    if profile.isSubscription, trimmedURL != originalURL {
+      Task { @MainActor in
+        let didUpdate = await appModel.updateSubscriptionSource(profile, urlString: trimmedURL)
+        if didUpdate {
+          if let updated = currentProfile(matching: profile), updated.name != trimmedName {
+            appModel.renameProfile(updated, to: trimmedName)
+          }
+          closeEditSheet()
+        }
+      }
+      return
+    }
+
+    if let updated = currentProfile(matching: profile), updated.name != trimmedName {
+      appModel.renameProfile(updated, to: trimmedName)
+    }
     closeEditSheet()
+  }
+
+  private func resetRemoteName(_ profile: Profile) {
+    appModel.resetSubscriptionName(profile)
+    if let updated = currentProfile(matching: profile) {
+      editProfileName = updated.name
+    }
+  }
+}
+
+private struct ProfileCard: View {
+  let profile: Profile
+  let isActive: Bool
+  let isUpdating: Bool
+  let sourceURLString: String?
+  let selectAction: () -> Void
+  let editAction: () -> Void
+  let updateAction: () -> Void
+  let deleteAction: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      ViewThatFits(in: .horizontal) {
+        HStack(alignment: .top, spacing: 14) {
+          titleBlock
+          Spacer(minLength: 12)
+          actionButtons
+        }
+
+        VStack(alignment: .leading, spacing: 12) {
+          titleBlock
+          actionButtons
+        }
+      }
+
+      ProfileMetricsRow(profile: profile, sourceURLString: sourceURLString)
+    }
+    .padding(14)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .dashboardCard(interactive: true)
+    .overlay(alignment: .leading) {
+      RoundedRectangle(cornerRadius: 2, style: .continuous)
+        .fill(isActive ? Color.accentColor : Color.clear)
+        .frame(width: 3)
+        .padding(.vertical, 8)
+    }
+    .contentShape(Rectangle())
+    .onTapGesture(perform: selectAction)
+  }
+
+  private var titleBlock: some View {
+    HStack(alignment: .top, spacing: 10) {
+      Image(systemName: profile.isSubscription ? "link.badge.plus" : "doc.text")
+        .font(.system(size: 16, weight: .semibold))
+        .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
+        .frame(width: 22)
+
+      VStack(alignment: .leading, spacing: 3) {
+        HStack(spacing: 8) {
+          Text(profile.name)
+            .font(.headline)
+            .lineLimit(1)
+            .minimumScaleFactor(0.76)
+          if isActive {
+            Text("Active")
+              .font(.caption2.weight(.semibold))
+              .foregroundStyle(.white)
+              .padding(.horizontal, 6)
+              .padding(.vertical, 2)
+              .background(Color.accentColor, in: Capsule())
+          }
+        }
+
+        Text(sourceLine)
+          .font(.callout)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+          .truncationMode(.middle)
+      }
+    }
+  }
+
+  private var actionButtons: some View {
+    HStack(spacing: 6) {
+      Button {
+        editAction()
+      } label: {
+        Label("Edit", systemImage: "pencil")
+      }
+      .help("Edit profile")
+
+      Button {
+        updateAction()
+      } label: {
+        HStack(spacing: 5) {
+          if isUpdating {
+            ProgressView()
+              .controlSize(.small)
+          } else {
+            Image(systemName: "arrow.triangle.2.circlepath")
+          }
+          Text(isUpdating ? "Updating" : "Update")
+        }
+      }
+      .disabled(!profile.isSubscription || isUpdating)
+      .help(profile.isSubscription ? "Refresh nodes from the subscription URL" : "Only subscription profiles can be updated")
+
+      Button(role: .destructive) {
+        deleteAction()
+      } label: {
+        Label("Delete", systemImage: "trash")
+      }
+      .help("Delete profile")
+    }
+    .buttonStyle(.borderless)
+    .controlSize(.small)
+  }
+
+  private var sourceLine: String {
+    if let sourceURLString, let url = URL(string: sourceURLString), let host = url.host(percentEncoded: false) {
+      return "\(host) - \(sourceURLString)"
+    }
+    switch profile.source {
+    case let .localFile(originalPath):
+      return originalPath ?? "Local YAML"
+    case .subscription:
+      return "Subscription URL unavailable"
+    }
+  }
+}
+
+private struct ProfileMetricsRow: View {
+  let profile: Profile
+  let sourceURLString: String?
+
+  var body: some View {
+    ViewThatFits(in: .horizontal) {
+      HStack(spacing: 8) {
+        metric("Source", profile.source.displayName, "externaldrive")
+        metric("Usage", profile.subscriptionMetadata?.trafficSummary ?? "-", "chart.bar")
+        metric("Expires", expiresLabel, "calendar")
+        metric("Interval", updateIntervalLabel(profile.subscriptionMetadata?.updateIntervalMinutes), "clock.arrow.circlepath")
+        metric("Updated", profile.updatedAt.formatted(date: .abbreviated, time: .omitted), "arrow.triangle.2.circlepath")
+      }
+
+      LazyVGrid(columns: [GridItem(.adaptive(minimum: 132), spacing: 8)], alignment: .leading, spacing: 8) {
+        metric("Source", profile.source.displayName, "externaldrive")
+        metric("Usage", profile.subscriptionMetadata?.trafficSummary ?? "-", "chart.bar")
+        metric("Expires", expiresLabel, "calendar")
+        metric("Interval", updateIntervalLabel(profile.subscriptionMetadata?.updateIntervalMinutes), "clock.arrow.circlepath")
+        metric("Updated", profile.updatedAt.formatted(date: .abbreviated, time: .omitted), "arrow.triangle.2.circlepath")
+      }
+    }
+  }
+
+  private func metric(_ title: String, _ value: String, _ symbolName: String) -> some View {
+    HStack(spacing: 6) {
+      Image(systemName: symbolName)
+        .foregroundStyle(.secondary)
+        .frame(width: 14)
+      VStack(alignment: .leading, spacing: 1) {
+        Text(title)
+          .font(.caption2)
+          .foregroundStyle(.tertiary)
+        Text(value)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+          .minimumScaleFactor(0.72)
+      }
+    }
+    .frame(minWidth: 110, alignment: .leading)
+  }
+
+  private var expiresLabel: String {
+    guard let expireAt = profile.subscriptionMetadata?.traffic?.expireAt else { return "-" }
+    return expireAt.formatted(date: .abbreviated, time: .omitted)
+  }
+
+  private func updateIntervalLabel(_ minutes: Int?) -> String {
+    guard let minutes, minutes > 0 else { return "-" }
+    if minutes % 1_440 == 0 {
+      return "\(minutes / 1_440)d"
+    }
+    if minutes % 60 == 0 {
+      return "\(minutes / 60)h"
+    }
+    return "\(minutes)m"
   }
 }
 
 private struct ProfileEditSheet: View {
   let profile: Profile
   @Binding var name: String
+  @Binding var subscriptionURL: String
   let onCancel: () -> Void
+  let onResetRemoteName: () -> Void
   let onSave: () -> Void
   @FocusState private var isNameFocused: Bool
 
@@ -303,12 +420,16 @@ private struct ProfileEditSheet: View {
     name.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
+  private var trimmedSubscriptionURL: String {
+    subscriptionURL.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
   var body: some View {
     VStack(alignment: .leading, spacing: 18) {
       VStack(alignment: .leading, spacing: 4) {
         Text("Edit Profile")
           .font(.title3.weight(.semibold))
-        Text(profile.name)
+        Text(profile.source.displayName)
           .font(.callout)
           .foregroundStyle(.secondary)
           .lineLimit(1)
@@ -318,14 +439,31 @@ private struct ProfileEditSheet: View {
         TextField("Name", text: $name)
           .focused($isNameFocused)
           .onSubmit {
-            if !trimmedName.isEmpty {
+            if canSave {
               onSave()
             }
           }
 
-        LabeledContent("Source") {
-          Text(profile.source.displayName)
-            .foregroundStyle(.secondary)
+        if profile.isSubscription {
+          TextField("Subscription URL", text: $subscriptionURL)
+            .textFieldStyle(.roundedBorder)
+            .onSubmit {
+              if canSave {
+                onSave()
+              }
+            }
+
+          Button {
+            onResetRemoteName()
+          } label: {
+            Label("Restore Remote Name", systemImage: "arrow.counterclockwise")
+          }
+          .disabled(!profile.nameIsUserCustomized)
+        } else {
+          LabeledContent("Source") {
+            Text(profile.source.displayName)
+              .foregroundStyle(.secondary)
+          }
         }
       }
 
@@ -337,13 +475,17 @@ private struct ProfileEditSheet: View {
           .keyboardShortcut(.cancelAction)
         Button("Save", action: onSave)
           .keyboardShortcut(.defaultAction)
-          .disabled(trimmedName.isEmpty)
+          .disabled(!canSave)
       }
     }
     .padding(20)
-    .frame(width: 420)
+    .frame(width: 460)
     .onAppear {
       isNameFocused = true
     }
+  }
+
+  private var canSave: Bool {
+    !trimmedName.isEmpty && (!profile.isSubscription || !trimmedSubscriptionURL.isEmpty)
   }
 }

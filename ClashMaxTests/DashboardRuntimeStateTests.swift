@@ -213,6 +213,149 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertFalse(ProxiesPageActionState.canRefresh(isStarting: true))
   }
 
+  func testDeveloperModeDefaultsOffAndPersists() throws {
+    let paths = try Self.makeRuntimePaths()
+    let suiteName = "ClashMaxDeveloperModeTests-\(UUID().uuidString)"
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+    defaults.removePersistentDomain(forName: suiteName)
+    let firstModel = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: defaults
+    )
+
+    XCTAssertFalse(firstModel.developerMode)
+
+    firstModel.developerMode = true
+
+    let secondModel = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: defaults
+    )
+
+    XCTAssertTrue(secondModel.developerMode)
+  }
+
+  func testLaunchSettingsUseMainAppLoginServiceAndPersistSilentStart() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let suiteName = "ClashMaxLaunchSettingsTests-\(UUID().uuidString)"
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+    defaults.removePersistentDomain(forName: suiteName)
+    let service = FakeLoginItemService(status: .notRegistered)
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      loginItemService: service,
+      defaults: defaults
+    )
+
+    XCTAssertFalse(model.launchSettings.launchAtLogin)
+
+    await model.updateLaunchAtLogin(true)
+    XCTAssertEqual(service.registerCount, 1)
+    XCTAssertTrue(model.launchSettings.launchAtLogin)
+
+    model.setSilentStart(true)
+    XCTAssertTrue(model.launchSettings.silentStart)
+
+    model.openLoginItemsSettings()
+    XCTAssertEqual(service.openSettingsCount, 1)
+
+    let reloaded = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      loginItemService: FakeLoginItemService(status: .enabled),
+      defaults: defaults
+    )
+    XCTAssertTrue(reloaded.launchSettings.silentStart)
+  }
+
+  func testSystemProxySettingsApplyCustomHostBypassAndStopGuard() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+    let controller = SystemProxyController(commandRunner: commandRunner)
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      systemProxyController: controller,
+      defaults: defaults
+    )
+    var settings = SystemProxySettings.default
+    settings.proxyHost = "0.0.0.0"
+    settings.useDefaultBypass = false
+    settings.customBypassDomains = ["localhost", "*.corp"]
+    settings.guardEnabled = true
+    settings.guardIntervalSeconds = 5
+
+    XCTAssertTrue(model.updateSystemProxySettings(settings))
+    model.setSystemProxyEnabled(true)
+
+    for _ in 0..<40 where !model.systemProxyEnabled || controller.guardState != .active {
+      await Task.yield()
+    }
+
+    XCTAssertTrue(model.systemProxyEnabled)
+    XCTAssertEqual(controller.guardState, .active)
+    XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setwebproxy Wi-Fi 0.0.0.0 7890"))
+    XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setproxybypassdomains Wi-Fi localhost *.corp"))
+
+    model.setSystemProxyEnabled(false)
+
+    for _ in 0..<40 where model.systemProxyEnabled || controller.guardState != .idle {
+      await Task.yield()
+    }
+
+    XCTAssertFalse(model.systemProxyEnabled)
+    XCTAssertEqual(controller.guardState, .idle)
+  }
+
+  func testProxyDelayDisplayLabelsAndTones() {
+    let noDelay = ProxyDelayDisplay(delay: nil)
+    XCTAssertEqual(noDelay.label, "No delay")
+    XCTAssertEqual(noDelay.tone, .unavailable)
+
+    let fast = ProxyDelayDisplay(delay: 100)
+    XCTAssertEqual(fast.label, "100 ms")
+    XCTAssertEqual(fast.tone, .fast)
+
+    XCTAssertEqual(ProxyDelayDisplay(delay: 101).tone, .good)
+    XCTAssertEqual(ProxyDelayDisplay(delay: 150).tone, .good)
+    XCTAssertEqual(ProxyDelayDisplay(delay: 151).tone, .moderate)
+    XCTAssertEqual(ProxyDelayDisplay(delay: 250).tone, .moderate)
+    XCTAssertEqual(ProxyDelayDisplay(delay: 251).tone, .slow)
+  }
+
+  func testProxyPreviewNoticeRequiresDeveloperMode() {
+    XCTAssertNil(ProxyPreviewNoticeKind.resolve(
+      developerMode: false,
+      previewRuntimeActive: true,
+      isShowingProxyPreview: false
+    ))
+    XCTAssertNil(ProxyPreviewNoticeKind.resolve(
+      developerMode: false,
+      previewRuntimeActive: false,
+      isShowingProxyPreview: true
+    ))
+    XCTAssertEqual(
+      ProxyPreviewNoticeKind.resolve(
+        developerMode: true,
+        previewRuntimeActive: true,
+        isShowingProxyPreview: false
+      ),
+      .previewRuntime
+    )
+    XCTAssertEqual(
+      ProxyPreviewNoticeKind.resolve(
+        developerMode: true,
+        previewRuntimeActive: false,
+        isShowingProxyPreview: true
+      ),
+      .offlinePreview
+    )
+  }
+
   func testDashboardProxySelectionUsesPreferredGroupAndSelectedNode() throws {
     let groups = [
       ProxyGroup(
@@ -570,7 +713,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
       paths: paths,
       profileStore: store,
       coreController: controller,
-      systemProxyController: SystemProxyController(commandRunner: commandRunner)
+      systemProxyController: SystemProxyController(commandRunner: commandRunner),
+      defaults: try Self.makeIsolatedDefaults()
     )
 
     model.start()
@@ -645,7 +789,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
       paths: paths,
       profileStore: store,
       coreController: controller,
-      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs()))
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      defaults: try Self.makeIsolatedDefaults()
     )
 
     model.start()
@@ -889,6 +1034,13 @@ final class DashboardRuntimeStateTests: XCTestCase {
     }
     return paths
   }
+
+  private static func makeIsolatedDefaults() throws -> UserDefaults {
+    let suiteName = "ClashMaxDashboardTests-\(UUID().uuidString)"
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+    defaults.removePersistentDomain(forName: suiteName)
+    return defaults
+  }
 }
 
 private actor RecordingMihomoController: MihomoAPIControlling {
@@ -1035,6 +1187,31 @@ private final class StaticHelperService: HelperServiceManaging {
   func register() throws {}
   func unregister() async throws {}
   func openSystemSettingsLoginItems() {}
+}
+
+private final class FakeLoginItemService: LoginItemManaging {
+  var status: SMAppService.Status
+  private(set) var registerCount = 0
+  private(set) var unregisterCount = 0
+  private(set) var openSettingsCount = 0
+
+  init(status: SMAppService.Status) {
+    self.status = status
+  }
+
+  func register() throws {
+    registerCount += 1
+    status = .enabled
+  }
+
+  func unregister() async throws {
+    unregisterCount += 1
+    status = .notRegistered
+  }
+
+  func openSystemSettingsLoginItems() {
+    openSettingsCount += 1
+  }
 }
 
 private struct StaticFingerprintProvider: HelperFingerprintProviding {

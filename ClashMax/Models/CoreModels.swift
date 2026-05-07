@@ -48,15 +48,28 @@ extension ProfileSource {
 struct Profile: Identifiable, Codable, Equatable {
   var id: UUID
   var name: String
+  var nameIsUserCustomized: Bool
   var source: ProfileSource
   var originalConfigPath: String
   var subscriptionMetadata: SubscriptionMetadata?
   var createdAt: Date
   var updatedAt: Date
 
+  private enum CodingKeys: String, CodingKey {
+    case id
+    case name
+    case nameIsUserCustomized
+    case source
+    case originalConfigPath
+    case subscriptionMetadata
+    case createdAt
+    case updatedAt
+  }
+
   init(
     id: UUID = UUID(),
     name: String,
+    nameIsUserCustomized: Bool = true,
     source: ProfileSource,
     originalConfigPath: String,
     subscriptionMetadata: SubscriptionMetadata? = nil,
@@ -65,17 +78,36 @@ struct Profile: Identifiable, Codable, Equatable {
   ) {
     self.id = id
     self.name = name
+    self.nameIsUserCustomized = nameIsUserCustomized
     self.source = source
     self.originalConfigPath = originalConfigPath
     self.subscriptionMetadata = subscriptionMetadata
     self.createdAt = createdAt
     self.updatedAt = updatedAt
   }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(UUID.self, forKey: .id)
+    name = try container.decode(String.self, forKey: .name)
+    source = try container.decode(ProfileSource.self, forKey: .source)
+    originalConfigPath = try container.decode(String.self, forKey: .originalConfigPath)
+    subscriptionMetadata = try container.decodeIfPresent(SubscriptionMetadata.self, forKey: .subscriptionMetadata)
+    createdAt = try container.decode(Date.self, forKey: .createdAt)
+    updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+    nameIsUserCustomized = try container.decodeIfPresent(Bool.self, forKey: .nameIsUserCustomized) ?? !source.isSubscription
+  }
 }
 
 extension Profile {
   var isSubscription: Bool {
-    if case .subscription = source { return true }
+    source.isSubscription
+  }
+}
+
+extension ProfileSource {
+  var isSubscription: Bool {
+    if case .subscription = self { return true }
     return false
   }
 }
@@ -127,6 +159,31 @@ struct RuntimeOverrides: Codable, Equatable {
   var logLevel: String
   var dnsEnabled: Bool?
   var tunEnabled: Bool
+  var tunSettings: TunSettings
+
+  init(
+    mixedPort: Int,
+    externalControllerHost: String,
+    externalControllerPort: Int,
+    secret: String,
+    allowLan: Bool,
+    mode: RunMode,
+    logLevel: String,
+    dnsEnabled: Bool?,
+    tunEnabled: Bool,
+    tunSettings: TunSettings = .default
+  ) {
+    self.mixedPort = mixedPort
+    self.externalControllerHost = externalControllerHost
+    self.externalControllerPort = externalControllerPort
+    self.secret = secret
+    self.allowLan = allowLan
+    self.mode = mode
+    self.logLevel = logLevel
+    self.dnsEnabled = dnsEnabled
+    self.tunEnabled = tunEnabled
+    self.tunSettings = tunSettings
+  }
 
   static func defaultForLaunch(secret: String = UUID().uuidString.replacingOccurrences(of: "-", with: "")) -> RuntimeOverrides {
     RuntimeOverrides(
@@ -138,13 +195,179 @@ struct RuntimeOverrides: Codable, Equatable {
       mode: .rule,
       logLevel: "info",
       dnsEnabled: nil,
-      tunEnabled: false
+      tunEnabled: false,
+      tunSettings: .default
     )
   }
 
   var endpoint: CoreAPIEndpoint {
     CoreAPIEndpoint(host: externalControllerHost, port: externalControllerPort, secret: secret)
   }
+}
+
+struct SystemProxySettings: Codable, Equatable {
+  static let defaultProxyHost = "127.0.0.1"
+  static let defaultGuardIntervalSeconds = 30
+  static let minimumGuardIntervalSeconds = 5
+  static let maximumGuardIntervalSeconds = 600
+  static let defaultBypassDomains = [
+    "127.0.0.1",
+    "localhost",
+    "::1",
+    "*.local",
+    "*.crashlytics.com",
+    "<local>",
+    "169.254/16",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16"
+  ]
+
+  var proxyHost: String
+  var customBypassDomains: [String]
+  var useDefaultBypass: Bool
+  var validateBypass: Bool
+  var guardEnabled: Bool
+  var guardIntervalSeconds: Int
+
+  static let `default` = SystemProxySettings(
+    proxyHost: defaultProxyHost,
+    customBypassDomains: [],
+    useDefaultBypass: true,
+    validateBypass: true,
+    guardEnabled: false,
+    guardIntervalSeconds: defaultGuardIntervalSeconds
+  )
+
+  var normalizedProxyHost: String {
+    let trimmed = proxyHost.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? Self.defaultProxyHost : trimmed
+  }
+
+  var normalizedGuardIntervalSeconds: Int {
+    min(max(guardIntervalSeconds, Self.minimumGuardIntervalSeconds), Self.maximumGuardIntervalSeconds)
+  }
+
+  var effectiveBypassDomains: [String] {
+    var domains: [String] = []
+    if useDefaultBypass {
+      domains.append(contentsOf: Self.defaultBypassDomains)
+    }
+    domains.append(contentsOf: customBypassDomains)
+    return Self.normalizedBypassDomains(domains)
+  }
+
+  var validationError: String? {
+    guard validateBypass else { return nil }
+    if normalizedProxyHost.contains(" ") {
+      return "Proxy host cannot contain spaces."
+    }
+    if let invalid = customBypassDomains.first(where: { !Self.isValidBypassDomain($0) }) {
+      return "Invalid bypass entry: \(invalid)"
+    }
+    return nil
+  }
+
+  static func normalizedBypassDomains(_ domains: [String]) -> [String] {
+    var seen = Set<String>()
+    return domains.compactMap { domain in
+      let trimmed = domain.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty else { return nil }
+      let key = trimmed.lowercased()
+      guard !seen.contains(key) else { return nil }
+      seen.insert(key)
+      return trimmed
+    }
+  }
+
+  static func isValidBypassDomain(_ value: String) -> Bool {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return false }
+    if trimmed == "<local>" { return true }
+    if trimmed.contains(" ") { return false }
+    if trimmed.contains("/") {
+      let pieces = trimmed.split(separator: "/", maxSplits: 1).map(String.init)
+      guard pieces.count == 2, let prefix = Int(pieces[1]), (0...128).contains(prefix) else { return false }
+      return !pieces[0].isEmpty
+    }
+    return trimmed.range(of: #"^[A-Za-z0-9*_.:-]+$"#, options: .regularExpression) != nil
+  }
+}
+
+enum TunStack: String, Codable, CaseIterable, Identifiable {
+  case system
+  case gvisor
+  case mixed
+
+  var id: String { rawValue }
+
+  var displayName: String {
+    switch self {
+    case .system: "System"
+    case .gvisor: "GVisor"
+    case .mixed: "Mixed"
+    }
+  }
+}
+
+struct TunSettings: Codable, Equatable {
+  static let defaultDevice = "utun1024"
+  static let defaultDNSHijack = ["any:53"]
+  static let defaultMTU = 1500
+
+  var stack: TunStack
+  var device: String
+  var autoRoute: Bool
+  var strictRoute: Bool
+  var autoDetectInterface: Bool
+  var dnsHijack: [String]
+  var mtu: Int
+  var routeExcludeAddresses: [String]
+
+  static let `default` = TunSettings(
+    stack: .mixed,
+    device: defaultDevice,
+    autoRoute: true,
+    strictRoute: false,
+    autoDetectInterface: true,
+    dnsHijack: defaultDNSHijack,
+    mtu: defaultMTU,
+    routeExcludeAddresses: []
+  )
+
+  var normalizedDevice: String {
+    let trimmed = device.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? Self.defaultDevice : trimmed
+  }
+
+  var normalizedDNSHijack: [String] {
+    normalizedList(dnsHijack, fallback: Self.defaultDNSHijack)
+  }
+
+  var normalizedRouteExcludeAddresses: [String] {
+    normalizedList(routeExcludeAddresses, fallback: [])
+  }
+
+  var normalizedMTU: Int {
+    min(max(mtu, 576), 9_000)
+  }
+
+  private func normalizedList(_ values: [String], fallback: [String]) -> [String] {
+    let normalized = SystemProxySettings.normalizedBypassDomains(values)
+    return normalized.isEmpty ? fallback : normalized
+  }
+}
+
+struct LaunchSettings: Equatable {
+  var launchAtLogin: Bool
+  var silentStart: Bool
+  var statusMessage: String
+
+  static let `default` = LaunchSettings(
+    launchAtLogin: false,
+    silentStart: false,
+    statusMessage: "Launch at login is not registered."
+  )
 }
 
 struct CoreAPIEndpoint: Codable, Equatable {
@@ -265,6 +488,20 @@ struct SubscriptionMetadata: Codable, Equatable {
   var updateIntervalMinutes: Int?
   var webPageURL: URL?
   var lastFetchedAt: Date?
+
+  init(
+    traffic: SubscriptionTrafficUsage? = nil,
+    remoteFileName: String? = nil,
+    updateIntervalMinutes: Int? = nil,
+    webPageURL: URL? = nil,
+    lastFetchedAt: Date? = nil
+  ) {
+    self.traffic = traffic
+    self.remoteFileName = remoteFileName
+    self.updateIntervalMinutes = updateIntervalMinutes
+    self.webPageURL = webPageURL
+    self.lastFetchedAt = lastFetchedAt
+  }
 
   var trafficSummary: String? {
     guard let traffic else { return nil }
