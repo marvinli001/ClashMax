@@ -11,6 +11,9 @@ struct ClashMaxApp: App {
       ContentView()
         .environmentObject(appModel)
         .frame(minWidth: 980, minHeight: 660)
+        .onAppear {
+          appDelegate.appModel = appModel
+        }
     }
     .defaultSize(width: 1180, height: 760)
     .defaultLaunchBehavior(.presented)
@@ -26,6 +29,9 @@ struct ClashMaxApp: App {
     MenuBarExtra {
       MenuBarView()
         .environmentObject(appModel)
+        .onAppear {
+          appDelegate.appModel = appModel
+        }
     } label: {
       HStack(spacing: 4) {
         Image(systemName: appModel.isRunning ? "shield.lefthalf.filled" : "shield")
@@ -36,11 +42,18 @@ struct ClashMaxApp: App {
     Settings {
       SettingsView()
         .environmentObject(appModel)
+        .onAppear {
+          appDelegate.appModel = appModel
+        }
     }
   }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+  weak var appModel: AppModel?
+  private var terminationCleanupInFlight = false
+
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.regular)
     if UserDefaults.standard.bool(forKey: AppModel.silentStartDefaultsKey) {
@@ -50,6 +63,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     } else {
       Self.showMainWindow()
     }
+  }
+
+  func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    guard let appModel, appModel.needsTerminationCleanup, !terminationCleanupInFlight else {
+      return .terminateNow
+    }
+
+    terminationCleanupInFlight = true
+    Task { @MainActor [weak self] in
+      await appModel.prepareForTermination()
+      self?.terminationCleanupInFlight = false
+      sender.reply(toApplicationShouldTerminate: true)
+    }
+    return .terminateLater
   }
 
   @MainActor

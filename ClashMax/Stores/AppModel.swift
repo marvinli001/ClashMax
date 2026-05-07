@@ -72,6 +72,7 @@ final class AppModel: ObservableObject {
   private static let previewSelectionsDefaultsKey = "io.github.clashmax.previewSelections"
   private static let developerModeDefaultsKey = "io.github.clashmax.developerMode"
   private static let systemProxySettingsDefaultsKey = "io.github.clashmax.systemProxySettings"
+  private static let systemProxyManagedDefaultsKey = "io.github.clashmax.systemProxyManaged"
   private static let tunSettingsDefaultsKey = "io.github.clashmax.tunSettings"
   static let silentStartDefaultsKey = "io.github.clashmax.silentStart"
   static let startWallClockSeconds: TimeInterval = 22
@@ -129,6 +130,7 @@ final class AppModel: ObservableObject {
     ) ?? .default
     overrides.tunSettings = tunSettings
     refreshLaunchSettings()
+    recoverDanglingSystemProxyIfNeeded()
     refreshProfilePreview()
     loadPreviewSelectionsForActiveProfile()
   }
@@ -587,8 +589,9 @@ final class AppModel: ObservableObject {
     guard proxyRoutingMode != mode else { return }
     if mode == .tun, systemProxyEnabled {
       stopSystemProxyGuard()
-      Task { [systemProxyController] in
-        try? await systemProxyController.restore()
+      Task { @MainActor [weak self] in
+        guard let self else { return }
+        try? await restoreSystemProxyState(disableWhenNoSnapshot: true)
       }
       systemProxyEnabled = false
     }
@@ -896,11 +899,13 @@ final class AppModel: ObservableObject {
           systemProxyEnabled = true
           try await activateSystemProxyGuardIfNeeded()
         } else {
-          stopSystemProxyGuard()
-          try await systemProxyController.restore()
+          try await restoreSystemProxyState(disableWhenNoSnapshot: true)
           systemProxyEnabled = false
         }
       } catch {
+        if !systemProxyController.hasManagedSystemProxyState {
+          markSystemProxyManaged(false)
+        }
         lastError = UserFacingError.message(for: error)
       }
     }
@@ -938,11 +943,19 @@ final class AppModel: ObservableObject {
     if let validationError = systemProxySettings.validationError {
       throw AppError.invalidProfileConfig(validationError)
     }
-    try await systemProxyController.apply(
-      host: systemProxySettings.normalizedProxyHost,
-      port: overrides.mixedPort,
-      bypassDomains: systemProxySettings.effectiveBypassDomains
-    )
+    markSystemProxyManaged(true)
+    do {
+      try await systemProxyController.apply(
+        host: systemProxySettings.normalizedProxyHost,
+        port: overrides.mixedPort,
+        bypassDomains: systemProxySettings.effectiveBypassDomains
+      )
+    } catch {
+      if !systemProxyController.hasManagedSystemProxyState {
+        markSystemProxyManaged(false)
+      }
+      throw error
+    }
   }
 
   private func activateSystemProxyGuardIfNeeded() async throws {
@@ -978,6 +991,41 @@ final class AppModel: ObservableObject {
     systemProxyGuardTask?.cancel()
     systemProxyGuardTask = nil
     systemProxyController.disableGuard()
+  }
+
+  private func restoreSystemProxyState(disableWhenNoSnapshot: Bool) async throws {
+    stopSystemProxyGuard()
+    if disableWhenNoSnapshot {
+      try await systemProxyController.restore()
+    } else {
+      try await systemProxyController.restoreManagedState()
+    }
+    if !systemProxyController.hasManagedSystemProxyState {
+      markSystemProxyManaged(false)
+    }
+  }
+
+  var needsTerminationCleanup: Bool {
+    startInFlight
+      || isCoreRunning
+      || systemProxyEnabled
+      || tunEnabled
+      || tunnelCoreRunning
+      || systemProxyController.hasManagedSystemProxyState
+      || defaults.bool(forKey: Self.systemProxyManagedDefaultsKey)
+  }
+
+  func prepareForTermination() async {
+    startTask?.cancel()
+    startTask = nil
+    startInFlight = false
+    previewTask?.cancel()
+    previewTask = nil
+    pendingModeTask?.cancel()
+    pendingModeTask = nil
+    pendingRoutingModeTask?.cancel()
+    pendingRoutingModeTask = nil
+    await stopRuntime()
   }
 
   func enterPreviewRuntime() {
@@ -1081,8 +1129,12 @@ final class AppModel: ObservableObject {
     runtimeOwner = .stopped
     refreshProfilePreview()
     if systemProxyEnabled {
-      stopSystemProxyGuard()
-      try? await systemProxyController.restore()
+      try? await restoreSystemProxyState(disableWhenNoSnapshot: true)
+    } else if systemProxyController.hasManagedSystemProxyState {
+      try? await restoreSystemProxyState(disableWhenNoSnapshot: false)
+    }
+    if !systemProxyController.hasManagedSystemProxyState {
+      markSystemProxyManaged(false)
     }
     systemProxyEnabled = false
     tunEnabled = false
@@ -1308,6 +1360,33 @@ final class AppModel: ObservableObject {
       store[id.uuidString] = previewSelections
     }
     defaults.set(store, forKey: Self.previewSelectionsDefaultsKey)
+  }
+
+  private func markSystemProxyManaged(_ isManaged: Bool) {
+    defaults.set(isManaged, forKey: Self.systemProxyManagedDefaultsKey)
+  }
+
+  private func recoverDanglingSystemProxyIfNeeded() {
+    guard defaults.bool(forKey: Self.systemProxyManagedDefaultsKey) else { return }
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      do {
+        let didChange = try await systemProxyController.disableMatchingProxy(
+          hosts: Self.localProxyHosts(for: systemProxySettings),
+          ports: [overrides.mixedPort]
+        )
+        markSystemProxyManaged(false)
+        if didChange {
+          appendAppLog(level: "info", message: "Cleared stale System Proxy settings left by a previous ClashMax session.")
+        }
+      } catch {
+        lastError = "Could not verify stale System Proxy settings from a previous ClashMax session: \(UserFacingError.message(for: error))"
+      }
+    }
+  }
+
+  private static func localProxyHosts(for settings: SystemProxySettings) -> Set<String> {
+    Set([settings.normalizedProxyHost, "127.0.0.1", "localhost", "::1"].map { $0.lowercased() })
   }
 
   private func saveCodable<T: Encodable>(_ value: T, forKey key: String) {

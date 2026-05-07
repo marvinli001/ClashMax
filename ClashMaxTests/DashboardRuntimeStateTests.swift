@@ -311,6 +311,36 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(controller.guardState, .idle)
   }
 
+  func testTerminationRestoresEnabledSystemProxy() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+    let controller = SystemProxyController(commandRunner: commandRunner)
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      systemProxyController: controller,
+      defaults: defaults
+    )
+
+    model.setSystemProxyEnabled(true)
+
+    for _ in 0..<40 where !model.systemProxyEnabled {
+      await Task.yield()
+    }
+
+    XCTAssertTrue(model.systemProxyEnabled)
+    XCTAssertTrue(model.needsTerminationCleanup)
+
+    await model.prepareForTermination()
+
+    XCTAssertFalse(model.systemProxyEnabled)
+    XCTAssertFalse(model.needsTerminationCleanup)
+    XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setwebproxystate Wi-Fi off"))
+    XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setsecurewebproxystate Wi-Fi off"))
+    XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setsocksfirewallproxystate Wi-Fi off"))
+  }
+
   func testProxyDelayDisplayLabelsAndTones() {
     let noDelay = ProxyDelayDisplay(delay: nil)
     XCTAssertEqual(noDelay.label, "No delay")

@@ -180,6 +180,36 @@ final class SystemProxyControllerTests: XCTestCase {
     XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setproxybypassdomains Wi-Fi localhost *.corp"))
   }
 
+  func testApplyRestoresCapturedServicesWhenLaterSnapshotFails() async throws {
+    let runner = FailingCommandRunner(
+      outputs: [
+        "/usr/sbin/networksetup -listallnetworkservices": "Wi-Fi\nEthernet\n",
+        "/usr/sbin/networksetup -getwebproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
+        "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
+        "/usr/sbin/networksetup -getsocksfirewallproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
+        "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": "There aren't any bypass domains set.\n",
+        "/usr/sbin/networksetup -getwebproxy Ethernet": "Enabled: No\nServer:\nPort: 0\n"
+      ],
+      failingCommands: [
+        "/usr/sbin/networksetup -getsecurewebproxy Ethernet"
+      ]
+    )
+    let controller = SystemProxyController(commandRunner: runner)
+
+    do {
+      try await controller.apply(host: "127.0.0.1", port: 7890)
+      XCTFail("Expected apply to fail")
+    } catch {
+      XCTAssertTrue(error.localizedDescription.contains("Injected failure"))
+    }
+
+    XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setwebproxy Wi-Fi 127.0.0.1 7890"))
+    XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setwebproxystate Wi-Fi off"))
+    XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setsecurewebproxystate Wi-Fi off"))
+    XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setsocksfirewallproxystate Wi-Fi off"))
+    XCTAssertFalse(controller.hasManagedSystemProxyState)
+  }
+
   func testProxyGuardRepairsServicesThatNoLongerMatchExpectedProxy() async throws {
     let runner = RecordingCommandRunner(outputs: [
       "/usr/sbin/networksetup -listallnetworkservices": "Wi-Fi\n",
@@ -260,5 +290,36 @@ final class SystemProxyControllerTests: XCTestCase {
     try await controller.restore()
 
     XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setproxybypassdomains Wi-Fi Empty"))
+  }
+}
+
+private final class FailingCommandRunner: CommandRunning, @unchecked Sendable {
+  let outputs: [String: String]
+  let failingCommands: Set<String>
+  private let queue = DispatchQueue(label: "io.github.clashmax.tests.FailingCommandRunner")
+  private var _commands: [String] = []
+
+  init(outputs: [String: String], failingCommands: Set<String>) {
+    self.outputs = outputs
+    self.failingCommands = failingCommands
+  }
+
+  var commands: [String] {
+    queue.sync { _commands }
+  }
+
+  func run(_ executable: String, _ arguments: [String]) async throws -> String {
+    let command = ([executable] + arguments).joined(separator: " ")
+    queue.sync {
+      _commands.append(command)
+    }
+    if failingCommands.contains(command) {
+      throw NSError(
+        domain: "ClashMaxTests.FailingCommandRunner",
+        code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "Injected failure for \(command)"]
+      )
+    }
+    return outputs[command] ?? ""
   }
 }
