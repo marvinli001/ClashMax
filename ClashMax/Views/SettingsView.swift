@@ -398,53 +398,67 @@ private struct UpdateVersionRow<Action: View>: View {
 
 private struct ExternalControlSettingsRow: View {
   @EnvironmentObject private var appModel: AppModel
-  @State private var isPresented = false
+  @State private var isControllerPresented = false
+  @State private var isCORSPresented = false
   @State private var draft = ExternalControllerSettings.default
   @State private var addressDraft = ExternalControllerSettings.default.address
   @State private var secretDraft = ""
   @State private var error: String?
+  @State private var corsDraft = ExternalControllerCORSSettings.default
+  @State private var originDraft = ""
+  @State private var corsError: String?
 
   var body: some View {
     HStack(alignment: .center, spacing: 16) {
       VStack(alignment: .leading, spacing: 3) {
         HStack(spacing: 6) {
-          Text("External Control")
-            .foregroundStyle(.primary)
-          Image(systemName: "gearshape")
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(.secondary)
-            .frame(width: 18, height: 18)
+          Button {
+            presentControllerSettings()
+          } label: {
+            Text("External Control")
+              .foregroundStyle(.primary)
+          }
+          .buttonStyle(.plain)
+
+          corsSettingsButton
         }
 
-        Text(description)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .lineLimit(3)
-          .fixedSize(horizontal: false, vertical: true)
+        Button {
+          presentControllerSettings()
+        } label: {
+          Text(description)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(3)
+            .fixedSize(horizontal: false, vertical: true)
+            .multilineTextAlignment(.leading)
+        }
+        .buttonStyle(.plain)
       }
       .layoutPriority(1)
 
       Spacer(minLength: 16)
 
-      Image(systemName: "chevron.right")
-        .font(.caption.weight(.semibold))
-        .foregroundStyle(.secondary)
+      Button {
+        presentControllerSettings()
+      } label: {
+        Image(systemName: "chevron.right")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.secondary)
+      }
+      .buttonStyle(.plain)
     }
     .contentShape(Rectangle())
     .frame(maxWidth: .infinity, alignment: .leading)
     .accessibilityAddTraits(.isButton)
-    .onTapGesture {
-      syncDraft()
-      isPresented = true
-    }
-    .sheet(isPresented: $isPresented) {
+    .sheet(isPresented: $isControllerPresented) {
       ExternalControlSettingsSheet(
         draft: $draft,
         addressDraft: $addressDraft,
         secretDraft: $secretDraft,
         error: $error,
         onCancel: {
-          isPresented = false
+          isControllerPresented = false
         },
         onSave: save
       )
@@ -459,11 +473,51 @@ private struct ExternalControlSettingsRow: View {
     return "\(state) for external web dashboards at \(settings.address) with Bearer auth."
   }
 
+  private var corsSettingsButton: some View {
+    Button {
+      syncCORSDraft()
+      isCORSPresented = true
+    } label: {
+      Image(systemName: "gearshape")
+        .font(.system(size: 12, weight: .semibold))
+        .foregroundStyle(.secondary)
+        .frame(width: 18, height: 18)
+    }
+    .buttonStyle(.borderless)
+    .controlSize(.small)
+    .help("Configure external control CORS")
+    .popover(isPresented: $isCORSPresented, arrowEdge: .bottom) {
+      ExternalControlCORSSettingsPopover(
+        draft: $corsDraft,
+        originDraft: $originDraft,
+        error: $corsError,
+        onCancel: {
+          isCORSPresented = false
+        },
+        onSave: saveCORS
+      )
+      .frame(width: 520)
+      .padding(18)
+    }
+  }
+
+  private func presentControllerSettings() {
+    syncDraft()
+    isControllerPresented = true
+  }
+
   private func syncDraft() {
     draft = appModel.externalControllerSettings
     addressDraft = draft.address
     secretDraft = draft.normalizedSecret
     error = nil
+  }
+
+  private func syncCORSDraft() {
+    corsDraft = appModel.externalControllerSettings.cors
+    corsDraft.allowedOrigins = ExternalControllerCORSSettings.normalizedOrigins(corsDraft.allowedOrigins)
+    originDraft = ""
+    corsError = nil
   }
 
   private func save() {
@@ -481,7 +535,20 @@ private struct ExternalControlSettingsRow: View {
       return
     }
     appModel.externalControllerSettings = draft
-    isPresented = false
+    isControllerPresented = false
+  }
+
+  private func saveCORS() {
+    corsDraft.allowedOrigins = ExternalControllerCORSSettings.normalizedOrigins(corsDraft.allowedOrigins)
+    if let validationError = corsDraft.validationError {
+      corsError = validationError
+      return
+    }
+    var settings = appModel.externalControllerSettings
+    corsDraft.enabled = settings.enabled
+    settings.cors = corsDraft
+    appModel.externalControllerSettings = settings
+    isCORSPresented = false
   }
 
   private static func parseAddress(_ value: String) -> (host: String, port: Int)? {
@@ -508,6 +575,106 @@ private struct ExternalControlSettingsRow: View {
       return (host, port)
     }
     return nil
+  }
+}
+
+private struct ExternalControlCORSSettingsPopover: View {
+  @Binding var draft: ExternalControllerCORSSettings
+  @Binding var originDraft: String
+  @Binding var error: String?
+
+  let onCancel: () -> Void
+  let onSave: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      Label("External Control CORS Settings", systemImage: "network")
+        .font(.title3.weight(.semibold))
+
+      Toggle("Allow Private Network Access", isOn: $draft.allowPrivateNetwork)
+        .toggleStyle(.switch)
+
+      VStack(alignment: .leading, spacing: 8) {
+        Text("Allowed Origins")
+          .font(.headline)
+
+        VStack(spacing: 8) {
+          ForEach(Array(draft.allowedOrigins.enumerated()), id: \.offset) { index, _ in
+            HStack(spacing: 8) {
+              TextField("https://dashboard.example", text: originBinding(at: index))
+                .textFieldStyle(.roundedBorder)
+              Button {
+                draft.allowedOrigins.remove(at: index)
+              } label: {
+                Image(systemName: "trash")
+                  .frame(width: 22, height: 22)
+              }
+              .buttonStyle(.borderedProminent)
+              .tint(.red)
+              .controlSize(.small)
+              .help("Remove origin")
+            }
+          }
+        }
+
+        HStack(spacing: 8) {
+          TextField("https://dashboard.example", text: $originDraft)
+            .textFieldStyle(.roundedBorder)
+            .onSubmit(addOrigin)
+          Button("Add", action: addOrigin)
+            .disabled(originDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+
+        Text("Always includes: \(ExternalControllerCORSSettings.fixedLocalOrigins.joined(separator: ", "))")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .padding(.horizontal, 8)
+          .padding(.vertical, 6)
+          .background(.quaternary, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+          .lineLimit(2)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+
+      if let error {
+        Label(error, systemImage: "exclamationmark.triangle.fill")
+          .font(.callout)
+          .foregroundStyle(.red)
+          .lineLimit(2)
+      }
+
+      HStack {
+        Spacer()
+        Button("Cancel", action: onCancel)
+          .keyboardShortcut(.cancelAction)
+        Button("Save", action: onSave)
+          .keyboardShortcut(.defaultAction)
+      }
+    }
+  }
+
+  private func originBinding(at index: Int) -> Binding<String> {
+    Binding(
+      get: {
+        guard draft.allowedOrigins.indices.contains(index) else { return "" }
+        return draft.allowedOrigins[index]
+      },
+      set: { value in
+        guard draft.allowedOrigins.indices.contains(index) else { return }
+        draft.allowedOrigins[index] = value
+      }
+    )
+  }
+
+  private func addOrigin() {
+    let trimmed = originDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return }
+    guard ExternalControllerCORSSettings.isValidOrigin(trimmed) else {
+      error = "Invalid origin: \(trimmed)"
+      return
+    }
+    draft.allowedOrigins = ExternalControllerCORSSettings.normalizedOrigins(draft.allowedOrigins + [trimmed])
+    originDraft = ""
+    error = nil
   }
 }
 

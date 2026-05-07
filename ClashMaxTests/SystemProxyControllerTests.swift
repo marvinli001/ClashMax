@@ -194,6 +194,46 @@ final class SystemProxyControllerTests: XCTestCase {
     XCTAssertFalse(runner.commands.contains { $0.contains("-setsecurewebproxy Tailscale") })
   }
 
+  func testApplyFallsBackToDefaultRouteWhenActiveInterfaceQueryFails() async throws {
+    let runner = FailingCommandRunner(
+      outputs: [
+        "/usr/sbin/networksetup -listnetworkserviceorder": """
+        An asterisk (*) denotes that a network service is disabled.
+        (1) Ethernet
+        (Hardware Port: Ethernet, Device: en0)
+
+        (2) USB 10/100/1G/2.5G LAN
+        (Hardware Port: USB 10/100/1G/2.5G LAN, Device: en8)
+
+        (3) Wi-Fi
+        (Hardware Port: Wi-Fi, Device: en1)
+        """,
+        "/sbin/route -n get default": """
+           route to: default
+        destination: default
+              mask: default
+           gateway: 192.168.8.1
+         interface: en0
+             flags: <UP,GATEWAY,DONE,STATIC,PRCLONING,GLOBAL>
+        """,
+        "/usr/sbin/networksetup -getwebproxy Ethernet": "Enabled: No\nServer:\nPort: 0\n",
+        "/usr/sbin/networksetup -getsecurewebproxy Ethernet": "Enabled: No\nServer:\nPort: 0\n",
+        "/usr/sbin/networksetup -getsocksfirewallproxy Ethernet": "Enabled: No\nServer:\nPort: 0\n",
+        "/usr/sbin/networksetup -getproxybypassdomains Ethernet": "There aren't any bypass domains set.\n"
+      ],
+      failingCommands: [
+        "/usr/sbin/scutil --nwi"
+      ]
+    )
+    let controller = SystemProxyController(commandRunner: runner)
+
+    try await controller.apply(host: "127.0.0.1", port: 7890)
+
+    XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setwebproxy Ethernet 127.0.0.1 7890"))
+    XCTAssertFalse(runner.commands.contains { $0.contains("USB 10/100/1G/2.5G LAN") })
+    XCTAssertFalse(runner.commands.contains("/usr/sbin/networksetup -listallnetworkservices"))
+  }
+
   func testApplySystemProxyAcceptsCustomBypassDomains() async throws {
     let runner = RecordingCommandRunner(outputs: [
       "/usr/sbin/networksetup -listallnetworkservices": "Wi-Fi\n"

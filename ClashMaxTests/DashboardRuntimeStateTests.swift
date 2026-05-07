@@ -401,6 +401,112 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(model.logs.contains { $0.level == "warn" && $0.message.contains("could not read Wi-Fi proxy settings") })
   }
 
+  func testPublicIPRefreshSkipsDuplicateInFlightRequest() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let info = Self.makePublicIPInfo(ip: "203.0.113.1", fetchedAt: Date(timeIntervalSince1970: 1_000))
+    let fetcher = RecordingPublicIPInfoFetcher(infos: [info], delayNanoseconds: 150_000_000)
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      publicIPInfoClient: fetcher
+    )
+    model.tunnelCoreRunning = true
+
+    model.refreshPublicIPInfo(force: true)
+    model.refreshPublicIPInfo(force: true)
+    try? await Task.sleep(nanoseconds: 20_000_000)
+
+    let inFlightRequestCount = await fetcher.requestCount()
+    XCTAssertEqual(inFlightRequestCount, 1)
+    try await Self.waitForPublicIPInfo(model)
+    XCTAssertEqual(model.publicIPInfoState.info, info)
+  }
+
+  func testPublicIPRefreshIntervalPreventsEarlyAutomaticRefresh() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let firstFetch = Date(timeIntervalSince1970: 1_000)
+    let secondFetch = Date(timeIntervalSince1970: 1_300)
+    let first = Self.makePublicIPInfo(ip: "203.0.113.1", fetchedAt: firstFetch)
+    let second = Self.makePublicIPInfo(ip: "198.51.100.9", fetchedAt: secondFetch)
+    let fetcher = RecordingPublicIPInfoFetcher(infos: [first, second])
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      publicIPInfoClient: fetcher
+    )
+    model.tunnelCoreRunning = true
+
+    model.refreshPublicIPInfo(force: true, now: firstFetch)
+    try await Self.waitForPublicIPInfo(model)
+
+    XCTAssertFalse(model.publicIPInfoNeedsRefresh(now: firstFetch.addingTimeInterval(299)))
+    model.refreshPublicIPInfo(now: firstFetch.addingTimeInterval(299))
+    let earlyRequestCount = await fetcher.requestCount()
+    XCTAssertEqual(earlyRequestCount, 1)
+
+    XCTAssertTrue(model.publicIPInfoNeedsRefresh(now: firstFetch.addingTimeInterval(300)))
+    model.refreshPublicIPInfo(now: firstFetch.addingTimeInterval(300))
+    try await Self.waitForPublicIPInfo(model, expectedIP: "198.51.100.9")
+    let refreshedRequestCount = await fetcher.requestCount()
+    XCTAssertEqual(refreshedRequestCount, 2)
+    XCTAssertEqual(model.publicIPInfoState.info, second)
+  }
+
+  func testForcedPublicIPRefreshIgnoresFreshCache() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let firstFetch = Date(timeIntervalSince1970: 2_000)
+    let first = Self.makePublicIPInfo(ip: "203.0.113.1", fetchedAt: firstFetch)
+    let second = Self.makePublicIPInfo(ip: "198.51.100.9", fetchedAt: firstFetch.addingTimeInterval(10))
+    let fetcher = RecordingPublicIPInfoFetcher(infos: [first, second])
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      publicIPInfoClient: fetcher
+    )
+    model.tunnelCoreRunning = true
+
+    model.refreshPublicIPInfo(force: true, now: firstFetch)
+    try await Self.waitForPublicIPInfo(model)
+    model.refreshPublicIPInfo(force: true, now: firstFetch.addingTimeInterval(10))
+    try await Self.waitForPublicIPInfo(model, expectedIP: "198.51.100.9")
+
+    let forcedRequestCount = await fetcher.requestCount()
+    XCTAssertEqual(forcedRequestCount, 2)
+    XCTAssertEqual(model.publicIPInfoState.info, second)
+  }
+
+  func testStoppingRuntimeCancelsAndClearsPublicIPState() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let info = Self.makePublicIPInfo(ip: "203.0.113.1", fetchedAt: Date(timeIntervalSince1970: 1_000))
+    let fetcher = RecordingPublicIPInfoFetcher(infos: [info], delayNanoseconds: 800_000_000)
+    let helperClient = TunnelHelperClient(
+      transport: ReadyTunnelHelperTransport(),
+      service: StaticHelperService(status: .enabled),
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test-helper"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test-helper")
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      helperClient: helperClient,
+      publicIPInfoClient: fetcher
+    )
+    model.tunnelCoreRunning = true
+
+    model.refreshPublicIPInfo(force: true)
+    try? await Task.sleep(nanoseconds: 20_000_000)
+    model.stop()
+
+    for _ in 0..<100 where model.publicIPInfoState != .idle {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 2_000_000)
+    }
+
+    let stoppedRequestCount = await fetcher.requestCount()
+    XCTAssertEqual(stoppedRequestCount, 1)
+    XCTAssertEqual(model.publicIPInfoState, .idle)
+  }
+
   func testTerminationRestoresEnabledSystemProxy() async throws {
     let paths = try Self.makeRuntimePaths()
     let defaults = try Self.makeIsolatedDefaults()
@@ -1398,6 +1504,66 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
     defaults.removePersistentDomain(forName: suiteName)
     return defaults
+  }
+
+  private static func makePublicIPInfo(ip: String, fetchedAt: Date) -> PublicIPInfo {
+    PublicIPInfo(
+      ipAddress: ip,
+      countryCode: "NZ",
+      countryName: "New Zealand",
+      region: "Auckland",
+      city: "Auckland",
+      asn: "AS23655",
+      isp: "2degrees",
+      organization: "Two Degrees Networks Limited",
+      timezone: "Pacific/Auckland",
+      latitude: -36.85,
+      longitude: 174.76,
+      sourceName: "test",
+      fetchedAt: fetchedAt
+    )
+  }
+
+  private static func waitForPublicIPInfo(
+    _ model: AppModel,
+    expectedIP: String? = nil,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) async throws {
+    for _ in 0..<120 {
+      if let info = model.publicIPInfoState.info,
+         !model.publicIPInfoState.isLoading,
+         expectedIP == nil || info.ipAddress == expectedIP {
+        return
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 2_000_000)
+    }
+    XCTFail("Timed out waiting for public IP info.", file: file, line: line)
+  }
+}
+
+private actor RecordingPublicIPInfoFetcher: PublicIPInfoFetching {
+  private let infos: [PublicIPInfo]
+  private let delayNanoseconds: UInt64
+  private var requests = 0
+
+  init(infos: [PublicIPInfo], delayNanoseconds: UInt64 = 0) {
+    self.infos = infos
+    self.delayNanoseconds = delayNanoseconds
+  }
+
+  func fetchPublicIPInfo() async throws -> PublicIPInfo {
+    requests += 1
+    if delayNanoseconds > 0 {
+      try await Task.sleep(nanoseconds: delayNanoseconds)
+    }
+    let index = min(requests - 1, max(infos.count - 1, 0))
+    return infos[index]
+  }
+
+  func requestCount() -> Int {
+    requests
   }
 }
 

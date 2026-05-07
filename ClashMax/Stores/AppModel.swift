@@ -52,6 +52,7 @@ final class AppModel: ObservableObject {
   @Published var helperLogs: [String] = []
   @Published var trafficSample: TrafficSample = .zero
   @Published var trafficHistory: [TrafficSample] = []
+  @Published private(set) var publicIPInfoState: PublicIPInfoState = .idle
   @Published var lastError: String?
   @Published private(set) var updatingProfileIDs: Set<Profile.ID> = []
   @Published private(set) var profileOperationMessage: String?
@@ -74,6 +75,7 @@ final class AppModel: ObservableObject {
   private let loginItemService: any LoginItemManaging
   private let tunnelReadinessProbe: CoreReadinessProbing
   private let pingTester: any PingTesting
+  private let publicIPInfoClient: any PublicIPInfoFetching
   private let paths: RuntimePaths
   private let normalizer = ConfigNormalizer()
   private let profilePreviewBuilder = ProfilePreviewBuilder()
@@ -83,6 +85,7 @@ final class AppModel: ObservableObject {
   private var pendingModeTask: Task<Void, Never>?
   private var pendingRoutingModeTask: Task<Void, Never>?
   private var systemProxyGuardTask: Task<Void, Never>?
+  private var publicIPInfoTask: Task<Void, Never>?
   private var streamTasks: [Task<Void, Never>] = []
   private var logBuffer = BoundedBuffer<LogEntry>(limit: AppConstants.retainedLogLimit)
   private var connectionBuffer = BoundedBuffer<ConnectionSnapshot>(limit: AppConstants.retainedConnectionLimit)
@@ -96,6 +99,7 @@ final class AppModel: ObservableObject {
   private static let appThemeDefaultsKey = "io.github.clashmax.appTheme"
   private static let externalControllerSettingsDefaultsKey = "io.github.clashmax.externalControllerSettings"
   private static let externalControllerCORSSettingsDefaultsKey = "io.github.clashmax.externalControllerCORSSettings"
+  static let publicIPRefreshInterval: TimeInterval = 300
   static let silentStartDefaultsKey = "io.github.clashmax.silentStart"
   static let startWallClockSeconds: TimeInterval = 22
 
@@ -129,6 +133,7 @@ final class AppModel: ObservableObject {
     tunnelReadinessProbe: CoreReadinessProbing = MihomoCoreReadinessProbe(),
     apiClient: (any MihomoAPIControlling)? = nil,
     pingTester: any PingTesting = SystemPingTester(),
+    publicIPInfoClient: any PublicIPInfoFetching = PublicIPInfoClient(),
     defaults: UserDefaults = .standard
   ) {
     self.paths = paths
@@ -139,6 +144,7 @@ final class AppModel: ObservableObject {
     self.loginItemService = loginItemService
     self.tunnelReadinessProbe = tunnelReadinessProbe
     self.pingTester = pingTester
+    self.publicIPInfoClient = publicIPInfoClient
     self.apiClient = apiClient
     self.defaults = defaults
     developerMode = defaults.bool(forKey: Self.developerModeDefaultsKey)
@@ -612,6 +618,7 @@ final class AppModel: ObservableObject {
     refreshProfilePreview()
     startStreams(client: client)
     reloadRuntimeData(clearAfterConfirmation: !previewSelections.isEmpty)
+    refreshPublicIPInfo()
   }
 
   func stop() {
@@ -807,6 +814,42 @@ final class AppModel: ObservableObject {
       } catch {
         lastError = UserFacingError.message(for: error)
       }
+    }
+  }
+
+  func publicIPInfoNeedsRefresh(now: Date = Date()) -> Bool {
+    guard isCoreRunning else { return false }
+    if publicIPInfoState.isLoading { return false }
+    guard let anchor = publicIPInfoState.refreshAnchor else { return true }
+    return now.timeIntervalSince(anchor) >= Self.publicIPRefreshInterval
+  }
+
+  func refreshPublicIPInfo(force: Bool = false, now: Date = Date()) {
+    guard isCoreRunning else {
+      cancelPublicIPInfoRefresh(clearState: true)
+      return
+    }
+    guard force || publicIPInfoNeedsRefresh(now: now) else { return }
+    guard !publicIPInfoState.isLoading else { return }
+
+    let previous = publicIPInfoState.info
+    publicIPInfoState = .loading(previous: previous, startedAt: now)
+    publicIPInfoTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      do {
+        let info = try await self.publicIPInfoClient.fetchPublicIPInfo()
+        guard !Task.isCancelled else { return }
+        self.publicIPInfoState = .loaded(info)
+      } catch is CancellationError {
+      } catch {
+        guard !Task.isCancelled else { return }
+        self.publicIPInfoState = .failed(
+          message: UserFacingError.message(for: error),
+          previous: previous,
+          failedAt: Date()
+        )
+      }
+      self.publicIPInfoTask = nil
     }
   }
 
@@ -1210,6 +1253,7 @@ final class AppModel: ObservableObject {
 
   private func stopRuntime() async {
     apiClient = nil
+    cancelPublicIPInfoRefresh(clearState: true)
     streamTasks.forEach { $0.cancel() }
     streamTasks.removeAll()
     coreController.stop()
@@ -1240,6 +1284,14 @@ final class AppModel: ObservableObject {
     }
     systemProxyEnabled = false
     tunEnabled = false
+  }
+
+  private func cancelPublicIPInfoRefresh(clearState: Bool) {
+    publicIPInfoTask?.cancel()
+    publicIPInfoTask = nil
+    if clearState {
+      publicIPInfoState = .idle
+    }
   }
 
   private func requireActiveProfile() throws -> Profile {

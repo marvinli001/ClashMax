@@ -83,6 +83,7 @@ final class SystemProxyController: @unchecked Sendable {
   static let defaultBypassDomains = SystemProxySettings.defaultBypassDomains
 
   static let applyBudgetSeconds: TimeInterval = 15
+  static let commandTimeoutSeconds: TimeInterval = 12
 
   private let commandRunner: CommandRunning
   private let operationGate = AsyncOperationGate()
@@ -91,7 +92,7 @@ final class SystemProxyController: @unchecked Sendable {
   private(set) var guardState: SystemProxyGuardState = .idle
   private let lock = NSLock()
 
-  init(commandRunner: CommandRunning = ProcessCommandRunner()) {
+  init(commandRunner: CommandRunning = ProcessCommandRunner(timeout: SystemProxyController.commandTimeoutSeconds)) {
     self.commandRunner = commandRunner
   }
 
@@ -312,7 +313,11 @@ final class SystemProxyController: @unchecked Sendable {
     let orderedOutput = try? await commandRunner.run("/usr/sbin/networksetup", ["-listnetworkserviceorder"])
     let activeOutput = try? await commandRunner.run("/usr/sbin/scutil", ["--nwi"])
     let orderedServices = orderedOutput.map(OrderedNetworkService.parse) ?? []
-    let activeInterfaces = activeOutput.map(ActiveNetworkInterfaces.parse) ?? []
+    var activeInterfaces = activeOutput.map(ActiveNetworkInterfaces.parse) ?? []
+    if activeInterfaces.isEmpty {
+      let routeOutput = try? await commandRunner.run("/sbin/route", ["-n", "get", "default"])
+      activeInterfaces = routeOutput.map(DefaultRouteInterfaces.parse) ?? []
+    }
     if !orderedServices.isEmpty, !activeInterfaces.isEmpty {
       let activeServices = orderedServices
         .filter { service in
@@ -379,6 +384,26 @@ final class SystemProxyController: @unchecked Sendable {
     lock.lock()
     defer { lock.unlock() }
     expectedConfiguration = configuration
+  }
+}
+
+private struct DefaultRouteInterfaces {
+  static func parse(_ output: String) -> Set<String> {
+    var interfaces = Set<String>()
+    for rawLine in output.split(separator: "\n") {
+      let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard line.hasPrefix("interface:"),
+            let separator = line.firstIndex(of: ":")
+      else {
+        continue
+      }
+      let interface = line[line.index(after: separator)...]
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+      if !interface.isEmpty {
+        interfaces.insert(interface)
+      }
+    }
+    return interfaces
   }
 }
 

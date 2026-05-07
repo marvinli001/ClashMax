@@ -18,11 +18,15 @@ struct RunningDashboardView: View {
         availableWidth: availableWidth
       )
 
-      CurrentProxyRuntimeCard(
-        state: state,
-        availableWidth: availableWidth,
-        selectedGroupName: $selectedProxyGroupName
-      )
+      DashboardResponsivePair(availableWidth: availableWidth) {
+        CurrentProxyRuntimeCard(
+          state: state,
+          availableWidth: runtimeInfoCardWidth,
+          selectedGroupName: $selectedProxyGroupName
+        )
+      } trailing: {
+        PublicIPInfoCard(availableWidth: runtimeInfoCardWidth)
+      }
       .staggeredArrival(index: 0, reduceMotion: reduceMotion, trigger: state)
 
       LazyVGrid(columns: metricColumns, spacing: DashboardLayoutMetrics.dashboardGridSpacing) {
@@ -55,28 +59,28 @@ struct RunningDashboardView: View {
           tint: .green
         )
       }
-      .staggeredArrival(index: 1, reduceMotion: reduceMotion, trigger: state)
+      .staggeredArrival(index: 2, reduceMotion: reduceMotion, trigger: state)
 
       DashboardResponsivePair(availableWidth: availableWidth) {
         RunningStatusCard()
       } trailing: {
         NetworkStatusCard()
       }
-      .staggeredArrival(index: 2, reduceMotion: reduceMotion, trigger: state)
+      .staggeredArrival(index: 3, reduceMotion: reduceMotion, trigger: state)
 
       DashboardResponsivePair(availableWidth: availableWidth) {
         TrafficRuntimeCard(samples: chartSamples)
       } trailing: {
         ProxyGroupsRuntimeCard()
       }
-      .staggeredArrival(index: 3, reduceMotion: reduceMotion, trigger: state)
+      .staggeredArrival(index: 4, reduceMotion: reduceMotion, trigger: state)
 
       DashboardResponsivePair(availableWidth: availableWidth) {
         ConnectionsRulesRuntimeCard()
       } trailing: {
         RecentLogsRuntimeCard()
       }
-      .staggeredArrival(index: 4, reduceMotion: reduceMotion, trigger: state)
+      .staggeredArrival(index: 5, reduceMotion: reduceMotion, trigger: state)
     }
   }
 
@@ -99,6 +103,13 @@ struct RunningDashboardView: View {
 
   private var trafficFootnote: String {
     appModel.trafficHistory.isEmpty ? "Waiting for runtime data" : "Live traffic"
+  }
+
+  private var runtimeInfoCardWidth: CGFloat {
+    if availableWidth >= DashboardLayoutMetrics.runningPairColumnsBreakpoint {
+      return max(0, (availableWidth - DashboardLayoutMetrics.dashboardGridSpacing) / 2)
+    }
+    return availableWidth
   }
 
   private var chartSamples: [TrafficSample] {
@@ -345,7 +356,7 @@ private struct CurrentProxyRuntimeCard: View {
       }
     }
     .padding(14)
-    .frame(maxWidth: .infinity, alignment: .topLeading)
+    .frame(maxWidth: .infinity, minHeight: availableWidth < 460 ? 190 : 210, alignment: .topLeading)
     .dashboardCard(interactive: true)
   }
 
