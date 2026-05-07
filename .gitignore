@@ -2,6 +2,7 @@
 
 # Local Codex/agent context. These files are for this workstation only.
 .codex/
+.claude/
 AGENTS.md
 
 .build/
