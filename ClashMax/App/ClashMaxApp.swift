@@ -6,12 +6,14 @@ struct ClashMaxApp: App {
   @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
   @StateObject private var appModel = AppModel.bootstrap()
   @StateObject private var appUpdateController = AppUpdateController()
+  @StateObject private var resourceUpdateController = ResourceUpdateController()
 
   var body: some Scene {
     WindowGroup("ClashMax", id: "main") {
       ContentView()
         .environmentObject(appModel)
         .environmentObject(appUpdateController)
+        .environmentObject(resourceUpdateController)
         .preferredColorScheme(appModel.appTheme.preferredColorScheme)
         .frame(minWidth: 980, minHeight: 660)
         .onAppear {
@@ -35,6 +37,7 @@ struct ClashMaxApp: App {
       MenuBarView()
         .environmentObject(appModel)
         .environmentObject(appUpdateController)
+        .environmentObject(resourceUpdateController)
         .preferredColorScheme(appModel.appTheme.preferredColorScheme)
         .onAppear {
           appDelegate.appModel = appModel
@@ -50,6 +53,7 @@ struct ClashMaxApp: App {
       SettingsView()
         .environmentObject(appModel)
         .environmentObject(appUpdateController)
+        .environmentObject(resourceUpdateController)
         .preferredColorScheme(appModel.appTheme.preferredColorScheme)
         .onAppear {
           appDelegate.appModel = appModel

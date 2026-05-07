@@ -43,6 +43,7 @@
 		B3C29A1240D3B5EBA9FE5A03 /* LogsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4A2BEB4712640A482254EF3 /* LogsView.swift */; };
 		B472275C65969F85A10A1180 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3049F5E5929A9350DF21AB0 /* main.swift */; };
 		B7F87955C7C14EA8E12691C4 /* TunnelHelperClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11BC6F6EFDDABB919C5C09FA /* TunnelHelperClient.swift */; };
+		B9E84EA51B0A5B846E191A11 /* ResourceUpdateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C683C4D363815222B2F88814 /* ResourceUpdateController.swift */; };
 		BA22256993B295697F6E4694 /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6FB4802572E1217EBCEE7D7 /* MenuBarView.swift */; };
 		BCCAD19625BA61056468BC2A /* Yams in Frameworks */ = {isa = PBXBuildFile; productRef = 88FF56EB7BDC95E76EC245CF /* Yams */; };
 		C0456C1F18ADEE6DC65F28D3 /* SystemProxyControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D9E260500E476D9D4BDAF98 /* SystemProxyControllerTests.swift */; };
@@ -117,6 +118,7 @@
 		B38F8F5042460DDFC4142D6E /* ConfigNormalizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigNormalizerTests.swift; sourceTree = "<group>"; };
 		B4A2BEB4712640A482254EF3 /* LogsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogsView.swift; sourceTree = "<group>"; };
 		BBDCBD94E79A76CA63291C71 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		C683C4D363815222B2F88814 /* ResourceUpdateController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResourceUpdateController.swift; sourceTree = "<group>"; };
 		C6FB4802572E1217EBCEE7D7 /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
 		C8758370389738F3DA585BFF /* RuntimePaths.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimePaths.swift; sourceTree = "<group>"; };
 		C92D6C3C6B280CDDFC29470F /* ProfileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileStore.swift; sourceTree = "<group>"; };
@@ -242,6 +244,7 @@
 				94791AE83711A844BABE209F /* CoreProcessController.swift */,
 				DD0BF20165DDA5CBA93D70BE /* KeychainStore.swift */,
 				8EE23FBD08FD740D82ABB9D6 /* MihomoAPIClient.swift */,
+				C683C4D363815222B2F88814 /* ResourceUpdateController.swift */,
 				E39A444F3025C24199E60E07 /* SubscriptionFetcher.swift */,
 				93A93A1E61ED764914241456 /* SystemProxyController.swift */,
 				11BC6F6EFDDABB919C5C09FA /* TunnelHelperClient.swift */,
@@ -578,6 +581,7 @@
 				7BCB87E35CCF1CD745D33AFA /* ProfileStore.swift in Sources */,
 				E5D87BAE2859A358110D7152 /* ProfilesView.swift in Sources */,
 				534998D677D07CA075B79150 /* ProxiesView.swift in Sources */,
+				B9E84EA51B0A5B846E191A11 /* ResourceUpdateController.swift in Sources */,
 				150793B689941D7F36C821B8 /* RulesView.swift in Sources */,
 				993E27377946D94ECEC6CA47 /* RunningDashboardView.swift in Sources */,
 				F232BA21F47604A638CC4458 /* RuntimePaths.swift in Sources */,

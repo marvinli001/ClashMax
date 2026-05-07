@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsView: View {
   @EnvironmentObject private var appModel: AppModel
   @EnvironmentObject private var appUpdateController: AppUpdateController
+  @EnvironmentObject private var resourceUpdateController: ResourceUpdateController
 
   var body: some View {
     AdaptivePage(
@@ -31,19 +32,21 @@ struct SettingsView: View {
           }
         }
 
-        Section("App Updates") {
-          SettingsControlRow("Current Version", description: "ClashMax app bundle version and build number.") {
-            Text(appUpdateController.versionSummary)
-              .font(.caption.monospacedDigit())
-              .foregroundStyle(.secondary)
-          }
-          SettingsControlRow("Update Feed", description: appUpdateController.feedURLString) {
-            Image(systemName: "link")
-              .foregroundStyle(.secondary)
-              .help(appUpdateController.feedURLString)
-          }
-          SettingsControlRow("Sparkle", description: appUpdateController.statusMessage) {
+        Section("Updates") {
+          UpdateVersionRow(
+            title: "App Package",
+            description: appUpdateController.statusMessage,
+            version: appUpdateController.versionSummary
+          ) {
             CheckForUpdatesButton(updateController: appUpdateController)
+          }
+
+          UpdateVersionRow(
+            title: "Resource Package",
+            description: resourceUpdateController.statusMessage,
+            version: resourceUpdateController.coreVersionSummary
+          ) {
+            CheckResourceUpdatesButton(updateController: resourceUpdateController)
           }
         }
 
@@ -326,6 +329,70 @@ private struct SettingsControlRow<Control: View>: View {
       }
     }
     .layoutPriority(1)
+  }
+}
+
+private struct UpdateVersionRow<Action: View>: View {
+  let title: String
+  let description: String
+  let version: String
+  let action: Action
+
+  init(
+    title: String,
+    description: String,
+    version: String,
+    @ViewBuilder action: () -> Action
+  ) {
+    self.title = title
+    self.description = description
+    self.version = version
+    self.action = action()
+  }
+
+  var body: some View {
+    ViewThatFits(in: .horizontal) {
+      HStack(alignment: .center, spacing: 16) {
+        titleBlock
+        Spacer(minLength: 16)
+        versionBadge
+        action
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+
+      VStack(alignment: .leading, spacing: 8) {
+        titleBlock
+        HStack(spacing: 10) {
+          versionBadge
+          action
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private var titleBlock: some View {
+    VStack(alignment: .leading, spacing: 2) {
+      Text(title)
+        .foregroundStyle(.primary)
+      Text(description)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .lineLimit(3)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+    .layoutPriority(1)
+  }
+
+  private var versionBadge: some View {
+    Text(version)
+      .font(.caption.monospacedDigit())
+      .foregroundStyle(.secondary)
+      .lineLimit(1)
+      .padding(.horizontal, 8)
+      .padding(.vertical, 3)
+      .background(.quaternary, in: Capsule())
   }
 }
 
