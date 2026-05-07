@@ -48,13 +48,6 @@ targets:
     entitlements:
       path: Config/ClashMax.entitlements
     postCompileScripts:
-      - name: Clean Bundle Extended Attributes
-        basedOnDependencyAnalysis: false
-        script: |
-          set -euo pipefail
-          if [ -d "$TARGET_BUILD_DIR/$WRAPPER_NAME" ]; then
-            xattr -cr "$TARGET_BUILD_DIR/$WRAPPER_NAME"
-          fi
       - name: Embed Helper
         inputFiles:
           - "$(BUILT_PRODUCTS_DIR)/ClashMaxHelper"
@@ -123,6 +116,14 @@ targets:
             /usr/bin/codesign --force --options runtime "$timestamp_arg" --sign "$sign_identity" "$core_binary"
             /usr/bin/codesign --verify --strict --verbose=2 "$core_binary"
           done
+    postBuildScripts:
+      - name: Clean Bundle Extended Attributes
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          if [ -d "$TARGET_BUILD_DIR/$WRAPPER_NAME" ]; then
+            xattr -cr "$TARGET_BUILD_DIR/$WRAPPER_NAME"
+          fi
   ClashMaxHelper:
     type: tool
     platform: macOS

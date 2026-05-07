@@ -6,8 +6,7 @@ struct SettingsView: View {
   var body: some View {
     AdaptivePage(
       title: "Settings",
-      subtitle: "Runtime overrides and system integration controls.",
-      maxContentWidth: 760
+      subtitle: "Runtime overrides and system integration controls."
     ) {
       EmptyView()
     } content: {
@@ -119,6 +118,7 @@ struct SettingsView: View {
       }
       .formStyle(.grouped)
       .scrollContentBackground(.hidden)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
       .onAppear {
         appModel.refreshLaunchSettings()
       }

@@ -357,11 +357,11 @@
 			buildConfigurationList = 98F94F27869B303584CB7EBE /* Build configuration list for PBXNativeTarget "ClashMax" */;
 			buildPhases = (
 				FA5D323DBCB23A8FC4E6E2AE /* Sources */,
-				6C3A8AF3C885C4663F97D8EA /* Clean Bundle Extended Attributes */,
 				FD4C75AEBC596A85273D77F7 /* Embed Helper */,
 				58BA3D232FA9D543002EBDF4 /* Sign Nested Core Binaries */,
 				55A829CAB414EE8DF5422195 /* Resources */,
 				B0268F82A08F5814E33FD482 /* Frameworks */,
+				6C3A8AF3C885C4663F97D8EA /* Clean Bundle Extended Attributes */,
 			);
 			buildRules = (
 			);
