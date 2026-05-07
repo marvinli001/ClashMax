@@ -237,6 +237,68 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(secondModel.developerMode)
   }
 
+  func testAppThemeDefaultsToSystemAndPersists() throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    let firstModel = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: defaults
+    )
+
+    XCTAssertEqual(firstModel.appTheme, .system)
+
+    firstModel.appTheme = .dark
+
+    let secondModel = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: defaults
+    )
+
+    XCTAssertEqual(secondModel.appTheme, .dark)
+  }
+
+  func testExternalControllerSettingsPersistAndSyncRuntimeOverrides() throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    let firstModel = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: defaults
+    )
+    let settings = ExternalControllerSettings(
+      enabled: false,
+      host: "localhost",
+      port: 19197,
+      secret: "saved-secret",
+      cors: ExternalControllerCORSSettings(
+        enabled: true,
+        allowPrivateNetwork: false,
+        allowedOrigins: ["https://yacd.metacubex.one"]
+      )
+    )
+
+    firstModel.externalControllerSettings = settings
+
+    XCTAssertEqual(firstModel.overrides.externalControllerHost, "localhost")
+    XCTAssertEqual(firstModel.overrides.externalControllerPort, 19197)
+    XCTAssertEqual(firstModel.overrides.secret, "saved-secret")
+    XCTAssertFalse(firstModel.overrides.externalControllerCORS.enabled)
+
+    let secondModel = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: defaults
+    )
+
+    XCTAssertEqual(secondModel.externalControllerSettings, settings)
+    XCTAssertEqual(secondModel.overrides.externalControllerHost, "localhost")
+    XCTAssertEqual(secondModel.overrides.externalControllerPort, 19197)
+    XCTAssertEqual(secondModel.overrides.secret, "saved-secret")
+    XCTAssertFalse(secondModel.overrides.externalControllerCORS.enabled)
+  }
+
   func testLaunchSettingsUseMainAppLoginServiceAndPersistSilentStart() async throws {
     let paths = try Self.makeRuntimePaths()
     let suiteName = "ClashMaxLaunchSettingsTests-\(UUID().uuidString)"
@@ -309,6 +371,34 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     XCTAssertFalse(model.systemProxyEnabled)
     XCTAssertEqual(controller.guardState, .idle)
+  }
+
+  func testSystemProxyGuardQueryWarningDoesNotBecomeGlobalError() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    let commandRunner = GuardWarningCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+    let controller = SystemProxyController(commandRunner: commandRunner)
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      systemProxyController: controller,
+      defaults: defaults
+    )
+    var settings = SystemProxySettings.default
+    settings.guardEnabled = true
+    settings.guardIntervalSeconds = 5
+
+    XCTAssertTrue(model.updateSystemProxySettings(settings))
+    model.setSystemProxyEnabled(true)
+
+    for _ in 0..<100 where !model.logs.contains(where: { $0.message.contains("could not read Wi-Fi proxy settings") }) {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 2_000_000)
+    }
+
+    XCTAssertTrue(model.systemProxyEnabled)
+    XCTAssertNil(model.lastError)
+    XCTAssertTrue(model.logs.contains { $0.level == "warn" && $0.message.contains("could not read Wi-Fi proxy settings") })
   }
 
   func testTerminationRestoresEnabledSystemProxy() async throws {
@@ -384,6 +474,47 @@ final class DashboardRuntimeStateTests: XCTestCase {
       ),
       .offlinePreview
     )
+  }
+
+  func testProviderSummaryRequiresDeveloperMode() {
+    XCTAssertFalse(ProxyPageVisibilityPolicy.showsProviderSummary(developerMode: false, providerCount: 3))
+    XCTAssertFalse(ProxyPageVisibilityPolicy.showsProviderSummary(developerMode: true, providerCount: 0))
+    XCTAssertTrue(ProxyPageVisibilityPolicy.showsProviderSummary(developerMode: true, providerCount: 3))
+  }
+
+  func testProxyGroupExpansionPolicyKeepsNormalRowsExpandable() {
+    let groups = [
+      ProxyGroup(
+        name: "Elite",
+        type: "select",
+        selected: "Japan",
+        nodes: [ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true)]
+      )
+    ]
+
+    let initialExpansion = ProxyGroupExpansionPolicy.resolvedExpansion(
+      current: nil,
+      groups: groups,
+      searchQuery: ""
+    )
+    XCTAssertEqual(initialExpansion, Set(["Elite"]))
+
+    XCTAssertEqual(ProxyGroupExpansionPolicy.toggled(groupID: "Elite", in: initialExpansion), Set<String>())
+  }
+
+  func testDeveloperOnlyLogsAreHiddenUntilDeveloperMode() {
+    let entries = [
+      LogEntry(level: "info", message: "Core ready"),
+      LogEntry(level: "debug", message: "controller request body"),
+      LogEntry(level: "info", message: "GET https://www.gstatic.com/generate_204"),
+      LogEntry(level: "trace", message: "raw stream frame")
+    ]
+
+    let normalMessages = LogVisibility.visibleEntries(in: entries, developerMode: false).map(\.message)
+    XCTAssertEqual(normalMessages, ["Core ready"])
+
+    let developerMessages = LogVisibility.visibleEntries(in: entries, developerMode: true).map(\.message)
+    XCTAssertEqual(developerMessages, entries.map(\.message))
   }
 
   func testProxyGroupExpansionDefaultsToSelectedGroup() {
@@ -548,7 +679,13 @@ final class DashboardRuntimeStateTests: XCTestCase {
       proxyGroupsResponse: [group],
       testDelayResult: 73
     )
-    let model = AppModel(paths: paths, profileStore: store, coreController: controller, apiClient: client)
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      apiClient: client,
+      defaults: try Self.makeIsolatedDefaults()
+    )
     model.proxyGroups = [group]
 
     try await controller.startUserMode(
@@ -570,6 +707,149 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let delayRequestCount = await client.delayRequestCount()
     XCTAssertEqual(delayRequestCount, 1)
     XCTAssertEqual(model.proxyGroups.first?.nodes.first?.delay, 73)
+  }
+
+  func testUnifiedMihomoDelayRunsTwiceAndUsesSecondResult() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try "proxies:\n  - { name: Japan, type: vless, server: jp.example, port: 443 }\n"
+      .write(to: configURL, atomically: true, encoding: .utf8)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try store.importLocalConfig(from: configURL)
+    let controller = CoreProcessController(
+      launcher: FakeProcessLauncher(),
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let group = ProxyGroup(
+      name: "Elite",
+      type: "select",
+      selected: "Japan",
+      nodes: [ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true, serverHost: "jp.example", serverPort: 443)]
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [group],
+      testDelayResults: [111, 73]
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      apiClient: client,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.delayTestSettings = DelayTestSettings(mode: .mihomoURL, unifiedDelay: true)
+    model.proxyGroups = [group]
+
+    try await controller.startUserMode(
+      coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+      configURL: configURL,
+      workDirectory: paths.runtime,
+      api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+    )
+
+    model.testDelay(for: group.nodes[0])
+
+    for _ in 0..<30 where await client.delayRequestCount() < 2 {
+      await Task.yield()
+    }
+    for _ in 0..<30 where model.proxyGroups.first?.nodes.first?.delay != 73 {
+      await Task.yield()
+    }
+
+    let delayRequestCount = await client.delayRequestCount()
+    XCTAssertEqual(delayRequestCount, 2)
+    XCTAssertEqual(model.proxyGroups.first?.nodes.first?.delay, 73)
+  }
+
+  func testNativePingDelayUsesNodeServerHost() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try "proxies:\n  - { name: Japan, type: vless, server: jp.example, port: 443 }\n"
+      .write(to: configURL, atomically: true, encoding: .utf8)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try store.importLocalConfig(from: configURL)
+    let controller = CoreProcessController(
+      launcher: FakeProcessLauncher(),
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let group = ProxyGroup(
+      name: "Elite",
+      type: "select",
+      selected: "Japan",
+      nodes: [ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true, serverHost: "jp.example", serverPort: 443)]
+    )
+    let client = RecordingMihomoController(proxyGroupsResponse: [group], testDelayResult: 99)
+    let pingTester = RecordingPingTester(results: [44])
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      apiClient: client,
+      pingTester: pingTester,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.delayTestSettings = DelayTestSettings(mode: .nativePing, unifiedDelay: false)
+    model.proxyGroups = [group]
+
+    try await controller.startUserMode(
+      coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+      configURL: configURL,
+      workDirectory: paths.runtime,
+      api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+    )
+
+    model.testDelay(for: group.nodes[0])
+
+    for _ in 0..<30 where await pingTester.requestCount() == 0 {
+      await Task.yield()
+    }
+    for _ in 0..<30 where model.proxyGroups.first?.nodes.first?.delay != 44 {
+      await Task.yield()
+    }
+
+    let requestedHosts = await pingTester.hosts()
+    let delayRequestCount = await client.delayRequestCount()
+    XCTAssertEqual(requestedHosts, ["jp.example"])
+    XCTAssertEqual(delayRequestCount, 0)
+    XCTAssertEqual(model.proxyGroups.first?.nodes.first?.delay, 44)
+  }
+
+  func testNativePingDelayRequiresNodeServerHost() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let group = ProxyGroup(
+      name: "Elite",
+      type: "select",
+      selected: "Japan",
+      nodes: [ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true)]
+    )
+    let client = RecordingMihomoController(proxyGroupsResponse: [group], testDelayResult: 99)
+    let pingTester = RecordingPingTester(results: [44])
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      apiClient: client,
+      pingTester: pingTester,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.delayTestSettings = DelayTestSettings(mode: .nativePing, unifiedDelay: false)
+
+    model.testDelay(for: group.nodes[0])
+
+    for _ in 0..<30 where model.lastError == nil {
+      await Task.yield()
+    }
+
+    XCTAssertTrue(model.lastError?.contains("Native ping needs a server host") == true)
+    let pingRequestCount = await pingTester.requestCount()
+    let delayRequestCount = await client.delayRequestCount()
+    XCTAssertEqual(pingRequestCount, 0)
+    XCTAssertEqual(delayRequestCount, 0)
   }
 
   func testReloadRuntimeDataIncludesProxyProvidersAndConnections() async throws {
@@ -1125,7 +1405,7 @@ private actor RecordingMihomoController: MihomoAPIControlling {
   private let proxyGroupsResponse: [ProxyGroup]
   private let proxyProvidersResponse: [ProxyProvider]
   private let connectionsResponse: [ConnectionSnapshot]
-  private let testDelayResult: Int
+  private let testDelayResults: [Int]
   private var delayRequests: [String] = []
   private var healthCheckRequests: [String] = []
   private var closedConnections: [String] = []
@@ -1137,10 +1417,24 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     connectionsResponse: [ConnectionSnapshot] = [],
     testDelayResult: Int
   ) {
+    self.init(
+      proxyGroupsResponse: proxyGroupsResponse,
+      proxyProvidersResponse: proxyProvidersResponse,
+      connectionsResponse: connectionsResponse,
+      testDelayResults: [testDelayResult]
+    )
+  }
+
+  init(
+    proxyGroupsResponse: [ProxyGroup],
+    proxyProvidersResponse: [ProxyProvider] = [],
+    connectionsResponse: [ConnectionSnapshot] = [],
+    testDelayResults: [Int]
+  ) {
     self.proxyGroupsResponse = proxyGroupsResponse
     self.proxyProvidersResponse = proxyProvidersResponse
     self.connectionsResponse = connectionsResponse
-    self.testDelayResult = testDelayResult
+    self.testDelayResults = testDelayResults
   }
 
   func updateMode(_ mode: RunMode) async throws {}
@@ -1165,7 +1459,8 @@ private actor RecordingMihomoController: MihomoAPIControlling {
 
   func testDelay(proxy: String, testURL: URL, timeout: Int) async throws -> Int {
     delayRequests.append(proxy)
-    return testDelayResult
+    let index = min(delayRequests.count - 1, max(testDelayResults.count - 1, 0))
+    return testDelayResults[index]
   }
 
   func healthCheckProvider(named provider: String) async throws {
@@ -1214,6 +1509,29 @@ private actor RecordingMihomoController: MihomoAPIControlling {
 
   func closeAllRequestCount() -> Int {
     closedAllRequestCount
+  }
+}
+
+private actor RecordingPingTester: PingTesting {
+  private let results: [Int]
+  private var requestedHosts: [String] = []
+
+  init(results: [Int]) {
+    self.results = results
+  }
+
+  func ping(host: String, timeoutMilliseconds: Int) async throws -> Int {
+    requestedHosts.append(host)
+    let index = min(requestedHosts.count - 1, max(results.count - 1, 0))
+    return results[index]
+  }
+
+  func requestCount() -> Int {
+    requestedHosts.count
+  }
+
+  func hosts() -> [String] {
+    requestedHosts
   }
 }
 
@@ -1321,6 +1639,35 @@ private struct FailingCoreReadinessProbe: CoreReadinessProbing {
 
   func waitUntilReady(api: CoreAPIEndpoint) async throws -> String {
     throw AppError.coreNotReady(message)
+  }
+}
+
+private final class GuardWarningCommandRunner: CommandRunning, @unchecked Sendable {
+  let outputs: [String: String]
+  private let queue = DispatchQueue(label: "io.github.clashmax.tests.GuardWarningCommandRunner")
+  private var secureWebReads = 0
+
+  init(outputs: [String: String]) {
+    self.outputs = outputs
+  }
+
+  func run(_ executable: String, _ arguments: [String]) async throws -> String {
+    let command = ([executable] + arguments).joined(separator: " ")
+    var shouldFail = false
+    queue.sync {
+      if command == "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi" {
+        secureWebReads += 1
+        shouldFail = secureWebReads > 1
+      }
+    }
+    if shouldFail {
+      throw NSError(
+        domain: "ClashMaxTests.GuardWarningCommandRunner",
+        code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "Injected guard query failure for \(command)"]
+      )
+    }
+    return outputs[command] ?? ""
   }
 }
 

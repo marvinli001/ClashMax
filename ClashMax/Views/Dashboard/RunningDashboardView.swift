@@ -640,14 +640,16 @@ private struct RecentLogsRuntimeCard: View {
   @EnvironmentObject private var appModel: AppModel
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      DashboardSectionHeader(title: "Recent Logs", symbolName: "terminal", trailing: "\(appModel.logs.count)")
+    let visibleLogs = appModel.userVisibleLogs
 
-      if appModel.logs.isEmpty {
+    VStack(alignment: .leading, spacing: 12) {
+      DashboardSectionHeader(title: "Recent Logs", symbolName: "terminal", trailing: "\(visibleLogs.count)")
+
+      if visibleLogs.isEmpty {
         DashboardEmptyRuntimeView(title: "Waiting for runtime data", symbolName: "text.alignleft")
       } else {
         VStack(spacing: 8) {
-          ForEach(Array(appModel.logs.suffix(6))) { entry in
+          ForEach(Array(visibleLogs.suffix(6))) { entry in
             HStack(alignment: .firstTextBaseline, spacing: 8) {
               Text(entry.level.uppercased())
                 .font(.caption.weight(.semibold))

@@ -92,6 +92,42 @@ final class MihomoAPIClientTests: XCTestCase {
     XCTAssertEqual(group.nodes.first?.delay, 157)
   }
 
+  func testProxyGroupsCarryRuntimeProxyEndpointsForNativePing() async throws {
+    let recorder = URLProtocolRecorder(responseBody: """
+    {
+      "proxies": {
+        "Elite": {
+          "type": "Selector",
+          "now": "Japan",
+          "all": ["Japan", "DIRECT"],
+          "history": []
+        },
+        "Japan": {
+          "type": "Vless",
+          "server": "jp.example",
+          "port": 443,
+          "history": []
+        },
+        "DIRECT": {
+          "type": "Direct",
+          "history": []
+        }
+      }
+    }
+    """)
+    let session = URLSession(configuration: recorder.configuration)
+    let client = MihomoAPIClient(baseURL: URL(string: "http://127.0.0.1:9097")!, secret: "abc", session: session)
+
+    let groups = try await client.proxyGroups()
+    let group = try XCTUnwrap(groups.first)
+
+    XCTAssertEqual(group.nodes[0].name, "Japan")
+    XCTAssertEqual(group.nodes[0].serverHost, "jp.example")
+    XCTAssertEqual(group.nodes[0].serverPort, 443)
+    XCTAssertNil(group.nodes[1].serverHost)
+    XCTAssertNil(group.nodes[1].serverPort)
+  }
+
   func testProviderHealthCheckUsesGetRequest() async throws {
     let recorder = URLProtocolRecorder()
     let session = URLSession(configuration: recorder.configuration)

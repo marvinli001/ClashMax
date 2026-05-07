@@ -43,6 +43,16 @@ struct ConfigNormalizer {
     root["allow-lan"] = overrides.allowLan
     root["mode"] = overrides.mode.rawValue
     root["log-level"] = overrides.logLevel
+    root["unified-delay"] = overrides.unifiedDelay
+
+    if overrides.externalControllerCORS.enabled {
+      root["external-controller-cors"] = [
+        "allow-origins": overrides.externalControllerCORS.effectiveAllowedOrigins,
+        "allow-private-network": overrides.externalControllerCORS.allowPrivateNetwork
+      ]
+    } else {
+      root.removeValue(forKey: "external-controller-cors")
+    }
 
     if let dnsEnabled = overrides.dnsEnabled {
       var dns = root["dns"] as? [String: Any] ?? [:]
@@ -287,9 +297,14 @@ struct ProfilePreviewBuilder {
   }
 
   private func clashConfigGroups(from root: [String: Any]) -> [ProxyGroup] {
-    let proxyTypes = dictionaryArray(root["proxies"]).reduce(into: [String: String]()) { result, proxy in
+    let proxyEntries = dictionaryArray(root["proxies"])
+    let proxyTypes = proxyEntries.reduce(into: [String: String]()) { result, proxy in
       guard let name = string(proxy["name"]) else { return }
       result[name] = string(proxy["type"]) ?? "proxy"
+    }
+    let proxyEndpoints = proxyEntries.reduce(into: [String: ProxyEndpoint]()) { result, proxy in
+      guard let name = string(proxy["name"]) else { return }
+      result[name] = ProxyEndpoint(host: string(proxy["server"]), port: int(proxy["port"]))
     }
     let groupEntries = dictionaryArray(root["proxy-groups"])
     let groupTypes = groupEntries.reduce(into: [String: String]()) { result, group in
@@ -305,7 +320,9 @@ struct ProfilePreviewBuilder {
           name: proxyName,
           type: proxyTypes[proxyName] ?? groupTypes[proxyName] ?? builtInProxyType(for: proxyName) ?? "proxy",
           delay: nil,
-          isSelectable: true
+          isSelectable: true,
+          serverHost: proxyEndpoints[proxyName]?.host,
+          serverPort: proxyEndpoints[proxyName]?.port
         )
       }
 
@@ -376,11 +393,14 @@ struct ProfilePreviewBuilder {
     }
 
     let type = normalizedProxyType(for: scheme)
+    let endpoint = providerURIEndpoint(from: trimmed)
     return ProxyNode(
       name: providerURIName(from: trimmed, scheme: type),
       type: type,
       delay: nil,
-      isSelectable: true
+      isSelectable: true,
+      serverHost: endpoint.host,
+      serverPort: endpoint.port
     )
   }
 
@@ -398,7 +418,11 @@ struct ProfilePreviewBuilder {
   }
 
   private func providerURIHost(from uri: String) -> String? {
-    guard let schemeRange = uri.range(of: "://") else { return nil }
+    providerURIEndpoint(from: uri).host
+  }
+
+  private func providerURIEndpoint(from uri: String) -> ProxyEndpoint {
+    guard let schemeRange = uri.range(of: "://") else { return ProxyEndpoint(host: nil, port: nil) }
     var remainder = String(uri[schemeRange.upperBound...])
     if let fragmentStart = remainder.firstIndex(of: "#") {
       remainder = String(remainder[..<fragmentStart])
@@ -409,12 +433,15 @@ struct ProfilePreviewBuilder {
     if let at = remainder.lastIndex(of: "@") {
       remainder = String(remainder[remainder.index(after: at)...])
     }
+    var port: Int?
     if let colon = remainder.lastIndex(of: ":") {
+      let portText = String(remainder[remainder.index(after: colon)...])
+      port = Int(portText)
       remainder = String(remainder[..<colon])
     }
     let decoded = remainder.removingPercentEncoding ?? remainder
     let trimmed = decoded.trimmingCharacters(in: .whitespacesAndNewlines)
-    return trimmed.isEmpty ? nil : trimmed
+    return ProxyEndpoint(host: trimmed.isEmpty ? nil : trimmed, port: port)
   }
 
   private func normalizedProxyType(for scheme: String) -> String {
@@ -459,4 +486,22 @@ struct ProfilePreviewBuilder {
       return nil
     }
   }
+
+  private func int(_ value: Any?) -> Int? {
+    switch value {
+    case let value as Int:
+      return value
+    case let value as String:
+      return Int(value.trimmingCharacters(in: .whitespacesAndNewlines))
+    case let value as CustomStringConvertible:
+      return Int(String(describing: value))
+    default:
+      return nil
+    }
+  }
+}
+
+private struct ProxyEndpoint {
+  var host: String?
+  var port: Int?
 }

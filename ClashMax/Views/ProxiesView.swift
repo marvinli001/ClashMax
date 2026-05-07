@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ProxiesView: View {
   @EnvironmentObject private var appModel: AppModel
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var searchText = ""
   @State private var sortOrder: ProxyNodeSort = .name
   @State private var expandedGroupIDs: Set<String>?
@@ -13,6 +14,12 @@ struct ProxiesView: View {
       current: expandedGroupIDs,
       groups: groups,
       searchQuery: searchQuery
+    )
+    let listAnimationState = ProxyGroupListAnimationState(
+      groups: groups,
+      expandedGroupIDs: visibleExpandedGroupIDs,
+      searchQuery: searchQuery,
+      sortOrder: sortOrder
     )
     let isStarting = appModel.dashboardRuntimeState.isStarting
     let canStart = ProxiesPageActionState.canStart(
@@ -59,7 +66,10 @@ struct ProxiesView: View {
             ProxyPreviewNotice(icon: notice.icon, message: notice.message)
           }
 
-          if !appModel.proxyProviders.isEmpty {
+          if ProxyPageVisibilityPolicy.showsProviderSummary(
+            developerMode: appModel.developerMode,
+            providerCount: appModel.proxyProviders.count
+          ) {
             ProxyProviderList(providers: appModel.proxyProviders)
           }
 
@@ -68,6 +78,7 @@ struct ProxiesView: View {
               ForEach(groups) { group in
                 ProxyGroupCard(
                   group: group,
+                  showsDeveloperDetails: appModel.developerMode,
                   isExpanded: visibleExpandedGroupIDs.contains(group.id),
                   isSearchActive: !searchQuery.isEmpty
                 ) {
@@ -76,9 +87,12 @@ struct ProxiesView: View {
               }
             }
             .padding(.vertical, 2)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .animation(ProxyInteractionAnimation.list(reduceMotion: reduceMotion), value: listAnimationState)
           }
           .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       }
     }
     .onAppear {
@@ -90,10 +104,12 @@ struct ProxiesView: View {
       }
     }
     .onChange(of: appModel.visibleProxyGroups.map(\.id)) { _, _ in
-      expandedGroupIDs = ProxyGroupExpansionPolicy.retainedExpansion(
-        current: expandedGroupIDs,
-        groups: appModel.visibleProxyGroups
-      )
+      withAnimation(ProxyInteractionAnimation.list(reduceMotion: reduceMotion)) {
+        expandedGroupIDs = ProxyGroupExpansionPolicy.retainedExpansion(
+          current: expandedGroupIDs,
+          groups: appModel.visibleProxyGroups
+        )
+      }
     }
   }
 
@@ -188,11 +204,13 @@ struct ProxiesView: View {
       groups: visibleGroups,
       searchQuery: normalizedSearchQuery
     )
-    expandedGroupIDs = ProxyGroupExpansionPolicy.toggled(groupID: group.id, in: currentExpansion)
+    withAnimation(ProxyInteractionAnimation.expansion(reduceMotion: reduceMotion)) {
+      expandedGroupIDs = ProxyGroupExpansionPolicy.toggled(groupID: group.id, in: currentExpansion)
+    }
   }
 }
 
-private enum ProxyNodeSort: String, CaseIterable, Identifiable {
+private enum ProxyNodeSort: String, CaseIterable, Equatable, Identifiable {
   case name
   case delay
   case type
@@ -205,6 +223,49 @@ private enum ProxyNodeSort: String, CaseIterable, Identifiable {
     case .delay: "Delay"
     case .type: "Type"
     }
+  }
+}
+
+private struct ProxyGroupListAnimationState: Equatable {
+  let groupIDs: [String]
+  let expandedGroupIDs: [String]
+  let nodeIDsByGroup: [[String]]
+  let selections: [String]
+  let searchQuery: String
+  let sortOrder: ProxyNodeSort
+
+  init(
+    groups: [ProxyGroup],
+    expandedGroupIDs: Set<String>,
+    searchQuery: String,
+    sortOrder: ProxyNodeSort
+  ) {
+    self.groupIDs = groups.map(\.id)
+    self.expandedGroupIDs = expandedGroupIDs.sorted()
+    self.nodeIDsByGroup = groups.map { group in
+      group.nodes.map(\.id)
+    }
+    self.selections = groups.map { group in
+      group.selected ?? ""
+    }
+    self.searchQuery = searchQuery
+    self.sortOrder = sortOrder
+  }
+}
+
+private struct ProxyNodeGridAnimationState: Equatable {
+  let nodeIDs: [String]
+  let selected: String?
+
+  init(group: ProxyGroup) {
+    nodeIDs = group.nodes.map(\.id)
+    selected = group.selected
+  }
+}
+
+enum ProxyPageVisibilityPolicy {
+  static func showsProviderSummary(developerMode: Bool, providerCount: Int) -> Bool {
+    developerMode && providerCount > 0
   }
 }
 
@@ -302,7 +363,11 @@ private struct ProxyProviderList: View {
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
-    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .background(ProxySurface.secondary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 8, style: .continuous)
+        .strokeBorder(ProxySurface.border, lineWidth: 1)
+    }
   }
 
   private func providerSubtitle(_ provider: ProxyProvider) -> String {
@@ -312,7 +377,9 @@ private struct ProxyProviderList: View {
 }
 
 private struct ProxyGroupCard: View {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let group: ProxyGroup
+  let showsDeveloperDetails: Bool
   let isExpanded: Bool
   let isSearchActive: Bool
   let onToggle: () -> Void
@@ -325,38 +392,54 @@ private struct ProxyGroupCard: View {
         groupHeader
       }
       .buttonStyle(.plain)
-      .help(isSearchActive ? "Search results expand matching groups automatically." : "Toggle \(group.name)")
-      .accessibilityLabel("\(isExpanded ? "Collapse" : "Expand") \(group.name)")
+      .help(groupHeaderHelp)
+      .accessibilityLabel(groupHeaderAccessibilityLabel)
 
       if isExpanded {
-        Divider()
-          .padding(.horizontal, 12)
-        LazyVGrid(
-          columns: [GridItem(.adaptive(minimum: 220, maximum: 320), spacing: 10, alignment: .topLeading)],
-          alignment: .leading,
-          spacing: 10
-        ) {
-          ForEach(group.nodes) { node in
-            ProxyNodeCard(group: group, node: node)
-          }
-        }
-        .padding(12)
+        expandedContent
+          .transition(ProxyInteractionAnimation.expansionTransition(reduceMotion: reduceMotion))
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .background(ProxySurface.group, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     .overlay {
       RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .strokeBorder(.primary.opacity(0.08))
+        .strokeBorder(ProxySurface.border, lineWidth: 1)
     }
+  }
+
+  private var expandedContent: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Divider()
+        .padding(.horizontal, 12)
+      LazyVGrid(
+        columns: [GridItem(.adaptive(minimum: 190, maximum: 280), spacing: 10, alignment: .topLeading)],
+        alignment: .leading,
+        spacing: 10
+      ) {
+        ForEach(group.nodes) { node in
+          ProxyNodeCard(group: group, node: node)
+            .transition(ProxyInteractionAnimation.nodeTransition(reduceMotion: reduceMotion))
+        }
+      }
+      .padding(10)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .animation(
+        ProxyInteractionAnimation.list(reduceMotion: reduceMotion),
+        value: ProxyNodeGridAnimationState(group: group)
+      )
+    }
+    .clipped()
   }
 
   private var groupHeader: some View {
     HStack(spacing: 10) {
-      Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+      Image(systemName: "chevron.right")
         .font(.caption.weight(.semibold))
         .foregroundStyle(.secondary)
         .frame(width: 12)
+        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+        .animation(ProxyInteractionAnimation.chevron(reduceMotion: reduceMotion), value: isExpanded)
 
       Image(systemName: "point.3.connected.trianglepath.dotted")
         .foregroundStyle(.cyan)
@@ -368,18 +451,22 @@ private struct ProxyGroupCard: View {
             .font(.callout.weight(.semibold))
             .foregroundStyle(.primary)
             .lineLimit(1)
-          ProxyTypeBadge(text: group.type)
+          if showsDeveloperDetails {
+            ProxyTypeBadge(text: group.type)
+          }
         }
 
         ViewThatFits(in: .horizontal) {
           HStack(spacing: 10) {
             nodeCountLabel
             selectedLabel
+            selectedDelayLabel
           }
 
           VStack(alignment: .leading, spacing: 3) {
             nodeCountLabel
             selectedLabel
+            selectedDelayLabel
           }
         }
       }
@@ -389,6 +476,17 @@ private struct ProxyGroupCard: View {
     .padding(.horizontal, 12)
     .padding(.vertical, 10)
     .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+  }
+
+  private var groupHeaderHelp: String {
+    if isSearchActive {
+      return "Search results expand matching groups automatically."
+    }
+    return "Toggle \(group.name)"
+  }
+
+  private var groupHeaderAccessibilityLabel: String {
+    return "\(isExpanded ? "Collapse" : "Expand") \(group.name)"
   }
 
   private var nodeCountLabel: some View {
@@ -411,10 +509,26 @@ private struct ProxyGroupCard: View {
     .font(.caption)
     .lineLimit(1)
   }
+
+  private var selectedDelayLabel: some View {
+    Group {
+      if let selectedNode = group.nodes.first(where: { $0.name == group.selected }) {
+        let delayDisplay = ProxyDelayDisplay(delay: selectedNode.delay)
+        Text(delayDisplay.label)
+          .foregroundStyle(delayDisplay.tone.color)
+      } else {
+        EmptyView()
+      }
+    }
+    .font(.caption.monospacedDigit())
+    .lineLimit(1)
+  }
 }
 
 private struct ProxyNodeCard: View {
   @EnvironmentObject private var appModel: AppModel
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @GestureState private var isPressing = false
   let group: ProxyGroup
   let node: ProxyNode
 
@@ -426,13 +540,17 @@ private struct ProxyNodeCard: View {
 
     ZStack(alignment: .topTrailing) {
       Button {
-        appModel.selectProxy(group: group, node: node)
+        withAnimation(ProxyInteractionAnimation.selection(reduceMotion: reduceMotion)) {
+          appModel.selectProxy(group: group, node: node)
+        }
       } label: {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
           HStack(alignment: .top, spacing: 8) {
             Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
               .foregroundStyle(isSelected ? .green : .secondary)
               .frame(width: 16)
+              .scaleEffect(isSelected ? 1.04 : 1)
+              .animation(ProxyInteractionAnimation.selection(reduceMotion: reduceMotion), value: isSelected)
 
             Text(node.name)
               .font(.callout.weight(isSelected ? .semibold : .regular))
@@ -446,14 +564,15 @@ private struct ProxyNodeCard: View {
           HStack(spacing: 8) {
             ProxyTypeBadge(text: node.type, isSelectable: node.isSelectable)
             Spacer(minLength: 8)
-            Label(delayDisplay.label, systemImage: "speedometer")
+            Text(delayDisplay.label)
               .font(.caption.monospacedDigit())
               .foregroundStyle(delayDisplay.tone.color)
               .lineLimit(1)
           }
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, minHeight: 92, alignment: .topLeading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
       }
       .buttonStyle(.plain)
@@ -463,20 +582,135 @@ private struct ProxyNodeCard: View {
       Button {
         appModel.testDelay(for: node)
       } label: {
-        Image(systemName: "speedometer")
+        Image(systemName: "dot.radiowaves.left.and.right")
+          .font(.system(size: 13, weight: .medium))
+          .frame(width: 20, height: 20)
       }
       .buttonStyle(.borderless)
       .controlSize(.small)
       .disabled(!canTest)
       .help(canTest ? "Test delay" : "Preview core needs a moment to come up before delay testing.")
       .accessibilityLabel("Test delay for \(node.name)")
-      .padding(6)
+      .padding(.top, 7)
+      .padding(.trailing, 7)
     }
-    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .frame(maxWidth: .infinity, alignment: .topLeading)
+    .scaleEffect(nodeScale(canSelect: canSelect))
+    .background {
+      RoundedRectangle(cornerRadius: 8, style: .continuous)
+        .fill(ProxySurface.node)
+      RoundedRectangle(cornerRadius: 8, style: .continuous)
+        .fill(nodeInteractionTint(isSelected: isSelected, canSelect: canSelect))
+    }
     .overlay {
       RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .strokeBorder(isSelected ? .green.opacity(0.75) : .primary.opacity(0.08), lineWidth: isSelected ? 1.2 : 1)
+        .strokeBorder(
+          nodeBorder(isSelected: isSelected, canSelect: canSelect),
+          lineWidth: isSelected || (isPressing && canSelect) ? 1.2 : 1
+        )
     }
+    .simultaneousGesture(pressGesture(isEnabled: canSelect))
+    .animation(ProxyInteractionAnimation.press(reduceMotion: reduceMotion), value: isPressing)
+    .animation(ProxyInteractionAnimation.selection(reduceMotion: reduceMotion), value: isSelected)
+  }
+
+  private func nodeScale(canSelect: Bool) -> Double {
+    guard canSelect, isPressing, !reduceMotion else { return 1 }
+    return 0.992
+  }
+
+  private func nodeInteractionTint(isSelected: Bool, canSelect: Bool) -> Color {
+    if isSelected {
+      return .green.opacity(0.05)
+    }
+    if canSelect, isPressing {
+      return Color.accentColor.opacity(0.045)
+    }
+    return .clear
+  }
+
+  private func nodeBorder(isSelected: Bool, canSelect: Bool) -> Color {
+    if isSelected {
+      return .green.opacity(0.75)
+    }
+    if canSelect, isPressing {
+      return Color.accentColor.opacity(0.35)
+    }
+    return ProxySurface.border
+  }
+
+  private func pressGesture(isEnabled: Bool) -> some Gesture {
+    DragGesture(minimumDistance: 0)
+      .updating($isPressing) { _, state, _ in
+        state = isEnabled
+      }
+  }
+}
+
+private enum ProxySurface {
+  static var group: Color {
+    Color(nsColor: .controlBackgroundColor)
+  }
+
+  static var node: Color {
+    Color(nsColor: .textBackgroundColor)
+  }
+
+  static var secondary: Color {
+    Color(nsColor: .controlBackgroundColor)
+  }
+
+  static var border: Color {
+    Color(nsColor: .separatorColor).opacity(0.55)
+  }
+}
+
+private enum ProxyInteractionAnimation {
+  static func expansion(reduceMotion: Bool) -> Animation {
+    reduceMotion
+      ? .easeInOut(duration: 0.12)
+      : .spring(response: 0.34, dampingFraction: 0.88)
+  }
+
+  static func list(reduceMotion: Bool) -> Animation {
+    reduceMotion
+      ? .easeInOut(duration: 0.12)
+      : .spring(response: 0.38, dampingFraction: 0.90)
+  }
+
+  static func chevron(reduceMotion: Bool) -> Animation {
+    reduceMotion
+      ? .easeInOut(duration: 0.10)
+      : .spring(response: 0.24, dampingFraction: 0.78)
+  }
+
+  static func press(reduceMotion: Bool) -> Animation {
+    reduceMotion
+      ? .easeInOut(duration: 0.08)
+      : .spring(response: 0.18, dampingFraction: 0.72)
+  }
+
+  static func selection(reduceMotion: Bool) -> Animation {
+    reduceMotion
+      ? .easeInOut(duration: 0.12)
+      : .spring(response: 0.26, dampingFraction: 0.82)
+  }
+
+  static func expansionTransition(reduceMotion: Bool) -> AnyTransition {
+    if reduceMotion {
+      return .opacity
+    }
+    return .asymmetric(
+      insertion: .opacity.combined(with: .move(edge: .top)),
+      removal: .opacity
+    )
+  }
+
+  static func nodeTransition(reduceMotion: Bool) -> AnyTransition {
+    if reduceMotion {
+      return .opacity
+    }
+    return .opacity.combined(with: .scale(scale: 0.98, anchor: .top))
   }
 }
 
@@ -609,6 +843,10 @@ private struct ProxyPreviewNotice: View {
       .padding(.horizontal, 12)
       .padding(.vertical, 8)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .background(.quaternary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+      .background(ProxySurface.secondary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+          .strokeBorder(ProxySurface.border, lineWidth: 1)
+      }
   }
 }

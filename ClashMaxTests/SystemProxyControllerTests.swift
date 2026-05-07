@@ -107,6 +107,31 @@ final class SystemProxyControllerTests: XCTestCase {
     XCTAssertLessThan(Date().timeIntervalSince(startedAt), 1)
   }
 
+  func testSystemPingTesterUsesFixedExecutableAndParsesLatency() async throws {
+    let runner = RecordingCommandRunner(outputs: [
+      "/sbin/ping -c 1 -W 5000 example.com": "64 bytes from 93.184.216.34: icmp_seq=0 ttl=56 time=12.4 ms"
+    ])
+    let tester = SystemPingTester(commandRunner: runner)
+
+    let delay = try await tester.ping(host: " example.com\n", timeoutMilliseconds: 5_000)
+
+    XCTAssertEqual(delay, 12)
+    XCTAssertEqual(runner.commands, ["/sbin/ping -c 1 -W 5000 example.com"])
+  }
+
+  func testSystemPingTesterRejectsOptionLikeHostsBeforeRunningCommand() async throws {
+    let runner = RecordingCommandRunner(outputs: [:])
+    let tester = SystemPingTester(commandRunner: runner)
+
+    do {
+      _ = try await tester.ping(host: "-c", timeoutMilliseconds: 5_000)
+      XCTFail("Expected invalid host error")
+    } catch {
+      XCTAssertTrue(error.localizedDescription.contains("invalid host"))
+    }
+    XCTAssertEqual(runner.commands, [])
+  }
+
   func testApplySystemProxyTargetsAllActiveServices() async throws {
     let runner = RecordingCommandRunner(outputs: [
       "/usr/sbin/networksetup -listallnetworkservices": "An asterisk (*) denotes that a network service is disabled.\nWi-Fi\nThunderbolt Bridge\n"
@@ -229,6 +254,44 @@ final class SystemProxyControllerTests: XCTestCase {
     XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setsecurewebproxy Wi-Fi 127.0.0.1 7890"))
   }
 
+  func testProxyGuardQueryFailureReturnsWarningWithoutThrowing() async throws {
+    let runner = FailingCommandRunner(
+      outputs: [
+        "/usr/sbin/networksetup -listallnetworkservices": "Wi-Fi\n",
+        "/usr/sbin/networksetup -getwebproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n"
+      ],
+      failingCommands: [
+        "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi"
+      ]
+    )
+    let controller = SystemProxyController(commandRunner: runner)
+
+    try await controller.enableGuard(host: "127.0.0.1", port: 7890, bypassDomains: ["localhost"])
+    let result = try await controller.verifyGuardOnceDetailed()
+
+    XCTAssertFalse(result.didRepair)
+    XCTAssertEqual(result.warnings.count, 1)
+    XCTAssertTrue(result.warnings[0].contains("could not read Wi-Fi proxy settings"))
+    XCTAssertFalse(runner.commands.contains("/usr/sbin/networksetup -setwebproxy Wi-Fi 127.0.0.1 7890"))
+  }
+
+  func testSystemProxyOperationsSerializeNetworkSetupCommands() async throws {
+    let runner = DelayedRecordingCommandRunner(outputs: [
+      "/usr/sbin/networksetup -listallnetworkservices": "Wi-Fi\n",
+      "/usr/sbin/networksetup -getwebproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
+      "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
+      "/usr/sbin/networksetup -getsocksfirewallproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
+      "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": "There aren't any bypass domains set.\n"
+    ])
+    let controller = SystemProxyController(commandRunner: runner)
+
+    async let applyResult: Void = controller.apply(host: "127.0.0.1", port: 7890)
+    async let restoreResult: Void = controller.restore()
+    _ = try await (applyResult, restoreResult)
+
+    XCTAssertEqual(runner.maximumConcurrentRuns, 1)
+  }
+
   func testRestoreTurnsProxyStatesOff() async throws {
     let runner = RecordingCommandRunner(outputs: [
       "/usr/sbin/networksetup -listallnetworkservices": "Wi-Fi\n"
@@ -290,6 +353,42 @@ final class SystemProxyControllerTests: XCTestCase {
     try await controller.restore()
 
     XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setproxybypassdomains Wi-Fi Empty"))
+  }
+}
+
+private final class DelayedRecordingCommandRunner: CommandRunning, @unchecked Sendable {
+  let outputs: [String: String]
+  private let delayNanoseconds: UInt64
+  private let queue = DispatchQueue(label: "io.github.clashmax.tests.DelayedRecordingCommandRunner")
+  private var _commands: [String] = []
+  private var inFlight = 0
+  private var maxInFlight = 0
+
+  init(outputs: [String: String], delayNanoseconds: UInt64 = 5_000_000) {
+    self.outputs = outputs
+    self.delayNanoseconds = delayNanoseconds
+  }
+
+  var commands: [String] {
+    queue.sync { _commands }
+  }
+
+  var maximumConcurrentRuns: Int {
+    queue.sync { maxInFlight }
+  }
+
+  func run(_ executable: String, _ arguments: [String]) async throws -> String {
+    let command = ([executable] + arguments).joined(separator: " ")
+    queue.sync {
+      _commands.append(command)
+      inFlight += 1
+      maxInFlight = max(maxInFlight, inFlight)
+    }
+    try? await Task.sleep(nanoseconds: delayNanoseconds)
+    queue.sync {
+      inFlight -= 1
+    }
+    return outputs[command] ?? ""
   }
 }
 

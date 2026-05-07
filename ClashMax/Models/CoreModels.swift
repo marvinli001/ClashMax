@@ -128,6 +128,22 @@ enum RunMode: String, Codable, CaseIterable, Identifiable {
   }
 }
 
+enum AppTheme: String, Codable, CaseIterable, Identifiable {
+  case system
+  case light
+  case dark
+
+  var id: String { rawValue }
+
+  var displayName: String {
+    switch self {
+    case .system: "System"
+    case .light: "Light"
+    case .dark: "Dark"
+    }
+  }
+}
+
 enum ProxyRoutingMode: String, Codable, CaseIterable, Identifiable {
   case systemProxy
   case tun
@@ -149,6 +165,199 @@ enum ProxyRoutingMode: String, Codable, CaseIterable, Identifiable {
   }
 }
 
+enum DelayTestMode: String, Codable, CaseIterable, Identifiable {
+  case mihomoURL
+  case nativePing
+
+  var id: String { rawValue }
+
+  var displayName: String {
+    switch self {
+    case .mihomoURL: "Mihomo URL Delay"
+    case .nativePing: "Native Ping"
+    }
+  }
+
+  var description: String {
+    switch self {
+    case .mihomoURL:
+      return "Measure through Mihomo's proxy delay API."
+    case .nativePing:
+      return "Ping the node server host directly from macOS."
+    }
+  }
+}
+
+struct DelayTestSettings: Codable, Equatable {
+  static let defaultTimeoutMilliseconds = 5_000
+
+  var mode: DelayTestMode
+  var unifiedDelay: Bool
+  var timeoutMilliseconds: Int
+
+  init(
+    mode: DelayTestMode = .mihomoURL,
+    unifiedDelay: Bool = false,
+    timeoutMilliseconds: Int = Self.defaultTimeoutMilliseconds
+  ) {
+    self.mode = mode
+    self.unifiedDelay = unifiedDelay
+    self.timeoutMilliseconds = timeoutMilliseconds
+  }
+
+  static let `default` = DelayTestSettings()
+
+  var normalizedTimeoutMilliseconds: Int {
+    min(max(timeoutMilliseconds, 1_000), 30_000)
+  }
+}
+
+struct ExternalControllerCORSSettings: Codable, Equatable {
+  static let fixedLocalOrigins = [
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "http://localhost:3000"
+  ]
+  static let defaultPanelOrigins = [
+    "https://yacd.metacubex.one",
+    "https://metacubex.github.io",
+    "https://board.zash.run.place"
+  ]
+
+  var enabled: Bool
+  var allowPrivateNetwork: Bool
+  var allowedOrigins: [String]
+
+  init(
+    enabled: Bool = true,
+    allowPrivateNetwork: Bool = true,
+    allowedOrigins: [String] = Self.defaultPanelOrigins
+  ) {
+    self.enabled = enabled
+    self.allowPrivateNetwork = allowPrivateNetwork
+    self.allowedOrigins = Self.normalizedOrigins(allowedOrigins)
+  }
+
+  static let `default` = ExternalControllerCORSSettings()
+
+  var effectiveAllowedOrigins: [String] {
+    Self.normalizedOrigins(Self.fixedLocalOrigins + allowedOrigins)
+  }
+
+  var validationError: String? {
+    if let invalid = allowedOrigins.first(where: { !Self.isValidOrigin($0) }) {
+      return "Invalid origin: \(invalid)"
+    }
+    return nil
+  }
+
+  static func normalizedOrigins(_ origins: [String]) -> [String] {
+    var seen = Set<String>()
+    return origins.compactMap { origin in
+      let trimmed = origin.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty else { return nil }
+      let key = trimmed.lowercased()
+      guard !seen.contains(key) else { return nil }
+      seen.insert(key)
+      return trimmed
+    }
+  }
+
+  static func isValidOrigin(_ origin: String) -> Bool {
+    let trimmed = origin.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty,
+          !trimmed.contains(where: \.isWhitespace),
+          let components = URLComponents(string: trimmed),
+          let scheme = components.scheme?.lowercased()
+    else { return false }
+
+    guard ["http", "https", "tauri"].contains(scheme),
+          components.host != nil,
+          components.path.isEmpty || components.path == "/",
+          components.query == nil,
+          components.fragment == nil
+    else { return false }
+
+    return true
+  }
+}
+
+struct ExternalControllerSettings: Codable, Equatable {
+  static let defaultHost = "127.0.0.1"
+  static let defaultPort = 9097
+  static let portRange = 1024...65535
+
+  var enabled: Bool
+  var host: String
+  var port: Int
+  var secret: String
+  var cors: ExternalControllerCORSSettings
+
+  init(
+    enabled: Bool = true,
+    host: String = Self.defaultHost,
+    port: Int = Self.defaultPort,
+    secret: String = Self.generateSecret(),
+    cors: ExternalControllerCORSSettings = .default
+  ) {
+    self.enabled = enabled
+    self.host = host
+    self.port = port
+    self.secret = secret
+    self.cors = cors
+  }
+
+  static let `default` = ExternalControllerSettings()
+
+  var address: String {
+    "\(normalizedHost):\(normalizedPort)"
+  }
+
+  var normalizedHost: String {
+    let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? Self.defaultHost : trimmed
+  }
+
+  var normalizedPort: Int {
+    Self.portRange.contains(port) ? port : Self.defaultPort
+  }
+
+  var normalizedSecret: String {
+    let trimmed = secret.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? Self.generateSecret() : trimmed
+  }
+
+  var runtimeCORS: ExternalControllerCORSSettings {
+    var runtime = cors
+    runtime.enabled = enabled && cors.enabled
+    runtime.allowedOrigins = ExternalControllerCORSSettings.normalizedOrigins(runtime.allowedOrigins)
+    return runtime
+  }
+
+  var validationError: String? {
+    let host = normalizedHost
+    guard Self.isLoopbackHost(host) else {
+      return "Controller host must stay on localhost, 127.0.0.1, or ::1."
+    }
+    guard Self.portRange.contains(port) else {
+      return "Controller port must be between \(Self.portRange.lowerBound) and \(Self.portRange.upperBound)."
+    }
+    guard !secret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      return "API secret cannot be empty."
+    }
+    return cors.validationError
+  }
+
+  static func isLoopbackHost(_ host: String) -> Bool {
+    let normalized = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    return ["127.0.0.1", "localhost", "::1"].contains(normalized)
+  }
+
+  static func generateSecret() -> String {
+    UUID().uuidString.replacingOccurrences(of: "-", with: "")
+  }
+}
+
 struct RuntimeOverrides: Codable, Equatable {
   var mixedPort: Int
   var externalControllerHost: String
@@ -157,7 +366,9 @@ struct RuntimeOverrides: Codable, Equatable {
   var allowLan: Bool
   var mode: RunMode
   var logLevel: String
+  var unifiedDelay: Bool
   var dnsEnabled: Bool?
+  var externalControllerCORS: ExternalControllerCORSSettings
   var tunEnabled: Bool
   var tunSettings: TunSettings
 
@@ -171,6 +382,8 @@ struct RuntimeOverrides: Codable, Equatable {
     logLevel: String,
     dnsEnabled: Bool?,
     tunEnabled: Bool,
+    unifiedDelay: Bool = false,
+    externalControllerCORS: ExternalControllerCORSSettings = .default,
     tunSettings: TunSettings = .default
   ) {
     self.mixedPort = mixedPort
@@ -180,7 +393,9 @@ struct RuntimeOverrides: Codable, Equatable {
     self.allowLan = allowLan
     self.mode = mode
     self.logLevel = logLevel
+    self.unifiedDelay = unifiedDelay
     self.dnsEnabled = dnsEnabled
+    self.externalControllerCORS = externalControllerCORS
     self.tunEnabled = tunEnabled
     self.tunSettings = tunSettings
   }
@@ -196,6 +411,8 @@ struct RuntimeOverrides: Codable, Equatable {
       logLevel: "info",
       dnsEnabled: nil,
       tunEnabled: false,
+      unifiedDelay: false,
+      externalControllerCORS: .default,
       tunSettings: .default
     )
   }
@@ -404,6 +621,8 @@ struct ProxyNode: Identifiable, Codable, Equatable {
   var type: String
   var delay: Int?
   var isSelectable: Bool
+  var serverHost: String?
+  var serverPort: Int?
 }
 
 struct ProxyGroup: Identifiable, Codable, Equatable {
@@ -472,6 +691,34 @@ struct LogEntry: Identifiable, Codable, Equatable {
     self.date = date
     self.level = level
     self.message = message
+  }
+}
+
+enum LogVisibility {
+  static func visibleEntries(in entries: [LogEntry], developerMode: Bool) -> [LogEntry] {
+    guard !developerMode else { return entries }
+    return entries.filter { !isDeveloperOnly($0) }
+  }
+
+  static func isDeveloperOnly(_ entry: LogEntry) -> Bool {
+    let level = entry.level.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    if level == "debug" || level == "trace" {
+      return true
+    }
+
+    let message = entry.message.lowercased()
+    return isDelayDiagnostic(message)
+  }
+
+  private static func isDelayDiagnostic(_ message: String) -> Bool {
+    if message.contains("url-test") || message.contains("generate_204") {
+      return true
+    }
+
+    guard let delayHost = AppConstants.defaultDelayTestURL.host?.lowercased() else {
+      return false
+    }
+    return message.contains(delayHost) && (message.contains("delay") || message.contains("latency"))
   }
 }
 

@@ -19,6 +19,23 @@ final class AppModel: ObservableObject {
       saveCodable(tunSettings, forKey: Self.tunSettingsDefaultsKey)
     }
   }
+  @Published var delayTestSettings = DelayTestSettings.default {
+    didSet {
+      overrides.unifiedDelay = delayTestSettings.unifiedDelay
+      saveCodable(delayTestSettings, forKey: Self.delayTestSettingsDefaultsKey)
+    }
+  }
+  @Published var appTheme = AppTheme.system {
+    didSet {
+      saveCodable(appTheme, forKey: Self.appThemeDefaultsKey)
+    }
+  }
+  @Published var externalControllerSettings = ExternalControllerSettings.default {
+    didSet {
+      syncExternalControllerSettings()
+      saveCodable(externalControllerSettings, forKey: Self.externalControllerSettingsDefaultsKey)
+    }
+  }
   @Published private(set) var launchSettings = LaunchSettings.default
   @Published private(set) var runtimeOwner: RuntimeOwner = .stopped
   @Published var systemProxyEnabled = false
@@ -56,6 +73,7 @@ final class AppModel: ObservableObject {
   let helperClient: TunnelHelperClient
   private let loginItemService: any LoginItemManaging
   private let tunnelReadinessProbe: CoreReadinessProbing
+  private let pingTester: any PingTesting
   private let paths: RuntimePaths
   private let normalizer = ConfigNormalizer()
   private let profilePreviewBuilder = ProfilePreviewBuilder()
@@ -74,6 +92,10 @@ final class AppModel: ObservableObject {
   private static let systemProxySettingsDefaultsKey = "io.github.clashmax.systemProxySettings"
   private static let systemProxyManagedDefaultsKey = "io.github.clashmax.systemProxyManaged"
   private static let tunSettingsDefaultsKey = "io.github.clashmax.tunSettings"
+  private static let delayTestSettingsDefaultsKey = "io.github.clashmax.delayTestSettings"
+  private static let appThemeDefaultsKey = "io.github.clashmax.appTheme"
+  private static let externalControllerSettingsDefaultsKey = "io.github.clashmax.externalControllerSettings"
+  private static let externalControllerCORSSettingsDefaultsKey = "io.github.clashmax.externalControllerCORSSettings"
   static let silentStartDefaultsKey = "io.github.clashmax.silentStart"
   static let startWallClockSeconds: TimeInterval = 22
 
@@ -106,6 +128,7 @@ final class AppModel: ObservableObject {
     loginItemService: any LoginItemManaging = MainAppLoginItemService(),
     tunnelReadinessProbe: CoreReadinessProbing = MihomoCoreReadinessProbe(),
     apiClient: (any MihomoAPIControlling)? = nil,
+    pingTester: any PingTesting = SystemPingTester(),
     defaults: UserDefaults = .standard
   ) {
     self.paths = paths
@@ -115,6 +138,7 @@ final class AppModel: ObservableObject {
     self.helperClient = helperClient
     self.loginItemService = loginItemService
     self.tunnelReadinessProbe = tunnelReadinessProbe
+    self.pingTester = pingTester
     self.apiClient = apiClient
     self.defaults = defaults
     developerMode = defaults.bool(forKey: Self.developerModeDefaultsKey)
@@ -128,7 +152,29 @@ final class AppModel: ObservableObject {
       forKey: Self.tunSettingsDefaultsKey,
       defaults: defaults
     ) ?? .default
+    delayTestSettings = Self.loadCodable(
+      DelayTestSettings.self,
+      forKey: Self.delayTestSettingsDefaultsKey,
+      defaults: defaults
+    ) ?? .default
+    appTheme = Self.loadCodable(
+      AppTheme.self,
+      forKey: Self.appThemeDefaultsKey,
+      defaults: defaults
+    ) ?? .system
+    let migratedCORSSettings = Self.loadCodable(
+      ExternalControllerCORSSettings.self,
+      forKey: Self.externalControllerCORSSettingsDefaultsKey,
+      defaults: defaults
+    )
+    externalControllerSettings = Self.loadCodable(
+      ExternalControllerSettings.self,
+      forKey: Self.externalControllerSettingsDefaultsKey,
+      defaults: defaults
+    ) ?? ExternalControllerSettings(cors: migratedCORSSettings ?? .default)
     overrides.tunSettings = tunSettings
+    overrides.unifiedDelay = delayTestSettings.unifiedDelay
+    syncExternalControllerSettings()
     refreshLaunchSettings()
     recoverDanglingSystemProxyIfNeeded()
     refreshProfilePreview()
@@ -212,6 +258,10 @@ final class AppModel: ObservableObject {
 
   var canSelectProxyOffline: Bool {
     !isCoreRunning && profileStore.activeProfile != nil && !profilePreviewGroups.isEmpty
+  }
+
+  var userVisibleLogs: [LogEntry] {
+    LogVisibility.visibleEntries(in: logs, developerMode: developerMode)
   }
 
   var proxyRuntimeActionMessage: String {
@@ -496,7 +546,7 @@ final class AppModel: ObservableObject {
     let profile = try requireActiveProfile()
     let routingMode = proxyRoutingMode
     let shouldUseTun = routingMode == .tun
-    overrides.secret = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+    syncExternalControllerSettings()
     overrides.tunEnabled = shouldUseTun
     overrides.tunSettings = tunSettings
     systemProxyEnabled = false
@@ -832,9 +882,10 @@ final class AppModel: ObservableObject {
       return
     }
     guard let apiClient = runtimeAPIClientForProxyAction() else { return }
+    let settings = delayTestSettings
     Task {
       do {
-        let delay = try await apiClient.testDelay(proxy: node.name, testURL: AppConstants.defaultDelayTestURL, timeout: 5000)
+        let delay = try await measureDelay(for: node, apiClient: apiClient, settings: settings)
         applyDelay(delay, to: node.name)
         reloadRuntimeData()
       } catch {
@@ -855,6 +906,54 @@ final class AppModel: ObservableObject {
       } catch {
         self.lastError = UserFacingError.message(for: error)
       }
+    }
+  }
+
+  private func measureDelay(
+    for node: ProxyNode,
+    apiClient: any MihomoAPIControlling,
+    settings: DelayTestSettings
+  ) async throws -> Int {
+    let attempts = settings.unifiedDelay ? 2 : 1
+    var lastDelay: Int?
+    var lastError: Error?
+
+    for _ in 0..<attempts {
+      do {
+        lastDelay = try await measureDelayOnce(for: node, apiClient: apiClient, settings: settings)
+        lastError = nil
+      } catch {
+        lastError = error
+        if !settings.unifiedDelay {
+          throw error
+        }
+      }
+    }
+
+    if let lastDelay {
+      return lastDelay
+    }
+    throw lastError ?? DelayTestError.noResult(node.name)
+  }
+
+  private func measureDelayOnce(
+    for node: ProxyNode,
+    apiClient: any MihomoAPIControlling,
+    settings: DelayTestSettings
+  ) async throws -> Int {
+    switch settings.mode {
+    case .mihomoURL:
+      return try await apiClient.testDelay(
+        proxy: node.name,
+        testURL: AppConstants.defaultDelayTestURL,
+        timeout: settings.normalizedTimeoutMilliseconds
+      )
+    case .nativePing:
+      let host = node.serverHost?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      guard !host.isEmpty else {
+        throw DelayTestError.missingServerHost(node.name)
+      }
+      return try await pingTester.ping(host: host, timeoutMilliseconds: settings.normalizedTimeoutMilliseconds)
     }
   }
 
@@ -975,7 +1074,10 @@ final class AppModel: ObservableObject {
       guard let self else { return }
       while !Task.isCancelled {
         do {
-          _ = try await self.systemProxyController.verifyGuardOnce()
+          let result = try await self.systemProxyController.verifyGuardOnceDetailed()
+          for warning in result.warnings {
+            self.appendAppLog(level: "warn", message: warning)
+          }
         } catch is CancellationError {
           return
         } catch {
@@ -1223,6 +1325,14 @@ final class AppModel: ObservableObject {
     }
   }
 
+  private func syncExternalControllerSettings() {
+    let settings = externalControllerSettings
+    overrides.externalControllerHost = settings.normalizedHost
+    overrides.externalControllerPort = settings.normalizedPort
+    overrides.secret = settings.normalizedSecret
+    overrides.externalControllerCORS = settings.runtimeCORS
+  }
+
   private func generateRuntimeConfig(
     for profile: Profile,
     overrides: RuntimeOverrides? = nil,
@@ -1422,6 +1532,20 @@ final class AppModel: ObservableObject {
       return "macOS could not find the ClashMax login item service."
     @unknown default:
       return "macOS reported an unknown login item state."
+    }
+  }
+}
+
+private enum DelayTestError: LocalizedError {
+  case missingServerHost(String)
+  case noResult(String)
+
+  var errorDescription: String? {
+    switch self {
+    case let .missingServerHost(nodeName):
+      return "Native ping needs a server host for \(nodeName). Refresh runtime data or switch to Mihomo URL Delay."
+    case let .noResult(nodeName):
+      return "Delay test for \(nodeName) finished without a result."
     }
   }
 }

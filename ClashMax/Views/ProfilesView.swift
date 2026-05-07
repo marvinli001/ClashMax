@@ -30,7 +30,7 @@ struct ProfilesView: View {
           )
         } else {
           ScrollView {
-            LazyVStack(alignment: .leading, spacing: 10) {
+            LazyVGrid(columns: profileGridColumns, alignment: .leading, spacing: 12) {
               ForEach(appModel.profileStore.profiles) { profile in
                 ProfileCard(
                   profile: profile,
@@ -49,6 +49,7 @@ struct ProfilesView: View {
               }
             }
             .padding(.vertical, 2)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
           }
         }
 
@@ -148,6 +149,16 @@ struct ProfilesView: View {
     .disabled(subscriptionURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || appModel.isAddingSubscription)
   }
 
+  private var profileGridColumns: [GridItem] {
+    [
+      GridItem(
+        .adaptive(minimum: 280, maximum: 360),
+        spacing: 12,
+        alignment: .topLeading
+      )
+    ]
+  }
+
   private var subscriptionLoadingIndicator: some View {
     HStack(spacing: 8) {
       ProgressView()
@@ -237,24 +248,17 @@ private struct ProfileCard: View {
   let deleteAction: () -> Void
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      ViewThatFits(in: .horizontal) {
-        HStack(alignment: .top, spacing: 14) {
-          titleBlock
-          Spacer(minLength: 12)
-          actionButtons
-        }
+    VStack(alignment: .leading, spacing: 10) {
+      titleBlock
 
-        VStack(alignment: .leading, spacing: 12) {
-          titleBlock
-          actionButtons
-        }
-      }
+      ProfileMetricsRow(profile: profile)
 
-      ProfileMetricsRow(profile: profile, sourceURLString: sourceURLString)
+      Spacer(minLength: 4)
+
+      actionButtons
     }
-    .padding(14)
-    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(12)
+    .frame(maxWidth: .infinity, minHeight: 184, alignment: .topLeading)
     .dashboardCard(interactive: true)
     .overlay(alignment: .leading) {
       RoundedRectangle(cornerRadius: 2, style: .continuous)
@@ -267,39 +271,32 @@ private struct ProfileCard: View {
   }
 
   private var titleBlock: some View {
-    HStack(alignment: .top, spacing: 10) {
-      Image(systemName: profile.isSubscription ? "link.badge.plus" : "doc.text")
-        .font(.system(size: 16, weight: .semibold))
-        .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
-        .frame(width: 22)
-
-      VStack(alignment: .leading, spacing: 3) {
-        HStack(spacing: 8) {
-          Text(profile.name)
-            .font(.headline)
-            .lineLimit(1)
-            .minimumScaleFactor(0.76)
-          if isActive {
-            Text("Active")
-              .font(.caption2.weight(.semibold))
-              .foregroundStyle(.white)
-              .padding(.horizontal, 6)
-              .padding(.vertical, 2)
-              .background(Color.accentColor, in: Capsule())
-          }
-        }
-
-        Text(sourceLine)
-          .font(.callout)
-          .foregroundStyle(.secondary)
+    VStack(alignment: .leading, spacing: 4) {
+      HStack(alignment: .firstTextBaseline, spacing: 7) {
+        Text(profile.name)
+          .font(.headline)
           .lineLimit(1)
-          .truncationMode(.middle)
+          .minimumScaleFactor(0.76)
+        if isActive {
+          Text("Active")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Color.accentColor, in: Capsule())
+        }
       }
+
+      Text(sourceLine)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .truncationMode(.middle)
     }
   }
 
   private var actionButtons: some View {
-    HStack(spacing: 6) {
+    HStack(spacing: 8) {
       Button {
         editAction()
       } label: {
@@ -330,6 +327,7 @@ private struct ProfileCard: View {
       }
       .help("Delete profile")
     }
+    .frame(maxWidth: .infinity, alignment: .leading)
     .buttonStyle(.borderless)
     .controlSize(.small)
   }
@@ -349,26 +347,22 @@ private struct ProfileCard: View {
 
 private struct ProfileMetricsRow: View {
   let profile: Profile
-  let sourceURLString: String?
 
   var body: some View {
-    ViewThatFits(in: .horizontal) {
-      HStack(spacing: 8) {
-        metric("Source", profile.source.displayName, "externaldrive")
-        metric("Usage", profile.subscriptionMetadata?.trafficSummary ?? "-", "chart.bar")
-        metric("Expires", expiresLabel, "calendar")
-        metric("Interval", updateIntervalLabel(profile.subscriptionMetadata?.updateIntervalMinutes), "clock.arrow.circlepath")
-        metric("Updated", profile.updatedAt.formatted(date: .abbreviated, time: .omitted), "arrow.triangle.2.circlepath")
-      }
-
-      LazyVGrid(columns: [GridItem(.adaptive(minimum: 132), spacing: 8)], alignment: .leading, spacing: 8) {
-        metric("Source", profile.source.displayName, "externaldrive")
-        metric("Usage", profile.subscriptionMetadata?.trafficSummary ?? "-", "chart.bar")
-        metric("Expires", expiresLabel, "calendar")
-        metric("Interval", updateIntervalLabel(profile.subscriptionMetadata?.updateIntervalMinutes), "clock.arrow.circlepath")
-        metric("Updated", profile.updatedAt.formatted(date: .abbreviated, time: .omitted), "arrow.triangle.2.circlepath")
-      }
+    LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
+      metric("Source", profile.source.displayName, "externaldrive")
+      metric("Usage", profile.subscriptionMetadata?.trafficSummary ?? "-", "chart.bar")
+      metric("Expires", expiresLabel, "calendar")
+      metric("Interval", updateIntervalLabel(profile.subscriptionMetadata?.updateIntervalMinutes), "clock.arrow.circlepath")
+      metric("Updated", profile.updatedAt.formatted(date: .abbreviated, time: .omitted), "arrow.triangle.2.circlepath")
     }
+  }
+
+  private var columns: [GridItem] {
+    [
+      GridItem(.flexible(minimum: 92), spacing: 8, alignment: .topLeading),
+      GridItem(.flexible(minimum: 92), spacing: 8, alignment: .topLeading)
+    ]
   }
 
   private func metric(_ title: String, _ value: String, _ symbolName: String) -> some View {
@@ -387,7 +381,7 @@ private struct ProfileMetricsRow: View {
           .minimumScaleFactor(0.72)
       }
     }
-    .frame(minWidth: 110, alignment: .leading)
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 
   private var expiresLabel: String {

@@ -5,12 +5,87 @@ protocol CommandRunning: Sendable {
   func run(_ executable: String, _ arguments: [String]) async throws -> String
 }
 
+protocol PingTesting: Sendable {
+  func ping(host: String, timeoutMilliseconds: Int) async throws -> Int
+}
+
+struct SystemPingTester: PingTesting {
+  enum PingError: LocalizedError {
+    case invalidHost(String)
+    case missingLatency
+
+    var errorDescription: String? {
+      switch self {
+      case let .invalidHost(host):
+        return "Native ping cannot use invalid host: \(host)"
+      case .missingLatency:
+        return "Native ping finished without a latency result."
+      }
+    }
+  }
+
+  private let commandRunner: any CommandRunning
+
+  init(commandRunner: any CommandRunning = ProcessCommandRunner(timeout: 6)) {
+    self.commandRunner = commandRunner
+  }
+
+  func ping(host: String, timeoutMilliseconds: Int) async throws -> Int {
+    let normalizedHost = try Self.normalizedHost(host)
+    let timeout = min(max(timeoutMilliseconds, 1_000), 30_000)
+    let output = try await commandRunner.run(
+      "/sbin/ping",
+      ["-c", "1", "-W", String(timeout), normalizedHost]
+    )
+    guard let latency = Self.latencyMilliseconds(from: output) else {
+      throw PingError.missingLatency
+    }
+    return max(0, Int(latency.rounded()))
+  }
+
+  private static func normalizedHost(_ host: String) throws -> String {
+    let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty,
+          !trimmed.hasPrefix("-"),
+          trimmed.count <= 253,
+          trimmed.range(of: #"^[A-Za-z0-9._:-]+$"#, options: .regularExpression) != nil
+    else {
+      throw PingError.invalidHost(host)
+    }
+    return trimmed
+  }
+
+  private static func latencyMilliseconds(from output: String) -> Double? {
+    guard let range = output.range(
+      of: #"time[=<]([0-9]+(?:\.[0-9]+)?)\s*ms"#,
+      options: .regularExpression
+    ) else {
+      return nil
+    }
+
+    let match = String(output[range])
+    guard let valueRange = match.range(
+      of: #"[0-9]+(?:\.[0-9]+)?"#,
+      options: .regularExpression
+    ) else {
+      return nil
+    }
+    return Double(match[valueRange])
+  }
+}
+
+struct SystemProxyGuardVerification: Equatable, Sendable {
+  var didRepair: Bool
+  var warnings: [String]
+}
+
 final class SystemProxyController: @unchecked Sendable {
   static let defaultBypassDomains = SystemProxySettings.defaultBypassDomains
 
   static let applyBudgetSeconds: TimeInterval = 15
 
   private let commandRunner: CommandRunning
+  private let operationGate = AsyncOperationGate()
   private var snapshots: [String: ServiceProxySnapshot] = [:]
   private var expectedConfiguration: ExpectedSystemProxyConfiguration?
   private(set) var guardState: SystemProxyGuardState = .idle
@@ -21,13 +96,15 @@ final class SystemProxyController: @unchecked Sendable {
   }
 
   func apply(host: String, port: Int, bypassDomains: [String] = SystemProxyController.defaultBypassDomains) async throws {
-    do {
-      try await withTimeout(seconds: Self.applyBudgetSeconds) { [self] in
-        try await applyInner(host: host, port: port, bypassDomains: bypassDomains, captureSnapshots: true)
+    try await operationGate.run { [self] in
+      do {
+        try await withTimeout(seconds: Self.applyBudgetSeconds) { [self] in
+          try await applyInner(host: host, port: port, bypassDomains: bypassDomains, captureSnapshots: true)
+        }
+      } catch {
+        try? await restoreCapturedSnapshots()
+        throw error
       }
-    } catch {
-      try? await restoreCapturedSnapshots()
-      throw error
     }
   }
 
@@ -42,29 +119,62 @@ final class SystemProxyController: @unchecked Sendable {
   }
 
   func verifyGuardOnce() async throws -> Bool {
-    guard let expected = readExpectedConfiguration(), guardState == .active else { return false }
+    try await verifyGuardOnceDetailed().didRepair
+  }
+
+  func verifyGuardOnceDetailed() async throws -> SystemProxyGuardVerification {
+    try await operationGate.run { [self] in
+      try await verifyGuardOnceInner()
+    }
+  }
+
+  private func verifyGuardOnceInner() async throws -> SystemProxyGuardVerification {
+    guard let expected = readExpectedConfiguration(), guardState == .active else {
+      return SystemProxyGuardVerification(didRepair: false, warnings: [])
+    }
     var didRepair = false
-    for service in try await networkServices() {
+    var warnings: [String] = []
+    let services: [String]
+    do {
+      services = try await networkServices()
+    } catch {
+      return SystemProxyGuardVerification(
+        didRepair: false,
+        warnings: ["System Proxy Guard could not list network services: \(UserFacingError.message(for: error))"]
+      )
+    }
+
+    for service in services {
       try Task.checkCancellation()
-      let snapshot = try await snapshot(for: service)
-      guard !snapshot.matches(expected) else { continue }
+      let currentSnapshot: ServiceProxySnapshot
+      do {
+        currentSnapshot = try await snapshot(for: service)
+      } catch {
+        warnings.append("System Proxy Guard could not read \(service) proxy settings: \(UserFacingError.message(for: error))")
+        continue
+      }
+      guard !currentSnapshot.matches(expected) else { continue }
       try await applyProxyCommands(host: expected.host, port: expected.port, service: service)
       try await setBypassDomains(expected.bypassDomains, service: service)
       didRepair = true
     }
-    return didRepair
+    return SystemProxyGuardVerification(didRepair: didRepair, warnings: warnings)
   }
 
   func restore() async throws {
-    try await withTimeout(seconds: Self.applyBudgetSeconds) { [self] in
-      try await restoreInner()
+    try await operationGate.run { [self] in
+      try await withTimeout(seconds: Self.applyBudgetSeconds) { [self] in
+        try await restoreInner()
+      }
     }
   }
 
   func restoreManagedState() async throws {
-    try await withTimeout(seconds: Self.applyBudgetSeconds) { [self] in
-      disableGuard()
-      try await restoreCapturedSnapshots()
+    try await operationGate.run { [self] in
+      try await withTimeout(seconds: Self.applyBudgetSeconds) { [self] in
+        disableGuard()
+        try await restoreCapturedSnapshots()
+      }
     }
   }
 
@@ -76,32 +186,34 @@ final class SystemProxyController: @unchecked Sendable {
 
   @discardableResult
   func disableMatchingProxy(hosts: Set<String>, ports: Set<Int>) async throws -> Bool {
-    try await withTimeout(seconds: Self.applyBudgetSeconds) { [self] in
-      var didChange = false
-      for service in try await networkServices() {
-        try Task.checkCancellation()
-        let snapshot = try await snapshot(for: service)
-        var changedService = false
-        if snapshot.web.matches(hosts: hosts, ports: ports) {
-          _ = try await commandRunner.run("/usr/sbin/networksetup", [ProxyKind.web.stateCommand, service, "off"])
-          changedService = true
-          didChange = true
+    try await operationGate.run { [self] in
+      try await withTimeout(seconds: Self.applyBudgetSeconds) { [self] in
+        var didChange = false
+        for service in try await networkServices() {
+          try Task.checkCancellation()
+          let snapshot = try await snapshot(for: service)
+          var changedService = false
+          if snapshot.web.matches(hosts: hosts, ports: ports) {
+            _ = try await commandRunner.run("/usr/sbin/networksetup", [ProxyKind.web.stateCommand, service, "off"])
+            changedService = true
+            didChange = true
+          }
+          if snapshot.secureWeb.matches(hosts: hosts, ports: ports) {
+            _ = try await commandRunner.run("/usr/sbin/networksetup", [ProxyKind.secureWeb.stateCommand, service, "off"])
+            changedService = true
+            didChange = true
+          }
+          if snapshot.socks.matches(hosts: hosts, ports: ports) {
+            _ = try await commandRunner.run("/usr/sbin/networksetup", [ProxyKind.socks.stateCommand, service, "off"])
+            changedService = true
+            didChange = true
+          }
+          if changedService, snapshot.bypassDomains == Self.defaultBypassDomains {
+            try await setBypassDomains([], service: service)
+          }
         }
-        if snapshot.secureWeb.matches(hosts: hosts, ports: ports) {
-          _ = try await commandRunner.run("/usr/sbin/networksetup", [ProxyKind.secureWeb.stateCommand, service, "off"])
-          changedService = true
-          didChange = true
-        }
-        if snapshot.socks.matches(hosts: hosts, ports: ports) {
-          _ = try await commandRunner.run("/usr/sbin/networksetup", [ProxyKind.socks.stateCommand, service, "off"])
-          changedService = true
-          didChange = true
-        }
-        if changedService, snapshot.bypassDomains == Self.defaultBypassDomains {
-          try await setBypassDomains([], service: service)
-        }
+        return didChange
       }
-      return didChange
     }
   }
 
@@ -399,6 +511,46 @@ private enum ProxyKind {
     case .web: "-setwebproxystate"
     case .secureWeb: "-setsecurewebproxystate"
     case .socks: "-setsocksfirewallproxystate"
+    }
+  }
+}
+
+private final class AsyncOperationGate: @unchecked Sendable {
+  private let state = AsyncOperationGateState()
+
+  func run<T: Sendable>(_ operation: @Sendable () async throws -> T) async throws -> T {
+    await state.acquire()
+    do {
+      let result = try await operation()
+      await state.release()
+      return result
+    } catch {
+      await state.release()
+      throw error
+    }
+  }
+}
+
+private actor AsyncOperationGateState {
+  private var isLocked = false
+  private var waiters: [CheckedContinuation<Void, Never>] = []
+
+  func acquire() async {
+    if !isLocked {
+      isLocked = true
+      return
+    }
+
+    await withCheckedContinuation { continuation in
+      waiters.append(continuation)
+    }
+  }
+
+  func release() {
+    if waiters.isEmpty {
+      isLocked = false
+    } else {
+      waiters.removeFirst().resume()
     }
   }
 }

@@ -10,6 +10,7 @@ struct ClashMaxApp: App {
     WindowGroup("ClashMax", id: "main") {
       ContentView()
         .environmentObject(appModel)
+        .preferredColorScheme(appModel.appTheme.preferredColorScheme)
         .frame(minWidth: 980, minHeight: 660)
         .onAppear {
           appDelegate.appModel = appModel
@@ -29,6 +30,7 @@ struct ClashMaxApp: App {
     MenuBarExtra {
       MenuBarView()
         .environmentObject(appModel)
+        .preferredColorScheme(appModel.appTheme.preferredColorScheme)
         .onAppear {
           appDelegate.appModel = appModel
         }
@@ -42,9 +44,23 @@ struct ClashMaxApp: App {
     Settings {
       SettingsView()
         .environmentObject(appModel)
+        .preferredColorScheme(appModel.appTheme.preferredColorScheme)
         .onAppear {
           appDelegate.appModel = appModel
         }
+    }
+  }
+}
+
+private extension AppTheme {
+  var preferredColorScheme: ColorScheme? {
+    switch self {
+    case .system:
+      return nil
+    case .light:
+      return .light
+    case .dark:
+      return .dark
     }
   }
 }

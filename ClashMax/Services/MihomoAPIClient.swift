@@ -77,11 +77,18 @@ struct MihomoAPIClient: Sendable {
     let data = try await data(for: request(path: "/proxies"))
     let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
     let proxies = object?["proxies"] as? [String: Any] ?? [:]
+    let proxyDetails = proxies.compactMapValues { $0 as? [String: Any] }
     let proxyTypes = proxies.reduce(into: [String: String]()) { result, item in
       guard let proxy = item.value as? [String: Any],
             let type = proxy["type"] as? String
       else { return }
       result[item.key] = type
+    }
+    let proxyEndpoints = proxyDetails.reduce(into: [String: ProxyEndpoint]()) { result, item in
+      result[item.key] = ProxyEndpoint(
+        host: item.value["server"] as? String,
+        port: Self.int(from: item.value["port"])
+      )
     }
 
     return proxies.compactMap { name, value in
@@ -95,7 +102,9 @@ struct MihomoAPIClient: Sendable {
           name: proxyName,
           type: proxyTypes[proxyName] ?? "proxy",
           delay: Self.delay(for: proxyName, history: history),
-          isSelectable: true
+          isSelectable: true,
+          serverHost: proxyEndpoints[proxyName]?.host,
+          serverPort: proxyEndpoints[proxyName]?.port
         )
       }
       return ProxyGroup(name: name, type: type, selected: item["now"] as? String, nodes: nodes)
@@ -119,7 +128,9 @@ struct MihomoAPIClient: Sendable {
           name: name,
           type: proxy["type"] as? String ?? "proxy",
           delay: nil,
-          isSelectable: true
+          isSelectable: true,
+          serverHost: proxy["server"] as? String,
+          serverPort: Self.int(from: proxy["port"])
         )
       }
       return ProxyProvider(
@@ -313,10 +324,28 @@ struct MihomoAPIClient: Sendable {
       .first { $0["name"] as? String == proxyName }?["delay"] as? Int
   }
 
+  private static func int(from value: Any?) -> Int? {
+    switch value {
+    case let value as Int:
+      return value
+    case let value as String:
+      return Int(value.trimmingCharacters(in: .whitespacesAndNewlines))
+    case let value as CustomStringConvertible:
+      return Int(String(describing: value))
+    default:
+      return nil
+    }
+  }
+
   private static func date(from value: Any?) -> Date? {
     guard let string = value as? String else { return nil }
     return ISO8601DateFormatter().date(from: string)
   }
+}
+
+private struct ProxyEndpoint {
+  var host: String?
+  var port: Int?
 }
 
 extension MihomoAPIClient: MihomoAPIControlling {}

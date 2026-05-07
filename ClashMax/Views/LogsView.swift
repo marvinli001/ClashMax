@@ -5,7 +5,8 @@ struct LogsView: View {
   @State private var levelFilter: LogLevelFilter = .all
 
   var body: some View {
-    let visibleLogs = filteredLogs
+    let retainedLogs = appModel.userVisibleLogs
+    let visibleLogs = filteredLogs(from: retainedLogs)
 
     AdaptivePage(
       title: "Logs",
@@ -46,18 +47,18 @@ struct LogsView: View {
     }
   }
 
-  private var filteredLogs: [LogEntry] {
+  private func filteredLogs(from entries: [LogEntry]) -> [LogEntry] {
     switch levelFilter {
     case .all:
-      return appModel.logs
+      return entries
     case .info:
-      return appModel.logs.filter { ["info", "information"].contains($0.level.lowercased()) }
+      return entries.filter { ["info", "information"].contains($0.level.lowercased()) }
     case .warning:
-      return appModel.logs.filter { ["warn", "warning"].contains($0.level.lowercased()) }
+      return entries.filter { ["warn", "warning"].contains($0.level.lowercased()) }
     case .error:
-      return appModel.logs.filter { ["error", "fatal"].contains($0.level.lowercased()) }
+      return entries.filter { ["error", "fatal"].contains($0.level.lowercased()) }
     case .debug:
-      return appModel.logs.filter { ["debug", "trace"].contains($0.level.lowercased()) }
+      return entries.filter { ["debug", "trace"].contains($0.level.lowercased()) }
     }
   }
 }

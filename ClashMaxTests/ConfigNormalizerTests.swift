@@ -102,6 +102,86 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertNil(disabledTun["auto-redirect"])
   }
 
+  func testRuntimeConfigAppliesUnifiedDelayAndExternalControllerCORS() throws {
+    let source = """
+    proxies:
+      - name: DIRECT
+        type: direct
+    external-controller-cors:
+      allow-origins: ["https://old.example"]
+      allow-private-network: false
+    """
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.unifiedDelay = true
+    overrides.externalControllerCORS = ExternalControllerCORSSettings(
+      enabled: true,
+      allowPrivateNetwork: true,
+      allowedOrigins: [
+        "https://custom.example",
+        "https://yacd.metacubex.one"
+      ]
+    )
+
+    let output = try ConfigNormalizer().runtimeConfig(from: source, overrides: overrides)
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let cors = try XCTUnwrap(yaml["external-controller-cors"] as? [String: Any])
+
+    XCTAssertEqual(yaml["unified-delay"] as? Bool, true)
+    XCTAssertEqual(cors["allow-private-network"] as? Bool, true)
+    XCTAssertEqual(
+      cors["allow-origins"] as? [String],
+      [
+        "tauri://localhost",
+        "http://tauri.localhost",
+        "http://localhost:3000",
+        "https://custom.example",
+        "https://yacd.metacubex.one"
+      ]
+    )
+  }
+
+  func testRuntimeConfigRemovesExternalControllerCORSWhenDisabled() throws {
+    let source = """
+    proxies:
+      - name: DIRECT
+        type: direct
+    external-controller-cors:
+      allow-origins: ["https://old.example"]
+      allow-private-network: true
+    """
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.externalControllerCORS.enabled = false
+
+    let output = try ConfigNormalizer().runtimeConfig(from: source, overrides: overrides)
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+
+    XCTAssertNil(yaml["external-controller-cors"])
+  }
+
+  func testRuntimeConfigUsesSavedExternalControllerAddressAndSecret() throws {
+    let source = """
+    proxies:
+      - name: DIRECT
+        type: direct
+    """
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "ignored")
+    overrides.externalControllerHost = "localhost"
+    overrides.externalControllerPort = 19197
+    overrides.secret = "saved-secret"
+    overrides.externalControllerCORS = ExternalControllerCORSSettings(
+      enabled: false,
+      allowPrivateNetwork: false,
+      allowedOrigins: ["https://yacd.metacubex.one"]
+    )
+
+    let output = try ConfigNormalizer().runtimeConfig(from: source, overrides: overrides)
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+
+    XCTAssertEqual(yaml["external-controller"] as? String, "localhost:19197")
+    XCTAssertEqual(yaml["secret"] as? String, "saved-secret")
+    XCTAssertNil(yaml["external-controller-cors"])
+  }
+
   func testURIProviderContentBuildsRuntimeConfigWithFileProvider() throws {
     let source = """
     vless://00000000-0000-0000-0000-000000000000@example.com:443?security=tls&sni=example.com#VLESS%20Node
@@ -151,6 +231,11 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(groups.map(\.name), ["Elite", "自动选择"])
     XCTAssertEqual(groups.first?.nodes.map(\.name), ["自动选择", "[Hy2]HK Hysteria", "[vless]JP Nano"])
     XCTAssertEqual(groups.first?.nodes.map(\.type), ["url-test", "hysteria2", "vless"])
+    XCTAssertNil(groups.first?.nodes[0].serverHost)
+    XCTAssertEqual(groups.first?.nodes[1].serverHost, "example.com")
+    XCTAssertEqual(groups.first?.nodes[1].serverPort, 23006)
+    XCTAssertEqual(groups.first?.nodes[2].serverHost, "example.net")
+    XCTAssertEqual(groups.first?.nodes[2].serverPort, 443)
   }
 
   func testPreviewGroupsExtractBase64URIProviderContent() throws {
@@ -165,5 +250,9 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(groups.map(\.name), ["Proxy", "Auto"])
     XCTAssertEqual(groups.first?.nodes.map(\.name), ["Auto", "VLESS Node", "Hysteria2 Node", "DIRECT"])
     XCTAssertEqual(groups.first?.nodes.map(\.type), ["url-test", "vless", "hysteria2", "direct"])
+    XCTAssertEqual(groups.first?.nodes[1].serverHost, "example.com")
+    XCTAssertEqual(groups.first?.nodes[1].serverPort, 443)
+    XCTAssertEqual(groups.first?.nodes[2].serverHost, "example.net")
+    XCTAssertEqual(groups.first?.nodes[2].serverPort, 8443)
   }
 }
