@@ -3,7 +3,6 @@
 # Local Codex/agent context. These files are for this workstation only.
 .codex/
 AGENTS.md
-docs
 
 .build/
 .swiftpm/
@@ -22,3 +21,4 @@ Resources/Core/mihomo-darwin-*
 Resources/Core/*.gz
 !Resources/Core/README.md
 !Resources/Core/mihomo-manifest.json
+docs/APP_UPDATES.md
