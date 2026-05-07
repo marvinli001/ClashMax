@@ -46,6 +46,8 @@ enum AppConstants {
   static let bundleIdentifier = "io.github.clashmax.ClashMax"
   static let helperBundleIdentifier = "io.github.clashmax.ClashMax.Helper"
   static let defaultDelayTestURL = URL(string: "https://www.gstatic.com/generate_204")!
+  static let appcastURL = URL(string: "https://marvinli001.github.io/ClashMax/appcast.xml")!
+  static let sparklePublicEDKeyPlaceholder = "REPLACE_WITH_SPARKLE_PUBLIC_ED_KEY"
   static let retainedLogLimit = 1000
   static let retainedConnectionLimit = 500
 

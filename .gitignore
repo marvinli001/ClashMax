@@ -3,6 +3,7 @@
 # Local Codex/agent context. These files are for this workstation only.
 .codex/
 AGENTS.md
+docs
 
 .build/
 .swiftpm/

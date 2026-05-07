@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MenuBarView: View {
   @EnvironmentObject private var appModel: AppModel
+  @EnvironmentObject private var appUpdateController: AppUpdateController
 
   var body: some View {
     Button(canStopRuntime ? "Stop Core" : "Start Core") {
@@ -56,6 +57,8 @@ struct MenuBarView: View {
       appModel.updateActiveSubscription()
     }
     .disabled(!(appModel.profileStore.activeProfile?.isSubscription ?? false))
+
+    CheckForUpdatesButton(updateController: appUpdateController)
 
     Button("Open Window") {
       AppDelegate.showMainWindow()

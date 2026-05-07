@@ -12,6 +12,11 @@ settings:
     ENABLE_HARDENED_RUNTIME: YES
     ARCHS: "$(ARCHS_STANDARD)"
     ONLY_ACTIVE_ARCH: NO
+  configs:
+    Debug:
+      ONLY_ACTIVE_ARCH: YES
+    Release:
+      ONLY_ACTIVE_ARCH: NO
 packages:
   Yams:
     url: https://github.com/jpsim/Yams.git
@@ -19,6 +24,9 @@ packages:
   Pow:
     url: https://github.com/EmergeTools/Pow.git
     from: "1.0.0"
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: "2.9.1"
 targets:
   ClashMax:
     type: application
@@ -28,9 +36,23 @@ targets:
       - path: ClashMax
     resources:
       - path: Resources
+    info:
+      path: Config/ClashMax-Info.plist
+      properties:
+        CFBundleDisplayName: ClashMax
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        LSApplicationCategoryType: public.app-category.utilities
+        NSPrincipalClass: NSApplication
+        NSHumanReadableCopyright: GPL-3.0
+        SUFeedURL: https://marvinli001.github.io/ClashMax/appcast.xml
+        SUPublicEDKey: "Gh5U2F2/392N+X0I2t1ojmM3uHPYKR2Ceww618dTaLc="
+        SUEnableAutomaticChecks: true
+        SUAutomaticallyUpdate: false
     dependencies:
       - package: Yams
       - package: Pow
+      - package: Sparkle
       - target: ClashMaxHelper
         embed: false
         link: false
@@ -38,13 +60,10 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.clashmax.ClashMax
         PRODUCT_NAME: ClashMax
-        GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_CFBundleDisplayName: ClashMax
-        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
-        INFOPLIST_KEY_NSPrincipalClass: NSApplication
-        INFOPLIST_KEY_NSHumanReadableCopyright: GPL-3.0
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_USER_SCRIPT_SANDBOXING: NO
+        MARKETING_VERSION: 1.0.0
+        CURRENT_PROJECT_VERSION: 1
     entitlements:
       path: Config/ClashMax.entitlements
     postCompileScripts:
@@ -154,3 +173,23 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/ClashMax.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ClashMax"
         BUNDLE_LOADER: "$(TEST_HOST)"
+schemes:
+  ClashMax:
+    build:
+      targets:
+        ClashMax: all
+        ClashMaxTests: [test]
+    run:
+      config: Debug
+      executable: ClashMax
+    test:
+      config: Debug
+      targets:
+        - ClashMaxTests
+    profile:
+      config: Release
+      executable: ClashMax
+    analyze:
+      config: Debug
+    archive:
+      config: Release

@@ -32,7 +32,7 @@ ClashMax 是一个使用 SwiftUI 构建的原生 macOS Mihomo 图形客户端。
 
 ## 当前状态
 
-ClashMax 可以作为开发构建运行，但还不是完整公开发行版。TUN 模式依赖 helper 注册、签名和 macOS 系统批准流程，仍需要真实机器验证。正式发布前还需要补齐完整 GPL 文本、签名/公证策略和安装包流程。
+ClashMax 可以作为开发构建运行，但还不是完整公开发行版。TUN 模式依赖 helper 注册、签名和 macOS 系统批准流程，仍需要真实机器验证。App 包更新已接入 Sparkle 框架入口，但正式发布前必须生成并配置真实 Sparkle EdDSA public key、完成 Developer ID 签名/公证，并发布 appcast。
 
 ## 环境要求
 
@@ -69,6 +69,16 @@ xcodebuild test -project ClashMax.xcodeproj -scheme ClashMax -destination 'platf
 ```
 
 TUN 模式需要 helper 被正确嵌入、签名、注册，并在系统设置中获批。普通系统代理模式由用户态 app process 负责。
+
+## App 更新发布
+
+ClashMax 使用 Sparkle 做 `.app` 包更新，更新源默认是：
+
+```text
+https://marvinli001.github.io/ClashMax/appcast.xml
+```
+
+首次公开发布前，先按 `docs/APP_UPDATES.md` 生成 Sparkle EdDSA key，把 public key 写入 `project.yml` 的 `SUPublicEDKey`，并妥善保存 private key。资源包更新例如 Mihomo core 更新不走 Sparkle appcast，会作为独立资源更新通道实现。
 
 ## 项目结构
 
@@ -123,3 +133,4 @@ ClashMax 计划保持 GPL-3.0-compatible，因为它分发或控制 Mihomo。打
 - [Mihomo](https://github.com/MetaCubeX/mihomo) 提供代理核心。
 - [Yams](https://github.com/jpsim/Yams) 提供 YAML 解析和生成。
 - [Pow](https://github.com/EmergeTools/Pow) 提供 SwiftUI effects。
+- [Sparkle](https://github.com/sparkle-project/Sparkle) 提供 macOS app 更新框架。

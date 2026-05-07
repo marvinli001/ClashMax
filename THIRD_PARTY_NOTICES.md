@@ -21,6 +21,12 @@ as a separate process and preserves user-provided Clash/Mihomo YAML configs.
 - License: MIT
 - Use: SwiftUI change effects and transitions on the Home dashboard.
 
+## Sparkle
+
+- Upstream: https://github.com/sparkle-project/Sparkle
+- License: MIT
+- Use: Native macOS app bundle update checks and installation.
+
 ## RiveRuntime
 
 - Upstream: https://github.com/rive-app/rive-ios

@@ -5,11 +5,13 @@ import SwiftUI
 struct ClashMaxApp: App {
   @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
   @StateObject private var appModel = AppModel.bootstrap()
+  @StateObject private var appUpdateController = AppUpdateController()
 
   var body: some Scene {
     WindowGroup("ClashMax", id: "main") {
       ContentView()
         .environmentObject(appModel)
+        .environmentObject(appUpdateController)
         .preferredColorScheme(appModel.appTheme.preferredColorScheme)
         .frame(minWidth: 980, minHeight: 660)
         .onAppear {
@@ -20,6 +22,8 @@ struct ClashMaxApp: App {
     .defaultLaunchBehavior(.presented)
     .commands {
       CommandGroup(after: .appInfo) {
+        CheckForUpdatesButton(updateController: appUpdateController)
+        Divider()
         Button("Open Main Window") {
           AppDelegate.showMainWindow()
         }
@@ -30,6 +34,7 @@ struct ClashMaxApp: App {
     MenuBarExtra {
       MenuBarView()
         .environmentObject(appModel)
+        .environmentObject(appUpdateController)
         .preferredColorScheme(appModel.appTheme.preferredColorScheme)
         .onAppear {
           appDelegate.appModel = appModel
@@ -44,6 +49,7 @@ struct ClashMaxApp: App {
     Settings {
       SettingsView()
         .environmentObject(appModel)
+        .environmentObject(appUpdateController)
         .preferredColorScheme(appModel.appTheme.preferredColorScheme)
         .onAppear {
           appDelegate.appModel = appModel

@@ -3,6 +3,7 @@ import SwiftUI
 
 struct SettingsView: View {
   @EnvironmentObject private var appModel: AppModel
+  @EnvironmentObject private var appUpdateController: AppUpdateController
 
   var body: some View {
     AdaptivePage(
@@ -27,6 +28,22 @@ struct SettingsView: View {
             .labelsHidden()
             .pickerStyle(.segmented)
             .frame(width: 220, alignment: .trailing)
+          }
+        }
+
+        Section("App Updates") {
+          SettingsControlRow("Current Version", description: "ClashMax app bundle version and build number.") {
+            Text(appUpdateController.versionSummary)
+              .font(.caption.monospacedDigit())
+              .foregroundStyle(.secondary)
+          }
+          SettingsControlRow("Update Feed", description: appUpdateController.feedURLString) {
+            Image(systemName: "link")
+              .foregroundStyle(.secondary)
+              .help(appUpdateController.feedURLString)
+          }
+          SettingsControlRow("Sparkle", description: appUpdateController.statusMessage) {
+            CheckForUpdatesButton(updateController: appUpdateController)
           }
         }
 
@@ -314,6 +331,11 @@ private struct SettingsControlRow<Control: View>: View {
 
 private struct ExternalControlSettingsRow: View {
   @EnvironmentObject private var appModel: AppModel
+  @State private var isPresented = false
+  @State private var draft = ExternalControllerSettings.default
+  @State private var addressDraft = ExternalControllerSettings.default.address
+  @State private var secretDraft = ""
+  @State private var error: String?
 
   var body: some View {
     HStack(alignment: .center, spacing: 16) {
@@ -321,7 +343,10 @@ private struct ExternalControlSettingsRow: View {
         HStack(spacing: 6) {
           Text("External Control")
             .foregroundStyle(.primary)
-          ExternalControlSettingsButton()
+          Image(systemName: "gearshape")
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .frame(width: 18, height: 18)
         }
 
         Text(description)
@@ -338,7 +363,27 @@ private struct ExternalControlSettingsRow: View {
         .font(.caption.weight(.semibold))
         .foregroundStyle(.secondary)
     }
+    .contentShape(Rectangle())
     .frame(maxWidth: .infinity, alignment: .leading)
+    .accessibilityAddTraits(.isButton)
+    .onTapGesture {
+      syncDraft()
+      isPresented = true
+    }
+    .sheet(isPresented: $isPresented) {
+      ExternalControlSettingsSheet(
+        draft: $draft,
+        addressDraft: $addressDraft,
+        secretDraft: $secretDraft,
+        error: $error,
+        onCancel: {
+          isPresented = false
+        },
+        onSave: save
+      )
+      .frame(width: 520)
+      .padding(24)
+    }
   }
 
   private var description: String {
@@ -346,184 +391,11 @@ private struct ExternalControlSettingsRow: View {
     let state = settings.enabled ? "Enabled" : "Disabled"
     return "\(state) for external web dashboards at \(settings.address) with Bearer auth."
   }
-}
-
-private struct ExternalControlSettingsButton: View {
-  @EnvironmentObject private var appModel: AppModel
-  @State private var isPresented = false
-  @State private var draft = ExternalControllerSettings.default
-  @State private var addressDraft = ExternalControllerSettings.default.address
-  @State private var secretDraft = ""
-  @State private var originDraft = ""
-  @State private var error: String?
-  @State private var showsOrigins = true
-
-  var body: some View {
-    Button {
-      syncDraft()
-      isPresented = true
-    } label: {
-      Image(systemName: "gearshape")
-        .font(.system(size: 12, weight: .semibold))
-        .frame(width: 18, height: 18)
-    }
-    .buttonStyle(.borderless)
-    .controlSize(.small)
-    .help("Configure external controller access")
-    .popover(isPresented: $isPresented, arrowEdge: .bottom) {
-      popoverContent
-        .frame(width: 540)
-        .padding(18)
-    }
-  }
-
-  private var popoverContent: some View {
-    VStack(alignment: .leading, spacing: 16) {
-      Label("External Controller", systemImage: "network")
-        .font(.title3.weight(.semibold))
-
-      Toggle("Enable External Controller", isOn: $draft.enabled)
-        .toggleStyle(.switch)
-
-      VStack(alignment: .leading, spacing: 10) {
-        labeledField("Controller Listen Address") {
-          HStack(spacing: 8) {
-            TextField("127.0.0.1:9097", text: $addressDraft)
-              .textFieldStyle(.roundedBorder)
-              .monospacedDigit()
-              .disabled(!draft.enabled)
-            copyButton(value: addressDraft, help: "Copy listen address")
-          }
-        }
-
-        labeledField("API Access Secret") {
-          HStack(spacing: 8) {
-            TextField("set-your-secret", text: $secretDraft)
-              .textFieldStyle(.roundedBorder)
-              .disabled(!draft.enabled)
-            copyButton(value: secretDraft, help: "Copy API secret")
-          }
-        }
-      }
-
-      Divider()
-
-      Toggle("Allow Private Network Access", isOn: $draft.cors.allowPrivateNetwork)
-        .toggleStyle(.switch)
-        .disabled(!draft.enabled)
-
-      DisclosureGroup("Allowed Web Panel Origins", isExpanded: $showsOrigins) {
-        VStack(alignment: .leading, spacing: 8) {
-          VStack(spacing: 8) {
-            ForEach(Array(draft.cors.allowedOrigins.enumerated()), id: \.offset) { index, _ in
-              HStack(spacing: 8) {
-                TextField("https://dashboard.example", text: originBinding(at: index))
-                  .textFieldStyle(.roundedBorder)
-                  .disabled(!draft.enabled)
-                Button {
-                  draft.cors.allowedOrigins.remove(at: index)
-                } label: {
-                  Image(systemName: "trash")
-                }
-                .buttonStyle(.borderless)
-                .disabled(!draft.enabled)
-                .help("Remove origin")
-              }
-            }
-          }
-
-          HStack(spacing: 8) {
-            TextField("https://dashboard.example", text: $originDraft)
-              .textFieldStyle(.roundedBorder)
-              .disabled(!draft.enabled)
-              .onSubmit(addOrigin)
-            Button("Add", action: addOrigin)
-              .disabled(!draft.enabled || originDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-          }
-
-          Text("Always includes: \(ExternalControllerCORSSettings.fixedLocalOrigins.joined(separator: ", "))")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .lineLimit(2)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.top, 8)
-      }
-      .disabled(!draft.enabled)
-
-      if let error {
-        Label(error, systemImage: "exclamationmark.triangle.fill")
-          .font(.callout)
-          .foregroundStyle(.red)
-          .lineLimit(2)
-      }
-
-      HStack {
-        Spacer()
-        Button("Cancel") {
-          isPresented = false
-        }
-        .keyboardShortcut(.cancelAction)
-        Button("Save") {
-          save()
-        }
-        .keyboardShortcut(.defaultAction)
-      }
-    }
-  }
 
   private func syncDraft() {
     draft = appModel.externalControllerSettings
     addressDraft = draft.address
     secretDraft = draft.normalizedSecret
-    originDraft = ""
-    error = nil
-  }
-
-  @ViewBuilder
-  private func labeledField<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-    HStack(alignment: .center, spacing: 14) {
-      Text(title)
-        .frame(width: 170, alignment: .leading)
-      content()
-    }
-  }
-
-  private func copyButton(value: String, help: String) -> some View {
-    Button {
-      NSPasteboard.general.clearContents()
-      NSPasteboard.general.setString(value, forType: .string)
-    } label: {
-      Image(systemName: "doc.on.doc")
-        .frame(width: 22, height: 22)
-    }
-    .buttonStyle(.borderless)
-    .disabled(value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-    .help(help)
-  }
-
-  private func originBinding(at index: Int) -> Binding<String> {
-    Binding(
-      get: {
-        guard draft.cors.allowedOrigins.indices.contains(index) else { return "" }
-        return draft.cors.allowedOrigins[index]
-      },
-      set: { value in
-        guard draft.cors.allowedOrigins.indices.contains(index) else { return }
-        draft.cors.allowedOrigins[index] = value
-      }
-    )
-  }
-
-  private func addOrigin() {
-    let trimmed = originDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else { return }
-    guard ExternalControllerCORSSettings.isValidOrigin(trimmed) else {
-      error = "Invalid origin: \(trimmed)"
-      return
-    }
-    draft.cors.allowedOrigins = ExternalControllerCORSSettings.normalizedOrigins(draft.cors.allowedOrigins + [trimmed])
-    originDraft = ""
     error = nil
   }
 
@@ -569,6 +441,91 @@ private struct ExternalControlSettingsButton: View {
       return (host, port)
     }
     return nil
+  }
+}
+
+private struct ExternalControlSettingsSheet: View {
+  @Binding var draft: ExternalControllerSettings
+  @Binding var addressDraft: String
+  @Binding var secretDraft: String
+  @Binding var error: String?
+
+  let onCancel: () -> Void
+  let onSave: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 18) {
+      Label("External Controller Listen Address", systemImage: "network")
+        .font(.title3.weight(.semibold))
+
+      VStack(alignment: .leading, spacing: 12) {
+        HStack(alignment: .center, spacing: 14) {
+          Text("Enable External Controller")
+            .frame(width: 170, alignment: .leading)
+          Toggle("Enable External Controller", isOn: $draft.enabled)
+            .labelsHidden()
+            .toggleStyle(.switch)
+        }
+
+        labeledField("Controller Listen Address") {
+          HStack(spacing: 8) {
+            TextField("127.0.0.1:9097", text: $addressDraft)
+              .textFieldStyle(.roundedBorder)
+              .monospacedDigit()
+              .disabled(!draft.enabled)
+            copyButton(value: addressDraft, isEnabled: draft.enabled, help: "Copy listen address")
+          }
+        }
+
+        labeledField("API Access Secret") {
+          HStack(spacing: 8) {
+            TextField("set-your-secret", text: $secretDraft)
+              .textFieldStyle(.roundedBorder)
+              .disabled(!draft.enabled)
+            copyButton(value: secretDraft, isEnabled: draft.enabled, help: "Copy API secret")
+          }
+        }
+      }
+
+      if let error {
+        Label(error, systemImage: "exclamationmark.triangle.fill")
+          .font(.callout)
+          .foregroundStyle(.red)
+          .lineLimit(2)
+      }
+
+      Divider()
+
+      HStack {
+        Spacer()
+        Button("Cancel", action: onCancel)
+          .keyboardShortcut(.cancelAction)
+        Button("Save", action: onSave)
+          .keyboardShortcut(.defaultAction)
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func labeledField<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+    HStack(alignment: .center, spacing: 14) {
+      Text(title)
+        .frame(width: 170, alignment: .leading)
+      content()
+    }
+  }
+
+  private func copyButton(value: String, isEnabled: Bool, help: String) -> some View {
+    Button {
+      NSPasteboard.general.clearContents()
+      NSPasteboard.general.setString(value, forType: .string)
+    } label: {
+      Image(systemName: "doc.on.doc")
+        .frame(width: 22, height: 22)
+    }
+    .buttonStyle(.borderless)
+    .disabled(!isEnabled || value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    .help(help)
   }
 }
 
