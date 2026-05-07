@@ -21,4 +21,3 @@ Resources/Core/mihomo-darwin-*
 Resources/Core/*.gz
 !Resources/Core/README.md
 !Resources/Core/mihomo-manifest.json
-THIRD_PARTY_NOTICES.md
