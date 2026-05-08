@@ -6,15 +6,14 @@ struct ClashMaxApp: App {
   @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
   @StateObject private var appModel = AppModel.bootstrap()
   @StateObject private var appUpdateController = AppUpdateController()
-  @StateObject private var resourceUpdateController = ResourceUpdateController()
+  private let bundledCoreInfo = BundledCoreInfo()
 
   var body: some Scene {
     WindowGroup("ClashMax", id: "main") {
       ContentView()
         .environmentObject(appModel)
         .environmentObject(appUpdateController)
-        .environmentObject(resourceUpdateController)
-        .preferredColorScheme(appModel.appTheme.preferredColorScheme)
+        .appThemeAppearance(appModel.appTheme)
         .frame(minWidth: 980, minHeight: 660)
         .onAppear {
           appDelegate.appModel = appModel
@@ -37,8 +36,7 @@ struct ClashMaxApp: App {
       MenuBarView()
         .environmentObject(appModel)
         .environmentObject(appUpdateController)
-        .environmentObject(resourceUpdateController)
-        .preferredColorScheme(appModel.appTheme.preferredColorScheme)
+        .appThemeAppearance(appModel.appTheme)
         .onAppear {
           appDelegate.appModel = appModel
         }
@@ -50,11 +48,10 @@ struct ClashMaxApp: App {
     }
 
     Settings {
-      SettingsView()
+      SettingsView(bundledCoreInfo: bundledCoreInfo)
         .environmentObject(appModel)
         .environmentObject(appUpdateController)
-        .environmentObject(resourceUpdateController)
-        .preferredColorScheme(appModel.appTheme.preferredColorScheme)
+        .appThemeAppearance(appModel.appTheme)
         .onAppear {
           appDelegate.appModel = appModel
         }
@@ -62,7 +59,42 @@ struct ClashMaxApp: App {
   }
 }
 
-private extension AppTheme {
+@MainActor
+enum AppThemeAppearance {
+  static func apply(_ theme: AppTheme, to application: NSApplication = .shared) {
+    let appearance = theme.nsAppearanceName.flatMap(NSAppearance.init(named:))
+    application.appearance = appearance
+
+    for window in application.windows {
+      window.appearance = appearance
+      window.contentView?.appearance = appearance
+      window.contentView?.needsDisplay = true
+    }
+  }
+}
+
+extension View {
+  func appThemeAppearance(_ theme: AppTheme) -> some View {
+    modifier(AppThemeAppearanceModifier(theme: theme))
+  }
+}
+
+private struct AppThemeAppearanceModifier: ViewModifier {
+  let theme: AppTheme
+
+  func body(content: Content) -> some View {
+    content
+      .preferredColorScheme(theme.preferredColorScheme)
+      .onAppear {
+        AppThemeAppearance.apply(theme)
+      }
+      .onChange(of: theme) { _, newTheme in
+        AppThemeAppearance.apply(newTheme)
+      }
+  }
+}
+
+extension AppTheme {
   var preferredColorScheme: ColorScheme? {
     switch self {
     case .system:
@@ -71,6 +103,17 @@ private extension AppTheme {
       return .light
     case .dark:
       return .dark
+    }
+  }
+
+  var nsAppearanceName: NSAppearance.Name? {
+    switch self {
+    case .system:
+      return nil
+    case .light:
+      return .aqua
+    case .dark:
+      return .darkAqua
     }
   }
 }

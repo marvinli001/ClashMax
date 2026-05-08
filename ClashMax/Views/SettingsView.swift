@@ -4,7 +4,11 @@ import SwiftUI
 struct SettingsView: View {
   @EnvironmentObject private var appModel: AppModel
   @EnvironmentObject private var appUpdateController: AppUpdateController
-  @EnvironmentObject private var resourceUpdateController: ResourceUpdateController
+  private let bundledCoreInfo: BundledCoreInfo
+
+  init(bundledCoreInfo: BundledCoreInfo = BundledCoreInfo()) {
+    self.bundledCoreInfo = bundledCoreInfo
+  }
 
   var body: some View {
     AdaptivePage(
@@ -42,12 +46,10 @@ struct SettingsView: View {
           }
 
           UpdateVersionRow(
-            title: "Resource Package",
-            description: resourceUpdateController.statusMessage,
-            version: resourceUpdateController.coreVersionSummary
-          ) {
-            CheckResourceUpdatesButton(updateController: resourceUpdateController)
-          }
+            title: "Bundled Core",
+            description: bundledCoreInfo.statusMessage,
+            version: bundledCoreInfo.versionSummary
+          )
         }
 
         Section("Launch") {
@@ -350,12 +352,23 @@ private struct UpdateVersionRow<Action: View>: View {
     self.action = action()
   }
 
+  init(
+    title: String,
+    description: String,
+    version: String
+  ) where Action == EmptyView {
+    self.title = title
+    self.description = description
+    self.version = version
+    action = EmptyView()
+  }
+
   var body: some View {
     ViewThatFits(in: .horizontal) {
       HStack(alignment: .center, spacing: 16) {
         titleBlock
         Spacer(minLength: 16)
-        versionBadge
+        versionLabel
         action
       }
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -363,7 +376,7 @@ private struct UpdateVersionRow<Action: View>: View {
       VStack(alignment: .leading, spacing: 8) {
         titleBlock
         HStack(spacing: 10) {
-          versionBadge
+          versionLabel
           action
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
@@ -385,14 +398,11 @@ private struct UpdateVersionRow<Action: View>: View {
     .layoutPriority(1)
   }
 
-  private var versionBadge: some View {
+  private var versionLabel: some View {
     Text(version)
       .font(.caption.monospacedDigit())
       .foregroundStyle(.secondary)
       .lineLimit(1)
-      .padding(.horizontal, 8)
-      .padding(.vertical, 3)
-      .background(.quaternary, in: Capsule())
   }
 }
 
@@ -407,50 +417,42 @@ private struct ExternalControlSettingsRow: View {
   @State private var corsDraft = ExternalControllerCORSSettings.default
   @State private var originDraft = ""
   @State private var corsError: String?
+  @State private var suppressControllerPresentation = false
 
   var body: some View {
     HStack(alignment: .center, spacing: 16) {
       VStack(alignment: .leading, spacing: 3) {
         HStack(spacing: 6) {
-          Button {
-            presentControllerSettings()
-          } label: {
-            Text("External Control")
-              .foregroundStyle(.primary)
-          }
-          .buttonStyle(.plain)
-
+          Text("External Control")
+            .foregroundStyle(.primary)
           corsSettingsButton
         }
 
-        Button {
-          presentControllerSettings()
-        } label: {
-          Text(description)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .lineLimit(3)
-            .fixedSize(horizontal: false, vertical: true)
-            .multilineTextAlignment(.leading)
-        }
-        .buttonStyle(.plain)
+        Text(description)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(3)
+          .fixedSize(horizontal: false, vertical: true)
+          .multilineTextAlignment(.leading)
       }
       .layoutPriority(1)
 
       Spacer(minLength: 16)
 
-      Button {
-        presentControllerSettings()
-      } label: {
-        Image(systemName: "chevron.right")
-          .font(.caption.weight(.semibold))
-          .foregroundStyle(.secondary)
-      }
-      .buttonStyle(.plain)
+      Image(systemName: "chevron.right")
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
     }
     .contentShape(Rectangle())
     .frame(maxWidth: .infinity, alignment: .leading)
     .accessibilityAddTraits(.isButton)
+    .onTapGesture {
+      guard !suppressControllerPresentation else {
+        suppressControllerPresentation = false
+        return
+      }
+      presentControllerSettings()
+    }
     .sheet(isPresented: $isControllerPresented) {
       ExternalControlSettingsSheet(
         draft: $draft,
@@ -475,8 +477,12 @@ private struct ExternalControlSettingsRow: View {
 
   private var corsSettingsButton: some View {
     Button {
+      suppressControllerPresentation = true
       syncCORSDraft()
       isCORSPresented = true
+      DispatchQueue.main.async {
+        suppressControllerPresentation = false
+      }
     } label: {
       Image(systemName: "gearshape")
         .font(.system(size: 12, weight: .semibold))

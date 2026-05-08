@@ -1,5 +1,7 @@
+import AppKit
 import Combine
 import ServiceManagement
+import SwiftUI
 import XCTest
 @testable import ClashMax
 
@@ -257,6 +259,17 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
 
     XCTAssertEqual(secondModel.appTheme, .dark)
+  }
+
+  func testAppThemeMapsToSwiftUIColorSchemeAndAppKitAppearance() {
+    XCTAssertNil(AppTheme.system.preferredColorScheme)
+    XCTAssertNil(AppTheme.system.nsAppearanceName)
+
+    XCTAssertEqual(AppTheme.light.preferredColorScheme, .light)
+    XCTAssertEqual(AppTheme.light.nsAppearanceName, .aqua)
+
+    XCTAssertEqual(AppTheme.dark.preferredColorScheme, .dark)
+    XCTAssertEqual(AppTheme.dark.nsAppearanceName, .darkAqua)
   }
 
   func testExternalControllerSettingsPersistAndSyncRuntimeOverrides() throws {
@@ -924,6 +937,163 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(requestedHosts, ["jp.example"])
     XCTAssertEqual(delayRequestCount, 0)
     XCTAssertEqual(model.proxyGroups.first?.nodes.first?.delay, 44)
+  }
+
+  func testNativePingDelayUsesPreviewServerHostWhenRuntimeOmitsEndpoint() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try """
+    proxies:
+      - { name: '[Hy2]HK Hysteria', type: hysteria2, server: example.com, port: 23006, password: password }
+    proxy-groups:
+      - { name: Elite, type: select, proxies: ['[Hy2]HK Hysteria', DIRECT] }
+    rules:
+      - MATCH,Elite
+    """.write(to: configURL, atomically: true, encoding: .utf8)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try store.importLocalConfig(from: configURL)
+    let controller = CoreProcessController(
+      launcher: FakeProcessLauncher(),
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let runtimeGroup = ProxyGroup(
+      name: "Elite",
+      type: "select",
+      selected: "[Hy2]HK Hysteria",
+      nodes: [ProxyNode(name: "[Hy2]HK Hysteria", type: "Hysteria2", delay: nil, isSelectable: true)]
+    )
+    let client = RecordingMihomoController(proxyGroupsResponse: [runtimeGroup], testDelayResult: 99)
+    let pingTester = RecordingPingTester(results: [51])
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      apiClient: client,
+      pingTester: pingTester,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.delayTestSettings = DelayTestSettings(mode: .nativePing, unifiedDelay: false)
+    model.proxyGroups = [runtimeGroup]
+
+    try await controller.startUserMode(
+      coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+      configURL: configURL,
+      workDirectory: paths.runtime,
+      api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+    )
+
+    model.testDelay(for: runtimeGroup.nodes[0])
+
+    for _ in 0..<30 where await pingTester.requestCount() == 0 {
+      await Task.yield()
+    }
+    for _ in 0..<30 where model.proxyGroups.first?.nodes.first?.delay != 51 {
+      await Task.yield()
+    }
+
+    let requestedHosts = await pingTester.hosts()
+    let delayRequestCount = await client.delayRequestCount()
+    XCTAssertEqual(requestedHosts, ["example.com"])
+    XCTAssertEqual(delayRequestCount, 0)
+    XCTAssertEqual(model.proxyGroups.first?.nodes.first?.serverHost, "example.com")
+    XCTAssertEqual(model.proxyGroups.first?.nodes.first?.serverPort, 23006)
+    XCTAssertEqual(model.proxyGroups.first?.nodes.first?.delay, 51)
+  }
+
+  func testNativePingDelayUsesProviderServerHostWhenRuntimeOmitsEndpoint() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try """
+    proxy-providers:
+      Remote:
+        type: http
+        url: https://sub.example/profile
+        path: ./remote.yaml
+    proxy-groups:
+      - { name: Elite, type: select, use: [Remote] }
+    rules:
+      - MATCH,Elite
+    """.write(to: configURL, atomically: true, encoding: .utf8)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try store.importLocalConfig(from: configURL)
+    let controller = CoreProcessController(
+      launcher: FakeProcessLauncher(),
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let runtimeGroup = ProxyGroup(
+      name: "Elite",
+      type: "select",
+      selected: "[Hy2]HK Hysteria",
+      nodes: [ProxyNode(name: "[Hy2]HK Hysteria", type: "Hysteria2", delay: nil, isSelectable: true)]
+    )
+    let provider = ProxyProvider(
+      name: "Remote",
+      type: "http",
+      vehicleType: "HTTP",
+      updatedAt: nil,
+      proxies: [
+        ProxyNode(
+          name: "[Hy2]HK Hysteria",
+          type: "Hysteria2",
+          delay: nil,
+          isSelectable: true,
+          serverHost: "provider.example",
+          serverPort: 443
+        )
+      ]
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [runtimeGroup],
+      proxyProvidersResponse: [provider],
+      testDelayResult: 99
+    )
+    let pingTester = RecordingPingTester(results: [62])
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      apiClient: client,
+      pingTester: pingTester,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.delayTestSettings = DelayTestSettings(mode: .nativePing, unifiedDelay: false)
+
+    try await controller.startUserMode(
+      coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+      configURL: configURL,
+      workDirectory: paths.runtime,
+      api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+    )
+
+    model.reloadRuntimeData()
+
+    for _ in 0..<30 where model.proxyGroups.first?.nodes.first?.serverHost == nil {
+      await Task.yield()
+    }
+
+    let node = try XCTUnwrap(model.proxyGroups.first?.nodes.first)
+    model.testDelay(for: node)
+
+    for _ in 0..<30 where await pingTester.requestCount() == 0 {
+      await Task.yield()
+    }
+    for _ in 0..<30 where model.proxyGroups.first?.nodes.first?.delay != 62 {
+      await Task.yield()
+    }
+
+    let requestedHosts = await pingTester.hosts()
+    let delayRequestCount = await client.delayRequestCount()
+    XCTAssertEqual(requestedHosts, ["provider.example"])
+    XCTAssertEqual(delayRequestCount, 0)
+    XCTAssertEqual(model.proxyGroups.first?.nodes.first?.serverHost, "provider.example")
+    XCTAssertEqual(model.proxyGroups.first?.nodes.first?.serverPort, 443)
+    XCTAssertEqual(model.proxyGroups.first?.nodes.first?.delay, 62)
   }
 
   func testNativePingDelayRequiresNodeServerHost() async throws {

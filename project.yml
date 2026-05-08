@@ -34,6 +34,9 @@ targets:
     sources:
       - path: Shared
       - path: ClashMax
+        excludes:
+          - "* 2.swift"
+          - "**/* 2.swift"
     resources:
       - path: Resources
     info:
@@ -164,6 +167,9 @@ targets:
     platform: macOS
     sources:
       - path: ClashMaxTests
+        excludes:
+          - "* 2.swift"
+          - "**/* 2.swift"
     dependencies:
       - target: ClashMax
       - package: Yams

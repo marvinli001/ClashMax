@@ -793,13 +793,20 @@ final class AppModel: ObservableObject {
     Task {
       do {
         let knownDelays = proxyDelayMap(from: proxyGroups)
+        let cachedRuntimeGroups = proxyGroups
         let runtimeGroups = try await apiClient.proxyGroups()
-        proxyGroups = runtimeGroups.preservingKnownDelays(knownDelays)
+        let refreshedProviders: [ProxyProvider]
         do {
-          proxyProviders = try await apiClient.structuredProxyProviders()
+          refreshedProviders = try await apiClient.structuredProxyProviders()
         } catch {
-          proxyProviders = []
+          refreshedProviders = []
         }
+        proxyProviders = refreshedProviders
+        proxyGroups = enrichProxyGroupsWithKnownEndpoints(
+          runtimeGroups,
+          providers: refreshedProviders,
+          cachedRuntimeGroups: cachedRuntimeGroups
+        ).preservingKnownDelays(knownDelays)
         rules = try await apiClient.rules()
         connections = try await apiClient.connections()
         if clearAfterConfirmation, let activeID = profileStore.activeProfileID {
@@ -992,7 +999,7 @@ final class AppModel: ObservableObject {
         timeout: settings.normalizedTimeoutMilliseconds
       )
     case .nativePing:
-      let host = node.serverHost?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      let host = nativePingHost(for: node) ?? ""
       guard !host.isEmpty else {
         throw DelayTestError.missingServerHost(node.name)
       }
@@ -1232,8 +1239,13 @@ final class AppModel: ObservableObject {
       try Task.checkCancellation()
       do {
         let knownDelays = proxyDelayMap(from: proxyGroups)
+        let cachedRuntimeGroups = proxyGroups
         let runtimeGroups = try await client.proxyGroups()
-        proxyGroups = runtimeGroups.preservingKnownDelays(knownDelays)
+        proxyGroups = enrichProxyGroupsWithKnownEndpoints(
+          runtimeGroups,
+          providers: proxyProviders,
+          cachedRuntimeGroups: cachedRuntimeGroups
+        ).preservingKnownDelays(knownDelays)
       } catch {
         // Best-effort initial fetch; UI still shows YAML preview if this fails.
       }
@@ -1375,6 +1387,68 @@ final class AppModel: ObservableObject {
         }
       }
     }
+  }
+
+  private func nativePingHost(for node: ProxyNode) -> String? {
+    if let endpoint = proxyEndpoint(from: node) {
+      return endpoint.host
+    }
+    let endpointMaps = [
+      proxyEndpointMap(from: proxyProviders),
+      proxyEndpointMap(from: profilePreviewGroups),
+      proxyEndpointMap(from: proxyGroups)
+    ]
+    return endpointMaps.lazy.compactMap { $0[node.name]?.host }.first
+  }
+
+  private func enrichProxyGroupsWithKnownEndpoints(
+    _ groups: [ProxyGroup],
+    providers: [ProxyProvider],
+    cachedRuntimeGroups: [ProxyGroup]
+  ) -> [ProxyGroup] {
+    let endpointMaps = [
+      proxyEndpointMap(from: providers),
+      proxyEndpointMap(from: profilePreviewGroups),
+      proxyEndpointMap(from: cachedRuntimeGroups)
+    ]
+    return groups.map { group in
+      var group = group
+      group.nodes = group.nodes.map { node in
+        guard proxyEndpoint(from: node) == nil,
+              let endpoint = endpointMaps.lazy.compactMap({ $0[node.name] }).first
+        else { return node }
+        var node = node
+        node.serverHost = endpoint.host
+        node.serverPort = endpoint.port
+        return node
+      }
+      return group
+    }
+  }
+
+  private func proxyEndpointMap(from providers: [ProxyProvider]) -> [String: ProxyNodeEndpoint] {
+    providers.reduce(into: [String: ProxyNodeEndpoint]()) { result, provider in
+      for node in provider.proxies {
+        guard result[node.name] == nil, let endpoint = proxyEndpoint(from: node) else { continue }
+        result[node.name] = endpoint
+      }
+    }
+  }
+
+  private func proxyEndpointMap(from groups: [ProxyGroup]) -> [String: ProxyNodeEndpoint] {
+    groups.reduce(into: [String: ProxyNodeEndpoint]()) { result, group in
+      for node in group.nodes {
+        guard result[node.name] == nil, let endpoint = proxyEndpoint(from: node) else { continue }
+        result[node.name] = endpoint
+      }
+    }
+  }
+
+  private func proxyEndpoint(from node: ProxyNode) -> ProxyNodeEndpoint? {
+    guard let host = node.serverHost?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !host.isEmpty
+    else { return nil }
+    return ProxyNodeEndpoint(host: host, port: node.serverPort)
   }
 
   private func syncExternalControllerSettings() {
@@ -1600,6 +1674,11 @@ private enum DelayTestError: LocalizedError {
       return "Delay test for \(nodeName) finished without a result."
     }
   }
+}
+
+private struct ProxyNodeEndpoint {
+  var host: String
+  var port: Int?
 }
 
 @MainActor

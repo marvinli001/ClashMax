@@ -3,13 +3,14 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 63;
+	objectVersion = 77;
 	objects = {
 
 /* Begin PBXBuildFile section */
 		03A016ED5D05A749BCE55F7F /* ProcessOutputCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C2802FE2952C25B5759E9C6 /* ProcessOutputCaptureTests.swift */; };
 		0726E0A274C59104498300B2 /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 608E910E0AB43ACEEB146E9D /* SidebarView.swift */; };
 		0786A610F48409C6706A09F9 /* MihomoAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EE23FBD08FD740D82ABB9D6 /* MihomoAPIClient.swift */; };
+		081AE579A8C912C7B1BB5523 /* BundledCoreInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0541249D56588E7DE6CA6FBF /* BundledCoreInfo.swift */; };
 		0C2AFFDB91A2D439A7F99AF4 /* PublicIPInfoClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22A5F4716EDB4547FD781A89 /* PublicIPInfoClientTests.swift */; };
 		0CF9FEE27C87AE34882DC521 /* TestDoubles.swift in Sources */ = {isa = PBXBuildFile; fileRef = E935C963C504825DE6A4F8BF /* TestDoubles.swift */; };
 		150793B689941D7F36C821B8 /* RulesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B5452AC779C350D39717FD0 /* RulesView.swift */; };
@@ -25,6 +26,7 @@
 		582338603DF2C43438BF0518 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD0BF20165DDA5CBA93D70BE /* KeychainStore.swift */; };
 		6507627D59CE801909FBDF59 /* Yams in Frameworks */ = {isa = PBXBuildFile; productRef = 9FF6185A9B5F20B8664BA152 /* Yams */; };
 		650C8DE3FF78436C97FF40CB /* AppUpdateControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAE456D3BB4410F527BE4948 /* AppUpdateControls.swift */; };
+		664CDD6AC7189C34D71DF56C /* BundledCoreInfoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 548EA1C3B3C20A3D802BC51F /* BundledCoreInfoTests.swift */; };
 		765BB58702FA82EAA03CDA95 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBDCBD94E79A76CA63291C71 /* AppModel.swift */; };
 		7833F2BEAAE74C3587715CB6 /* Pow in Frameworks */ = {isa = PBXBuildFile; productRef = AC88EA016AB92CD58BDFAEC1 /* Pow */; };
 		7A2CDDBBDADDE68423B6DC61 /* SubscriptionFetcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6053241A6DAFF9F3FCB53237 /* SubscriptionFetcherTests.swift */; };
@@ -46,7 +48,6 @@
 		B3C29A1240D3B5EBA9FE5A03 /* LogsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4A2BEB4712640A482254EF3 /* LogsView.swift */; };
 		B472275C65969F85A10A1180 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3049F5E5929A9350DF21AB0 /* main.swift */; };
 		B7F87955C7C14EA8E12691C4 /* TunnelHelperClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11BC6F6EFDDABB919C5C09FA /* TunnelHelperClient.swift */; };
-		B9E84EA51B0A5B846E191A11 /* ResourceUpdateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C683C4D363815222B2F88814 /* ResourceUpdateController.swift */; };
 		BA22256993B295697F6E4694 /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6FB4802572E1217EBCEE7D7 /* MenuBarView.swift */; };
 		BCCAD19625BA61056468BC2A /* Yams in Frameworks */ = {isa = PBXBuildFile; productRef = 88FF56EB7BDC95E76EC245CF /* Yams */; };
 		C0456C1F18ADEE6DC65F28D3 /* SystemProxyControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D9E260500E476D9D4BDAF98 /* SystemProxyControllerTests.swift */; };
@@ -87,6 +88,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		0541249D56588E7DE6CA6FBF /* BundledCoreInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BundledCoreInfo.swift; sourceTree = "<group>"; };
 		071CA2908C95169B76DF5A8F /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		0B5452AC779C350D39717FD0 /* RulesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RulesView.swift; sourceTree = "<group>"; };
 		0C2802FE2952C25B5759E9C6 /* ProcessOutputCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessOutputCaptureTests.swift; sourceTree = "<group>"; };
@@ -105,7 +107,8 @@
 		33B5EAE971B5BB7B41079222 /* CoreRuntimePreflightTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreRuntimePreflightTests.swift; sourceTree = "<group>"; };
 		4294DDEF4FE7C6F6B5D92D11 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		47357CB3092C971F87BF7463 /* TunnelHelperClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TunnelHelperClientTests.swift; sourceTree = "<group>"; };
-		4A6EDC74EB42EB37E504DC43 /* ClashMaxHelper */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = ClashMaxHelper; sourceTree = BUILT_PRODUCTS_DIR; };
+		4A6EDC74EB42EB37E504DC43 /* ClashMaxHelper */ = {isa = PBXFileReference; includeInIndex = 0; path = ClashMaxHelper; sourceTree = BUILT_PRODUCTS_DIR; };
+		548EA1C3B3C20A3D802BC51F /* BundledCoreInfoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BundledCoreInfoTests.swift; sourceTree = "<group>"; };
 		54DFA4FE364633A28C1ED410 /* DashboardComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardComponents.swift; sourceTree = "<group>"; };
 		5A31C178439DDE1DF4A02EDB /* ConfigNormalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigNormalizer.swift; sourceTree = "<group>"; };
 		6053241A6DAFF9F3FCB53237 /* SubscriptionFetcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionFetcherTests.swift; sourceTree = "<group>"; };
@@ -125,7 +128,6 @@
 		B38F8F5042460DDFC4142D6E /* ConfigNormalizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigNormalizerTests.swift; sourceTree = "<group>"; };
 		B4A2BEB4712640A482254EF3 /* LogsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogsView.swift; sourceTree = "<group>"; };
 		BBDCBD94E79A76CA63291C71 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
-		C683C4D363815222B2F88814 /* ResourceUpdateController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResourceUpdateController.swift; sourceTree = "<group>"; };
 		C6BEDC20E0F4E7253F960801 /* PublicIPInfoClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublicIPInfoClient.swift; sourceTree = "<group>"; };
 		C6FB4802572E1217EBCEE7D7 /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
 		C8758370389738F3DA585BFF /* RuntimePaths.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimePaths.swift; sourceTree = "<group>"; };
@@ -199,6 +201,7 @@
 		106BB2107ACE823AA0F85EE7 /* ClashMaxTests */ = {
 			isa = PBXGroup;
 			children = (
+				548EA1C3B3C20A3D802BC51F /* BundledCoreInfoTests.swift */,
 				B38F8F5042460DDFC4142D6E /* ConfigNormalizerTests.swift */,
 				71A566E7FD4BA3634EEB1E5A /* CoreProcessControllerTests.swift */,
 				33B5EAE971B5BB7B41079222 /* CoreRuntimePreflightTests.swift */,
@@ -250,12 +253,12 @@
 			isa = PBXGroup;
 			children = (
 				7BFC26DAE0C73081B06AAF11 /* AppUpdateController.swift */,
+				0541249D56588E7DE6CA6FBF /* BundledCoreInfo.swift */,
 				5A31C178439DDE1DF4A02EDB /* ConfigNormalizer.swift */,
 				94791AE83711A844BABE209F /* CoreProcessController.swift */,
 				DD0BF20165DDA5CBA93D70BE /* KeychainStore.swift */,
 				8EE23FBD08FD740D82ABB9D6 /* MihomoAPIClient.swift */,
 				C6BEDC20E0F4E7253F960801 /* PublicIPInfoClient.swift */,
-				C683C4D363815222B2F88814 /* ResourceUpdateController.swift */,
 				E39A444F3025C24199E60E07 /* SubscriptionFetcher.swift */,
 				93A93A1E61ED764914241456 /* SystemProxyController.swift */,
 				11BC6F6EFDDABB919C5C09FA /* TunnelHelperClient.swift */,
@@ -408,7 +411,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 2640;
+				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					2EAAFCFED0B5B54550ECAAE5 = {
 						DevelopmentTeam = "";
@@ -439,6 +442,7 @@
 				DF4B431A5D634A27B3468C54 /* XCRemoteSwiftPackageReference "Sparkle" */,
 				601C2B5DE33ECB99B22399CE /* XCRemoteSwiftPackageReference "Yams" */,
 			);
+			preferredProjectObjectVersion = 77;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -547,6 +551,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				664CDD6AC7189C34D71DF56C /* BundledCoreInfoTests.swift in Sources */,
 				9F9BD79C3A92F49607A26D64 /* ConfigNormalizerTests.swift in Sources */,
 				B09DA1E8D5571B3D00E74431 /* CoreProcessControllerTests.swift in Sources */,
 				CD94E81AD8133D6E9396B91E /* CoreRuntimePreflightTests.swift in Sources */,
@@ -573,6 +578,7 @@
 				811095BA42CD82CD81DC5D8B /* AppUpdateController.swift in Sources */,
 				650C8DE3FF78436C97FF40CB /* AppUpdateControls.swift in Sources */,
 				EFA791062B0C236B26E0F5B6 /* BoundedBuffer.swift in Sources */,
+				081AE579A8C912C7B1BB5523 /* BundledCoreInfo.swift in Sources */,
 				9435537B65D100571BA1DB93 /* ClashMaxApp.swift in Sources */,
 				C054AF00023F8C2AAFC76D11 /* ConfigNormalizer.swift in Sources */,
 				459B18A0DA1B260D3CAFA0C1 /* ConnectionsView.swift in Sources */,
@@ -596,7 +602,6 @@
 				C65C12ED7117611A2B3765D8 /* PublicIPInfo.swift in Sources */,
 				4784750293BF8FBEA77B6CFE /* PublicIPInfoCard.swift in Sources */,
 				9DCF787EBE577F3DCEF8AD70 /* PublicIPInfoClient.swift in Sources */,
-				B9E84EA51B0A5B846E191A11 /* ResourceUpdateController.swift in Sources */,
 				150793B689941D7F36C821B8 /* RulesView.swift in Sources */,
 				993E27377946D94ECEC6CA47 /* RunningDashboardView.swift in Sources */,
 				F232BA21F47604A638CC4458 /* RuntimePaths.swift in Sources */,
@@ -661,7 +666,6 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -681,7 +685,6 @@
 				ONLY_ACTIVE_ARCH = NO;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 6.0;
@@ -724,7 +727,6 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -750,7 +752,6 @@
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 6.0;
@@ -763,7 +764,6 @@
 				CODE_SIGN_ENTITLEMENTS = Config/ClashMaxHelper.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
-				DEAD_CODE_STRIPPING = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Config/ClashMaxHelper-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -782,7 +782,6 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				COMBINE_HIDPI_IMAGES = YES;
-				DEAD_CODE_STRIPPING = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -802,7 +801,6 @@
 				CODE_SIGN_ENTITLEMENTS = Config/ClashMax.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEAD_CODE_STRIPPING = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				INFOPLIST_FILE = "Config/ClashMax-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -822,7 +820,6 @@
 				CODE_SIGN_ENTITLEMENTS = Config/ClashMaxHelper.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
-				DEAD_CODE_STRIPPING = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Config/ClashMaxHelper-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -843,7 +840,6 @@
 				CODE_SIGN_ENTITLEMENTS = Config/ClashMax.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEAD_CODE_STRIPPING = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				INFOPLIST_FILE = "Config/ClashMax-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -862,7 +858,6 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				COMBINE_HIDPI_IMAGES = YES;
-				DEAD_CODE_STRIPPING = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

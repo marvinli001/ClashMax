@@ -21,7 +21,7 @@ ClashMax 是一个使用 SwiftUI 构建的原生 macOS Mihomo 图形客户端。
 - 原生 macOS 应用体验，覆盖 Dashboard、Profiles、Proxies、Connections、Rules、Logs、Settings 和菜单栏控制。
 - 支持导入本地 Clash/Mihomo YAML 配置，并支持订阅配置的添加、更新、重命名和删除。
 - 保留原始 YAML 不变，启动前生成 ClashMax 托管的 runtime YAML，便于安全注入端口、controller、secret、DNS、TUN 和运行模式。
-- 内置 Mihomo sidecar core，并在设置中分别呈现 App 版本、构建号和内置 Mihomo 资源版本。
+- 内置 Mihomo sidecar core，并在设置中呈现 App 版本、构建号和随包内置的 Mihomo 版本。
 - 支持普通系统代理模式，由用户态核心负责 HTTP、HTTPS、SOCKS 代理设置与恢复。
 - 支持 privileged helper 驱动的 TUN 路径，适配 macOS 的系统批准和权限模型。
 - 接入 Mihomo REST 与 WebSocket 控制面，覆盖版本、配置、代理组、provider、规则、连接、流量和日志。
@@ -54,7 +54,7 @@ ClashMax 是一个使用 SwiftUI 构建的原生 macOS Mihomo 图形客户端。
 
 ## 下载与更新
 
-发布版通过 GitHub Releases 提供。安装后，ClashMax 可在应用内检查 App 更新；Mihomo 资源版本会在设置中独立展示，避免把 App 包版本和内置核心资源版本混在一起。
+发布版通过 GitHub Releases 提供。安装后，ClashMax 可在应用内检查 App 更新；每个 App release 都包含对应的 stable Mihomo 内核，用户不需要单独安装或维护 core binary。
 
 ## 许可证
 
