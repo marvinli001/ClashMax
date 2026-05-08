@@ -294,6 +294,26 @@ final class SystemProxyControllerTests: XCTestCase {
     XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setsecurewebproxy Wi-Fi 127.0.0.1 7890"))
   }
 
+  func testProxyGuardMatchesExpectedHostCaseInsensitively() async throws {
+    let runner = RecordingCommandRunner(outputs: [
+      "/usr/sbin/networksetup -listallnetworkservices": "Wi-Fi\n",
+      "/usr/sbin/networksetup -getwebproxy Wi-Fi": "Enabled: Yes\nServer: myhost.lan\nPort: 7890\n",
+      "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi": "Enabled: Yes\nServer: myhost.lan\nPort: 7890\n",
+      "/usr/sbin/networksetup -getsocksfirewallproxy Wi-Fi": "Enabled: Yes\nServer: myhost.lan\nPort: 7890\n",
+      "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": "Exceptions List\nlocalhost\n"
+    ])
+    let controller = SystemProxyController(commandRunner: runner)
+
+    try await controller.enableGuard(host: "MyHost.lan", port: 7890, bypassDomains: ["localhost"])
+    let result = try await controller.verifyGuardOnceDetailed()
+
+    XCTAssertFalse(result.didRepair)
+    XCTAssertTrue(result.warnings.isEmpty)
+    XCTAssertFalse(runner.commands.contains { $0.contains("-setwebproxy Wi-Fi") })
+    XCTAssertFalse(runner.commands.contains { $0.contains("-setsecurewebproxy Wi-Fi") })
+    XCTAssertFalse(runner.commands.contains { $0.contains("-setsocksfirewallproxy Wi-Fi") })
+  }
+
   func testProxyGuardQueryFailureReturnsWarningWithoutThrowing() async throws {
     let runner = FailingCommandRunner(
       outputs: [

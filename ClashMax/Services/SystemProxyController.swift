@@ -619,8 +619,11 @@ private struct ServiceProxySnapshot: Codable {
   var bypassDomains: [String]
 
   func matches(_ expected: ExpectedSystemProxyConfiguration) -> Bool {
-    [web, secureWeb, socks].allSatisfy {
-      $0.enabled && $0.server == expected.host && $0.port == expected.port
+    guard let expectedHost = normalizedProxyMatchHost(expected.host) else {
+      return false
+    }
+    return [web, secureWeb, socks].allSatisfy {
+      $0.matches(hosts: [expectedHost], ports: [expected.port])
     } && bypassDomains == expected.bypassDomains
   }
 
