@@ -259,7 +259,7 @@ final class AppModel: ObservableObject {
   }
 
   var canControlRuntimeProxies: Bool {
-    apiClient != nil
+    isCoreRunning && apiClient != nil
   }
 
   var canSelectProxyOffline: Bool {
@@ -1259,7 +1259,7 @@ final class AppModel: ObservableObject {
       coreController.stop()
       apiClient = nil
       runtimeOwner = .stopped
-      lastError = UserFacingError.message(for: error)
+      appendAppLog(level: "debug", message: "Preview runtime unavailable: \(UserFacingError.message(for: error))")
     }
   }
 
@@ -1328,7 +1328,7 @@ final class AppModel: ObservableObject {
   }
 
   private func runtimeAPIClientForProxyAction() -> (any MihomoAPIControlling)? {
-    guard let apiClient else {
+    guard canControlRuntimeProxies, let apiClient else {
       lastError = proxyRuntimeActionMessage
       return nil
     }

@@ -311,7 +311,6 @@ private struct CurrentProxyRuntimeCard: View {
     let groups = DashboardProxySelectionState.selectableGroups(from: appModel.proxyGroups)
     let group = DashboardProxySelectionState.resolvedGroup(from: groups, preferredName: selectedGroupName)
     let node = group.flatMap(DashboardProxySelectionState.currentNode)
-    let compact = availableWidth < 700
 
     VStack(alignment: .leading, spacing: 14) {
       HStack(spacing: 10) {
@@ -334,16 +333,13 @@ private struct CurrentProxyRuntimeCard: View {
       if let group, let node {
         currentNodeSummary(group: group, node: node)
 
-        if compact {
-          VStack(alignment: .leading, spacing: 10) {
-            groupControl(groups: groups)
-            nodeControl(group: group)
-          }
-        } else {
-          HStack(alignment: .bottom, spacing: 12) {
-            groupControl(groups: groups)
-            nodeControl(group: group)
-          }
+        HStack(alignment: .bottom, spacing: 10) {
+          groupControl(groups: groups)
+            .frame(minWidth: 112, idealWidth: 150, maxWidth: 180)
+            .layoutPriority(1)
+          nodeControl(group: group)
+            .frame(minWidth: 0, maxWidth: .infinity)
+            .layoutPriority(2)
         }
       } else {
         DashboardEmptyRuntimeView(
@@ -414,6 +410,7 @@ private struct CurrentProxyRuntimeCard: View {
       }
       .labelsHidden()
       .frame(maxWidth: .infinity, alignment: .leading)
+      .controlSize(.small)
     }
   }
 
@@ -427,14 +424,17 @@ private struct CurrentProxyRuntimeCard: View {
         }
         .labelsHidden()
         .frame(maxWidth: .infinity, alignment: .leading)
+        .controlSize(.small)
 
         Button {
           guard let node = DashboardProxySelectionState.currentNode(in: group) else { return }
           appModel.testDelay(for: node)
         } label: {
           Image(systemName: "speedometer")
+            .frame(width: 18, height: 18)
         }
         .buttonStyle(.borderless)
+        .controlSize(.small)
         .disabled(!appModel.canControlRuntimeProxies)
         .help(appModel.canControlRuntimeProxies ? "Test current node delay" : appModel.proxyRuntimeActionMessage)
       }

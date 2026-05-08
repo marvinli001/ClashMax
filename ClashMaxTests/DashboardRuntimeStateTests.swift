@@ -203,6 +203,43 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(model.lastError, "Start the core before selecting proxies or testing delay.")
   }
 
+  func testEarlyRuntimeAPIClientDoesNotEnableDelayBeforeCoreIsRunning() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try """
+    proxies:
+      - { name: Japan, type: vless, server: example.net, port: 443, uuid: 00000000-0000-0000-0000-000000000000 }
+    proxy-groups:
+      - { name: Elite, type: select, proxies: [Japan, DIRECT] }
+    rules:
+      - MATCH,Elite
+    """.write(to: configURL, atomically: true, encoding: .utf8)
+
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try store.importLocalConfig(from: configURL)
+    let group = ProxyGroup(
+      name: "Elite",
+      type: "select",
+      selected: "Japan",
+      nodes: [ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true)]
+    )
+    let client = RecordingMihomoController(proxyGroupsResponse: [group], testDelayResult: 73)
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      apiClient: client,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    XCTAssertFalse(model.canControlRuntimeProxies)
+
+    model.testDelay(for: group.nodes[0])
+
+    let delayRequestCount = await client.delayRequestCount()
+    XCTAssertEqual(model.lastError, "Start the core before selecting proxies or testing delay.")
+    XCTAssertEqual(delayRequestCount, 0)
+  }
+
   func testProxyPageActionsAreDisabledWhileRuntimeIsStarting() {
     XCTAssertFalse(
       ProxiesPageActionState.canStart(
@@ -1098,6 +1135,17 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
   func testNativePingDelayRequiresNodeServerHost() async throws {
     let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try store.importLocalConfig(from: configURL)
+    let controller = CoreProcessController(
+      launcher: FakeProcessLauncher(),
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
     let group = ProxyGroup(
       name: "Elite",
       type: "select",
@@ -1108,12 +1156,21 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let pingTester = RecordingPingTester(results: [44])
     let model = AppModel(
       paths: paths,
-      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      profileStore: store,
+      coreController: controller,
       apiClient: client,
       pingTester: pingTester,
       defaults: try Self.makeIsolatedDefaults()
     )
     model.delayTestSettings = DelayTestSettings(mode: .nativePing, unifiedDelay: false)
+    model.proxyGroups = [group]
+
+    try await controller.startUserMode(
+      coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+      configURL: configURL,
+      workDirectory: paths.runtime,
+      api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+    )
 
     model.testDelay(for: group.nodes[0])
 
@@ -1192,6 +1249,17 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
   func testProviderHealthAndConnectionCloseUseRuntimeAPI() async throws {
     let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try store.importLocalConfig(from: configURL)
+    let controller = CoreProcessController(
+      launcher: FakeProcessLauncher(),
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
     let provider = ProxyProvider(
       name: "Remote/sub",
       type: "http",
@@ -1212,26 +1280,39 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let client = RecordingMihomoController(
       proxyGroupsResponse: [],
       proxyProvidersResponse: [provider],
-      connectionsResponse: [connection],
+      connectionsResponse: [],
       testDelayResult: 73
     )
     let model = AppModel(
       paths: paths,
-      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      profileStore: store,
+      coreController: controller,
       apiClient: client
     )
+
+    try await controller.startUserMode(
+      coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+      configURL: configURL,
+      workDirectory: paths.runtime,
+      api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+    )
+
     model.connections = [connection]
 
     model.healthCheckProvider(provider)
     model.closeConnection(connection)
 
-    for _ in 0..<20 {
+    for _ in 0..<80 {
       let healthCheckCount = await client.healthCheckRequestCount()
       let closedConnectionIDs = await client.closedConnectionIDs()
-      if healthCheckCount > 0 && !closedConnectionIDs.isEmpty {
+      if healthCheckCount > 0
+        && !closedConnectionIDs.isEmpty
+        && model.closingConnectionIDs.isEmpty
+        && model.connections.isEmpty {
         break
       }
       await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
     }
 
     let healthCheckProviders = await client.healthCheckProviders()
@@ -1243,8 +1324,13 @@ final class DashboardRuntimeStateTests: XCTestCase {
     model.connections = [connection]
     model.closeAllRuntimeConnections()
 
-    for _ in 0..<20 where await client.closeAllRequestCount() == 0 {
+    for _ in 0..<80 {
+      let closeAllRequestCount = await client.closeAllRequestCount()
+      if closeAllRequestCount > 0 && !model.closingAllConnections && model.connections.isEmpty {
+        break
+      }
       await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
     }
 
     let closeAllRequestCount = await client.closeAllRequestCount()
