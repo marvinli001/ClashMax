@@ -121,9 +121,9 @@ enum RunMode: String, Codable, CaseIterable, Identifiable {
 
   var displayName: String {
     switch self {
-    case .rule: "Rule"
-    case .global: "Global"
-    case .direct: "Direct"
+    case .rule: String(localized: "Rule")
+    case .global: String(localized: "Global")
+    case .direct: String(localized: "Direct")
     }
   }
 }
@@ -137,9 +137,9 @@ enum AppTheme: String, Codable, CaseIterable, Identifiable {
 
   var displayName: String {
     switch self {
-    case .system: "System"
-    case .light: "Light"
-    case .dark: "Dark"
+    case .system: String(localized: "System")
+    case .light: String(localized: "Light")
+    case .dark: String(localized: "Dark")
     }
   }
 }
@@ -152,8 +152,8 @@ enum ProxyRoutingMode: String, Codable, CaseIterable, Identifiable {
 
   var displayName: String {
     switch self {
-    case .systemProxy: "System Proxy"
-    case .tun: "TUN"
+    case .systemProxy: String(localized: "System Proxy")
+    case .tun: String(localized: "TUN")
     }
   }
 
@@ -173,17 +173,17 @@ enum DelayTestMode: String, Codable, CaseIterable, Identifiable {
 
   var displayName: String {
     switch self {
-    case .mihomoURL: "Mihomo URL Delay"
-    case .nativePing: "Native Ping"
+    case .mihomoURL: String(localized: "Mihomo URL Delay")
+    case .nativePing: String(localized: "Native Ping")
     }
   }
 
   var description: String {
     switch self {
     case .mihomoURL:
-      return "Measure through Mihomo's proxy delay API."
+      return String(localized: "Measure through Mihomo's proxy delay API.")
     case .nativePing:
-      return "Ping the node server host directly from macOS."
+      return String(localized: "Ping the node server host directly from macOS.")
     }
   }
 }
@@ -575,6 +575,49 @@ struct TunSettings: Codable, Equatable {
   }
 }
 
+enum TunHelperPreparationState: Equatable {
+  case idle
+  case checking
+  case ready
+  case requiresApproval(String)
+  case notBootstrapped(String)
+  case failed(String)
+
+  var isReady: Bool {
+    if case .ready = self { return true }
+    return false
+  }
+
+  var isFailure: Bool {
+    if case .failed = self { return true }
+    return false
+  }
+
+  var shouldPollForApproval: Bool {
+    switch self {
+    case .requiresApproval, .notBootstrapped:
+      return true
+    default:
+      return false
+    }
+  }
+
+  var message: String {
+    switch self {
+    case .idle:
+      return String(localized: "TUN helper needs preparation before Start is available.")
+    case .checking:
+      return String(localized: "Preparing the TUN helper with macOS.")
+    case .ready:
+      return String(localized: "TUN helper is ready.")
+    case let .requiresApproval(message),
+         let .notBootstrapped(message),
+         let .failed(message):
+      return message
+    }
+  }
+}
+
 struct LaunchSettings: Equatable {
   var launchAtLogin: Bool
   var silentStart: Bool
@@ -583,7 +626,7 @@ struct LaunchSettings: Equatable {
   static let `default` = LaunchSettings(
     launchAtLogin: false,
     silentStart: false,
-    statusMessage: "Launch at login is not registered."
+    statusMessage: String(localized: "Launch at login is not registered.")
   )
 }
 
@@ -606,11 +649,11 @@ enum CoreStatus: Equatable {
 
   var displayName: String {
     switch self {
-    case .stopped: "Stopped"
-    case .starting: "Starting"
-    case .running: "Running"
-    case .crashed: "Crashed"
-    case .restarting: "Restarting"
+    case .stopped: String(localized: "Stopped")
+    case .starting: String(localized: "Starting")
+    case .running: String(localized: "Running")
+    case .crashed: String(localized: "Crashed")
+    case .restarting: String(localized: "Restarting")
     }
   }
 }

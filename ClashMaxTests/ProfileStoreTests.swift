@@ -198,7 +198,10 @@ final class ProfileStoreTests: XCTestCase {
     let store = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
 
     XCTAssertThrowsError(try store.importLocalConfig(from: fixture.configURL)) { error in
-      XCTAssertTrue(String(describing: error).contains("proxy"))
+      XCTAssertTrue(
+        String(describing: error)
+          .contains(String(localized: "Profile must include at least one proxy or proxy provider."))
+      )
     }
 
     XCTAssertTrue(store.profiles.isEmpty)

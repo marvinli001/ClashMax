@@ -79,21 +79,46 @@ struct SystemProxyGuardVerification: Equatable, Sendable {
   var warnings: [String]
 }
 
+struct SystemProxyRestoreResult: Equatable, Sendable {
+  var restoredSnapshotCount: Int
+  var didFallbackDisable: Bool
+  var verified: Bool
+}
+
+struct SystemProxyRestoreVerificationError: LocalizedError, Equatable, Sendable {
+  var services: [String]
+
+  var errorDescription: String? {
+    "System Proxy still points to ClashMax after restore: \(services.joined(separator: ", "))"
+  }
+}
+
 final class SystemProxyController: @unchecked Sendable {
   static let defaultBypassDomains = SystemProxySettings.defaultBypassDomains
 
   static let applyBudgetSeconds: TimeInterval = 15
+  static let restoreVerificationBudgetSeconds: TimeInterval = 20
   static let commandTimeoutSeconds: TimeInterval = 12
+  private static let persistedSnapshotsDefaultsKey = "io.github.clashmax.systemProxySnapshots"
 
   private let commandRunner: CommandRunning
+  private let snapshotDefaults: UserDefaults?
+  private let snapshotDefaultsKey: String
   private let operationGate = AsyncOperationGate()
   private var snapshots: [String: ServiceProxySnapshot] = [:]
   private var expectedConfiguration: ExpectedSystemProxyConfiguration?
   private(set) var guardState: SystemProxyGuardState = .idle
   private let lock = NSLock()
 
-  init(commandRunner: CommandRunning = ProcessCommandRunner(timeout: SystemProxyController.commandTimeoutSeconds)) {
+  init(
+    commandRunner: CommandRunning = ProcessCommandRunner(timeout: SystemProxyController.commandTimeoutSeconds),
+    snapshotDefaults: UserDefaults? = nil,
+    snapshotDefaultsKey: String = SystemProxyController.persistedSnapshotsDefaultsKey
+  ) {
     self.commandRunner = commandRunner
+    self.snapshotDefaults = snapshotDefaults
+    self.snapshotDefaultsKey = snapshotDefaultsKey
+    self.snapshots = Self.loadPersistedSnapshots(defaults: snapshotDefaults, key: snapshotDefaultsKey)
   }
 
   func apply(host: String, port: Int, bypassDomains: [String] = SystemProxyController.defaultBypassDomains) async throws {
@@ -179,6 +204,34 @@ final class SystemProxyController: @unchecked Sendable {
     }
   }
 
+  func restoreAndVerify(
+    hosts: [String],
+    ports: [Int],
+    disableWhenNoSnapshot: Bool
+  ) async throws -> SystemProxyRestoreResult {
+    try await restoreAndVerify(
+      hosts: Set(hosts.map { $0.lowercased() }),
+      ports: Set(ports),
+      disableWhenNoSnapshot: disableWhenNoSnapshot
+    )
+  }
+
+  func restoreAndVerify(
+    hosts: Set<String>,
+    ports: Set<Int>,
+    disableWhenNoSnapshot: Bool
+  ) async throws -> SystemProxyRestoreResult {
+    try await withTimeout(seconds: Self.restoreVerificationBudgetSeconds) { [self] in
+      try await operationGate.run { [self] in
+        try await restoreAndVerifyInner(
+          hosts: hosts,
+          ports: ports,
+          disableWhenNoSnapshot: disableWhenNoSnapshot
+        )
+      }
+    }
+  }
+
   var hasManagedSystemProxyState: Bool {
     lock.lock()
     defer { lock.unlock() }
@@ -189,31 +242,7 @@ final class SystemProxyController: @unchecked Sendable {
   func disableMatchingProxy(hosts: Set<String>, ports: Set<Int>) async throws -> Bool {
     try await operationGate.run { [self] in
       try await withTimeout(seconds: Self.applyBudgetSeconds) { [self] in
-        var didChange = false
-        for service in try await networkServices() {
-          try Task.checkCancellation()
-          let snapshot = try await snapshot(for: service)
-          var changedService = false
-          if snapshot.web.matches(hosts: hosts, ports: ports) {
-            _ = try await commandRunner.run("/usr/sbin/networksetup", [ProxyKind.web.stateCommand, service, "off"])
-            changedService = true
-            didChange = true
-          }
-          if snapshot.secureWeb.matches(hosts: hosts, ports: ports) {
-            _ = try await commandRunner.run("/usr/sbin/networksetup", [ProxyKind.secureWeb.stateCommand, service, "off"])
-            changedService = true
-            didChange = true
-          }
-          if snapshot.socks.matches(hosts: hosts, ports: ports) {
-            _ = try await commandRunner.run("/usr/sbin/networksetup", [ProxyKind.socks.stateCommand, service, "off"])
-            changedService = true
-            didChange = true
-          }
-          if changedService, snapshot.bypassDomains == Self.defaultBypassDomains {
-            try await setBypassDomains([], service: service)
-          }
-        }
-        return didChange
+        try await disableMatchingProxyInner(hosts: hosts, ports: ports)
       }
     }
   }
@@ -250,7 +279,59 @@ final class SystemProxyController: @unchecked Sendable {
     try await restoreCapturedSnapshots()
   }
 
-  private func restoreCapturedSnapshots() async throws {
+  private func restoreAndVerifyInner(
+    hosts: Set<String>,
+    ports: Set<Int>,
+    disableWhenNoSnapshot: Bool
+  ) async throws -> SystemProxyRestoreResult {
+    disableGuard()
+    let capturedCount = readAllSnapshots().count
+    var restoreError: Error?
+
+    do {
+      if capturedCount > 0 {
+        try await restoreCapturedSnapshots(removeAfterRestore: false)
+      } else if disableWhenNoSnapshot {
+        for service in try await networkServices() {
+          try Task.checkCancellation()
+          try await disableAllProxyTypes(for: service)
+          try await setBypassDomains([], service: service)
+        }
+      }
+    } catch {
+      restoreError = error
+    }
+
+    var didFallbackDisable = false
+    do {
+      let residualServices = try await servicesMatchingProxyInner(hosts: hosts, ports: ports)
+      if restoreError != nil || !residualServices.isEmpty {
+        didFallbackDisable = try await disableMatchingProxyInner(hosts: hosts, ports: ports)
+      }
+    } catch {
+      if restoreError == nil {
+        restoreError = error
+      }
+    }
+
+    let residualServices = try await servicesMatchingProxyInner(hosts: hosts, ports: ports)
+    guard residualServices.isEmpty else {
+      throw SystemProxyRestoreVerificationError(services: residualServices)
+    }
+    if let restoreError {
+      throw restoreError
+    }
+
+    clearSnapshots()
+    writeExpectedConfiguration(nil)
+    return SystemProxyRestoreResult(
+      restoredSnapshotCount: capturedCount,
+      didFallbackDisable: didFallbackDisable,
+      verified: true
+    )
+  }
+
+  private func restoreCapturedSnapshots(removeAfterRestore: Bool = true) async throws {
     let captured = readAllSnapshots()
     var firstError: Error?
 
@@ -261,7 +342,9 @@ final class SystemProxyController: @unchecked Sendable {
         try await restore(snapshot.secureWeb, service: service, kind: .secureWeb)
         try await restore(snapshot.socks, service: service, kind: .socks)
         try await setBypassDomains(snapshot.bypassDomains, service: service)
-        removeSnapshot(for: service)
+        if removeAfterRestore {
+          removeSnapshot(for: service)
+        }
       } catch {
         if firstError == nil {
           firstError = error
@@ -269,12 +352,52 @@ final class SystemProxyController: @unchecked Sendable {
       }
     }
 
-    if readAllSnapshots().isEmpty {
+    if removeAfterRestore, readAllSnapshots().isEmpty {
       writeExpectedConfiguration(nil)
     }
     if let firstError {
       throw firstError
     }
+  }
+
+  private func disableMatchingProxyInner(hosts: Set<String>, ports: Set<Int>) async throws -> Bool {
+    var didChange = false
+    for service in try await networkServices() {
+      try Task.checkCancellation()
+      let snapshot = try await snapshot(for: service)
+      var changedService = false
+      if snapshot.web.matches(hosts: hosts, ports: ports) {
+        _ = try await commandRunner.run("/usr/sbin/networksetup", [ProxyKind.web.stateCommand, service, "off"])
+        changedService = true
+        didChange = true
+      }
+      if snapshot.secureWeb.matches(hosts: hosts, ports: ports) {
+        _ = try await commandRunner.run("/usr/sbin/networksetup", [ProxyKind.secureWeb.stateCommand, service, "off"])
+        changedService = true
+        didChange = true
+      }
+      if snapshot.socks.matches(hosts: hosts, ports: ports) {
+        _ = try await commandRunner.run("/usr/sbin/networksetup", [ProxyKind.socks.stateCommand, service, "off"])
+        changedService = true
+        didChange = true
+      }
+      if changedService, snapshot.bypassDomains == Self.defaultBypassDomains {
+        try await setBypassDomains([], service: service)
+      }
+    }
+    return didChange
+  }
+
+  private func servicesMatchingProxyInner(hosts: Set<String>, ports: Set<Int>) async throws -> [String] {
+    var servicesWithResidualProxy: [String] = []
+    for service in try await networkServices() {
+      try Task.checkCancellation()
+      let snapshot = try await snapshot(for: service)
+      if snapshot.containsProxyMatching(hosts: hosts, ports: ports) {
+        servicesWithResidualProxy.append(service)
+      }
+    }
+    return servicesWithResidualProxy
   }
 
   private func disableAllProxyTypes(for service: String) async throws {
@@ -354,6 +477,7 @@ final class SystemProxyController: @unchecked Sendable {
     lock.lock()
     defer { lock.unlock() }
     snapshots[service] = snapshot
+    persistSnapshotsLocked()
   }
 
   private func readAllSnapshots() -> [String: ServiceProxySnapshot] {
@@ -366,12 +490,14 @@ final class SystemProxyController: @unchecked Sendable {
     lock.lock()
     defer { lock.unlock() }
     snapshots.removeAll()
+    persistSnapshotsLocked()
   }
 
   private func removeSnapshot(for service: String) {
     lock.lock()
     defer { lock.unlock() }
     snapshots.removeValue(forKey: service)
+    persistSnapshotsLocked()
   }
 
   private func readExpectedConfiguration() -> ExpectedSystemProxyConfiguration? {
@@ -384,6 +510,25 @@ final class SystemProxyController: @unchecked Sendable {
     lock.lock()
     defer { lock.unlock() }
     expectedConfiguration = configuration
+  }
+
+  private static func loadPersistedSnapshots(defaults: UserDefaults?, key: String) -> [String: ServiceProxySnapshot] {
+    guard let data = defaults?.data(forKey: key),
+          let snapshots = try? JSONDecoder().decode([String: ServiceProxySnapshot].self, from: data)
+    else {
+      return [:]
+    }
+    return snapshots
+  }
+
+  private func persistSnapshotsLocked() {
+    guard let snapshotDefaults else { return }
+    if snapshots.isEmpty {
+      snapshotDefaults.removeObject(forKey: snapshotDefaultsKey)
+      return
+    }
+    guard let data = try? JSONEncoder().encode(snapshots) else { return }
+    snapshotDefaults.set(data, forKey: snapshotDefaultsKey)
   }
 }
 
@@ -465,7 +610,7 @@ private struct ActiveNetworkInterfaces {
   }
 }
 
-private struct ServiceProxySnapshot {
+private struct ServiceProxySnapshot: Codable {
   var web: ProxyState
   var secureWeb: ProxyState
   var socks: ProxyState
@@ -476,9 +621,13 @@ private struct ServiceProxySnapshot {
       $0.enabled && $0.server == expected.host && $0.port == expected.port
     } && bypassDomains == expected.bypassDomains
   }
+
+  func containsProxyMatching(hosts: Set<String>, ports: Set<Int>) -> Bool {
+    [web, secureWeb, socks].contains { $0.matches(hosts: hosts, ports: ports) }
+  }
 }
 
-private struct ProxyState {
+private struct ProxyState: Codable {
   var enabled: Bool
   var server: String
   var port: Int

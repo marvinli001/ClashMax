@@ -162,22 +162,26 @@ enum ProfileConfigFormat: Equatable {
   case proxyProviderContent
 }
 
-enum ProfileConfigFormatError: Error, CustomStringConvertible {
+enum ProfileConfigFormatError: Error, CustomStringConvertible, LocalizedError {
   case empty
   case yaml(String)
   case rootIsNotMapping
   case missingProxyDefinitions
 
   var description: String {
+    errorDescription ?? ""
+  }
+
+  var errorDescription: String? {
     switch self {
     case .empty:
-      return "Profile response is empty."
+      return String(localized: "Profile response is empty.")
     case let .yaml(message):
-      return "YAML parse error: \(message)"
+      return String(format: String(localized: "YAML parse error: %@"), message)
     case .rootIsNotMapping:
-      return "YAML root must be a mapping or URI/base64 proxy-provider content."
+      return String(localized: "YAML root must be a mapping or URI/base64 proxy-provider content.")
     case .missingProxyDefinitions:
-      return "Profile must include at least one proxy or proxy provider."
+      return String(localized: "Profile must include at least one proxy or proxy provider.")
     }
   }
 }

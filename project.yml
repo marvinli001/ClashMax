@@ -1,6 +1,8 @@
 name: ClashMax
 options:
   bundleIdPrefix: io.github.clashmax
+  developmentLanguage: en
+  useBaseInternationalization: false
   deploymentTarget:
     macOS: "26.0"
 settings:
@@ -37,8 +39,11 @@ targets:
         excludes:
           - "* 2.swift"
           - "**/* 2.swift"
-    resources:
       - path: Resources
+        buildPhase: resources
+        excludes:
+          - Core
+          - Core/**
     info:
       path: Config/ClashMax-Info.plist
       properties:

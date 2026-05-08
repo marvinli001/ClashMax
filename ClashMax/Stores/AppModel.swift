@@ -3,6 +3,31 @@ import Foundation
 import ServiceManagement
 import UniformTypeIdentifiers
 
+private enum AppStartupAbort: Error {
+  case waitingForTunHelper
+}
+
+private struct RuntimeStopResult {
+  var helperStopError: Error?
+  var systemProxyRestoreError: Error?
+
+  static let success = RuntimeStopResult()
+
+  var succeeded: Bool {
+    helperStopError == nil && systemProxyRestoreError == nil
+  }
+
+  var userFacingMessage: String? {
+    if let systemProxyRestoreError {
+      return "Could not restore System Proxy settings: \(UserFacingError.message(for: systemProxyRestoreError))"
+    }
+    if let helperStopError {
+      return "Could not stop TUN helper cleanly: \(UserFacingError.message(for: helperStopError))"
+    }
+    return nil
+  }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
   @Published var selectedSection: AppSection = .home
@@ -41,6 +66,7 @@ final class AppModel: ObservableObject {
   @Published var systemProxyEnabled = false
   @Published var tunEnabled = false
   @Published var tunnelCoreRunning = false
+  @Published private(set) var tunHelperPreparationState: TunHelperPreparationState = .idle
   @Published private(set) var isAddingSubscription = false
   @Published private(set) var startInFlight = false
   @Published private(set) var sessionStartedAt: Date?
@@ -82,8 +108,10 @@ final class AppModel: ObservableObject {
   private var apiClient: (any MihomoAPIControlling)?
   private var startTask: Task<Void, Never>?
   private var previewTask: Task<Void, Never>?
+  private var stopTask: Task<RuntimeStopResult, Never>?
   private var pendingModeTask: Task<Void, Never>?
   private var pendingRoutingModeTask: Task<Void, Never>?
+  private var tunHelperPreparationTask: Task<Void, Never>?
   private var systemProxyGuardTask: Task<Void, Never>?
   private var publicIPInfoTask: Task<Void, Never>?
   private var streamTasks: [Task<Void, Never>] = []
@@ -102,6 +130,8 @@ final class AppModel: ObservableObject {
   static let publicIPRefreshInterval: TimeInterval = 300
   static let silentStartDefaultsKey = "io.github.clashmax.silentStart"
   static let startWallClockSeconds: TimeInterval = 22
+  private static let tunHelperApprovalPollingAttempts = 8
+  private static let tunHelperApprovalPollingIntervalNanoseconds: UInt64 = 1_000_000_000
 
   static func bootstrap() -> AppModel {
     do {
@@ -127,7 +157,7 @@ final class AppModel: ObservableObject {
     paths: RuntimePaths,
     profileStore: ProfileStore? = nil,
     coreController: CoreProcessController = CoreProcessController(),
-    systemProxyController: SystemProxyController = SystemProxyController(),
+    systemProxyController: SystemProxyController? = nil,
     helperClient: TunnelHelperClient = TunnelHelperClient(),
     loginItemService: any LoginItemManaging = MainAppLoginItemService(),
     tunnelReadinessProbe: CoreReadinessProbing = MihomoCoreReadinessProbe(),
@@ -139,7 +169,6 @@ final class AppModel: ObservableObject {
     self.paths = paths
     self.profileStore = profileStore ?? ProfileStore(paths: paths)
     self.coreController = coreController
-    self.systemProxyController = systemProxyController
     self.helperClient = helperClient
     self.loginItemService = loginItemService
     self.tunnelReadinessProbe = tunnelReadinessProbe
@@ -147,6 +176,7 @@ final class AppModel: ObservableObject {
     self.publicIPInfoClient = publicIPInfoClient
     self.apiClient = apiClient
     self.defaults = defaults
+    self.systemProxyController = systemProxyController ?? SystemProxyController(snapshotDefaults: defaults)
     developerMode = defaults.bool(forKey: Self.developerModeDefaultsKey)
     systemProxySettings = Self.loadCodable(
       SystemProxySettings.self,
@@ -233,6 +263,9 @@ final class AppModel: ObservableObject {
     }
     if (try? bundledCoreURL()) == nil {
       return AppError.missingBundledCore.description
+    }
+    if proxyRoutingMode == .tun, !tunHelperPreparationState.isReady {
+      return tunHelperPreparationState.message
     }
     return nil
   }
@@ -511,6 +544,22 @@ final class AppModel: ObservableObject {
 
   func start() {
     guard startTask == nil, !startInFlight else { return }
+    if profileStore.activeProfile == nil {
+      lastError = "No active profile selected."
+      return
+    }
+    if (try? bundledCoreURL()) == nil {
+      lastError = AppError.missingBundledCore.description
+      return
+    }
+    if proxyRoutingMode == .tun, !tunHelperPreparationState.isReady {
+      if tunHelperPreparationState.isFailure {
+        lastError = tunHelperPreparationState.message
+      } else {
+        prepareTunHelperIfNeeded(force: false)
+      }
+      return
+    }
     startTask = Task { [weak self] in
       await Task.yield()
       guard let self, !Task.isCancelled else { return }
@@ -531,15 +580,17 @@ final class AppModel: ObservableObject {
         try await self.runStartSequence()
       }
     } catch is CancellationError {
-      await stopRuntime()
+      handleStopResult(await stopRuntimeCoordinated())
+    } catch AppStartupAbort.waitingForTunHelper {
+      handleStopResult(await stopRuntimeCoordinated())
     } catch let error as OperationTimedOutError {
       publishStartupDiagnostics(level: "error")
       let diagnostics = startupDiagnosticsSummary()
-      await stopRuntime()
+      handleStopResult(await stopRuntimeCoordinated())
       lastError = "ClashMax could not start within \(Int(error.seconds))s.\(diagnostics.isEmpty ? "" : "\n\(diagnostics)")"
     } catch {
       publishStartupDiagnostics(level: "error")
-      await stopRuntime()
+      handleStopResult(await stopRuntimeCoordinated())
       lastError = UserFacingError.message(for: error)
     }
   }
@@ -566,7 +617,13 @@ final class AppModel: ObservableObject {
     try Task.checkCancellation()
 
     if shouldUseTun {
-      try await helperClient.register()
+      let preparationState = await prepareTunHelperForStart()
+      guard preparationState.isReady else {
+        if preparationState.isFailure {
+          throw AppError.helperResponse(preparationState.message)
+        }
+        throw AppStartupAbort.waitingForTunHelper
+      }
       let response = try await helperClient.startTunnel(
         coreURL: coreURL,
         configURL: runtimeConfig,
@@ -627,8 +684,10 @@ final class AppModel: ObservableObject {
     startInFlight = false
     previewTask?.cancel()
     previewTask = nil
-    Task {
-      await stopRuntime()
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      let result = await stopRuntimeCoordinated()
+      handleStopResult(result)
     }
   }
 
@@ -636,24 +695,37 @@ final class AppModel: ObservableObject {
     startTask?.cancel()
     startTask = nil
     startInFlight = false
-    Task {
-      await stopRuntime()
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      let result = await stopRuntimeCoordinated()
+      handleStopResult(result)
+      guard result.succeeded else { return }
       start()
     }
   }
 
   func setProxyRoutingMode(_ mode: ProxyRoutingMode) {
     guard proxyRoutingMode != mode else { return }
+    let shouldRestart = isRunning || startInFlight
     if mode == .tun, systemProxyEnabled {
       stopSystemProxyGuard()
       Task { @MainActor [weak self] in
         guard let self else { return }
-        try? await restoreSystemProxyState(disableWhenNoSnapshot: true)
+        do {
+          _ = try await restoreSystemProxyState(disableWhenNoSnapshot: true)
+          systemProxyEnabled = false
+        } catch {
+          lastError = UserFacingError.message(for: error)
+        }
       }
-      systemProxyEnabled = false
     }
     proxyRoutingMode = mode
-    if isRunning || startInFlight {
+    if mode == .tun {
+      prepareTunHelperIfNeeded(force: true, restartWhenReady: shouldRestart)
+    } else {
+      cancelTunHelperPreparation(resetState: true)
+    }
+    if mode != .tun, shouldRestart {
       restart()
     }
   }
@@ -700,22 +772,14 @@ final class AppModel: ObservableObject {
   }
 
   func registerHelper() {
-    Task { @MainActor [weak self] in
-      guard let self else { return }
-      do {
-        lastError = nil
-        try await helperClient.register()
-      } catch {
-        let message = UserFacingError.message(for: error)
-        helperClient.statusMessage = message
-        lastError = message
-      }
-    }
+    prepareTunHelperIfNeeded(force: true)
   }
 
   func refreshHelperRegistrationStatus() {
     Task { @MainActor [weak self] in
-      await self?.helperClient.refreshRegistrationStatus()
+      guard let self else { return }
+      let state = await helperClient.currentPreparationState()
+      applyTunHelperPreparationState(state)
     }
   }
 
@@ -723,11 +787,16 @@ final class AppModel: ObservableObject {
     Task { @MainActor [weak self] in
       guard let self else { return }
       do {
+        tunHelperPreparationTask?.cancel()
+        tunHelperPreparationTask = nil
+        tunHelperPreparationState = .checking
         lastError = nil
         try await helperClient.repairRegistration()
+        prepareTunHelperIfNeeded(force: true)
       } catch {
         let message = UserFacingError.message(for: error)
         helperClient.statusMessage = message
+        tunHelperPreparationState = .failed(message)
         lastError = message
       }
     }
@@ -735,6 +804,91 @@ final class AppModel: ObservableObject {
 
   func openHelperApprovalSettings() {
     helperClient.openApprovalSettings()
+  }
+
+  private func prepareTunHelperIfNeeded(
+    openSystemSettings: Bool = true,
+    force: Bool,
+    restartWhenReady: Bool = false
+  ) {
+    guard proxyRoutingMode == .tun else {
+      cancelTunHelperPreparation(resetState: true)
+      return
+    }
+    if !force, tunHelperPreparationState == .checking {
+      return
+    }
+    if !force, tunHelperPreparationState.isReady {
+      if restartWhenReady {
+        restart()
+      }
+      return
+    }
+    tunHelperPreparationTask?.cancel()
+    tunHelperPreparationState = .checking
+    lastError = nil
+    tunHelperPreparationTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      let firstState = await helperClient.prepareForTunnelStart(
+        openSystemSettingsWhenApprovalRequired: openSystemSettings
+      )
+      let finalState = await applyAndPollTunHelperPreparation(firstState)
+      tunHelperPreparationTask = nil
+      if finalState.isReady, restartWhenReady, proxyRoutingMode == .tun {
+        restart()
+      }
+    }
+  }
+
+  private func prepareTunHelperForStart() async -> TunHelperPreparationState {
+    tunHelperPreparationTask?.cancel()
+    tunHelperPreparationTask = nil
+    tunHelperPreparationState = .checking
+    lastError = nil
+    let state = await helperClient.prepareForTunnelStart(openSystemSettingsWhenApprovalRequired: true)
+    applyTunHelperPreparationState(state)
+    if state.shouldPollForApproval {
+      prepareTunHelperIfNeeded(openSystemSettings: false, force: true)
+    }
+    return state
+  }
+
+  private func applyAndPollTunHelperPreparation(_ initialState: TunHelperPreparationState) async -> TunHelperPreparationState {
+    var state = initialState
+    applyTunHelperPreparationState(state)
+    guard state.shouldPollForApproval else { return state }
+
+    for _ in 0..<Self.tunHelperApprovalPollingAttempts {
+      do {
+        try await Task.sleep(nanoseconds: Self.tunHelperApprovalPollingIntervalNanoseconds)
+      } catch {
+        return state
+      }
+      guard proxyRoutingMode == .tun, !Task.isCancelled else { return state }
+      state = await helperClient.prepareForTunnelStart(openSystemSettingsWhenApprovalRequired: false)
+      applyTunHelperPreparationState(state)
+      if !state.shouldPollForApproval {
+        return state
+      }
+    }
+    return state
+  }
+
+  private func applyTunHelperPreparationState(_ state: TunHelperPreparationState) {
+    tunHelperPreparationState = state
+    if state.isFailure {
+      lastError = state.message
+    } else {
+      lastError = nil
+    }
+  }
+
+  private func cancelTunHelperPreparation(resetState: Bool) {
+    tunHelperPreparationTask?.cancel()
+    tunHelperPreparationTask = nil
+    if resetState {
+      tunHelperPreparationState = .idle
+    }
   }
 
   func refreshLaunchSettings() {
@@ -1048,13 +1202,10 @@ final class AppModel: ObservableObject {
           systemProxyEnabled = true
           try await activateSystemProxyGuardIfNeeded()
         } else {
-          try await restoreSystemProxyState(disableWhenNoSnapshot: true)
+          _ = try await restoreSystemProxyState(disableWhenNoSnapshot: true)
           systemProxyEnabled = false
         }
       } catch {
-        if !systemProxyController.hasManagedSystemProxyState {
-          markSystemProxyManaged(false)
-        }
         lastError = UserFacingError.message(for: error)
       }
     }
@@ -1145,16 +1296,18 @@ final class AppModel: ObservableObject {
     systemProxyController.disableGuard()
   }
 
-  private func restoreSystemProxyState(disableWhenNoSnapshot: Bool) async throws {
+  @discardableResult
+  private func restoreSystemProxyState(disableWhenNoSnapshot: Bool) async throws -> SystemProxyRestoreResult {
     stopSystemProxyGuard()
-    if disableWhenNoSnapshot {
-      try await systemProxyController.restore()
-    } else {
-      try await systemProxyController.restoreManagedState()
-    }
+    let result = try await systemProxyController.restoreAndVerify(
+      hosts: Self.localProxyHosts(for: systemProxySettings),
+      ports: [overrides.mixedPort],
+      disableWhenNoSnapshot: disableWhenNoSnapshot
+    )
     if !systemProxyController.hasManagedSystemProxyState {
       markSystemProxyManaged(false)
     }
+    return result
   }
 
   var needsTerminationCleanup: Bool {
@@ -1167,7 +1320,8 @@ final class AppModel: ObservableObject {
       || defaults.bool(forKey: Self.systemProxyManagedDefaultsKey)
   }
 
-  func prepareForTermination() async {
+  @discardableResult
+  func prepareForTermination() async -> Bool {
     startTask?.cancel()
     startTask = nil
     startInFlight = false
@@ -1177,7 +1331,10 @@ final class AppModel: ObservableObject {
     pendingModeTask = nil
     pendingRoutingModeTask?.cancel()
     pendingRoutingModeTask = nil
-    await stopRuntime()
+    cancelTunHelperPreparation(resetState: false)
+    let result = await stopRuntimeCoordinated()
+    handleStopResult(result)
+    return result.succeeded
   }
 
   func enterPreviewRuntime() {
@@ -1263,7 +1420,28 @@ final class AppModel: ObservableObject {
     }
   }
 
-  private func stopRuntime() async {
+  private func stopRuntimeCoordinated() async -> RuntimeStopResult {
+    if let stopTask {
+      return await stopTask.value
+    }
+    let task = Task { @MainActor [weak self] in
+      guard let self else { return RuntimeStopResult.success }
+      return await self.stopRuntime()
+    }
+    stopTask = task
+    let result = await task.value
+    stopTask = nil
+    return result
+  }
+
+  private func handleStopResult(_ result: RuntimeStopResult) {
+    guard !result.succeeded, let message = result.userFacingMessage else { return }
+    lastError = message
+    appendAppLog(level: "error", message: message)
+  }
+
+  private func stopRuntime() async -> RuntimeStopResult {
+    var result = RuntimeStopResult()
     apiClient = nil
     cancelPublicIPInfoRefresh(clearState: true)
     streamTasks.forEach { $0.cancel() }
@@ -1279,23 +1457,34 @@ final class AppModel: ObservableObject {
     trafficSample = .zero
     trafficHistory = []
     if tunEnabled || tunnelCoreRunning {
-      _ = try? await helperClient.stopTunnel()
+      do {
+        _ = try await helperClient.stopTunnel()
+      } catch {
+        result.helperStopError = error
+      }
     }
     tunnelCoreRunning = false
     sessionStartedAt = nil
     previewRuntimeActive = false
     runtimeOwner = .stopped
     refreshProfilePreview()
-    if systemProxyEnabled {
-      try? await restoreSystemProxyState(disableWhenNoSnapshot: true)
-    } else if systemProxyController.hasManagedSystemProxyState {
-      try? await restoreSystemProxyState(disableWhenNoSnapshot: false)
+    if systemProxyEnabled
+      || systemProxyController.hasManagedSystemProxyState
+      || defaults.bool(forKey: Self.systemProxyManagedDefaultsKey)
+    {
+      do {
+        _ = try await restoreSystemProxyState(disableWhenNoSnapshot: systemProxyEnabled)
+        systemProxyEnabled = false
+      } catch {
+        result.systemProxyRestoreError = error
+      }
     }
-    if !systemProxyController.hasManagedSystemProxyState {
+    if result.systemProxyRestoreError == nil, !systemProxyController.hasManagedSystemProxyState {
       markSystemProxyManaged(false)
+      systemProxyEnabled = false
     }
-    systemProxyEnabled = false
     tunEnabled = false
+    return result
   }
 
   private func cancelPublicIPInfoRefresh(clearState: Bool) {
@@ -1607,13 +1796,9 @@ final class AppModel: ObservableObject {
     Task { @MainActor [weak self] in
       guard let self else { return }
       do {
-        let didChange = try await systemProxyController.disableMatchingProxy(
-          hosts: Self.localProxyHosts(for: systemProxySettings),
-          ports: [overrides.mixedPort]
-        )
-        markSystemProxyManaged(false)
-        if didChange {
-          appendAppLog(level: "info", message: "Cleared stale System Proxy settings left by a previous ClashMax session.")
+        let result = try await restoreSystemProxyState(disableWhenNoSnapshot: false)
+        if result.didFallbackDisable {
+          appendAppLog(level: "info", message: "Cleared stale System Proxy settings left by a previous ClashMax session after restore verification.")
         }
       } catch {
         lastError = "Could not verify stale System Proxy settings from a previous ClashMax session: \(UserFacingError.message(for: error))"
@@ -1649,15 +1834,15 @@ final class AppModel: ObservableObject {
   private static func loginItemStatusMessage(for status: SMAppService.Status) -> String {
     switch status {
     case .enabled:
-      return "ClashMax will launch when you log in."
+      return String(localized: "ClashMax will launch when you log in.")
     case .requiresApproval:
-      return "Approve ClashMax in System Settings > General > Login Items & Extensions."
+      return String(localized: "Approve ClashMax in System Settings > General > Login Items & Extensions.")
     case .notRegistered:
-      return "Launch at login is not registered."
+      return String(localized: "Launch at login is not registered.")
     case .notFound:
-      return "macOS could not find the ClashMax login item service."
+      return String(localized: "macOS could not find the ClashMax login item service.")
     @unknown default:
-      return "macOS reported an unknown login item state."
+      return String(localized: "macOS reported an unknown login item state.")
     }
   }
 }

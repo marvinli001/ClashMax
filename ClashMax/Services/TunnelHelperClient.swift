@@ -178,6 +178,20 @@ final class TunnelHelperClient: ObservableObject {
     }
   }
 
+  func prepareForTunnelStart(openSystemSettingsWhenApprovalRequired: Bool = true) async -> TunHelperPreparationState {
+    do {
+      let fingerprint = try fingerprintProvider.currentFingerprint()
+      return try await prepareForTunnelStart(
+        fingerprint: fingerprint,
+        openSystemSettingsWhenApprovalRequired: openSystemSettingsWhenApprovalRequired
+      )
+    } catch {
+      let message = UserFacingError.message(for: error)
+      statusMessage = message
+      return .failed(message)
+    }
+  }
+
   func openApprovalSettings() {
     service.openSystemSettingsLoginItems()
   }
@@ -199,23 +213,46 @@ final class TunnelHelperClient: ObservableObject {
     }
   }
 
-  static func statusMessage(for status: SMAppService.Status) -> String {
-    switch status {
-    case .notRegistered:
-      return "Helper not registered. Click Register or Start in TUN mode."
+  func currentPreparationState() async -> TunHelperPreparationState {
+    switch service.status {
     case .enabled:
-      return "Helper registered. Verifying helper connection."
+      return await bootstrappedPreparationState()
     case .requiresApproval:
-      return "Helper registered. Approve ClashMax in System Settings > General > Login Items & Extensions, then click Status."
+      let message = Self.statusMessage(for: service.status)
+      statusMessage = message
+      return .requiresApproval(message)
+    case .notRegistered:
+      let message = Self.statusMessage(for: service.status)
+      statusMessage = message
+      return .idle
     case .notFound:
-      return "Helper not found in the app bundle. Clean build and run ClashMax again."
+      let message = Self.statusMessage(for: service.status)
+      statusMessage = message
+      return .failed(message)
     @unknown default:
-      return "Helper status is unknown. Clean build and run ClashMax again."
+      let message = Self.statusMessage(for: service.status)
+      statusMessage = message
+      return .failed(message)
     }
   }
 
-  static let bootstrappedMessage = "Helper registered and bootstrapped."
-  static let notBootstrappedMessage = "Helper registered but not bootstrapped. Open System Settings > General > Login Items & Extensions, approve ClashMax, then click Repair or restart macOS."
+  static func statusMessage(for status: SMAppService.Status) -> String {
+    switch status {
+    case .notRegistered:
+      return String(localized: "Helper not registered. Click Register or Start in TUN mode.")
+    case .enabled:
+      return String(localized: "Helper registered. Verifying helper connection.")
+    case .requiresApproval:
+      return String(localized: "Helper registered. Approve ClashMax in System Settings > General > Login Items & Extensions, then click Status.")
+    case .notFound:
+      return String(localized: "Helper not found in the app bundle. Clean build and run ClashMax again.")
+    @unknown default:
+      return String(localized: "Helper status is unknown. Clean build and run ClashMax again.")
+    }
+  }
+
+  static let bootstrappedMessage = String(localized: "Helper registered and bootstrapped.")
+  static let notBootstrappedMessage = String(localized: "Helper registered but not bootstrapped. Open System Settings > General > Login Items & Extensions, approve ClashMax, then click Repair or restart macOS.")
 
   private func repairRegistration(fingerprint: String) async throws {
     switch service.status {
@@ -240,6 +277,90 @@ final class TunnelHelperClient: ObservableObject {
       }
     @unknown default:
       statusMessage = Self.statusMessage(for: service.status)
+    }
+  }
+
+  private func prepareForTunnelStart(
+    fingerprint: String,
+    openSystemSettingsWhenApprovalRequired: Bool
+  ) async throws -> TunHelperPreparationState {
+    switch service.status {
+    case .enabled:
+      if registrationRecordStore.helperFingerprint().map({ $0 != fingerprint }) == true {
+        try await service.unregister()
+        try service.register()
+        registrationRecordStore.setHelperFingerprint(fingerprint)
+        return await preparationStateAfterRegistration(
+          openSystemSettingsWhenApprovalRequired: openSystemSettingsWhenApprovalRequired
+        )
+      }
+      registrationRecordStore.setHelperFingerprint(fingerprint)
+      return await bootstrappedPreparationState()
+    case .requiresApproval:
+      registrationRecordStore.setHelperFingerprint(fingerprint)
+      return approvalRequiredState(openSystemSettings: openSystemSettingsWhenApprovalRequired)
+    case .notRegistered:
+      try service.register()
+      registrationRecordStore.setHelperFingerprint(fingerprint)
+      return await preparationStateAfterRegistration(
+        openSystemSettingsWhenApprovalRequired: openSystemSettingsWhenApprovalRequired
+      )
+    case .notFound:
+      let message = Self.statusMessage(for: service.status)
+      statusMessage = message
+      return .failed(message)
+    @unknown default:
+      try service.register()
+      registrationRecordStore.setHelperFingerprint(fingerprint)
+      return await preparationStateAfterRegistration(
+        openSystemSettingsWhenApprovalRequired: openSystemSettingsWhenApprovalRequired
+      )
+    }
+  }
+
+  private func preparationStateAfterRegistration(openSystemSettingsWhenApprovalRequired: Bool) async -> TunHelperPreparationState {
+    switch service.status {
+    case .enabled:
+      return await bootstrappedPreparationState()
+    case .requiresApproval:
+      return approvalRequiredState(openSystemSettings: openSystemSettingsWhenApprovalRequired)
+    case .notRegistered:
+      let message = Self.statusMessage(for: service.status)
+      statusMessage = message
+      return .notBootstrapped(message)
+    case .notFound:
+      let message = Self.statusMessage(for: service.status)
+      statusMessage = message
+      return .failed(message)
+    @unknown default:
+      let message = Self.statusMessage(for: service.status)
+      statusMessage = message
+      return .failed(message)
+    }
+  }
+
+  private func approvalRequiredState(openSystemSettings: Bool) -> TunHelperPreparationState {
+    let message = Self.statusMessage(for: service.status)
+    statusMessage = message
+    if openSystemSettings {
+      openApprovalSettings()
+    }
+    return .requiresApproval(message)
+  }
+
+  private func bootstrappedPreparationState() async -> TunHelperPreparationState {
+    do {
+      let response = try await status()
+      guard response.ok else {
+        let message = response.message.isEmpty ? Self.notBootstrappedMessage : response.message
+        statusMessage = message
+        return .notBootstrapped(message)
+      }
+      statusMessage = Self.bootstrappedMessage
+      return .ready
+    } catch {
+      statusMessage = Self.notBootstrappedMessage
+      return .notBootstrapped(Self.notBootstrappedMessage)
     }
   }
 

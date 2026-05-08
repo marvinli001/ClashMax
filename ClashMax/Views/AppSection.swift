@@ -12,7 +12,15 @@ enum AppSection: String, CaseIterable, Identifiable {
   var id: String { rawValue }
 
   var title: String {
-    rawValue.capitalized
+    switch self {
+    case .home: String(localized: "Home")
+    case .profiles: String(localized: "Profiles")
+    case .proxies: String(localized: "Proxies")
+    case .connections: String(localized: "Connections")
+    case .rules: String(localized: "Rules")
+    case .logs: String(localized: "Logs")
+    case .settings: String(localized: "Settings")
+    }
   }
 
   var symbolName: String {

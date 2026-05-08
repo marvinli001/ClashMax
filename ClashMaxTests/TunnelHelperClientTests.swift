@@ -39,10 +39,7 @@ final class TunnelHelperClientTests: XCTestCase {
 
     XCTAssertEqual(service.registerCount, 0)
     XCTAssertEqual(service.unregisterCount, 0)
-    XCTAssertEqual(
-      client.statusMessage,
-      "Helper registered but not bootstrapped. Open System Settings > General > Login Items & Extensions, approve ClashMax, then click Repair or restart macOS."
-    )
+    XCTAssertEqual(client.statusMessage, TunnelHelperClient.notBootstrappedMessage)
   }
 
   func testEnabledRegistrationIsReportedAsNotBootstrappedWhenXPCStatusPayloadFails() async throws {
@@ -58,10 +55,7 @@ final class TunnelHelperClientTests: XCTestCase {
 
     await client.refreshRegistrationStatus()
 
-    XCTAssertEqual(
-      client.statusMessage,
-      "Helper registered but not bootstrapped. Open System Settings > General > Login Items & Extensions, approve ClashMax, then click Repair or restart macOS."
-    )
+    XCTAssertEqual(client.statusMessage, TunnelHelperClient.notBootstrappedMessage)
   }
 
   func testRegisterRepairsChangedHelperFingerprintBeforeVerifyingXPCStatus() async throws {
@@ -80,7 +74,7 @@ final class TunnelHelperClientTests: XCTestCase {
     XCTAssertEqual(service.unregisterCount, 1)
     XCTAssertEqual(service.registerCount, 1)
     XCTAssertEqual(recordStore.storedFingerprint, "new")
-    XCTAssertEqual(client.statusMessage, "Helper registered and bootstrapped.")
+    XCTAssertEqual(client.statusMessage, TunnelHelperClient.bootstrappedMessage)
   }
 
   func testRegisterDoesNotReregisterUnchangedEnabledHelper() async throws {
@@ -98,7 +92,7 @@ final class TunnelHelperClientTests: XCTestCase {
 
     XCTAssertEqual(service.unregisterCount, 0)
     XCTAssertEqual(service.registerCount, 0)
-    XCTAssertEqual(client.statusMessage, "Helper registered and bootstrapped.")
+    XCTAssertEqual(client.statusMessage, TunnelHelperClient.bootstrappedMessage)
   }
 
   func testRegisterOpensSystemSettingsWhenHelperRequiresApproval() async throws {
@@ -116,10 +110,7 @@ final class TunnelHelperClientTests: XCTestCase {
     XCTAssertEqual(service.registerCount, 0)
     XCTAssertEqual(service.openSettingsCount, 1)
     XCTAssertEqual(recordStore.storedFingerprint, "current")
-    XCTAssertEqual(
-      client.statusMessage,
-      "Helper registered. Approve ClashMax in System Settings > General > Login Items & Extensions, then click Status."
-    )
+    XCTAssertEqual(client.statusMessage, TunnelHelperClient.statusMessage(for: .requiresApproval))
   }
 
   func testRegisterOpensSystemSettingsAfterRegistrationRequiresApproval() async throws {
@@ -137,10 +128,45 @@ final class TunnelHelperClientTests: XCTestCase {
     XCTAssertEqual(service.registerCount, 1)
     XCTAssertEqual(service.openSettingsCount, 1)
     XCTAssertEqual(recordStore.storedFingerprint, "current")
-    XCTAssertEqual(
-      client.statusMessage,
-      "Helper registered. Approve ClashMax in System Settings > General > Login Items & Extensions, then click Status."
+    XCTAssertEqual(client.statusMessage, TunnelHelperClient.statusMessage(for: .requiresApproval))
+  }
+
+  func testPreparingTunnelReturnsRequiresApprovalWithoutThrowing() async throws {
+    let service = FakeHelperService(status: .requiresApproval)
+    let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
+    let transport = FakeHelperTransport()
+    let client = TunnelHelperClient(
+      transport: transport,
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "current"),
+      registrationRecordStore: recordStore
     )
+
+    let state = await client.prepareForTunnelStart()
+
+    XCTAssertEqual(service.registerCount, 0)
+    XCTAssertEqual(service.openSettingsCount, 1)
+    XCTAssertEqual(recordStore.storedFingerprint, "current")
+    XCTAssertEqual(
+      state,
+      .requiresApproval(TunnelHelperClient.statusMessage(for: .requiresApproval))
+    )
+  }
+
+  func testPreparingTunnelReportsReadyWhenHelperIsBootstrapped() async throws {
+    let service = FakeHelperService(status: .enabled)
+    let transport = FakeHelperTransport(statusResponse: HelperClientResponse(payload: HelperXPCPayload.response(ok: true)))
+    let client = TunnelHelperClient(
+      transport: transport,
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "same"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "same")
+    )
+
+    let state = await client.prepareForTunnelStart()
+
+    XCTAssertEqual(state, .ready)
+    XCTAssertEqual(client.statusMessage, TunnelHelperClient.bootstrappedMessage)
   }
 
   func testRepairHelperAlwaysUnregistersThenRegistersAndVerifies() async throws {
@@ -159,25 +185,25 @@ final class TunnelHelperClientTests: XCTestCase {
     XCTAssertEqual(service.unregisterCount, 1)
     XCTAssertEqual(service.registerCount, 1)
     XCTAssertEqual(recordStore.storedFingerprint, "current")
-    XCTAssertEqual(client.statusMessage, "Helper registered and bootstrapped.")
+    XCTAssertEqual(client.statusMessage, TunnelHelperClient.bootstrappedMessage)
   }
 
   func testHelperRegistrationStatusMessagesGuideRegistrationAndApproval() {
     XCTAssertEqual(
       TunnelHelperClient.statusMessage(for: .notRegistered),
-      "Helper not registered. Click Register or Start in TUN mode."
+      String(localized: "Helper not registered. Click Register or Start in TUN mode.")
     )
     XCTAssertEqual(
       TunnelHelperClient.statusMessage(for: .enabled),
-      "Helper registered. Verifying helper connection."
+      String(localized: "Helper registered. Verifying helper connection.")
     )
     XCTAssertEqual(
       TunnelHelperClient.statusMessage(for: .requiresApproval),
-      "Helper registered. Approve ClashMax in System Settings > General > Login Items & Extensions, then click Status."
+      String(localized: "Helper registered. Approve ClashMax in System Settings > General > Login Items & Extensions, then click Status.")
     )
     XCTAssertEqual(
       TunnelHelperClient.statusMessage(for: .notFound),
-      "Helper not found in the app bundle. Clean build and run ClashMax again."
+      String(localized: "Helper not found in the app bundle. Clean build and run ClashMax again.")
     )
   }
 

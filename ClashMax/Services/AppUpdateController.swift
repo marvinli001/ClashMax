@@ -4,7 +4,7 @@ import Sparkle
 @MainActor
 final class AppUpdateController: NSObject, ObservableObject {
   @Published private(set) var canCheckForUpdates = false
-  @Published private(set) var statusMessage = "Checking for updates is not configured for this build."
+  @Published private(set) var statusMessage = String(localized: "Checking for updates is not configured for this build.")
 
   private let updaterController: SPUStandardUpdaterController?
   private var canCheckObservation: NSKeyValueObservation?
@@ -18,7 +18,7 @@ final class AppUpdateController: NSObject, ObservableObject {
       )
       updaterController = controller
       super.init()
-      statusMessage = "Sparkle is configured for automatic app updates."
+      statusMessage = String(localized: "Sparkle is configured for automatic app updates.")
       canCheckForUpdates = controller.updater.canCheckForUpdates
       canCheckObservation = controller.updater.observe(\.canCheckForUpdates, options: [.initial, .new]) { [weak self] updater, _ in
         Task { @MainActor in
@@ -28,7 +28,7 @@ final class AppUpdateController: NSObject, ObservableObject {
     } else {
       updaterController = nil
       super.init()
-      statusMessage = "Generate a Sparkle EdDSA key and replace SUPublicEDKey before publishing updates."
+      statusMessage = String(localized: "Generate a Sparkle EdDSA key and replace SUPublicEDKey before publishing updates.")
     }
   }
 

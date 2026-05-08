@@ -384,6 +384,97 @@ final class SystemProxyControllerTests: XCTestCase {
     XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setproxybypassdomains Wi-Fi corp.internal *.corp"))
   }
 
+  func testCapturedSnapshotsPersistAcrossControllerInstancesUntilVerifiedRestore() async throws {
+    let defaults = try Self.makeIsolatedDefaults()
+    let firstRunner = RecordingCommandRunner(outputs: [
+      "/usr/sbin/networksetup -listallnetworkservices": "Wi-Fi\n",
+      "/usr/sbin/networksetup -getwebproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
+      "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
+      "/usr/sbin/networksetup -getsocksfirewallproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
+      "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": "There aren't any bypass domains set.\n"
+    ])
+    let firstController = SystemProxyController(commandRunner: firstRunner, snapshotDefaults: defaults)
+
+    try await firstController.apply(host: "127.0.0.1", port: 7890)
+
+    let secondRunner = RecordingCommandRunner(outputs: [
+      "/usr/sbin/networksetup -listallnetworkservices": "Wi-Fi\n",
+      "/usr/sbin/networksetup -getwebproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
+      "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
+      "/usr/sbin/networksetup -getsocksfirewallproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
+      "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": "There aren't any bypass domains set.\n"
+    ])
+    let secondController = SystemProxyController(commandRunner: secondRunner, snapshotDefaults: defaults)
+
+    XCTAssertTrue(secondController.hasManagedSystemProxyState)
+
+    let result = try await secondController.restoreAndVerify(
+      hosts: ["127.0.0.1"],
+      ports: [7890],
+      disableWhenNoSnapshot: false
+    )
+
+    XCTAssertTrue(result.verified)
+    XCTAssertFalse(result.didFallbackDisable)
+    XCTAssertTrue(secondRunner.commands.contains("/usr/sbin/networksetup -setwebproxystate Wi-Fi off"))
+    XCTAssertFalse(secondController.hasManagedSystemProxyState)
+
+    let thirdController = SystemProxyController(commandRunner: RecordingCommandRunner(outputs: [:]), snapshotDefaults: defaults)
+    XCTAssertFalse(thirdController.hasManagedSystemProxyState)
+  }
+
+  func testRestoreAndVerifyDisablesResidualClashProxyBeforeClearingSnapshots() async throws {
+    let defaults = try Self.makeIsolatedDefaults()
+    let runner = SequencedCommandRunner(outputs: [
+      "/usr/sbin/networksetup -listallnetworkservices": [
+        "Wi-Fi\n",
+        "Wi-Fi\n",
+        "Wi-Fi\n",
+        "Wi-Fi\n"
+      ],
+      "/usr/sbin/networksetup -getwebproxy Wi-Fi": [
+        "Enabled: No\nServer:\nPort: 0\n",
+        "Enabled: Yes\nServer: 127.0.0.1\nPort: 7890\n",
+        "Enabled: Yes\nServer: 127.0.0.1\nPort: 7890\n",
+        "Enabled: No\nServer:\nPort: 0\n"
+      ],
+      "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi": [
+        "Enabled: No\nServer:\nPort: 0\n",
+        "Enabled: Yes\nServer: 127.0.0.1\nPort: 7890\n",
+        "Enabled: Yes\nServer: 127.0.0.1\nPort: 7890\n",
+        "Enabled: No\nServer:\nPort: 0\n"
+      ],
+      "/usr/sbin/networksetup -getsocksfirewallproxy Wi-Fi": [
+        "Enabled: No\nServer:\nPort: 0\n",
+        "Enabled: Yes\nServer: 127.0.0.1\nPort: 7890\n",
+        "Enabled: Yes\nServer: 127.0.0.1\nPort: 7890\n",
+        "Enabled: No\nServer:\nPort: 0\n"
+      ],
+      "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": [
+        "There aren't any bypass domains set.\n",
+        "Exceptions List\n\(SystemProxySettings.defaultBypassDomains.joined(separator: "\n"))\n",
+        "Exceptions List\n\(SystemProxySettings.defaultBypassDomains.joined(separator: "\n"))\n",
+        "There aren't any bypass domains set.\n"
+      ]
+    ])
+    let controller = SystemProxyController(commandRunner: runner, snapshotDefaults: defaults)
+
+    try await controller.apply(host: "127.0.0.1", port: 7890)
+
+    let result = try await controller.restoreAndVerify(
+      hosts: ["127.0.0.1", "localhost", "::1"],
+      ports: [7890],
+      disableWhenNoSnapshot: true
+    )
+
+    XCTAssertTrue(result.verified)
+    XCTAssertTrue(result.didFallbackDisable)
+    XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setwebproxystate Wi-Fi off"))
+    XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setsecurewebproxystate Wi-Fi off"))
+    XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setsocksfirewallproxystate Wi-Fi off"))
+    XCTAssertFalse(controller.hasManagedSystemProxyState)
+  }
+
   func testRestoreClearsBypassDomainsWhenNoSnapshotExists() async throws {
     let runner = RecordingCommandRunner(outputs: [
       "/usr/sbin/networksetup -listallnetworkservices": "Wi-Fi\n"
@@ -393,6 +484,13 @@ final class SystemProxyControllerTests: XCTestCase {
     try await controller.restore()
 
     XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setproxybypassdomains Wi-Fi Empty"))
+  }
+
+  private static func makeIsolatedDefaults() throws -> UserDefaults {
+    let suiteName = "ClashMaxSystemProxyControllerTests-\(UUID().uuidString)"
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+    defaults.removePersistentDomain(forName: suiteName)
+    return defaults
   }
 }
 
@@ -429,6 +527,33 @@ private final class DelayedRecordingCommandRunner: CommandRunning, @unchecked Se
       inFlight -= 1
     }
     return outputs[command] ?? ""
+  }
+}
+
+private final class SequencedCommandRunner: CommandRunning, @unchecked Sendable {
+  private let queue = DispatchQueue(label: "io.github.clashmax.tests.SequencedCommandRunner")
+  private var outputs: [String: [String]]
+  private var _commands: [String] = []
+
+  init(outputs: [String: [String]]) {
+    self.outputs = outputs
+  }
+
+  var commands: [String] {
+    queue.sync { _commands }
+  }
+
+  func run(_ executable: String, _ arguments: [String]) async throws -> String {
+    let command = ([executable] + arguments).joined(separator: " ")
+    return queue.sync {
+      _commands.append(command)
+      guard var values = outputs[command], !values.isEmpty else {
+        return ""
+      }
+      let value = values.removeFirst()
+      outputs[command] = values
+      return value
+    }
   }
 }
 

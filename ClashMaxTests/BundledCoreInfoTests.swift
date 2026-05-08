@@ -17,7 +17,7 @@ final class BundledCoreInfoTests: XCTestCase {
     XCTAssertEqual(info.versionSummary, "Mihomo v9.9.9")
     XCTAssertEqual(
       info.statusMessage,
-      "Bundled with ClashMax. Updating ClashMax updates the bundled Mihomo core."
+      String(localized: "Bundled with ClashMax. Updating ClashMax updates the bundled Mihomo core.")
     )
   }
 
@@ -27,8 +27,8 @@ final class BundledCoreInfoTests: XCTestCase {
 
     let info = BundledCoreInfo(manifestURL: manifestURL)
 
-    XCTAssertEqual(info.versionSummary, "Mihomo unavailable")
-    XCTAssertEqual(info.statusMessage, "Bundled Mihomo core information is unavailable.")
+    XCTAssertEqual(info.versionSummary, String(localized: "Mihomo unavailable"))
+    XCTAssertEqual(info.statusMessage, String(localized: "Bundled Mihomo core information is unavailable."))
     XCTAssertFalse(info.statusMessage.localizedCaseInsensitiveContains("check"))
   }
 }

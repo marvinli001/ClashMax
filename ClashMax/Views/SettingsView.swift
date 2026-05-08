@@ -34,6 +34,20 @@ struct SettingsView: View {
             .pickerStyle(.segmented)
             .frame(width: 220, alignment: .trailing)
           }
+          SettingsControlRow(
+            "Language",
+            description: String(
+              format: String(localized: "Current app language: %@. Change per-app language in macOS Language & Region, then reopen ClashMax if needed."),
+              AppLocalization.currentLanguageDisplayName
+            )
+          ) {
+            Button {
+              AppLocalization.openLanguageAndRegionSettings()
+            } label: {
+              Label("Open Language & Region", systemImage: "globe")
+            }
+            .help("Open System Settings > General > Language & Region.")
+          }
         }
 
         Section("Updates") {
@@ -153,7 +167,7 @@ struct SettingsView: View {
           }
 
           if appModel.proxyRoutingMode == .tun {
-            SettingsControlRow("TUN Helper Status", description: appModel.helperClient.statusMessage) {
+            SettingsControlRow("TUN Helper Status", description: appModel.tunHelperPreparationState.message) {
               ViewThatFits(in: .horizontal) {
                 helperActionButtons
                 helperActionButtonRows
@@ -281,10 +295,10 @@ private struct SettingsToggleRow: View {
 
   var body: some View {
     SettingsControlRow(title, description: description) {
-      Toggle(title, isOn: $isOn)
+      Toggle(localizedSettingsText(title), isOn: $isOn)
         .labelsHidden()
         .toggleStyle(.switch)
-        .accessibilityLabel(title)
+        .accessibilityLabel(localizedSettingsText(title))
     }
   }
 }
@@ -320,10 +334,10 @@ private struct SettingsControlRow<Control: View>: View {
 
   private var titleBlock: some View {
     VStack(alignment: .leading, spacing: 2) {
-      Text(title)
+      Text(localizedSettingsText(title))
         .foregroundStyle(.primary)
       if let description {
-        Text(description)
+        Text(localizedSettingsText(description))
           .font(.caption)
           .foregroundStyle(.secondary)
           .lineLimit(3)
@@ -387,9 +401,9 @@ private struct UpdateVersionRow<Action: View>: View {
 
   private var titleBlock: some View {
     VStack(alignment: .leading, spacing: 2) {
-      Text(title)
+      Text(localizedSettingsText(title))
         .foregroundStyle(.primary)
-      Text(description)
+      Text(localizedSettingsText(description))
         .font(.caption)
         .foregroundStyle(.secondary)
         .lineLimit(3)
@@ -471,8 +485,12 @@ private struct ExternalControlSettingsRow: View {
 
   private var description: String {
     let settings = appModel.externalControllerSettings
-    let state = settings.enabled ? "Enabled" : "Disabled"
-    return "\(state) for external web dashboards at \(settings.address) with Bearer auth."
+    let state = settings.enabled ? String(localized: "Enabled") : String(localized: "Disabled")
+    return String(
+      format: String(localized: "%@ for external web dashboards at %@ with Bearer auth."),
+      state,
+      settings.address
+    )
   }
 
   private var corsSettingsButton: some View {
@@ -749,7 +767,7 @@ private struct ExternalControlSettingsSheet: View {
   @ViewBuilder
   private func labeledField<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
     HStack(alignment: .center, spacing: 14) {
-      Text(title)
+      Text(localizedSettingsText(title))
         .frame(width: 170, alignment: .leading)
       content()
     }
@@ -767,6 +785,10 @@ private struct ExternalControlSettingsSheet: View {
     .disabled(!isEnabled || value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     .help(help)
   }
+}
+
+private func localizedSettingsText(_ value: String) -> String {
+  NSLocalizedString(value, comment: "")
 }
 
 private struct PortControl: View {

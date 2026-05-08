@@ -14,13 +14,13 @@ struct BundledCoreInfo: Equatable {
       let data = try? Data(contentsOf: manifestURL),
       let manifest = try? JSONDecoder().decode(BundledCoreManifest.self, from: data)
     else {
-      versionSummary = "Mihomo unavailable"
-      statusMessage = "Bundled Mihomo core information is unavailable."
+      versionSummary = String(localized: "Mihomo unavailable")
+      statusMessage = String(localized: "Bundled Mihomo core information is unavailable.")
       return
     }
 
     versionSummary = "Mihomo \(manifest.version)"
-    statusMessage = "Bundled with ClashMax. Updating ClashMax updates the bundled Mihomo core."
+    statusMessage = String(localized: "Bundled with ClashMax. Updating ClashMax updates the bundled Mihomo core.")
   }
 
   private static func manifestURL(in bundle: Bundle) -> URL? {

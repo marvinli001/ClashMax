@@ -306,11 +306,13 @@ private struct LaunchStatusMessage: View {
   }
 
   private var messageSymbol: String {
+    if appModel.tunHelperPreparationState.isFailure { return "xmark.octagon.fill" }
     if case .blocked = state { return "exclamationmark.triangle.fill" }
     return "xmark.octagon.fill"
   }
 
   private var messageColor: Color {
+    if appModel.tunHelperPreparationState.isFailure { return .red }
     if case .blocked = state { return .secondary }
     return .red
   }

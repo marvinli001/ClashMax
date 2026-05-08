@@ -561,7 +561,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let paths = try Self.makeRuntimePaths()
     let defaults = try Self.makeIsolatedDefaults()
     let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
-    let controller = SystemProxyController(commandRunner: commandRunner)
+    let controller = SystemProxyController(commandRunner: commandRunner, snapshotDefaults: defaults)
     let model = AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
@@ -571,20 +571,54 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.setSystemProxyEnabled(true)
 
-    for _ in 0..<40 where !model.systemProxyEnabled {
+    for _ in 0..<100 where !model.systemProxyEnabled {
       await Task.yield()
+      try? await Task.sleep(nanoseconds: 2_000_000)
     }
 
     XCTAssertTrue(model.systemProxyEnabled)
     XCTAssertTrue(model.needsTerminationCleanup)
 
-    await model.prepareForTermination()
+    let didCleanUp = await model.prepareForTermination()
 
+    XCTAssertTrue(didCleanUp)
     XCTAssertFalse(model.systemProxyEnabled)
     XCTAssertFalse(model.needsTerminationCleanup)
     XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setwebproxystate Wi-Fi off"))
     XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setsecurewebproxystate Wi-Fi off"))
     XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setsocksfirewallproxystate Wi-Fi off"))
+  }
+
+  func testStopAndTerminationShareSingleRuntimeTeardown() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    let commandRunner = SlowRecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+    let controller = SystemProxyController(commandRunner: commandRunner, snapshotDefaults: defaults)
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      systemProxyController: controller,
+      defaults: defaults
+    )
+
+    model.setSystemProxyEnabled(true)
+
+    for _ in 0..<100 where !model.systemProxyEnabled {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 2_000_000)
+    }
+    XCTAssertTrue(model.systemProxyEnabled)
+
+    model.stop()
+    let didCleanUp = await model.prepareForTermination()
+
+    XCTAssertTrue(didCleanUp)
+    XCTAssertFalse(model.systemProxyEnabled)
+    XCTAssertEqual(
+      commandRunner.commands.filter { $0 == "/usr/sbin/networksetup -setwebproxystate Wi-Fi off" }.count,
+      1
+    )
+    XCTAssertFalse(defaults.bool(forKey: "io.github.clashmax.systemProxyManaged"))
   }
 
   func testProxyDelayDisplayLabelsAndTones() {
@@ -1411,7 +1445,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
     }
 
     XCTAssertFalse(model.startInFlight)
-    XCTAssertEqual(model.lastError, "Profile must include at least one proxy or proxy provider.")
+    XCTAssertEqual(
+      model.lastError,
+      String(localized: "Profile must include at least one proxy or proxy provider.")
+    )
   }
 
   func testStartAppliesSelectedSystemProxyRoutingMode() async throws {
@@ -1469,7 +1506,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
       helperClient: helper,
       tunnelReadinessProbe: FailingCoreReadinessProbe(message: "controller refused connection")
     )
-    model.proxyRoutingMode = .tun
+    model.requestProxyRoutingMode(.tun)
+    for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
+      await Task.yield()
+    }
+    XCTAssertTrue(model.tunHelperPreparationState.isReady)
 
     model.start()
 
@@ -1588,6 +1629,82 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     XCTAssertEqual(model.proxyRoutingMode, .tun)
     XCTAssertGreaterThan(changeCount, 0)
+  }
+
+  func testSelectingTunPreparesHelperAndBlocksStartDuringApproval() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try store.importLocalConfig(from: configURL)
+    let helperTransport = ReadyTunnelHelperTransport()
+    let service = StaticHelperService(status: .requiresApproval)
+    let helper = TunnelHelperClient(
+      transport: helperTransport,
+      service: service,
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      helperClient: helper,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    model.requestProxyRoutingMode(.tun)
+
+    for _ in 0..<40 where model.proxyRoutingMode != .tun || model.tunHelperPreparationState == .checking || model.tunHelperPreparationState == .idle {
+      await Task.yield()
+    }
+
+    guard case .requiresApproval = model.tunHelperPreparationState else {
+      XCTFail("Expected TUN helper approval state, got \(model.tunHelperPreparationState)")
+      return
+    }
+    XCTAssertEqual(service.registerCount, 0)
+    XCTAssertEqual(service.openSettingsCount, 1)
+    XCTAssertNil(model.lastError)
+    XCTAssertNotNil(model.readinessIssue)
+
+    model.start()
+
+    let startCount = await helperTransport.startCount()
+    XCTAssertEqual(startCount, 0)
+    XCTAssertNil(model.lastError)
+  }
+
+  func testSelectingTunRegistersAndMarksReadyHelper() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try store.importLocalConfig(from: configURL)
+    let service = StaticHelperService(status: .notRegistered, statusAfterRegister: .enabled)
+    let helper = TunnelHelperClient(
+      transport: ReadyTunnelHelperTransport(),
+      service: service,
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      helperClient: helper,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    model.requestProxyRoutingMode(.tun)
+
+    for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
+      await Task.yield()
+    }
+
+    XCTAssertEqual(model.proxyRoutingMode, .tun)
+    XCTAssertEqual(service.registerCount, 1)
+    XCTAssertTrue(model.tunHelperPreparationState.isReady)
+    XCTAssertNil(model.readinessIssue)
+    XCTAssertNil(model.lastError)
   }
 
   func testRunningCoversUserModeAndTunnelCore() {
@@ -1997,14 +2114,29 @@ private actor ReadyTunnelHelperTransport: HelperXPCTransport {
 @MainActor
 private final class StaticHelperService: HelperServiceManaging {
   var status: SMAppService.Status
+  let statusAfterRegister: SMAppService.Status
+  private(set) var registerCount = 0
+  private(set) var unregisterCount = 0
+  private(set) var openSettingsCount = 0
 
-  init(status: SMAppService.Status) {
+  init(status: SMAppService.Status, statusAfterRegister: SMAppService.Status = .enabled) {
     self.status = status
+    self.statusAfterRegister = statusAfterRegister
   }
 
-  func register() throws {}
-  func unregister() async throws {}
-  func openSystemSettingsLoginItems() {}
+  func register() throws {
+    registerCount += 1
+    status = statusAfterRegister
+  }
+
+  func unregister() async throws {
+    unregisterCount += 1
+    status = .notRegistered
+  }
+
+  func openSystemSettingsLoginItems() {
+    openSettingsCount += 1
+  }
 }
 
 private final class FakeLoginItemService: LoginItemManaging {
@@ -2089,6 +2221,31 @@ private final class GuardWarningCommandRunner: CommandRunning, @unchecked Sendab
         userInfo: [NSLocalizedDescriptionKey: "Injected guard query failure for \(command)"]
       )
     }
+    return outputs[command] ?? ""
+  }
+}
+
+private final class SlowRecordingCommandRunner: CommandRunning, @unchecked Sendable {
+  let outputs: [String: String]
+  private let delayNanoseconds: UInt64
+  private let queue = DispatchQueue(label: "io.github.clashmax.tests.SlowRecordingCommandRunner")
+  private var _commands: [String] = []
+
+  init(outputs: [String: String], delayNanoseconds: UInt64 = 10_000_000) {
+    self.outputs = outputs
+    self.delayNanoseconds = delayNanoseconds
+  }
+
+  var commands: [String] {
+    queue.sync { _commands }
+  }
+
+  func run(_ executable: String, _ arguments: [String]) async throws -> String {
+    let command = ([executable] + arguments).joined(separator: " ")
+    queue.sync {
+      _commands.append(command)
+    }
+    try? await Task.sleep(nanoseconds: delayNanoseconds)
     return outputs[command] ?? ""
   }
 }
