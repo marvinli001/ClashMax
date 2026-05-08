@@ -59,6 +59,8 @@ Release builds are distributed through GitHub Releases. After installation, Clas
 
 ## Local Development
 
+Project-level development rules live in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). Keep local agent notes in `AGENTS.md`; that file is intentionally not committed.
+
 The Xcode project is generated from `project.yml` with XcodeGen, and `ClashMax.xcodeproj/` is not committed. After cloning the repository, run:
 
 ```bash

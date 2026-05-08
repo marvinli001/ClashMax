@@ -383,7 +383,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(reloaded.launchSettings.silentStart)
   }
 
-  func testSystemProxySettingsApplyCustomHostBypassAndStopGuard() async throws {
+  func testSystemProxySettingsNormalizeUnspecifiedHostBeforeApplyingProxy() async throws {
     let paths = try Self.makeRuntimePaths()
     let defaults = try Self.makeIsolatedDefaults()
     let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
@@ -401,6 +401,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     settings.guardEnabled = true
     settings.guardIntervalSeconds = 5
 
+    XCTAssertEqual(settings.normalizedProxyHost, "127.0.0.1")
     XCTAssertTrue(model.updateSystemProxySettings(settings))
     model.setSystemProxyEnabled(true)
 
@@ -410,7 +411,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     XCTAssertTrue(model.systemProxyEnabled)
     XCTAssertEqual(controller.guardState, .active)
-    XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setwebproxy Wi-Fi 0.0.0.0 7890"))
+    XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setwebproxy Wi-Fi 127.0.0.1 7890"))
     XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setproxybypassdomains Wi-Fi localhost *.corp"))
 
     model.setSystemProxyEnabled(false)
@@ -421,6 +422,29 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     XCTAssertFalse(model.systemProxyEnabled)
     XCTAssertEqual(controller.guardState, .idle)
+  }
+
+  func testSystemProxyRestoreIgnoresUnspecifiedRawProxyHosts() async throws {
+    try await assertSystemProxyRestoreIgnoresUnspecifiedRawProxyHost("0.0.0.0", residualServer: "0.0.0.0")
+    try await assertSystemProxyRestoreIgnoresUnspecifiedRawProxyHost("::", residualServer: "::")
+  }
+
+  func testSystemProxySettingsNormalizeUnspecifiedBindHostsToLoopback() {
+    var ipv4 = SystemProxySettings.default
+    ipv4.proxyHost = "0.0.0.0"
+    XCTAssertEqual(ipv4.normalizedProxyHost, "127.0.0.1")
+
+    var ipv6 = SystemProxySettings.default
+    ipv6.proxyHost = "::"
+    XCTAssertEqual(ipv6.normalizedProxyHost, "127.0.0.1")
+
+    var bracketedIPv6 = SystemProxySettings.default
+    bracketedIPv6.proxyHost = "[::]"
+    XCTAssertEqual(bracketedIPv6.normalizedProxyHost, "127.0.0.1")
+
+    var custom = SystemProxySettings.default
+    custom.proxyHost = "192.168.1.20"
+    XCTAssertEqual(custom.normalizedProxyHost, "192.168.1.20")
   }
 
   func testSystemProxyGuardQueryWarningDoesNotBecomeGlobalError() async throws {
@@ -1877,6 +1901,84 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
     defaults.removePersistentDomain(forName: suiteName)
     return defaults
+  }
+
+  private func assertSystemProxyRestoreIgnoresUnspecifiedRawProxyHost(
+    _ rawHost: String,
+    residualServer: String,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) async throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    let commandRunner = SequencedRecordingCommandRunner(
+      outputs: Self.networkSetupOutputsWithResidualServer(residualServer)
+    )
+    let controller = SystemProxyController(commandRunner: commandRunner)
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      systemProxyController: controller,
+      defaults: defaults
+    )
+    var settings = SystemProxySettings.default
+    settings.proxyHost = rawHost
+
+    XCTAssertTrue(model.updateSystemProxySettings(settings), file: file, line: line)
+    model.setSystemProxyEnabled(true)
+
+    for _ in 0..<40 where !model.systemProxyEnabled {
+      await Task.yield()
+    }
+    XCTAssertTrue(model.systemProxyEnabled, file: file, line: line)
+
+    model.setSystemProxyEnabled(false)
+
+    for _ in 0..<40 where model.systemProxyEnabled {
+      await Task.yield()
+    }
+
+    let webProxyDisableCount = commandRunner.commands.filter {
+      $0 == "/usr/sbin/networksetup -setwebproxystate Wi-Fi off"
+    }.count
+    XCTAssertEqual(webProxyDisableCount, 1, file: file, line: line)
+    XCTAssertFalse(model.systemProxyEnabled, file: file, line: line)
+    XCTAssertNil(model.lastError, file: file, line: line)
+  }
+
+  private static func networkSetupOutputsWithResidualServer(_ server: String) -> [String: [String]] {
+    [
+      "/usr/sbin/networksetup -listallnetworkservices": [
+        "Wi-Fi\n",
+        "Wi-Fi\n",
+        "Wi-Fi\n",
+        "Wi-Fi\n"
+      ],
+      "/usr/sbin/networksetup -getwebproxy Wi-Fi": [
+        "Enabled: No\nServer:\nPort: 0\n",
+        "Enabled: Yes\nServer: \(server)\nPort: 7890\n",
+        "Enabled: Yes\nServer: \(server)\nPort: 7890\n",
+        "Enabled: No\nServer:\nPort: 0\n"
+      ],
+      "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi": [
+        "Enabled: No\nServer:\nPort: 0\n",
+        "Enabled: No\nServer:\nPort: 0\n",
+        "Enabled: No\nServer:\nPort: 0\n",
+        "Enabled: No\nServer:\nPort: 0\n"
+      ],
+      "/usr/sbin/networksetup -getsocksfirewallproxy Wi-Fi": [
+        "Enabled: No\nServer:\nPort: 0\n",
+        "Enabled: No\nServer:\nPort: 0\n",
+        "Enabled: No\nServer:\nPort: 0\n",
+        "Enabled: No\nServer:\nPort: 0\n"
+      ],
+      "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": [
+        "There aren't any bypass domains set.\n",
+        "There aren't any bypass domains set.\n",
+        "There aren't any bypass domains set.\n",
+        "There aren't any bypass domains set.\n"
+      ]
+    ]
   }
 
   private static func makePublicIPInfo(ip: String, fetchedAt: Date) -> PublicIPInfo {

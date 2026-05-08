@@ -193,3 +193,30 @@ final class RecordingCommandRunner: CommandRunning, @unchecked Sendable {
     return outputs[command] ?? ""
   }
 }
+
+final class SequencedRecordingCommandRunner: CommandRunning, @unchecked Sendable {
+  private let queue = DispatchQueue(label: "io.github.clashmax.tests.SequencedRecordingCommandRunner")
+  private var outputs: [String: [String]]
+  private var _commands: [String] = []
+
+  init(outputs: [String: [String]]) {
+    self.outputs = outputs
+  }
+
+  var commands: [String] {
+    queue.sync { _commands }
+  }
+
+  func run(_ executable: String, _ arguments: [String]) async throws -> String {
+    let command = ([executable] + arguments).joined(separator: " ")
+    return queue.sync {
+      _commands.append(command)
+      guard var values = outputs[command], !values.isEmpty else {
+        return ""
+      }
+      let value = values.removeFirst()
+      outputs[command] = values
+      return value
+    }
+  }
+}

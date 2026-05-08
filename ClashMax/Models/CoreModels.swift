@@ -458,7 +458,10 @@ struct SystemProxySettings: Codable, Equatable {
 
   var normalizedProxyHost: String {
     let trimmed = proxyHost.trimmingCharacters(in: .whitespacesAndNewlines)
-    return trimmed.isEmpty ? Self.defaultProxyHost : trimmed
+    if trimmed.isEmpty || Self.isUnspecifiedBindHost(trimmed) {
+      return Self.defaultProxyHost
+    }
+    return trimmed
   }
 
   var normalizedGuardIntervalSeconds: Int {
@@ -508,6 +511,16 @@ struct SystemProxySettings: Codable, Equatable {
       return !pieces[0].isEmpty
     }
     return trimmed.range(of: #"^[A-Za-z0-9*_.:-]+$"#, options: .regularExpression) != nil
+  }
+
+  static func isUnspecifiedBindHost(_ host: String) -> Bool {
+    let normalized = host
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+      .lowercased()
+    return normalized == "0.0.0.0"
+      || normalized == "::"
+      || normalized == "0:0:0:0:0:0:0:0"
   }
 }
 

@@ -1807,7 +1807,14 @@ final class AppModel: ObservableObject {
   }
 
   private static func localProxyHosts(for settings: SystemProxySettings) -> Set<String> {
-    Set([settings.normalizedProxyHost, "127.0.0.1", "localhost", "::1"].map { $0.lowercased() })
+    let rawProxyHost = settings.proxyHost.trimmingCharacters(in: .whitespacesAndNewlines)
+    var hosts = [settings.normalizedProxyHost, "127.0.0.1", "localhost", "::1"]
+    if !rawProxyHost.isEmpty, !SystemProxySettings.isUnspecifiedBindHost(rawProxyHost) {
+      hosts.append(rawProxyHost)
+    }
+    return Set(hosts
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty })
   }
 
   private func saveCodable<T: Encodable>(_ value: T, forKey key: String) {

@@ -475,6 +475,46 @@ final class SystemProxyControllerTests: XCTestCase {
     XCTAssertFalse(controller.hasManagedSystemProxyState)
   }
 
+  func testRestoreAndVerifySetHostsMatchesResidualProxyCaseInsensitively() async throws {
+    let runner = SequencedRecordingCommandRunner(outputs: [
+      "/usr/sbin/networksetup -listallnetworkservices": [
+        "Wi-Fi\n",
+        "Wi-Fi\n",
+        "Wi-Fi\n",
+        "Wi-Fi\n"
+      ],
+      "/usr/sbin/networksetup -getwebproxy Wi-Fi": [
+        "Enabled: Yes\nServer: myhost.lan\nPort: 7890\n",
+        "Enabled: Yes\nServer: myhost.lan\nPort: 7890\n",
+        "Enabled: No\nServer:\nPort: 0\n"
+      ],
+      "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi": [
+        "Enabled: No\nServer:\nPort: 0\n",
+        "Enabled: No\nServer:\nPort: 0\n",
+        "Enabled: No\nServer:\nPort: 0\n"
+      ],
+      "/usr/sbin/networksetup -getsocksfirewallproxy Wi-Fi": [
+        "Enabled: No\nServer:\nPort: 0\n",
+        "Enabled: No\nServer:\nPort: 0\n",
+        "Enabled: No\nServer:\nPort: 0\n"
+      ],
+      "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": [
+        "There aren't any bypass domains set.\n",
+        "There aren't any bypass domains set.\n",
+        "There aren't any bypass domains set.\n"
+      ]
+    ])
+    let controller = SystemProxyController(commandRunner: runner)
+
+    let result = try await controller.restoreAndVerify(
+      hosts: Set(["MyHost.lan"]),
+      ports: Set([7890]),
+      disableWhenNoSnapshot: true
+    )
+
+    XCTAssertTrue(result.didFallbackDisable)
+  }
+
   func testRestoreClearsBypassDomainsWhenNoSnapshotExists() async throws {
     let runner = RecordingCommandRunner(outputs: [
       "/usr/sbin/networksetup -listallnetworkservices": "Wi-Fi\n"

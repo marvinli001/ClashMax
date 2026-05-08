@@ -210,7 +210,7 @@ final class SystemProxyController: @unchecked Sendable {
     disableWhenNoSnapshot: Bool
   ) async throws -> SystemProxyRestoreResult {
     try await restoreAndVerify(
-      hosts: Set(hosts.map { $0.lowercased() }),
+      hosts: normalizedProxyMatchHosts(hosts),
       ports: Set(ports),
       disableWhenNoSnapshot: disableWhenNoSnapshot
     )
@@ -221,10 +221,11 @@ final class SystemProxyController: @unchecked Sendable {
     ports: Set<Int>,
     disableWhenNoSnapshot: Bool
   ) async throws -> SystemProxyRestoreResult {
-    try await withTimeout(seconds: Self.restoreVerificationBudgetSeconds) { [self] in
+    let normalizedHosts = normalizedProxyMatchHosts(hosts)
+    return try await withTimeout(seconds: Self.restoreVerificationBudgetSeconds) { [self] in
       try await operationGate.run { [self] in
         try await restoreAndVerifyInner(
-          hosts: hosts,
+          hosts: normalizedHosts,
           ports: ports,
           disableWhenNoSnapshot: disableWhenNoSnapshot
         )
@@ -240,9 +241,10 @@ final class SystemProxyController: @unchecked Sendable {
 
   @discardableResult
   func disableMatchingProxy(hosts: Set<String>, ports: Set<Int>) async throws -> Bool {
-    try await operationGate.run { [self] in
+    let normalizedHosts = normalizedProxyMatchHosts(hosts)
+    return try await operationGate.run { [self] in
       try await withTimeout(seconds: Self.applyBudgetSeconds) { [self] in
-        try await disableMatchingProxyInner(hosts: hosts, ports: ports)
+        try await disableMatchingProxyInner(hosts: normalizedHosts, ports: ports)
       }
     }
   }
@@ -649,8 +651,19 @@ private struct ProxyState: Codable {
   }
 
   func matches(hosts: Set<String>, ports: Set<Int>) -> Bool {
-    enabled && hosts.contains(server.lowercased()) && ports.contains(port)
+    guard let normalizedServer = normalizedProxyMatchHost(server) else { return false }
+    return enabled && hosts.contains(normalizedServer) && ports.contains(port)
   }
+}
+
+private func normalizedProxyMatchHosts<S: Sequence>(_ hosts: S) -> Set<String> where S.Element == String {
+  Set(hosts.compactMap(normalizedProxyMatchHost))
+}
+
+private func normalizedProxyMatchHost(_ host: String) -> String? {
+  let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+  guard !trimmed.isEmpty else { return nil }
+  return trimmed.lowercased()
 }
 
 private struct ProxyBypassDomains {
