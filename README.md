@@ -56,6 +56,20 @@ ClashMax 是一个使用 SwiftUI 构建的原生 macOS Mihomo 图形客户端。
 
 发布版通过 GitHub Releases 提供。安装后，ClashMax 可在应用内检查 App 更新；每个 App release 都包含对应的 stable Mihomo 内核，用户不需要单独安装或维护 core binary。
 
+## 本地开发
+
+Xcode 工程由 XcodeGen 根据 `project.yml` 生成，不提交 `ClashMax.xcodeproj/`。克隆仓库后先执行：
+
+```bash
+xcodegen generate
+```
+
+然后打开生成的 `ClashMax.xcodeproj`，或直接运行：
+
+```bash
+xcodebuild test -project ClashMax.xcodeproj -scheme ClashMax -destination 'platform=macOS' -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO
+```
+
 ## 许可证
 
 ClashMax 使用 GPL-3.0 许可证发布。项目分发并控制 Mihomo，因此保留与 Mihomo 生态兼容的开源授权边界。

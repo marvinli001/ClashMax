@@ -1,0 +1,978 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="ClashMax is a native macOS Mihomo proxy client built with SwiftUI.">
+  <meta property="og:title" content="ClashMax">
+  <meta property="og:description" content="原生 macOS Mihomo 代理控制台。">
+  <meta property="og:image" content="https://marvinli001.github.io/ClashMax/assets/clashmax-icon.png">
+  <meta property="og:type" content="website">
+  <link rel="icon" type="image/png" href="assets/clashmax-icon.png">
+  <link rel="apple-touch-icon" href="assets/clashmax-icon.png">
+  <title>ClashMax - Native macOS Mihomo Client</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #050606;
+      --panel: #0d0f0f;
+      --panel-strong: #121616;
+      --ink: #f3f7f2;
+      --muted: #9ba39b;
+      --soft: #646d66;
+      --line: #242a27;
+      --line-soft: rgba(255, 255, 255, 0.08);
+      --accent: #19e6c2;
+      --accent-2: #f2a84b;
+      --danger: #ff6a5f;
+      --max: 1180px;
+      --radius: 8px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0) 36rem),
+        radial-gradient(circle at 80% 0%, rgba(25, 230, 194, 0.08), transparent 28rem),
+        var(--bg);
+      color: var(--ink);
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+      letter-spacing: 0;
+    }
+
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .site-header {
+      position: fixed;
+      z-index: 10;
+      top: 0;
+      right: 0;
+      left: 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+      background: rgba(5, 6, 6, 0.76);
+      backdrop-filter: blur(18px);
+    }
+
+    .nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: min(100% - 40px, var(--max));
+      height: 68px;
+      margin: 0 auto;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 15px;
+      font-weight: 650;
+    }
+
+    .brand img {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 26px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 560;
+    }
+
+    .nav-links a {
+      transition: color 160ms ease;
+    }
+
+    .nav-links a:hover {
+      color: var(--ink);
+    }
+
+    .nav-download {
+      padding: 9px 13px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--ink);
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .hero {
+      position: relative;
+      display: grid;
+      align-items: center;
+      min-height: 92svh;
+      padding: 112px 0 44px;
+      overflow: hidden;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .hero::before {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      content: "";
+      background-image:
+        linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+      background-size: 72px 72px;
+      mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.9), transparent 78%);
+    }
+
+    .hero-inner {
+      position: relative;
+      display: grid;
+      grid-template-columns: minmax(0, 0.88fr) minmax(420px, 1.12fr);
+      gap: 64px;
+      align-items: center;
+      width: min(100% - 40px, var(--max));
+      margin: 0 auto;
+    }
+
+    .hero-copy {
+      max-width: 530px;
+    }
+
+    .logo-mark {
+      width: 72px;
+      height: 72px;
+      margin-bottom: 30px;
+      border-radius: 18px;
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.36);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 76px;
+      line-height: 0.94;
+      font-weight: 760;
+      letter-spacing: 0;
+    }
+
+    .hero-copy p {
+      margin: 26px 0 0;
+      color: #c8cec8;
+      font-size: 20px;
+      line-height: 1.65;
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 34px;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 44px;
+      padding: 0 18px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      font-size: 14px;
+      font-weight: 650;
+      transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+    }
+
+    .button.primary {
+      border-color: rgba(25, 230, 194, 0.64);
+      background: #dffdf6;
+      color: #06110f;
+    }
+
+    .button:hover {
+      transform: translateY(-1px);
+      border-color: rgba(255, 255, 255, 0.24);
+      background: rgba(255, 255, 255, 0.07);
+    }
+
+    .button.primary:hover {
+      background: #f5fffc;
+      border-color: #f5fffc;
+    }
+
+    .facts {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 1px;
+      max-width: 500px;
+      margin-top: 42px;
+      border: 1px solid var(--line);
+      background: var(--line);
+    }
+
+    .fact {
+      min-height: 74px;
+      padding: 15px 16px;
+      background: rgba(13, 15, 15, 0.9);
+    }
+
+    .fact strong {
+      display: block;
+      font-size: 14px;
+      line-height: 1.35;
+    }
+
+    .fact span {
+      display: block;
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .runtime-plane {
+      position: relative;
+      min-height: 610px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: var(--radius);
+      background:
+        linear-gradient(135deg, rgba(255, 255, 255, 0.07), transparent 34%),
+        linear-gradient(180deg, rgba(18, 22, 22, 0.92), rgba(8, 10, 10, 0.95));
+      box-shadow: 0 50px 110px rgba(0, 0, 0, 0.38);
+      overflow: hidden;
+      animation: surface-in 680ms ease both;
+    }
+
+    .runtime-plane::after {
+      position: absolute;
+      right: -6%;
+      bottom: -10%;
+      width: 48%;
+      height: 42%;
+      border: 1px solid rgba(25, 230, 194, 0.18);
+      content: "";
+      transform: rotate(-8deg);
+      background:
+        linear-gradient(90deg, transparent 49%, rgba(25, 230, 194, 0.22) 50%, transparent 51%),
+        linear-gradient(180deg, transparent 49%, rgba(242, 168, 75, 0.18) 50%, transparent 51%);
+      background-size: 34px 34px;
+      opacity: 0.64;
+    }
+
+    .plane-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 58px;
+      padding: 0 20px;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: #d9e2dc;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 0 4px rgba(25, 230, 194, 0.12);
+    }
+
+    .plane-body {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 1px;
+      min-height: 552px;
+      background: var(--line);
+    }
+
+    .ops-column,
+    .route-column {
+      padding: 22px;
+      background: rgba(8, 10, 10, 0.86);
+    }
+
+    .section-label {
+      margin: 0 0 18px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .metric-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 14px;
+      padding: 15px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .metric-row:last-child {
+      border-bottom: 0;
+    }
+
+    .metric-row span {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .metric-row strong {
+      font-size: 14px;
+      line-height: 1.4;
+      text-align: right;
+    }
+
+    .route-map {
+      position: relative;
+      min-height: 226px;
+      margin-top: 20px;
+      border: 1px solid var(--line);
+      background:
+        linear-gradient(90deg, transparent 49%, rgba(255, 255, 255, 0.06) 50%, transparent 51%),
+        linear-gradient(180deg, transparent 49%, rgba(255, 255, 255, 0.06) 50%, transparent 51%);
+      background-size: 48px 48px;
+    }
+
+    .route-map span {
+      position: absolute;
+      display: inline-flex;
+      align-items: center;
+      min-height: 26px;
+      padding: 0 9px;
+      border: 1px solid var(--line);
+      background: rgba(13, 15, 15, 0.92);
+      color: #dbe4de;
+      font-size: 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    .node-a {
+      top: 28px;
+      left: 22px;
+    }
+
+    .node-b {
+      top: 92px;
+      right: 22px;
+    }
+
+    .node-c {
+      bottom: 28px;
+      left: 64px;
+    }
+
+    .route-line {
+      position: absolute;
+      inset: 44px 58px 52px 78px;
+      border-top: 1px solid rgba(25, 230, 194, 0.48);
+      border-right: 1px solid rgba(242, 168, 75, 0.48);
+      transform: skewY(-11deg);
+    }
+
+    .log-stream {
+      margin-top: 24px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.025);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.85;
+      color: #bcc6bf;
+    }
+
+    .log-stream b {
+      color: var(--accent);
+      font-weight: 650;
+    }
+
+    main {
+      overflow: hidden;
+    }
+
+    .section {
+      width: min(100% - 40px, var(--max));
+      margin: 0 auto;
+      padding: 118px 0;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .section-heading {
+      display: grid;
+      grid-template-columns: minmax(0, 0.84fr) minmax(260px, 0.5fr);
+      gap: 56px;
+      align-items: end;
+      margin-bottom: 54px;
+    }
+
+    h2 {
+      margin: 0;
+      max-width: 760px;
+      font-size: 42px;
+      line-height: 1.08;
+      font-weight: 740;
+      letter-spacing: 0;
+    }
+
+    .section-heading p,
+    .section-copy {
+      margin: 0;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.72;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: 0.92fr 1.08fr;
+      gap: 1px;
+      border: 1px solid var(--line);
+      background: var(--line);
+    }
+
+    .flow-pane {
+      min-height: 330px;
+      padding: 28px;
+      background: var(--panel);
+    }
+
+    .code-block {
+      margin: 24px 0 0;
+      color: #cdd6cf;
+      font-size: 13px;
+      line-height: 1.85;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      white-space: pre-wrap;
+    }
+
+    .code-block .accent {
+      color: var(--accent);
+    }
+
+    .code-block .warn {
+      color: var(--accent-2);
+    }
+
+    .control-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 1px;
+      border: 1px solid var(--line);
+      background: var(--line);
+    }
+
+    .control {
+      min-height: 158px;
+      padding: 22px;
+      background: var(--panel);
+      transition: background 160ms ease, transform 160ms ease;
+    }
+
+    .control:hover {
+      transform: translateY(-2px);
+      background: var(--panel-strong);
+    }
+
+    .control small {
+      display: block;
+      color: var(--soft);
+      font-size: 11px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    .control strong {
+      display: block;
+      margin-top: 34px;
+      font-size: 19px;
+      line-height: 1.25;
+    }
+
+    .control span {
+      display: block;
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .boundary {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 1px;
+      border: 1px solid var(--line);
+      background: var(--line);
+    }
+
+    .boundary-item {
+      min-height: 240px;
+      padding: 26px;
+      background: var(--panel);
+    }
+
+    .boundary-item strong {
+      display: block;
+      font-size: 20px;
+      line-height: 1.25;
+    }
+
+    .boundary-item p {
+      margin: 18px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .boundary-item code {
+      color: #dce5df;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 13px;
+    }
+
+    .closing {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 40px;
+      align-items: center;
+      width: min(100% - 40px, var(--max));
+      margin: 0 auto;
+      padding: 92px 0 98px;
+    }
+
+    .closing h2 {
+      max-width: 720px;
+    }
+
+    .closing p {
+      max-width: 720px;
+      margin: 20px 0 0;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.72;
+    }
+
+    .closing-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-width: 190px;
+    }
+
+    footer {
+      border-top: 1px solid var(--line-soft);
+      color: var(--soft);
+      font-size: 13px;
+    }
+
+    .footer-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      width: min(100% - 40px, var(--max));
+      min-height: 76px;
+      margin: 0 auto;
+    }
+
+    .footer-links {
+      display: flex;
+      gap: 20px;
+    }
+
+    @keyframes surface-in {
+      from {
+        opacity: 0;
+        transform: translateY(18px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html {
+        scroll-behavior: auto;
+      }
+
+      *,
+      *::before,
+      *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+
+    @media (max-width: 980px) {
+      .hero {
+        min-height: auto;
+        padding-top: 106px;
+      }
+
+      .hero-inner,
+      .section-heading,
+      .flow,
+      .closing {
+        grid-template-columns: 1fr;
+      }
+
+      .runtime-plane {
+        min-height: auto;
+      }
+
+      .control-grid,
+      .boundary {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      h1 {
+        font-size: 58px;
+      }
+
+      .hero-copy p {
+        font-size: 18px;
+      }
+
+      .closing-actions {
+        flex-direction: row;
+        flex-wrap: wrap;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .nav {
+        width: min(100% - 28px, var(--max));
+      }
+
+      .nav-links a:not(.nav-download) {
+        display: none;
+      }
+
+      .hero-inner,
+      .section,
+      .closing,
+      .footer-inner {
+        width: min(100% - 28px, var(--max));
+      }
+
+      .hero-inner {
+        gap: 42px;
+      }
+
+      .logo-mark {
+        width: 62px;
+        height: 62px;
+        margin-bottom: 24px;
+      }
+
+      h1 {
+        font-size: 46px;
+      }
+
+      h2 {
+        font-size: 32px;
+      }
+
+      .hero-copy p,
+      .section-heading p,
+      .section-copy,
+      .closing p {
+        font-size: 15px;
+      }
+
+      .facts,
+      .plane-body,
+      .control-grid,
+      .boundary {
+        grid-template-columns: 1fr;
+      }
+
+      .runtime-plane {
+        min-height: 0;
+      }
+
+      .plane-top {
+        align-items: flex-start;
+        justify-content: center;
+        min-height: 76px;
+        padding: 12px 16px;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .plane-top > span:last-child {
+        max-width: 100%;
+        overflow-wrap: anywhere;
+        font-size: 11px;
+        line-height: 1.45;
+      }
+
+      .ops-column {
+        padding: 18px;
+      }
+
+      .route-column {
+        display: none;
+      }
+
+      .section {
+        padding: 86px 0;
+      }
+
+      .footer-inner {
+        flex-direction: column;
+        align-items: flex-start;
+        justify-content: center;
+        padding: 24px 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <nav class="nav" aria-label="Primary navigation">
+      <a class="brand" href="#top" aria-label="ClashMax home">
+        <img src="assets/clashmax-icon.png" width="34" height="34" alt="">
+        <span>ClashMax</span>
+      </a>
+      <div class="nav-links">
+        <a href="#runtime">Runtime</a>
+        <a href="#controls">Controls</a>
+        <a href="#security">Security</a>
+        <a class="nav-download" href="https://github.com/marvinli001/ClashMax/releases/tag/v1.0.0">Download</a>
+      </div>
+    </nav>
+  </header>
+
+  <main id="top">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-inner">
+        <div class="hero-copy">
+          <img class="logo-mark" src="assets/clashmax-icon.png" width="72" height="72" alt="ClashMax icon">
+          <h1 id="hero-title">ClashMax</h1>
+          <p>原生 macOS Mihomo 代理控制台。把配置、代理组、连接、规则、日志和系统代理/TUN 收进一个安静、可扫描的 SwiftUI 工作面。</p>
+          <div class="hero-actions" aria-label="Project links">
+            <a class="button primary" href="https://github.com/marvinli001/ClashMax/releases/tag/v1.0.0">Download v1.0.0</a>
+            <a class="button" href="https://github.com/marvinli001/ClashMax">GitHub</a>
+            <a class="button" href="https://github.com/marvinli001/ClashMax/issues">Issue</a>
+          </div>
+          <div class="facts" aria-label="Project facts">
+            <div class="fact">
+              <strong>SwiftUI</strong>
+              <span>native macOS 26+</span>
+            </div>
+            <div class="fact">
+              <strong>Mihomo v1.19.24</strong>
+              <span>bundled sidecar core</span>
+            </div>
+            <div class="fact">
+              <strong>GPL-3.0</strong>
+              <span>open source boundary</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="runtime-plane" aria-label="ClashMax runtime preview">
+          <div class="plane-top">
+            <span class="status"><span class="dot"></span> running</span>
+            <span>127.0.0.1 controller / bearer auth</span>
+          </div>
+          <div class="plane-body">
+            <div class="ops-column">
+              <p class="section-label">Runtime snapshot</p>
+              <div class="metric-row">
+                <span>Profile</span>
+                <strong>default.yaml</strong>
+              </div>
+              <div class="metric-row">
+                <span>Mode</span>
+                <strong>Rule</strong>
+              </div>
+              <div class="metric-row">
+                <span>System proxy</span>
+                <strong>managed</strong>
+              </div>
+              <div class="metric-row">
+                <span>TUN</span>
+                <strong>helper path</strong>
+              </div>
+              <div class="metric-row">
+                <span>Controller secret</span>
+                <strong>per run</strong>
+              </div>
+              <div class="log-stream" aria-label="Runtime log preview">
+                <div><b>proxy</b> provider health check completed</div>
+                <div><b>rule</b> GEOIP matched direct</div>
+                <div><b>conn</b> closed stale tcp session</div>
+                <div><b>tun</b> macOS runtime without auto-redirect</div>
+              </div>
+            </div>
+            <div class="route-column">
+              <p class="section-label">Route surface</p>
+              <div class="route-map" aria-hidden="true">
+                <div class="route-line"></div>
+                <span class="node-a">DIRECT</span>
+                <span class="node-b">PROXY</span>
+                <span class="node-c">REJECT</span>
+              </div>
+              <div class="metric-row">
+                <span>Proxy groups</span>
+                <strong>switchable</strong>
+              </div>
+              <div class="metric-row">
+                <span>Connections</span>
+                <strong>inspectable</strong>
+              </div>
+              <div class="metric-row">
+                <span>Logs</span>
+                <strong>streaming</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="runtime" aria-labelledby="runtime-title">
+      <div class="section-heading">
+        <h2 id="runtime-title">原始 profile 保持不动，运行态配置由 ClashMax 托管。</h2>
+        <p>日常使用不应该把订阅文件改得面目全非。ClashMax 在启动前生成 runtime YAML，用来注入端口、controller、secret、DNS、TUN 和运行模式。</p>
+      </div>
+      <div class="flow">
+        <div class="flow-pane">
+          <p class="section-label">Input profile</p>
+          <div class="code-block">profiles/
+  default.yaml
+  work.yaml
+  lab.yaml
+
+subscription url -> Keychain
+source yaml -> local storage</div>
+        </div>
+        <div class="flow-pane">
+          <p class="section-label">Managed runtime</p>
+          <div class="code-block"><span class="accent">external-controller</span>: 127.0.0.1:&lt;port&gt;
+<span class="accent">secret</span>: generated per run
+<span class="warn">tun</span>: helper-owned path on macOS
+system proxy: snapshot -> set -> restore
+controller access: Bearer auth</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="controls" aria-labelledby="controls-title">
+      <div class="section-heading">
+        <h2 id="controls-title">第一屏就是代理客户端，不绕到营销页。</h2>
+        <p>ClashMax 的界面方向是密度适中、状态明确、可快速操作。常用页面围绕 Mihomo 控制面展开。</p>
+      </div>
+      <div class="control-grid">
+        <div class="control">
+          <small>01</small>
+          <strong>Dashboard</strong>
+          <span>启动、停止、运行模式、系统代理和 TUN 状态。</span>
+        </div>
+        <div class="control">
+          <small>02</small>
+          <strong>Profiles</strong>
+          <span>导入本地 YAML，管理订阅，更新、重命名和删除。</span>
+        </div>
+        <div class="control">
+          <small>03</small>
+          <strong>Proxies</strong>
+          <span>代理组切换、延迟测试、provider health check。</span>
+        </div>
+        <div class="control">
+          <small>04</small>
+          <strong>Connections</strong>
+          <span>查看连接、目标地址、规则命中和实时流量。</span>
+        </div>
+        <div class="control">
+          <small>05</small>
+          <strong>Rules</strong>
+          <span>检查运行时规则列表，定位配置命中路径。</span>
+        </div>
+        <div class="control">
+          <small>06</small>
+          <strong>Logs</strong>
+          <span>观察 Mihomo 日志，排查配置和网络异常。</span>
+        </div>
+        <div class="control">
+          <small>07</small>
+          <strong>Settings</strong>
+          <span>管理 core、helper、更新源和运行参数。</span>
+        </div>
+        <div class="control">
+          <small>08</small>
+          <strong>Menu Bar</strong>
+          <span>从菜单栏快速查看状态和执行轻量操作。</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="security" aria-labelledby="security-title">
+      <div class="section-heading">
+        <h2 id="security-title">安全边界写清楚，权限路径尽量窄。</h2>
+        <p>代理客户端会触碰系统网络设置，所以默认行为必须具体、可检查、可恢复。</p>
+      </div>
+      <div class="boundary">
+        <div class="boundary-item">
+          <strong>Local controller</strong>
+          <p>Mihomo controller 默认监听 <code>127.0.0.1</code>，不会把控制面暴露给局域网。</p>
+        </div>
+        <div class="boundary-item">
+          <strong>Per-run secret</strong>
+          <p>每次启动生成新的 controller secret，访问 Mihomo REST/WebSocket 控制面时使用 Bearer auth。</p>
+        </div>
+        <div class="boundary-item">
+          <strong>Helper boundary</strong>
+          <p>普通系统代理走用户态 core；TUN 相关能力交给 privileged helper，并校验 app-owned core/config paths。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="closing" aria-labelledby="closing-title">
+      <div>
+        <h2 id="closing-title">开源、早期、欢迎直接挑问题。</h2>
+        <p>ClashMax 使用 GPL-3.0 发布。遇到复现稳定的问题，直接发 Issue；如果这个方向对你有用，也欢迎给项目一个 Star。</p>
+      </div>
+      <div class="closing-actions">
+        <a class="button primary" href="https://github.com/marvinli001/ClashMax">Star on GitHub</a>
+        <a class="button" href="https://github.com/marvinli001/ClashMax/issues">Report issue</a>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="footer-inner">
+      <span>ClashMax. Native macOS Mihomo client.</span>
+      <div class="footer-links">
+        <a href="https://github.com/marvinli001/ClashMax">GitHub</a>
+        <a href="appcast.xml">Appcast</a>
+        <a href="https://github.com/marvinli001/ClashMax/releases/tag/v1.0.0">Release</a>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>
