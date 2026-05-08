@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 enum ProfileSource: Codable, Equatable {
@@ -518,9 +519,24 @@ struct SystemProxySettings: Codable, Equatable {
       .trimmingCharacters(in: .whitespacesAndNewlines)
       .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
       .lowercased()
-    return normalized == "0.0.0.0"
-      || normalized == "::"
-      || normalized == "0:0:0:0:0:0:0:0"
+    var ipv4 = in_addr()
+    if normalized.withCString({ inet_pton(AF_INET, $0, &ipv4) }) == 1 {
+      return ipv4.s_addr == 0
+    }
+
+    var ipv6 = in6_addr()
+    guard normalized.withCString({ inet_pton(AF_INET6, $0, &ipv6) }) == 1 else {
+      return false
+    }
+
+    let bytes = withUnsafeBytes(of: &ipv6) { Array($0) }
+    if bytes.allSatisfy({ $0 == 0 }) {
+      return true
+    }
+
+    let ipv4MappedPrefix: [UInt8] = Array(repeating: 0, count: 10) + [0xff, 0xff]
+    return bytes.starts(with: ipv4MappedPrefix)
+      && bytes[12...15].allSatisfy { $0 == 0 }
   }
 }
 

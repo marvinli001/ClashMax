@@ -1,6 +1,12 @@
+import Darwin
 import Foundation
+import Security
 
 let clashMaxHelperMachServiceName = "io.github.clashmax.ClashMax.Helper"
+let clashMaxAppBundleIdentifier = "io.github.clashmax.ClashMax"
+let clashMaxHelperBundleIdentifier = "io.github.clashmax.ClashMax.Helper"
+let clashMaxAppSupportDirectoryName = "ClashMax"
+let clashMaxRuntimeDirectoryName = "Runtime"
 
 @objc(ClashMaxHelperXPCProtocol)
 protocol ClashMaxHelperXPCProtocol {
@@ -167,36 +173,367 @@ struct HelperBundleLocator {
   }
 }
 
+struct HelperTrustedPaths {
+  let runtimeRoot: URL
+  let bundledCoreRoot: URL
+
+  init(runtimeRoot: URL, bundledCoreRoot: URL) {
+    self.runtimeRoot = runtimeRoot.standardizedFileURL
+    self.bundledCoreRoot = bundledCoreRoot.standardizedFileURL
+  }
+
+  static func live(clientUserID: uid_t, bundledCoreRoot: URL = HelperBundleLocator.bundledCoreRoot()) throws -> HelperTrustedPaths {
+    let homeDirectory = try HelperUserHomeDirectoryResolver.homeDirectory(for: clientUserID)
+    let runtimeRoot = homeDirectory
+      .appendingPathComponent("Library", isDirectory: true)
+      .appendingPathComponent("Application Support", isDirectory: true)
+      .appendingPathComponent(clashMaxAppSupportDirectoryName, isDirectory: true)
+      .appendingPathComponent(clashMaxRuntimeDirectoryName, isDirectory: true)
+    return HelperTrustedPaths(runtimeRoot: runtimeRoot, bundledCoreRoot: bundledCoreRoot)
+  }
+}
+
+enum HelperUserHomeDirectoryResolver {
+  enum ResolutionError: Error, CustomStringConvertible {
+    case cannotResolveHomeDirectory(uid_t)
+
+    var description: String {
+      switch self {
+      case let .cannotResolveHomeDirectory(userID):
+        return "Unable to resolve home directory for uid \(userID)"
+      }
+    }
+  }
+
+  static func homeDirectory(for userID: uid_t) throws -> URL {
+    var password = passwd()
+    var result: UnsafeMutablePointer<passwd>?
+    let configuredBufferSize = sysconf(_SC_GETPW_R_SIZE_MAX)
+    let bufferSize = configuredBufferSize > 0 ? Int(configuredBufferSize) : 16_384
+    var buffer = [CChar](repeating: 0, count: bufferSize)
+
+    let status = getpwuid_r(userID, &password, &buffer, buffer.count, &result)
+    guard status == 0,
+          let record = result,
+          let home = record.pointee.pw_dir,
+          !String(cString: home).isEmpty
+    else {
+      throw ResolutionError.cannotResolveHomeDirectory(userID)
+    }
+
+    return URL(fileURLWithPath: String(cString: home), isDirectory: true)
+  }
+}
+
+struct HelperValidatedTunnelPaths {
+  let coreURL: URL
+  let configURL: URL
+  let workDirectory: URL
+}
+
 struct HelperPathValidator {
   enum ValidationError: Error, CustomStringConvertible {
     case pathEscapesAllowedRoots(String)
+    case unexpectedWorkDirectory(String)
+    case untrustedCoreExecutableName(String)
+    case missingFile(String)
+    case missingDirectory(String)
+    case notExecutable(String)
 
     var description: String {
       switch self {
       case let .pathEscapesAllowedRoots(path):
         return "Path is outside ClashMax-managed locations: \(path)"
+      case let .unexpectedWorkDirectory(path):
+        return "Work directory must be ClashMax's fixed runtime directory: \(path)"
+      case let .untrustedCoreExecutableName(name):
+        return "Core executable is not an approved bundled Mihomo binary: \(name)"
+      case let .missingFile(path):
+        return "Required file is missing: \(path)"
+      case let .missingDirectory(path):
+        return "Required directory is missing: \(path)"
+      case let .notExecutable(path):
+        return "Core executable is not executable: \(path)"
       }
     }
   }
 
-  let appSupportRoot: URL
-  let bundledCoreRoot: URL
+  private static let approvedBundledCoreNames: Set<String> = [
+    "mihomo",
+    "mihomo-darwin-amd64",
+    "mihomo-darwin-arm64"
+  ]
+  // Downloaded cores need a manifest hash or signing requirement before adding any non-bundle root.
+
+  let trustedPaths: HelperTrustedPaths
+  private let fileManager: FileManager
+
+  init(trustedPaths: HelperTrustedPaths, fileManager: FileManager = .default) {
+    self.trustedPaths = trustedPaths
+    self.fileManager = fileManager
+  }
+
+  init(runtimeRoot: URL, bundledCoreRoot: URL, fileManager: FileManager = .default) {
+    self.init(
+      trustedPaths: HelperTrustedPaths(runtimeRoot: runtimeRoot, bundledCoreRoot: bundledCoreRoot),
+      fileManager: fileManager
+    )
+  }
 
   func validate(coreURL: URL, configURL: URL, workDirectory: URL) throws {
-    guard isInside(coreURL, root: bundledCoreRoot) || isInside(coreURL, root: appSupportRoot) else {
+    _ = try validatedPaths(coreURL: coreURL, configURL: configURL, workDirectory: workDirectory)
+  }
+
+  func validatedPaths(coreURL: URL, configURL: URL, workDirectory: URL) throws -> HelperValidatedTunnelPaths {
+    let core = try canonicalExistingFile(coreURL, requireExecutable: true)
+    let config = try canonicalExistingFile(configURL, requireExecutable: false)
+    let workDirectory = try canonicalExistingDirectory(workDirectory)
+    let bundledCoreRoot = try canonicalExistingDirectory(trustedPaths.bundledCoreRoot)
+    let runtimeRoot = try canonicalExistingDirectory(trustedPaths.runtimeRoot)
+
+    guard isInside(core, root: bundledCoreRoot) else {
       throw ValidationError.pathEscapesAllowedRoots(coreURL.path)
     }
-    guard isInside(configURL, root: appSupportRoot) else {
+    guard Self.approvedBundledCoreNames.contains(core.lastPathComponent) else {
+      throw ValidationError.untrustedCoreExecutableName(core.lastPathComponent)
+    }
+    guard isInside(config, root: runtimeRoot) else {
       throw ValidationError.pathEscapesAllowedRoots(configURL.path)
     }
-    guard isInside(workDirectory, root: appSupportRoot) else {
-      throw ValidationError.pathEscapesAllowedRoots(workDirectory.path)
+    guard workDirectory.path == runtimeRoot.path else {
+      throw ValidationError.unexpectedWorkDirectory(workDirectory.path)
     }
+
+    return HelperValidatedTunnelPaths(coreURL: core, configURL: config, workDirectory: workDirectory)
   }
 
   private func isInside(_ candidate: URL, root: URL) -> Bool {
     let candidatePath = candidate.standardizedFileURL.path
     let rootPath = root.standardizedFileURL.path
     return candidatePath == rootPath || candidatePath.hasPrefix(rootPath + "/")
+  }
+
+  private func canonicalExistingFile(_ url: URL, requireExecutable: Bool) throws -> URL {
+    let resolved = url.resolvingSymlinksInPath().standardizedFileURL
+    var isDirectory: ObjCBool = false
+    guard fileManager.fileExists(atPath: resolved.path, isDirectory: &isDirectory), !isDirectory.boolValue else {
+      throw ValidationError.missingFile(url.path)
+    }
+    if requireExecutable, !fileManager.isExecutableFile(atPath: resolved.path) {
+      throw ValidationError.notExecutable(url.path)
+    }
+    return resolved
+  }
+
+  private func canonicalExistingDirectory(_ url: URL) throws -> URL {
+    let resolved = url.resolvingSymlinksInPath().standardizedFileURL
+    var isDirectory: ObjCBool = false
+    guard fileManager.fileExists(atPath: resolved.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+      throw ValidationError.missingDirectory(url.path)
+    }
+    return resolved
+  }
+}
+
+struct HelperCodeSignatureInfo: Equatable {
+  let bundleIdentifier: String?
+  let teamIdentifier: String?
+}
+
+enum HelperBuildConfiguration {
+  #if DEBUG
+  static let allowsLocalDevelopmentSignatureFallback = true
+  #else
+  static let allowsLocalDevelopmentSignatureFallback = false
+  #endif
+}
+
+struct HelperCodeSignaturePolicy {
+  let expectedClientBundleIdentifier: String
+  let helperBundleIdentifier: String
+  let trustedTeamIdentifier: String?
+  let allowsLocalDevelopmentFallback: Bool
+  let localDevelopmentClientIdentifiers: Set<String>
+
+  init(
+    expectedClientBundleIdentifier: String = clashMaxAppBundleIdentifier,
+    helperBundleIdentifier: String = clashMaxHelperBundleIdentifier,
+    trustedTeamIdentifier: String?,
+    allowsLocalDevelopmentFallback: Bool = HelperBuildConfiguration.allowsLocalDevelopmentSignatureFallback,
+    localDevelopmentClientIdentifiers: Set<String> = ["ClashMax"]
+  ) {
+    self.expectedClientBundleIdentifier = expectedClientBundleIdentifier
+    self.helperBundleIdentifier = helperBundleIdentifier
+    self.trustedTeamIdentifier = trustedTeamIdentifier
+    self.allowsLocalDevelopmentFallback = allowsLocalDevelopmentFallback
+    self.localDevelopmentClientIdentifiers = localDevelopmentClientIdentifiers
+  }
+
+  static func live() -> HelperCodeSignaturePolicy {
+    HelperCodeSignaturePolicy(
+      trustedTeamIdentifier: try? HelperCodeSignatureReader.currentTeamIdentifier()
+    )
+  }
+
+  var clientCodeSigningRequirement: String? {
+    if let trustedTeamIdentifier {
+      return #"identifier "\#(Self.requirementLiteral(expectedClientBundleIdentifier))" and anchor apple generic and certificate leaf[subject.OU] = "\#(Self.requirementLiteral(trustedTeamIdentifier))""#
+    }
+
+    guard allowsLocalDevelopmentFallback else {
+      return nil
+    }
+
+    return localDevelopmentAllowedClientIdentifiers
+      .sorted()
+      .map { #"identifier "\#(Self.requirementLiteral($0))""# }
+      .joined(separator: " or ")
+  }
+
+  var coreCodeSigningRequirement: String? {
+    guard let trustedTeamIdentifier else {
+      return nil
+    }
+    return #"anchor apple generic and certificate leaf[subject.OU] = "\#(Self.requirementLiteral(trustedTeamIdentifier))""#
+  }
+
+  func allowsClient(_ info: HelperCodeSignatureInfo) -> Bool {
+    guard let bundleIdentifier = info.bundleIdentifier else {
+      return false
+    }
+    guard let trustedTeamIdentifier else {
+      return allowsLocalDevelopmentFallback && localDevelopmentAllowedClientIdentifiers.contains(bundleIdentifier)
+    }
+    return bundleIdentifier == expectedClientBundleIdentifier && info.teamIdentifier == trustedTeamIdentifier
+  }
+
+  func allowsCore(_ info: HelperCodeSignatureInfo) -> Bool {
+    guard let trustedTeamIdentifier else {
+      return allowsLocalDevelopmentFallback
+    }
+    return info.teamIdentifier == trustedTeamIdentifier
+  }
+
+  private static func requirementLiteral(_ value: String) -> String {
+    value
+      .replacingOccurrences(of: "\\", with: "\\\\")
+      .replacingOccurrences(of: "\"", with: "\\\"")
+  }
+
+  private var localDevelopmentAllowedClientIdentifiers: Set<String> {
+    var identifiers = localDevelopmentClientIdentifiers
+    identifiers.insert(expectedClientBundleIdentifier)
+    return identifiers
+  }
+}
+
+enum HelperCodeSignatureError: Error, CustomStringConvertible {
+  case securityFrameworkFailure(operation: String, status: OSStatus)
+  case untrustedClientSignature(String)
+  case untrustedCoreSignature(String)
+
+  var description: String {
+    switch self {
+    case let .securityFrameworkFailure(operation, status):
+      let message = SecCopyErrorMessageString(status, nil) as String? ?? "OSStatus \(status)"
+      return "Code signature \(operation) failed: \(message)"
+    case let .untrustedClientSignature(identifier):
+      return "Rejected untrusted ClashMax client signature: \(identifier)"
+    case let .untrustedCoreSignature(path):
+      return "Rejected untrusted Mihomo core signature: \(path)"
+    }
+  }
+}
+
+enum HelperCodeSignatureReader {
+  static func currentTeamIdentifier() throws -> String? {
+    var code: SecCode?
+    let copyStatus = SecCodeCopySelf(SecCSFlags(), &code)
+    guard copyStatus == errSecSuccess, let code else {
+      throw HelperCodeSignatureError.securityFrameworkFailure(operation: "copy self", status: copyStatus)
+    }
+
+    let info = try info(from: code, requirementString: nil)
+    return info.teamIdentifier
+  }
+
+  static func info(forProcessIdentifier processIdentifier: pid_t, requirementString: String?) throws -> HelperCodeSignatureInfo {
+    var code: SecCode?
+    let attributes = [kSecGuestAttributePid as String: NSNumber(value: processIdentifier)] as CFDictionary
+    let copyStatus = SecCodeCopyGuestWithAttributes(nil, attributes, SecCSFlags(), &code)
+    guard copyStatus == errSecSuccess, let code else {
+      throw HelperCodeSignatureError.securityFrameworkFailure(operation: "copy guest", status: copyStatus)
+    }
+
+    return try info(from: code, requirementString: requirementString)
+  }
+
+  static func info(forStaticCodeAt url: URL, requirementString: String?) throws -> HelperCodeSignatureInfo {
+    var staticCode: SecStaticCode?
+    let createStatus = SecStaticCodeCreateWithPath(url as CFURL, SecCSFlags(), &staticCode)
+    guard createStatus == errSecSuccess, let staticCode else {
+      throw HelperCodeSignatureError.securityFrameworkFailure(operation: "create static code", status: createStatus)
+    }
+
+    if let requirementString {
+      try checkStaticCode(staticCode, requirementString: requirementString)
+    }
+
+    return try signingInfo(from: staticCode)
+  }
+
+  private static func info(from code: SecCode, requirementString: String?) throws -> HelperCodeSignatureInfo {
+    if let requirementString {
+      try checkDynamicCode(code, requirementString: requirementString)
+    }
+
+    var staticCode: SecStaticCode?
+    let copyStatus = SecCodeCopyStaticCode(code, SecCSFlags(), &staticCode)
+    guard copyStatus == errSecSuccess, let staticCode else {
+      throw HelperCodeSignatureError.securityFrameworkFailure(operation: "copy static code", status: copyStatus)
+    }
+    return try signingInfo(from: staticCode)
+  }
+
+  private static func signingInfo(from staticCode: SecStaticCode) throws -> HelperCodeSignatureInfo {
+    var information: CFDictionary?
+    let infoStatus = SecCodeCopySigningInformation(
+      staticCode,
+      SecCSFlags(rawValue: kSecCSSigningInformation),
+      &information
+    )
+    guard infoStatus == errSecSuccess, let dictionary = information as? [String: Any] else {
+      throw HelperCodeSignatureError.securityFrameworkFailure(operation: "copy signing info", status: infoStatus)
+    }
+
+    return HelperCodeSignatureInfo(
+      bundleIdentifier: dictionary[kSecCodeInfoIdentifier as String] as? String,
+      teamIdentifier: dictionary[kSecCodeInfoTeamIdentifier as String] as? String
+    )
+  }
+
+  private static func checkDynamicCode(_ code: SecCode, requirementString: String) throws {
+    let requirement = try requirement(from: requirementString)
+    let status = SecCodeCheckValidity(code, SecCSFlags(), requirement)
+    guard status == errSecSuccess else {
+      throw HelperCodeSignatureError.securityFrameworkFailure(operation: "check dynamic validity", status: status)
+    }
+  }
+
+  private static func checkStaticCode(_ staticCode: SecStaticCode, requirementString: String) throws {
+    let requirement = try requirement(from: requirementString)
+    let status = SecStaticCodeCheckValidity(staticCode, SecCSFlags(), requirement)
+    guard status == errSecSuccess else {
+      throw HelperCodeSignatureError.securityFrameworkFailure(operation: "check static validity", status: status)
+    }
+  }
+
+  private static func requirement(from requirementString: String) throws -> SecRequirement {
+    var requirement: SecRequirement?
+    let status = SecRequirementCreateWithString(requirementString as CFString, SecCSFlags(), &requirement)
+    guard status == errSecSuccess, let requirement else {
+      throw HelperCodeSignatureError.securityFrameworkFailure(operation: "create requirement", status: status)
+    }
+    return requirement
   }
 }

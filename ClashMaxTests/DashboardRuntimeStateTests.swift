@@ -442,6 +442,18 @@ final class DashboardRuntimeStateTests: XCTestCase {
     bracketedIPv6.proxyHost = "[::]"
     XCTAssertEqual(bracketedIPv6.normalizedProxyHost, "127.0.0.1")
 
+    var ipv4Mapped = SystemProxySettings.default
+    ipv4Mapped.proxyHost = "::ffff:0.0.0.0"
+    XCTAssertEqual(ipv4Mapped.normalizedProxyHost, "127.0.0.1")
+
+    var bracketedIPv4Mapped = SystemProxySettings.default
+    bracketedIPv4Mapped.proxyHost = "[::ffff:0.0.0.0]"
+    XCTAssertEqual(bracketedIPv4Mapped.normalizedProxyHost, "127.0.0.1")
+
+    var expandedIPv4Mapped = SystemProxySettings.default
+    expandedIPv4Mapped.proxyHost = "0:0:0:0:0:ffff:0:0"
+    XCTAssertEqual(expandedIPv4Mapped.normalizedProxyHost, "127.0.0.1")
+
     var custom = SystemProxySettings.default
     custom.proxyHost = "192.168.1.20"
     XCTAssertEqual(custom.normalizedProxyHost, "192.168.1.20")

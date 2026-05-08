@@ -9,12 +9,21 @@ RunLoop.current.run()
 
 final class HelperListenerDelegate: NSObject, NSXPCListenerDelegate {
   let service: HelperService
+  private let connectionAuthorizer: any HelperConnectionAuthorizing
 
-  init(service: HelperService) {
+  init(
+    service: HelperService,
+    connectionAuthorizer: any HelperConnectionAuthorizing = CodeSignatureConnectionAuthorizer()
+  ) {
     self.service = service
+    self.connectionAuthorizer = connectionAuthorizer
   }
 
   func listener(_ listener: NSXPCListener, shouldAcceptNewConnection newConnection: NSXPCConnection) -> Bool {
+    guard connectionAuthorizer.isAuthorized(newConnection) else {
+      return false
+    }
+
     newConnection.exportedInterface = ClashMaxHelperXPCInterface.make()
     newConnection.exportedObject = service
     newConnection.resume()
@@ -22,10 +31,76 @@ final class HelperListenerDelegate: NSObject, NSXPCListenerDelegate {
   }
 }
 
+protocol HelperConnectionAuthorizing {
+  func isAuthorized(_ connection: NSXPCConnection) -> Bool
+}
+
+final class CodeSignatureConnectionAuthorizer: HelperConnectionAuthorizing {
+  private let policy: HelperCodeSignaturePolicy
+
+  init(policy: HelperCodeSignaturePolicy = .live()) {
+    self.policy = policy
+  }
+
+  func isAuthorized(_ connection: NSXPCConnection) -> Bool {
+    do {
+      let requirement = policy.clientCodeSigningRequirement
+      if let requirement {
+        connection.setCodeSigningRequirement(requirement)
+      }
+
+      let info = try HelperCodeSignatureReader.info(
+        forProcessIdentifier: connection.processIdentifier,
+        requirementString: requirement
+      )
+      guard policy.allowsClient(info) else {
+        throw HelperCodeSignatureError.untrustedClientSignature(info.bundleIdentifier ?? "<unsigned>")
+      }
+      return true
+    } catch {
+      return false
+    }
+  }
+}
+
+protocol HelperCoreExecutableValidating {
+  func validateCoreExecutable(at url: URL) throws
+}
+
+struct CodeSignatureCoreExecutableValidator: HelperCoreExecutableValidating {
+  private let policy: HelperCodeSignaturePolicy
+
+  init(policy: HelperCodeSignaturePolicy = .live()) {
+    self.policy = policy
+  }
+
+  func validateCoreExecutable(at url: URL) throws {
+    let info = try HelperCodeSignatureReader.info(
+      forStaticCodeAt: url,
+      requirementString: policy.coreCodeSigningRequirement
+    )
+    guard policy.allowsCore(info) else {
+      throw HelperCodeSignatureError.untrustedCoreSignature(url.path)
+    }
+  }
+}
+
 final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Sendable {
   private var process: Process?
   private var logs = BoundedBuffer<String>(limit: 200)
   private let lock = NSLock()
+  private let trustedPathsProvider: (uid_t) throws -> HelperTrustedPaths
+  private let coreExecutableValidator: any HelperCoreExecutableValidating
+
+  init(
+    trustedPathsProvider: @escaping (uid_t) throws -> HelperTrustedPaths = { userID in
+      try HelperTrustedPaths.live(clientUserID: userID, bundledCoreRoot: HelperBundleLocator.bundledCoreRoot())
+    },
+    coreExecutableValidator: any HelperCoreExecutableValidating = CodeSignatureCoreExecutableValidator()
+  ) {
+    self.trustedPathsProvider = trustedPathsProvider
+    self.coreExecutableValidator = coreExecutableValidator
+  }
 
   func status(withReply reply: @escaping (NSString) -> Void) {
     reply(HelperXPCPayload.response(
@@ -80,28 +155,28 @@ final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Senda
   }
 
   private func start(corePath: String, configPath: String, workDirectoryPath: String, secret: String) throws {
-    let appSupportRoot = URL(fileURLWithPath: workDirectoryPath)
-      .deletingLastPathComponent()
-      .standardizedFileURL
-    let validator = HelperPathValidator(
-      appSupportRoot: appSupportRoot,
-      bundledCoreRoot: bundledCoreRoot()
-    )
-    try validator.validate(
+    guard let connection = NSXPCConnection.current() else {
+      throw HelperCodeSignatureError.untrustedClientSignature("<missing XPC connection>")
+    }
+
+    let trustedPaths = try trustedPathsProvider(connection.effectiveUserIdentifier)
+    let validator = HelperPathValidator(trustedPaths: trustedPaths)
+    let paths = try validator.validatedPaths(
       coreURL: URL(fileURLWithPath: corePath),
       configURL: URL(fileURLWithPath: configPath),
       workDirectory: URL(fileURLWithPath: workDirectoryPath)
     )
+    try coreExecutableValidator.validateCoreExecutable(at: paths.coreURL)
 
     if process?.isRunning == true { return }
 
     let process = Process()
     let pipe = Pipe()
-    process.executableURL = URL(fileURLWithPath: corePath)
-    process.arguments = ["-f", configPath, "-d", workDirectoryPath]
-    process.currentDirectoryURL = URL(fileURLWithPath: workDirectoryPath)
+    process.executableURL = paths.coreURL
+    process.arguments = ["-f", paths.configURL.path, "-d", paths.workDirectory.path]
+    process.currentDirectoryURL = paths.workDirectory
     process.environment = ProcessInfo.processInfo.environment.merging([
-      "SAFE_PATHS": workDirectoryPath,
+      "SAFE_PATHS": paths.workDirectory.path,
       "CLASHMAX_HELPER": "1",
       "CLASHMAX_SECRET": secret
     ]) { _, new in new }
@@ -125,9 +200,5 @@ final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Senda
     lock.lock()
     logs.append(line)
     lock.unlock()
-  }
-
-  private func bundledCoreRoot() -> URL {
-    HelperBundleLocator.bundledCoreRoot()
   }
 }
