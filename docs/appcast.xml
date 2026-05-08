@@ -1,9 +1,14 @@
-<?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
-  <channel>
-    <title>ClashMax App Updates</title>
-    <link>https://marvinli001.github.io/ClashMax/appcast.xml</link>
-    <description>ClashMax stable app update feed.</description>
-    <language>zh-CN</language>
-  </channel>
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>ClashMax</title>
+        <item>
+            <title>1.0.0</title>
+            <pubDate>Fri, 08 May 2026 13:13:43 +1200</pubDate>
+            <sparkle:version>2</sparkle:version>
+            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/marvinli001/ClashMax/releases/download/v1.0.0/ClashMax-1.0.0.zip" length="30966867" type="application/octet-stream" sparkle:edSignature="bf8RLWMwxdMy9boAegxU0avdeffZB00kiOwMC+YzfnE6J9GpEwVnE+QAW855N/WQZj8b+Lb44xyirY0T48QIDQ=="/>
+        </item>
+    </channel>
 </rss>

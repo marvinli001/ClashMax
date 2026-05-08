@@ -24,11 +24,15 @@ VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO
 BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$INFO_PLIST")"
 ARCHIVE_NAME="ClashMax-${VERSION}.zip"
 ARCHIVE_PATH="$OUTPUT_DIR/$ARCHIVE_NAME"
+STAGING_DIR="$(mktemp -d "${TMPDIR:-/tmp}/clashmax-sparkle-package.XXXXXX")"
+STAGED_APP_PATH="$STAGING_DIR/$(basename "$APP_PATH")"
+trap 'rm -rf "$STAGING_DIR"' EXIT
 
 mkdir -p "$OUTPUT_DIR"
 rm -f "$ARCHIVE_PATH"
 
-/usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ARCHIVE_PATH"
+/usr/bin/ditto --noextattr --norsrc "$APP_PATH" "$STAGED_APP_PATH"
+COPYFILE_DISABLE=1 /usr/bin/ditto -c -k --noextattr --norsrc --keepParent "$STAGED_APP_PATH" "$ARCHIVE_PATH"
 
 echo "created $ARCHIVE_PATH"
 echo "version $VERSION build $BUILD"

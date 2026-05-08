@@ -10,6 +10,7 @@ AGENTS.md
 DerivedData/
 build/
 dist/
+notarization apppack/
 *.xcresult
 *.xcuserdata/
 *.xcuserstate
