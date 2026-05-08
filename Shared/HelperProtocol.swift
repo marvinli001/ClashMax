@@ -66,15 +66,24 @@ enum HelperResponseKey {
   static let ok = "ok"
   static let running = "running"
   static let pid = "pid"
+  static let code = "code"
   static let message = "message"
 }
 
+enum HelperResponseCode {
+  static let alreadyRunning = "alreadyRunning"
+  static let invalidPath = "invalidPath"
+  static let untrustedSignature = "untrustedSignature"
+  static let launchFailed = "launchFailed"
+}
+
 enum HelperXPCPayload {
-  static func response(ok: Bool, running: Bool = false, pid: Int = 0, message: String = "") -> NSString {
+  static func response(ok: Bool, running: Bool = false, pid: Int = 0, code: String = "", message: String = "") -> NSString {
     jsonString([
       HelperResponseKey.ok: ok,
       HelperResponseKey.running: running,
       HelperResponseKey.pid: pid,
+      HelperResponseKey.code: code,
       HelperResponseKey.message: message
     ]) as NSString
   }
@@ -535,5 +544,275 @@ enum HelperCodeSignatureReader {
       throw HelperCodeSignatureError.securityFrameworkFailure(operation: "create requirement", status: status)
     }
     return requirement
+  }
+}
+
+protocol HelperCoreExecutableValidating {
+  func validateCoreExecutable(at url: URL) throws
+}
+
+struct CodeSignatureCoreExecutableValidator: HelperCoreExecutableValidating {
+  private let policy: HelperCodeSignaturePolicy
+
+  init(policy: HelperCodeSignaturePolicy = .live()) {
+    self.policy = policy
+  }
+
+  func validateCoreExecutable(at url: URL) throws {
+    let info = try HelperCodeSignatureReader.info(
+      forStaticCodeAt: url,
+      requirementString: policy.coreCodeSigningRequirement
+    )
+    guard policy.allowsCore(info) else {
+      throw HelperCodeSignatureError.untrustedCoreSignature(url.path)
+    }
+  }
+}
+
+enum HelperRuntimeError: Error, CustomStringConvertible {
+  case alreadyRunning(pid: pid_t)
+
+  var description: String {
+    switch self {
+    case let .alreadyRunning(pid):
+      return "Mihomo is already running with pid \(pid). Stop the tunnel or call restartTunnel before starting with new parameters."
+    }
+  }
+}
+
+final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Sendable {
+  private var process: Process?
+  private var logs = BoundedBuffer<String>(limit: 200)
+  private let stateLock = NSLock()
+  private let logLock = NSLock()
+  private let trustedPathsProvider: (uid_t) throws -> HelperTrustedPaths
+  private let coreExecutableValidator: any HelperCoreExecutableValidating
+  private let clientUserIDProvider: () throws -> uid_t
+  private let processTerminationTimeout: TimeInterval
+
+  init(
+    trustedPathsProvider: @escaping (uid_t) throws -> HelperTrustedPaths = { userID in
+      try HelperTrustedPaths.live(clientUserID: userID, bundledCoreRoot: HelperBundleLocator.bundledCoreRoot())
+    },
+    coreExecutableValidator: any HelperCoreExecutableValidating = CodeSignatureCoreExecutableValidator(),
+    clientUserIDProvider: @escaping () throws -> uid_t = {
+      guard let connection = NSXPCConnection.current() else {
+        throw HelperCodeSignatureError.untrustedClientSignature("<missing XPC connection>")
+      }
+      return connection.effectiveUserIdentifier
+    },
+    processTerminationTimeout: TimeInterval = 2
+  ) {
+    self.trustedPathsProvider = trustedPathsProvider
+    self.coreExecutableValidator = coreExecutableValidator
+    self.clientUserIDProvider = clientUserIDProvider
+    self.processTerminationTimeout = processTerminationTimeout
+  }
+
+  func status(withReply reply: @escaping (NSString) -> Void) {
+    stateLock.lock()
+    let running = process?.isRunning ?? false
+    let pid = running ? Int(process?.processIdentifier ?? 0) : 0
+    if !running {
+      process = nil
+    }
+    stateLock.unlock()
+
+    reply(HelperXPCPayload.response(ok: true, running: running, pid: pid))
+  }
+
+  func startTunnel(
+    corePath: NSString,
+    configPath: NSString,
+    workDirectoryPath: NSString,
+    secret: NSString,
+    withReply reply: @escaping (NSString) -> Void
+  ) {
+    do {
+      let launchedProcess = try start(
+        corePath: corePath as String,
+        configPath: configPath as String,
+        workDirectoryPath: workDirectoryPath as String,
+        secret: secret as String
+      )
+      reply(HelperXPCPayload.response(
+        ok: true,
+        running: true,
+        pid: Int(launchedProcess.processIdentifier)
+      ))
+    } catch {
+      reply(response(for: error))
+    }
+  }
+
+  func stopTunnel(withReply reply: @escaping (NSString) -> Void) {
+    stateLock.lock()
+    stopTrackedProcessLocked()
+    stateLock.unlock()
+
+    reply(HelperXPCPayload.response(ok: true, running: false))
+  }
+
+  func restartTunnel(
+    corePath: NSString,
+    configPath: NSString,
+    workDirectoryPath: NSString,
+    secret: NSString,
+    withReply reply: @escaping (NSString) -> Void
+  ) {
+    do {
+      let launchedProcess = try restart(
+        corePath: corePath as String,
+        configPath: configPath as String,
+        workDirectoryPath: workDirectoryPath as String,
+        secret: secret as String
+      )
+      reply(HelperXPCPayload.response(
+        ok: true,
+        running: true,
+        pid: Int(launchedProcess.processIdentifier)
+      ))
+    } catch {
+      reply(response(for: error))
+    }
+  }
+
+  func recentLogs(withReply reply: @escaping (NSString) -> Void) {
+    logLock.lock()
+    let snapshot = logs.elements
+    logLock.unlock()
+    reply(HelperXPCPayload.logs(snapshot))
+  }
+
+  private func start(corePath: String, configPath: String, workDirectoryPath: String, secret: String) throws -> Process {
+    try rejectAlreadyRunningProcess()
+    let paths = try validatedPaths(corePath: corePath, configPath: configPath, workDirectoryPath: workDirectoryPath)
+
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    try rejectAlreadyRunningProcessLocked()
+    return try launchProcessLocked(paths: paths, secret: secret)
+  }
+
+  private func restart(corePath: String, configPath: String, workDirectoryPath: String, secret: String) throws -> Process {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    stopTrackedProcessLocked()
+    let paths = try validatedPaths(corePath: corePath, configPath: configPath, workDirectoryPath: workDirectoryPath)
+    return try launchProcessLocked(paths: paths, secret: secret)
+  }
+
+  private func rejectAlreadyRunningProcess() throws {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    try rejectAlreadyRunningProcessLocked()
+  }
+
+  private func rejectAlreadyRunningProcessLocked() throws {
+    guard let existingProcess = process else { return }
+    if existingProcess.isRunning {
+      throw HelperRuntimeError.alreadyRunning(pid: existingProcess.processIdentifier)
+    }
+    process = nil
+  }
+
+  private func validatedPaths(corePath: String, configPath: String, workDirectoryPath: String) throws -> HelperValidatedTunnelPaths {
+    let clientUserID = try clientUserIDProvider()
+    let trustedPaths = try trustedPathsProvider(clientUserID)
+    let validator = HelperPathValidator(trustedPaths: trustedPaths)
+    let paths = try validator.validatedPaths(
+      coreURL: URL(fileURLWithPath: corePath),
+      configURL: URL(fileURLWithPath: configPath),
+      workDirectory: URL(fileURLWithPath: workDirectoryPath)
+    )
+    try coreExecutableValidator.validateCoreExecutable(at: paths.coreURL)
+    return paths
+  }
+
+  private func launchProcessLocked(paths: HelperValidatedTunnelPaths, secret: String) throws -> Process {
+    let process = Process()
+    let pipe = Pipe()
+    process.executableURL = paths.coreURL
+    process.arguments = ["-f", paths.configURL.path, "-d", paths.workDirectory.path]
+    process.currentDirectoryURL = paths.workDirectory
+    process.environment = ProcessInfo.processInfo.environment.merging([
+      "SAFE_PATHS": paths.workDirectory.path,
+      "CLASHMAX_HELPER": "1",
+      "CLASHMAX_SECRET": secret
+    ]) { _, new in new }
+    process.standardOutput = pipe
+    process.standardError = pipe
+    process.terminationHandler = { [weak self] process in
+      self?.appendLog("mihomo exited with code \(process.terminationStatus)")
+    }
+
+    pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+      let data = handle.availableData
+      guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+      self?.appendLog(text.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    try process.run()
+    self.process = process
+    return process
+  }
+
+  private func stopTrackedProcessLocked() {
+    guard let existingProcess = process else { return }
+    if existingProcess.isRunning {
+      terminateAndWait(existingProcess)
+    }
+    process = nil
+  }
+
+  private func terminateAndWait(_ process: Process) {
+    process.terminate()
+    waitForProcessExit(process, timeout: processTerminationTimeout)
+
+    guard process.isRunning else { return }
+    kill(process.processIdentifier, SIGKILL)
+    waitForProcessExit(process, timeout: 1)
+  }
+
+  private func waitForProcessExit(_ process: Process, timeout: TimeInterval) {
+    let deadline = Date().addingTimeInterval(timeout)
+    while process.isRunning && Date() < deadline {
+      Thread.sleep(forTimeInterval: 0.02)
+    }
+  }
+
+  private func response(for error: Error) -> NSString {
+    if case let HelperRuntimeError.alreadyRunning(pid) = error {
+      return HelperXPCPayload.response(
+        ok: false,
+        running: true,
+        pid: Int(pid),
+        code: HelperResponseCode.alreadyRunning,
+        message: String(describing: error)
+      )
+    }
+
+    return HelperXPCPayload.response(
+      ok: false,
+      code: responseCode(for: error),
+      message: String(describing: error)
+    )
+  }
+
+  private func responseCode(for error: Error) -> String {
+    switch error {
+    case is HelperPathValidator.ValidationError:
+      return HelperResponseCode.invalidPath
+    case is HelperCodeSignatureError:
+      return HelperResponseCode.untrustedSignature
+    default:
+      return HelperResponseCode.launchFailed
+    }
+  }
+
+  private func appendLog(_ line: String) {
+    logLock.lock()
+    logs.append(line)
+    logLock.unlock()
   }
 }

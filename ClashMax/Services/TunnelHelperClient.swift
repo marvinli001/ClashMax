@@ -109,6 +109,7 @@ struct HelperClientResponse: Sendable {
   var ok: Bool
   var running: Bool
   var pid: Int
+  var code: String
   var message: String
 
   init(payload: NSString) {
@@ -118,17 +119,19 @@ struct HelperClientResponse: Sendable {
     pid = (dictionary[HelperResponseKey.pid] as? NSNumber)?.intValue
       ?? dictionary[HelperResponseKey.pid] as? Int
       ?? 0
+    code = dictionary[HelperResponseKey.code] as? String ?? ""
     message = dictionary[HelperResponseKey.message] as? String ?? ""
   }
 
-  static func failure(_ message: String) -> HelperClientResponse {
-    HelperClientResponse(ok: false, running: false, pid: 0, message: message)
+  static func failure(_ message: String, code: String = "") -> HelperClientResponse {
+    HelperClientResponse(ok: false, running: false, pid: 0, code: code, message: message)
   }
 
-  private init(ok: Bool, running: Bool, pid: Int, message: String) {
+  private init(ok: Bool, running: Bool, pid: Int, code: String, message: String) {
     self.ok = ok
     self.running = running
     self.pid = pid
+    self.code = code
     self.message = message
   }
 }
@@ -456,9 +459,9 @@ struct PrivilegedHelperXPCTransport: HelperXPCTransport {
     }
     return try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<HelperClientResponse, Error>) in
-        box.attach(continuation) {
+        guard box.attach(continuation, cleanup: {
           connection.invalidate()
-        }
+        }) else { return }
 
         let proxy = connection.remoteObjectProxyWithErrorHandler { error in
           box.fail(error)
@@ -493,9 +496,9 @@ struct PrivilegedHelperXPCTransport: HelperXPCTransport {
     }
     return try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[String], Error>) in
-        box.attach(continuation) {
+        guard box.attach(continuation, cleanup: {
           connection.invalidate()
-        }
+        }) else { return }
 
         let proxy = connection.remoteObjectProxyWithErrorHandler { error in
           box.fail(error)
@@ -520,22 +523,44 @@ private enum HelperXPCConnectionMessage {
   static let invalidated = "Helper connection invalidated. Open System Settings > General > Login Items & Extensions, approve ClashMax, then click Repair Helper or restart macOS."
 }
 
-private final class ContinuationBox<Value: Sendable>: @unchecked Sendable {
+final class ContinuationBox<Value: Sendable>: @unchecked Sendable {
   private let lock = NSLock()
   private var continuation: CheckedContinuation<Value, Error>?
   private var cleanup: (() -> Void)?
-  private var settled = false
+  private var pendingResult: Result<Value, Error>?
+  private var shouldRunPendingCleanup = false
+  private var cleanupHasRun = false
 
-  func attach(_ continuation: CheckedContinuation<Value, Error>, cleanup: @escaping () -> Void) {
+  @discardableResult
+  func attach(_ continuation: CheckedContinuation<Value, Error>, cleanup: @escaping () -> Void) -> Bool {
+    let resultToResume: Result<Value, Error>?
+    let cleanupToRun: (() -> Void)?
+    let didAttach: Bool
+
     lock.lock()
-    if settled {
-      lock.unlock()
-      cleanup()
-      return
+    if let pendingResult {
+      resultToResume = pendingResult
+      didAttach = false
+      if shouldRunPendingCleanup && !cleanupHasRun {
+        cleanupToRun = cleanup
+        cleanupHasRun = true
+      } else {
+        cleanupToRun = nil
+      }
+    } else {
+      resultToResume = nil
+      cleanupToRun = nil
+      didAttach = true
+      self.continuation = continuation
+      self.cleanup = cleanup
     }
-    self.continuation = continuation
-    self.cleanup = cleanup
     lock.unlock()
+
+    if let resultToResume {
+      resume(continuation, with: resultToResume)
+    }
+    cleanupToRun?()
+    return didAttach
   }
 
   func succeed(_ value: Value) {
@@ -547,22 +572,39 @@ private final class ContinuationBox<Value: Sendable>: @unchecked Sendable {
   }
 
   private func settle(_ result: Result<Value, Error>, runCleanup: Bool) {
+    let continuationToResume: CheckedContinuation<Value, Error>?
+    let cleanupToRun: (() -> Void)?
+
     lock.lock()
-    guard !settled else { lock.unlock(); return }
-    settled = true
-    let continuation = self.continuation
-    let cleanup = self.cleanup
+    guard pendingResult == nil else {
+      lock.unlock()
+      return
+    }
+    pendingResult = result
+    shouldRunPendingCleanup = runCleanup
+    continuationToResume = self.continuation
+    if continuationToResume != nil, runCleanup, !cleanupHasRun {
+      cleanupToRun = self.cleanup
+      cleanupHasRun = true
+    } else {
+      cleanupToRun = nil
+    }
     self.continuation = nil
     self.cleanup = nil
     lock.unlock()
+
+    if let continuationToResume {
+      resume(continuationToResume, with: result)
+    }
+    cleanupToRun?()
+  }
+
+  private func resume(_ continuation: CheckedContinuation<Value, Error>, with result: Result<Value, Error>) {
     switch result {
     case let .success(value):
-      continuation?.resume(returning: value)
+      continuation.resume(returning: value)
     case let .failure(error):
-      continuation?.resume(throwing: error)
-    }
-    if runCleanup {
-      cleanup?()
+      continuation.resume(throwing: error)
     }
   }
 }

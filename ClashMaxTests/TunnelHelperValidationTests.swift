@@ -1,3 +1,4 @@
+import Darwin
 import XCTest
 @testable import ClashMax
 
@@ -159,6 +160,43 @@ final class TunnelHelperValidationTests: XCTestCase {
     )))
   }
 
+  func testHelperStartTunnelRejectsSecondStartWhenProcessIsAlreadyRunning() throws {
+    let fixture = try makeRuntimeFixture()
+    let service = makeHelperService(fixture: fixture)
+    addTeardownBlock { stop(service) }
+
+    let first = try start(service, fixture: fixture, secret: "old")
+    XCTAssertTrue(first.ok)
+    XCTAssertTrue(first.running)
+    XCTAssertGreaterThan(first.pid, 0)
+    XCTAssertEqual(try waitForLaunchState(fixture: fixture, expected: "\(first.pid):old"), "\(first.pid):old")
+
+    let second = try start(service, fixture: fixture, secret: "new")
+    XCTAssertFalse(second.ok)
+    XCTAssertTrue(second.running)
+    XCTAssertEqual(second.pid, first.pid)
+    XCTAssertEqual(second.code, HelperResponseCode.alreadyRunning)
+    XCTAssertTrue(second.message.localizedCaseInsensitiveContains("already running"))
+    XCTAssertEqual(try waitForLaunchState(fixture: fixture, expected: "\(first.pid):old"), "\(first.pid):old")
+  }
+
+  func testHelperRestartTunnelWaitsForOldProcessBeforeStartingReplacement() throws {
+    let fixture = try makeRuntimeFixture()
+    let service = makeHelperService(fixture: fixture)
+    addTeardownBlock { stop(service) }
+
+    let first = try start(service, fixture: fixture, secret: "old")
+    XCTAssertTrue(first.ok)
+    XCTAssertEqual(try waitForLaunchState(fixture: fixture, expected: "\(first.pid):old"), "\(first.pid):old")
+
+    let restarted = try restart(service, fixture: fixture, secret: "new")
+    XCTAssertTrue(restarted.ok)
+    XCTAssertTrue(restarted.running)
+    XCTAssertGreaterThan(restarted.pid, 0)
+    XCTAssertFalse(isProcessAlive(pid_t(first.pid)))
+    XCTAssertEqual(try waitForLaunchState(fixture: fixture, expected: "\(restarted.pid):new"), "\(restarted.pid):new")
+  }
+
   private func makePathFixture() throws -> PathFixture {
     let tempRoot = FileManager.default.temporaryDirectory
       .appendingPathComponent("ClashMaxHelperValidation-\(UUID().uuidString)", isDirectory: true)
@@ -188,6 +226,52 @@ final class TunnelHelperValidationTests: XCTestCase {
       configURL: configURL
     )
   }
+
+  private func makeRuntimeFixture() throws -> PathFixture {
+    let tempRoot = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxHelperRuntime-\(UUID().uuidString)", isDirectory: true)
+    let appSupportRoot = tempRoot.appendingPathComponent("Application Support/ClashMax", isDirectory: true)
+    let runtimeRoot = appSupportRoot.appendingPathComponent("Runtime", isDirectory: true)
+    let bundledCoreRoot = tempRoot.appendingPathComponent("ClashMax.app/Contents/Resources/Core", isDirectory: true)
+    try FileManager.default.createDirectory(at: runtimeRoot, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: bundledCoreRoot, withIntermediateDirectories: true)
+
+    let configURL = runtimeRoot.appendingPathComponent("config.yaml")
+    try "port: 7890\n".write(to: configURL, atomically: true, encoding: .utf8)
+
+    let coreURL = bundledCoreRoot.appendingPathComponent("mihomo-darwin-arm64")
+    try """
+    #!/bin/sh
+    trap 'sleep 1; exit 0' TERM
+    printf "%s:%s\\n" "$$" "$CLASHMAX_SECRET" > "$PWD/launch-state.txt"
+    while true; do sleep 1; done
+    """.write(to: coreURL, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: coreURL.path)
+
+    addTeardownBlock {
+      try? FileManager.default.removeItem(at: tempRoot)
+    }
+
+    return PathFixture(
+      tempRoot: tempRoot,
+      appSupportRoot: appSupportRoot,
+      runtimeRoot: runtimeRoot,
+      bundledCoreRoot: bundledCoreRoot,
+      coreURL: coreURL,
+      configURL: configURL
+    )
+  }
+
+  private func makeHelperService(fixture: PathFixture) -> HelperService {
+    HelperService(
+      trustedPathsProvider: { _ in
+        HelperTrustedPaths(runtimeRoot: fixture.runtimeRoot, bundledCoreRoot: fixture.bundledCoreRoot)
+      },
+      coreExecutableValidator: NoopHelperCoreExecutableValidator(),
+      clientUserIDProvider: { getuid() },
+      processTerminationTimeout: 2
+    )
+  }
 }
 
 private struct PathFixture {
@@ -197,4 +281,62 @@ private struct PathFixture {
   let bundledCoreRoot: URL
   let coreURL: URL
   let configURL: URL
+}
+
+private func start(_ service: HelperService, fixture: PathFixture, secret: String) throws -> HelperClientResponse {
+  var payload: NSString?
+  service.startTunnel(
+    corePath: fixture.coreURL.path as NSString,
+    configPath: fixture.configURL.path as NSString,
+    workDirectoryPath: fixture.runtimeRoot.path as NSString,
+    secret: secret as NSString
+  ) { response in
+    payload = response
+  }
+  return HelperClientResponse(payload: try XCTUnwrap(payload))
+}
+
+private func restart(_ service: HelperService, fixture: PathFixture, secret: String) throws -> HelperClientResponse {
+  var payload: NSString?
+  service.restartTunnel(
+    corePath: fixture.coreURL.path as NSString,
+    configPath: fixture.configURL.path as NSString,
+    workDirectoryPath: fixture.runtimeRoot.path as NSString,
+    secret: secret as NSString
+  ) { response in
+    payload = response
+  }
+  return HelperClientResponse(payload: try XCTUnwrap(payload))
+}
+
+private func stop(_ service: HelperService) {
+  service.stopTunnel { _ in }
+}
+
+private func waitForLaunchState(fixture: PathFixture, expected: String) throws -> String {
+  let stateURL = fixture.runtimeRoot.appendingPathComponent("launch-state.txt")
+  let deadline = Date().addingTimeInterval(3)
+  var lastState = ""
+  while Date() < deadline {
+    if let state = try? String(contentsOf: stateURL, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+       !state.isEmpty {
+      lastState = state
+      if state == expected {
+        return state
+      }
+    }
+    Thread.sleep(forTimeInterval: 0.02)
+  }
+  if !lastState.isEmpty {
+    return lastState
+  }
+  return try String(contentsOf: stateURL, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private func isProcessAlive(_ pid: pid_t) -> Bool {
+  kill(pid, 0) == 0 || errno == EPERM
+}
+
+private struct NoopHelperCoreExecutableValidator: HelperCoreExecutableValidating {
+  func validateCoreExecutable(at url: URL) throws {}
 }

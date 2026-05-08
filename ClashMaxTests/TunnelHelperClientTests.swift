@@ -15,12 +15,19 @@ final class TunnelHelperClientTests: XCTestCase {
   }
 
   func testHelperStringPayloadsDecodeResponsesAndLogs() {
-    let response = HelperClientResponse(payload: HelperXPCPayload.response(ok: true, running: true, pid: 42, message: "ready"))
+    let response = HelperClientResponse(payload: HelperXPCPayload.response(
+      ok: false,
+      running: true,
+      pid: 42,
+      code: HelperResponseCode.alreadyRunning,
+      message: "already running"
+    ))
 
-    XCTAssertTrue(response.ok)
+    XCTAssertFalse(response.ok)
     XCTAssertTrue(response.running)
     XCTAssertEqual(response.pid, 42)
-    XCTAssertEqual(response.message, "ready")
+    XCTAssertEqual(response.code, HelperResponseCode.alreadyRunning)
+    XCTAssertEqual(response.message, "already running")
     XCTAssertEqual(HelperXPCPayload.logLines(from: HelperXPCPayload.logs(["one", "two"])), ["one", "two"])
   }
 
@@ -255,6 +262,65 @@ final class TunnelHelperClientTests: XCTestCase {
     }
 
     XCTAssertLessThan(Date().timeIntervalSince(startedAt), 3)
+  }
+
+  func testContinuationBoxResumesConnectionFailureThatArrivesBeforeAttachWithoutCleanup() async {
+    let cases = [
+      "pre-attach invalidation",
+      "pre-attach interruption"
+    ]
+
+    for expectedMessage in cases {
+      let box = ContinuationBox<String>()
+      let expectation = expectation(description: "\(expectedMessage) resumes")
+      var cleanupCount = 0
+
+      box.fail(AppError.helperResponse(expectedMessage), runCleanup: false)
+
+      Task {
+        do {
+          _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
+            let didAttach = box.attach(continuation) {
+              cleanupCount += 1
+            }
+            XCTAssertFalse(didAttach)
+          }
+          XCTFail("Expected pre-attach failure")
+        } catch {
+          XCTAssertEqual(UserFacingError.message(for: error), expectedMessage)
+        }
+        expectation.fulfill()
+      }
+
+      await fulfillment(of: [expectation], timeout: 0.5)
+      XCTAssertEqual(cleanupCount, 0)
+    }
+  }
+
+  func testContinuationBoxRunsDeferredCleanupAfterPreAttachSuccess() async {
+    let box = ContinuationBox<String>()
+    let expectation = expectation(description: "pre-attach success resumes")
+    var cleanupCount = 0
+
+    box.succeed("ready")
+
+    Task {
+      do {
+        let value = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
+          let didAttach = box.attach(continuation) {
+            cleanupCount += 1
+          }
+          XCTAssertFalse(didAttach)
+        }
+        XCTAssertEqual(value, "ready")
+        XCTAssertEqual(cleanupCount, 1)
+      } catch {
+        XCTFail("Expected success, got \(error)")
+      }
+      expectation.fulfill()
+    }
+
+    await fulfillment(of: [expectation], timeout: 0.5)
   }
 }
 
