@@ -761,7 +761,7 @@
         <a href="#runtime">Runtime</a>
         <a href="#controls">Controls</a>
         <a href="#security">Security</a>
-        <a class="nav-download" href="https://github.com/marvinli001/ClashMax/releases/tag/v1.0.0">Download</a>
+        <a class="nav-download" href="https://github.com/marvinli001/ClashMax/releases/latest" data-latest-download>Download</a>
       </div>
     </nav>
   </header>
@@ -774,7 +774,7 @@
           <h1 id="hero-title">ClashMax</h1>
           <p>原生 macOS Mihomo 代理控制台。把配置、代理组、连接、规则、日志和系统代理/TUN 收进一个安静、可扫描的 SwiftUI 工作面。</p>
           <div class="hero-actions" aria-label="Project links">
-            <a class="button primary" href="https://github.com/marvinli001/ClashMax/releases/tag/v1.0.0">Download v1.0.0</a>
+            <a class="button primary" href="https://github.com/marvinli001/ClashMax/releases/latest" data-latest-download>Download</a>
             <a class="button" href="https://github.com/marvinli001/ClashMax">GitHub</a>
             <a class="button" href="https://github.com/marvinli001/ClashMax/issues">Issue</a>
           </div>
@@ -970,9 +970,80 @@ controller access: Bearer auth</div>
       <div class="footer-links">
         <a href="https://github.com/marvinli001/ClashMax">GitHub</a>
         <a href="appcast.xml">Appcast</a>
-        <a href="https://github.com/marvinli001/ClashMax/releases/tag/v1.0.0">Release</a>
+        <a href="https://github.com/marvinli001/ClashMax/releases/latest">Release</a>
       </div>
     </div>
   </footer>
+  <script>
+    (() => {
+      const releasePageURL = "https://github.com/marvinli001/ClashMax/releases/latest";
+      const latestReleaseAPI = "https://api.github.com/repos/marvinli001/ClashMax/releases/latest";
+      const downloadLinks = Array.from(document.querySelectorAll("[data-latest-download]"));
+
+      if (!downloadLinks.length) {
+        return;
+      }
+
+      const chooseZipAsset = (assets = []) => {
+        const zipAssets = assets.filter((asset) =>
+          typeof asset.name === "string" &&
+          typeof asset.browser_download_url === "string" &&
+          /\.zip$/i.test(asset.name) &&
+          !/\.delta$/i.test(asset.name)
+        );
+
+        return (
+          zipAssets.find((asset) => /^ClashMax[-_].*\.zip$/i.test(asset.name)) ||
+          zipAssets.find((asset) => /^ClashMax\.zip$/i.test(asset.name)) ||
+          zipAssets[0]
+        );
+      };
+
+      let latestDownloadURL = releasePageURL;
+
+      const setDownloadURL = (url) => {
+        latestDownloadURL = url;
+        downloadLinks.forEach((link) => {
+          link.href = url;
+          link.setAttribute("aria-label", "Download latest ClashMax zip");
+        });
+      };
+
+      const latestDownloadRequest = fetch(latestReleaseAPI, {
+        headers: { Accept: "application/vnd.github+json" }
+      })
+        .then((response) => {
+          if (!response.ok) {
+            throw new Error(`GitHub release lookup failed: ${response.status}`);
+          }
+          return response.json();
+        })
+        .then((release) => {
+          const zipAsset = chooseZipAsset(release.assets);
+          if (!zipAsset) {
+            throw new Error("No zip asset found on the latest release.");
+          }
+          setDownloadURL(zipAsset.browser_download_url);
+          return zipAsset.browser_download_url;
+        })
+        .catch(() => {
+          setDownloadURL(releasePageURL);
+          return releasePageURL;
+        });
+
+      downloadLinks.forEach((link) => {
+        link.addEventListener("click", (event) => {
+          if (latestDownloadURL !== releasePageURL) {
+            return;
+          }
+
+          event.preventDefault();
+          latestDownloadRequest.then((url) => {
+            window.location.href = url;
+          });
+        });
+      });
+    })();
+  </script>
 </body>
 </html>
