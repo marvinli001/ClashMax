@@ -589,6 +589,7 @@ final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Senda
   private let coreExecutableValidator: any HelperCoreExecutableValidating
   private let clientUserIDProvider: () throws -> uid_t
   private let processTerminationTimeout: TimeInterval
+  private let processDidLaunch: ((Process) -> Void)?
 
   init(
     trustedPathsProvider: @escaping (uid_t) throws -> HelperTrustedPaths = { userID in
@@ -601,19 +602,25 @@ final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Senda
       }
       return connection.effectiveUserIdentifier
     },
-    processTerminationTimeout: TimeInterval = 2
+    processTerminationTimeout: TimeInterval = 2,
+    processDidLaunch: ((Process) -> Void)? = nil
   ) {
     self.trustedPathsProvider = trustedPathsProvider
     self.coreExecutableValidator = coreExecutableValidator
     self.clientUserIDProvider = clientUserIDProvider
     self.processTerminationTimeout = processTerminationTimeout
+    self.processDidLaunch = processDidLaunch
   }
 
   func status(withReply reply: @escaping (NSString) -> Void) {
     stateLock.lock()
-    let running = process?.isRunning ?? false
-    let pid = running ? Int(process?.processIdentifier ?? 0) : 0
+    let existingProcess = process
+    let running = existingProcess?.isRunning ?? false
+    let pid = running ? Int(existingProcess?.processIdentifier ?? 0) : 0
     if !running {
+      if let existingProcess {
+        HelperProcessOutputHandlers.clear(for: existingProcess)
+      }
       process = nil
     }
     stateLock.unlock()
@@ -713,6 +720,7 @@ final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Senda
     if existingProcess.isRunning {
       throw HelperRuntimeError.alreadyRunning(pid: existingProcess.processIdentifier)
     }
+    HelperProcessOutputHandlers.clear(for: existingProcess)
     process = nil
   }
 
@@ -745,14 +753,17 @@ final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Senda
     process.terminationHandler = { [weak self] process in
       self?.appendLog("mihomo exited with code \(process.terminationStatus)")
     }
-
-    pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-      let data = handle.availableData
-      guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-      self?.appendLog(text.trimmingCharacters(in: .whitespacesAndNewlines))
+    HelperProcessOutputHandlers.install(on: pipe) { [weak self] text in
+      self?.appendLog(text)
     }
 
-    try process.run()
+    do {
+      try process.run()
+    } catch {
+      HelperProcessOutputHandlers.clear(for: process)
+      throw error
+    }
+    processDidLaunch?(process)
     self.process = process
     return process
   }
@@ -762,6 +773,7 @@ final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Senda
     if existingProcess.isRunning {
       terminateAndWait(existingProcess)
     }
+    HelperProcessOutputHandlers.clear(for: existingProcess)
     process = nil
   }
 
@@ -814,5 +826,44 @@ final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Senda
     logLock.lock()
     logs.append(line)
     logLock.unlock()
+  }
+}
+
+enum HelperProcessOutputHandlers {
+  static func install(on pipe: Pipe, appendLog: @escaping @Sendable (String) -> Void) {
+    pipe.fileHandleForReading.readabilityHandler = { handle in
+      let data = handle.availableData
+      guard !data.isEmpty else {
+        handle.readabilityHandler = nil
+        return
+      }
+      guard let text = String(data: data, encoding: .utf8) else {
+        return
+      }
+      appendLog(text.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+  }
+
+  static func clear(for process: Process) {
+    var clearedHandles = Set<ObjectIdentifier>()
+    clearHandler(for: process.standardOutput, clearedHandles: &clearedHandles)
+    clearHandler(for: process.standardError, clearedHandles: &clearedHandles)
+    process.terminationHandler = nil
+  }
+
+  private static func clearHandler(for stream: Any?, clearedHandles: inout Set<ObjectIdentifier>) {
+    if let pipe = stream as? Pipe {
+      clearHandler(for: pipe.fileHandleForReading, clearedHandles: &clearedHandles)
+    } else if let handle = stream as? FileHandle {
+      clearHandler(for: handle, clearedHandles: &clearedHandles)
+    }
+  }
+
+  private static func clearHandler(for handle: FileHandle, clearedHandles: inout Set<ObjectIdentifier>) {
+    let identifier = ObjectIdentifier(handle)
+    guard clearedHandles.insert(identifier).inserted else {
+      return
+    }
+    handle.readabilityHandler = nil
   }
 }

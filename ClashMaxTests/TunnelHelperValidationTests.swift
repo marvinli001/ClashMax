@@ -197,6 +197,78 @@ final class TunnelHelperValidationTests: XCTestCase {
     XCTAssertEqual(try waitForLaunchState(fixture: fixture, expected: "\(restarted.pid):new"), "\(restarted.pid):new")
   }
 
+  func testHelperOutputHandlerClearsItselfAtEOF() throws {
+    let pipe = Pipe()
+    let logs = ThreadSafeStringRecorder()
+    HelperProcessOutputHandlers.install(on: pipe) { line in
+      logs.append(line)
+    }
+    let handler = try XCTUnwrap(pipe.fileHandleForReading.readabilityHandler)
+
+    pipe.fileHandleForWriting.closeFile()
+    handler(pipe.fileHandleForReading)
+
+    XCTAssertNil(pipe.fileHandleForReading.readabilityHandler)
+    XCTAssertTrue(logs.isEmpty)
+  }
+
+  func testHelperStopTunnelClearsOutputAndTerminationHandlersOnTrackedProcess() throws {
+    let fixture = try makeRuntimeFixture()
+    var launchedProcess: Process?
+    let service = makeHelperService(fixture: fixture) { process in
+      launchedProcess = process
+    }
+    addTeardownBlock { stop(service) }
+
+    let response = try start(service, fixture: fixture, secret: "cleanup")
+    XCTAssertTrue(response.ok)
+    XCTAssertEqual(try waitForLaunchState(fixture: fixture, expected: "\(response.pid):cleanup"), "\(response.pid):cleanup")
+    let process = try XCTUnwrap(launchedProcess)
+    let outputHandle = try XCTUnwrap((process.standardOutput as? Pipe)?.fileHandleForReading)
+    let errorHandle = try XCTUnwrap((process.standardError as? Pipe)?.fileHandleForReading)
+    XCTAssertTrue(outputHandle === errorHandle)
+    XCTAssertNotNil(outputHandle.readabilityHandler)
+    XCTAssertNotNil(errorHandle.readabilityHandler)
+    XCTAssertNotNil(process.terminationHandler)
+
+    stop(service)
+
+    XCTAssertNil(outputHandle.readabilityHandler)
+    XCTAssertNil(errorHandle.readabilityHandler)
+    XCTAssertNil(process.terminationHandler)
+  }
+
+  func testHelperStatusClearsOutputAndTerminationHandlersForExitedTrackedProcess() throws {
+    let fixture = try makeRuntimeFixture(coreScript: """
+    #!/bin/sh
+    printf "%s:%s\\n" "$$" "$CLASHMAX_SECRET" > "$PWD/launch-state.txt"
+    exit 0
+    """)
+    var launchedProcess: Process?
+    let service = makeHelperService(fixture: fixture) { process in
+      launchedProcess = process
+    }
+    addTeardownBlock { stop(service) }
+
+    let response = try start(service, fixture: fixture, secret: "exited")
+    XCTAssertTrue(response.ok)
+    XCTAssertEqual(try waitForLaunchState(fixture: fixture, expected: "\(response.pid):exited"), "\(response.pid):exited")
+    let process = try XCTUnwrap(launchedProcess)
+    waitForProcessExit(process)
+    XCTAssertFalse(process.isRunning)
+    let outputHandle = try XCTUnwrap((process.standardOutput as? Pipe)?.fileHandleForReading)
+
+    var payload: NSString?
+    service.status { response in
+      payload = response
+    }
+    let status = HelperClientResponse(payload: try XCTUnwrap(payload))
+
+    XCTAssertFalse(status.running)
+    XCTAssertNil(outputHandle.readabilityHandler)
+    XCTAssertNil(process.terminationHandler)
+  }
+
   private func makePathFixture() throws -> PathFixture {
     let tempRoot = FileManager.default.temporaryDirectory
       .appendingPathComponent("ClashMaxHelperValidation-\(UUID().uuidString)", isDirectory: true)
@@ -227,7 +299,14 @@ final class TunnelHelperValidationTests: XCTestCase {
     )
   }
 
-  private func makeRuntimeFixture() throws -> PathFixture {
+  private func makeRuntimeFixture(
+    coreScript: String = """
+    #!/bin/sh
+    trap 'sleep 1; exit 0' TERM
+    printf "%s:%s\\n" "$$" "$CLASHMAX_SECRET" > "$PWD/launch-state.txt"
+    while true; do sleep 1; done
+    """
+  ) throws -> PathFixture {
     let tempRoot = FileManager.default.temporaryDirectory
       .appendingPathComponent("ClashMaxHelperRuntime-\(UUID().uuidString)", isDirectory: true)
     let appSupportRoot = tempRoot.appendingPathComponent("Application Support/ClashMax", isDirectory: true)
@@ -240,12 +319,7 @@ final class TunnelHelperValidationTests: XCTestCase {
     try "port: 7890\n".write(to: configURL, atomically: true, encoding: .utf8)
 
     let coreURL = bundledCoreRoot.appendingPathComponent("mihomo-darwin-arm64")
-    try """
-    #!/bin/sh
-    trap 'sleep 1; exit 0' TERM
-    printf "%s:%s\\n" "$$" "$CLASHMAX_SECRET" > "$PWD/launch-state.txt"
-    while true; do sleep 1; done
-    """.write(to: coreURL, atomically: true, encoding: .utf8)
+    try coreScript.write(to: coreURL, atomically: true, encoding: .utf8)
     try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: coreURL.path)
 
     addTeardownBlock {
@@ -262,14 +336,18 @@ final class TunnelHelperValidationTests: XCTestCase {
     )
   }
 
-  private func makeHelperService(fixture: PathFixture) -> HelperService {
+  private func makeHelperService(
+    fixture: PathFixture,
+    processDidLaunch: ((Process) -> Void)? = nil
+  ) -> HelperService {
     HelperService(
       trustedPathsProvider: { _ in
         HelperTrustedPaths(runtimeRoot: fixture.runtimeRoot, bundledCoreRoot: fixture.bundledCoreRoot)
       },
       coreExecutableValidator: NoopHelperCoreExecutableValidator(),
       clientUserIDProvider: { getuid() },
-      processTerminationTimeout: 2
+      processTerminationTimeout: 2,
+      processDidLaunch: processDidLaunch
     )
   }
 }
@@ -281,6 +359,23 @@ private struct PathFixture {
   let bundledCoreRoot: URL
   let coreURL: URL
   let configURL: URL
+}
+
+private final class ThreadSafeStringRecorder: @unchecked Sendable {
+  private let lock = NSLock()
+  private var values: [String] = []
+
+  var isEmpty: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return values.isEmpty
+  }
+
+  func append(_ value: String) {
+    lock.lock()
+    values.append(value)
+    lock.unlock()
+  }
 }
 
 private func start(_ service: HelperService, fixture: PathFixture, secret: String) throws -> HelperClientResponse {
@@ -335,6 +430,13 @@ private func waitForLaunchState(fixture: PathFixture, expected: String) throws -
 
 private func isProcessAlive(_ pid: pid_t) -> Bool {
   kill(pid, 0) == 0 || errno == EPERM
+}
+
+private func waitForProcessExit(_ process: Process) {
+  let deadline = Date().addingTimeInterval(3)
+  while process.isRunning && Date() < deadline {
+    Thread.sleep(forTimeInterval: 0.02)
+  }
 }
 
 private struct NoopHelperCoreExecutableValidator: HelperCoreExecutableValidating {

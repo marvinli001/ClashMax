@@ -352,6 +352,49 @@ final class SystemProxyControllerTests: XCTestCase {
     XCTAssertEqual(runner.maximumConcurrentRuns, 1)
   }
 
+  func testAsyncOperationGateCancelsQueuedWaiterWithoutRunningOperationOrBlockingLaterWork() async throws {
+    let gate = AsyncOperationGate()
+    let firstEntered = AsyncTestSignal()
+    let releaseFirst = AsyncTestSignal()
+    let secondStarted = AsyncTestSignal()
+    let probe = AsyncOperationGateProbe()
+
+    let firstTask = Task {
+      try await gate.run {
+        await firstEntered.signal()
+        await releaseFirst.wait()
+      }
+    }
+    await firstEntered.wait()
+
+    let secondTask = Task {
+      await secondStarted.signal()
+      return try await gate.run {
+        await probe.markSecondOperationExecuted()
+        return "second"
+      }
+    }
+    await secondStarted.wait()
+    for _ in 0..<10 {
+      await Task.yield()
+    }
+
+    secondTask.cancel()
+    await releaseFirst.signal()
+    try await firstTask.value
+
+    await XCTAssertThrowsCancellationErrorAsync {
+      try await secondTask.value
+    }
+    let didExecuteSecondOperation = await probe.didExecuteSecondOperation
+    XCTAssertFalse(didExecuteSecondOperation)
+
+    let thirdResult = try await gate.run {
+      "third"
+    }
+    XCTAssertEqual(thirdResult, "third")
+  }
+
   func testRestoreTurnsProxyStatesOff() async throws {
     let runner = RecordingCommandRunner(outputs: [
       "/usr/sbin/networksetup -listallnetworkservices": "Wi-Fi\n"
@@ -551,6 +594,40 @@ final class SystemProxyControllerTests: XCTestCase {
     let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
     defaults.removePersistentDomain(forName: suiteName)
     return defaults
+  }
+}
+
+private actor AsyncTestSignal {
+  private var isSignaled = false
+  private var waiters: [CheckedContinuation<Void, Never>] = []
+
+  func wait() async {
+    if isSignaled {
+      return
+    }
+
+    await withCheckedContinuation { continuation in
+      waiters.append(continuation)
+    }
+  }
+
+  func signal() {
+    isSignaled = true
+    let continuations = waiters
+    waiters.removeAll()
+    continuations.forEach { $0.resume() }
+  }
+}
+
+private actor AsyncOperationGateProbe {
+  private var executedSecondOperation = false
+
+  var didExecuteSecondOperation: Bool {
+    executedSecondOperation
+  }
+
+  func markSecondOperationExecuted() {
+    executedSecondOperation = true
   }
 }
 

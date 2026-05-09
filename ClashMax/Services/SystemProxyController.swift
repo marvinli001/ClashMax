@@ -705,12 +705,13 @@ private enum ProxyKind {
   }
 }
 
-private final class AsyncOperationGate: @unchecked Sendable {
+final class AsyncOperationGate: @unchecked Sendable {
   private let state = AsyncOperationGateState()
 
   func run<T: Sendable>(_ operation: @Sendable () async throws -> T) async throws -> T {
-    await state.acquire()
+    try await state.acquire()
     do {
+      try Task.checkCancellation()
       let result = try await operation()
       await state.release()
       return result
@@ -722,17 +723,33 @@ private final class AsyncOperationGate: @unchecked Sendable {
 }
 
 private actor AsyncOperationGateState {
-  private var isLocked = false
-  private var waiters: [CheckedContinuation<Void, Never>] = []
+  private struct Waiter {
+    let id: UUID
+    let continuation: CheckedContinuation<Void, Error>
+  }
 
-  func acquire() async {
+  private var isLocked = false
+  private var waiters: [Waiter] = []
+
+  func acquire() async throws {
     if !isLocked {
       isLocked = true
       return
     }
 
-    await withCheckedContinuation { continuation in
-      waiters.append(continuation)
+    let waiterID = UUID()
+    try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        if Task.isCancelled {
+          continuation.resume(throwing: CancellationError())
+        } else {
+          waiters.append(Waiter(id: waiterID, continuation: continuation))
+        }
+      }
+    } onCancel: {
+      Task {
+        await self.cancelWaiter(id: waiterID)
+      }
     }
   }
 
@@ -740,8 +757,15 @@ private actor AsyncOperationGateState {
     if waiters.isEmpty {
       isLocked = false
     } else {
-      waiters.removeFirst().resume()
+      waiters.removeFirst().continuation.resume()
     }
+  }
+
+  private func cancelWaiter(id: UUID) {
+    guard let index = waiters.firstIndex(where: { $0.id == id }) else {
+      return
+    }
+    waiters.remove(at: index).continuation.resume(throwing: CancellationError())
   }
 }
 
