@@ -297,6 +297,183 @@ struct ProcessOutputCapture: Sendable {
   }
 }
 
+struct CancellableProcessResult: Sendable {
+  let terminationStatus: Int32
+  let output: String
+}
+
+final class CancellableProcessExecution: @unchecked Sendable {
+  private enum StopReason {
+    case cancelled
+    case timedOut
+  }
+
+  private let process: Process
+  private let timeout: TimeInterval
+  private let timeoutError: (String) -> Error
+  private let output: () -> String
+  private let cleanup: () -> Void
+  private let lock = NSLock()
+  private var isStarted = false
+  private var completedStatus: Int32?
+  private var stopReason: StopReason?
+  private var waitContinuation: CheckedContinuation<Int32, Never>?
+
+  init(
+    process: Process,
+    timeout: TimeInterval,
+    timeoutError: @escaping (String) -> Error,
+    output: @escaping () -> String,
+    cleanup: @escaping () -> Void = {}
+  ) {
+    self.process = process
+    self.timeout = timeout
+    self.timeoutError = timeoutError
+    self.output = output
+    self.cleanup = cleanup
+  }
+
+  func run() async throws -> CancellableProcessResult {
+    try await withTaskCancellationHandler {
+      try await runWithCancellationHandler()
+    } onCancel: {
+      self.requestStop(.cancelled)
+    }
+  }
+
+  private func runWithCancellationHandler() async throws -> CancellableProcessResult {
+    do {
+      try Task.checkCancellation()
+    } catch {
+      cleanup()
+      throw error
+    }
+    process.terminationHandler = { [weak self] process in
+      self?.complete(status: process.terminationStatus)
+    }
+
+    do {
+      try process.run()
+    } catch {
+      process.terminationHandler = nil
+      cleanup()
+      throw error
+    }
+
+    if markStartedAndNeedsStop() || Task.isCancelled {
+      requestStop(.cancelled)
+    }
+
+    let timeoutTask = makeTimeoutTask()
+    let terminationStatus = await waitForTermination()
+    timeoutTask.cancel()
+
+    let resultOutput = output()
+    process.terminationHandler = nil
+    cleanup()
+
+    switch currentStopReason() {
+    case .cancelled:
+      throw CancellationError()
+    case .timedOut:
+      throw timeoutError(resultOutput)
+    case nil:
+      return CancellableProcessResult(terminationStatus: terminationStatus, output: resultOutput)
+    }
+  }
+
+  private func makeTimeoutTask() -> Task<Void, Never> {
+    Task { [weak self] in
+      do {
+        try await Task.sleep(nanoseconds: Self.nanoseconds(for: self?.timeout ?? 0))
+        self?.requestStop(.timedOut)
+      } catch {
+      }
+    }
+  }
+
+  private func markStartedAndNeedsStop() -> Bool {
+    lock.lock()
+    isStarted = true
+    let shouldStop = completedStatus == nil && stopReason != nil
+    lock.unlock()
+    return shouldStop
+  }
+
+  private func waitForTermination() async -> Int32 {
+    await withCheckedContinuation { continuation in
+      let status: Int32?
+      lock.lock()
+      if let completedStatus {
+        status = completedStatus
+      } else {
+        status = nil
+        waitContinuation = continuation
+      }
+      lock.unlock()
+
+      if let status {
+        continuation.resume(returning: status)
+      }
+    }
+  }
+
+  private func complete(status: Int32) {
+    let continuationToResume: CheckedContinuation<Int32, Never>?
+
+    lock.lock()
+    guard completedStatus == nil else {
+      lock.unlock()
+      return
+    }
+    completedStatus = status
+    continuationToResume = waitContinuation
+    waitContinuation = nil
+    lock.unlock()
+
+    continuationToResume?.resume(returning: status)
+  }
+
+  private func requestStop(_ reason: StopReason) {
+    let shouldTerminate: Bool
+
+    lock.lock()
+    if completedStatus == nil {
+      if stopReason == nil || reason == .cancelled {
+        stopReason = reason
+      }
+      shouldTerminate = isStarted
+    } else {
+      shouldTerminate = false
+    }
+    lock.unlock()
+
+    guard shouldTerminate else { return }
+    terminateRunningProcess()
+  }
+
+  private func terminateRunningProcess() {
+    guard process.isRunning else { return }
+    process.terminate()
+    DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.5) { [process] in
+      if process.isRunning {
+        kill(process.processIdentifier, SIGKILL)
+      }
+    }
+  }
+
+  private func currentStopReason() -> StopReason? {
+    lock.lock()
+    let reason = stopReason
+    lock.unlock()
+    return reason
+  }
+
+  private static func nanoseconds(for seconds: TimeInterval) -> UInt64 {
+    UInt64(max(seconds, 0) * 1_000_000_000)
+  }
+}
+
 struct MihomoOrphanProcessReaper: CoreProcessReaping {
   func reapOrphans(coreURL: URL, configURL: URL, workDirectory: URL) async {
     await Task.detached(priority: .utility) {
@@ -385,13 +562,10 @@ struct MihomoRuntimeConfigValidator: RuntimeConfigValidating {
   }
 
   func validate(coreURL: URL, configURL: URL, workDirectory: URL) async throws {
-    let timeout = timeout
-    try await Task.detached(priority: .userInitiated) {
-      try Self.validateSynchronously(coreURL: coreURL, configURL: configURL, workDirectory: workDirectory, timeout: timeout)
-    }.value
+    try await Self.validateAsync(coreURL: coreURL, configURL: configURL, workDirectory: workDirectory, timeout: timeout)
   }
 
-  nonisolated private static func validateSynchronously(coreURL: URL, configURL: URL, workDirectory: URL, timeout: TimeInterval) throws {
+  nonisolated private static func validateAsync(coreURL: URL, configURL: URL, workDirectory: URL, timeout: TimeInterval) async throws {
     let process = Process()
     let stdoutPipe = Pipe()
     let stderrPipe = Pipe()
@@ -408,34 +582,31 @@ struct MihomoRuntimeConfigValidator: RuntimeConfigValidating {
     drain.attach(stdoutPipe.fileHandleForReading)
     drain.attach(stderrPipe.fileHandleForReading)
 
-    try process.run()
-    let waitGroup = DispatchGroup()
-    waitGroup.enter()
-    DispatchQueue.global(qos: .userInitiated).async {
-      process.waitUntilExit()
-      waitGroup.leave()
-    }
-
-    if waitGroup.wait(timeout: .now() + timeout) == .timedOut {
-      process.terminate()
-      if waitGroup.wait(timeout: .now() + 0.5) == .timedOut, process.isRunning {
-        kill(process.processIdentifier, SIGKILL)
-        waitGroup.wait()
+    let execution = CancellableProcessExecution(
+      process: process,
+      timeout: timeout,
+      timeoutError: { output in
+        NSError(
+          domain: "ClashMax.CoreValidation",
+          code: Int(ETIMEDOUT),
+          userInfo: [
+            NSLocalizedDescriptionKey: "Runtime config validation timed out after \(timeout)s.\(output.isEmpty ? "" : "\n\(output)")"
+          ]
+        )
+      },
+      output: {
+        drain.flush()
+      },
+      cleanup: {
+        drain.detachAll()
       }
+    )
 
-      let output = drain.flush()
-      throw NSError(
-        domain: "ClashMax.CoreValidation",
-        code: Int(ETIMEDOUT),
-        userInfo: [
-          NSLocalizedDescriptionKey: "Runtime config validation timed out after \(timeout)s.\(output.isEmpty ? "" : "\n\(output)")"
-        ]
+    let result = try await execution.run()
+    guard result.terminationStatus == 0 else {
+      throw AppError.configValidationFailed(
+        result.output.isEmpty ? "mihomo exited with code \(result.terminationStatus)" : result.output
       )
-    }
-
-    let output = drain.flush()
-    guard process.terminationStatus == 0 else {
-      throw AppError.configValidationFailed(output.isEmpty ? "mihomo exited with code \(process.terminationStatus)" : output)
     }
   }
 }
@@ -598,9 +769,18 @@ final class LiveOutputDrain: @unchecked Sendable {
       .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
   }
 
-  deinit {
-    for handle in attached {
+  func detachAll() {
+    lock.lock()
+    let handles = attached
+    attached.removeAll()
+    lock.unlock()
+
+    for handle in handles {
       handle.readabilityHandler = nil
     }
+  }
+
+  deinit {
+    detachAll()
   }
 }

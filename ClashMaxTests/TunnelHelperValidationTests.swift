@@ -197,6 +197,47 @@ final class TunnelHelperValidationTests: XCTestCase {
     XCTAssertEqual(try waitForLaunchState(fixture: fixture, expected: "\(restarted.pid):new"), "\(restarted.pid):new")
   }
 
+  func testHelperConcurrentStartTunnelAllowsOnlyOneRunningProcess() throws {
+    let fixture = try makeRuntimeFixture()
+    let service = makeHelperService(fixture: fixture)
+    addTeardownBlock { stop(service) }
+
+    let responseRecorder = ThreadSafeStartResponseRecorder()
+    let startGate = DispatchSemaphore(value: 0)
+    let done = DispatchGroup()
+
+    for secret in ["first", "second"] {
+      done.enter()
+      DispatchQueue.global().async {
+        startGate.wait()
+        responseRecorder.append(Result {
+          (secret, try start(service, fixture: fixture, secret: secret))
+        })
+        done.leave()
+      }
+    }
+
+    startGate.signal()
+    startGate.signal()
+
+    XCTAssertEqual(done.wait(timeout: .now() + 5), .success)
+    let responses = try responseRecorder.values.map { try $0.get() }
+    let accepted = responses.filter { $0.1.ok }
+    let rejected = responses.filter { !$0.1.ok }
+
+    XCTAssertEqual(accepted.count, 1)
+    XCTAssertEqual(rejected.count, 1)
+    let acceptedResponse = try XCTUnwrap(accepted.first)
+    let rejectedResponse = try XCTUnwrap(rejected.first).1
+    XCTAssertTrue(acceptedResponse.1.running)
+    XCTAssertEqual(rejectedResponse.code, HelperResponseCode.alreadyRunning)
+    XCTAssertEqual(rejectedResponse.pid, acceptedResponse.1.pid)
+    XCTAssertEqual(
+      try waitForLaunchState(fixture: fixture, expected: "\(acceptedResponse.1.pid):\(acceptedResponse.0)"),
+      "\(acceptedResponse.1.pid):\(acceptedResponse.0)"
+    )
+  }
+
   func testHelperOutputHandlerClearsItselfAtEOF() throws {
     let pipe = Pipe()
     let logs = ThreadSafeStringRecorder()
@@ -374,6 +415,23 @@ private final class ThreadSafeStringRecorder: @unchecked Sendable {
   func append(_ value: String) {
     lock.lock()
     values.append(value)
+    lock.unlock()
+  }
+}
+
+private final class ThreadSafeStartResponseRecorder: @unchecked Sendable {
+  private let lock = NSLock()
+  private var results: [Result<(String, HelperClientResponse), Error>] = []
+
+  var values: [Result<(String, HelperClientResponse), Error>] {
+    lock.lock()
+    defer { lock.unlock() }
+    return results
+  }
+
+  func append(_ result: Result<(String, HelperClientResponse), Error>) {
+    lock.lock()
+    results.append(result)
     lock.unlock()
   }
 }

@@ -581,6 +581,7 @@ enum HelperRuntimeError: Error, CustomStringConvertible {
 }
 
 final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Sendable {
+  // Guard every read/write of process with stateLock via withStateLock or *Locked helpers.
   private var process: Process?
   private var logs = BoundedBuffer<String>(limit: 200)
   private let stateLock = NSLock()
@@ -613,19 +614,20 @@ final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Senda
   }
 
   func status(withReply reply: @escaping (NSString) -> Void) {
-    stateLock.lock()
-    let existingProcess = process
-    let running = existingProcess?.isRunning ?? false
-    let pid = running ? Int(existingProcess?.processIdentifier ?? 0) : 0
-    if !running {
-      if let existingProcess {
-        HelperProcessOutputHandlers.clear(for: existingProcess)
+    let status = withStateLock { () -> (running: Bool, pid: Int) in
+      let existingProcess = process
+      let running = existingProcess?.isRunning ?? false
+      let pid = running ? Int(existingProcess?.processIdentifier ?? 0) : 0
+      if !running {
+        if let existingProcess {
+          HelperProcessOutputHandlers.clear(for: existingProcess)
+        }
+        process = nil
       }
-      process = nil
+      return (running, pid)
     }
-    stateLock.unlock()
 
-    reply(HelperXPCPayload.response(ok: true, running: running, pid: pid))
+    reply(HelperXPCPayload.response(ok: true, running: status.running, pid: status.pid))
   }
 
   func startTunnel(
@@ -653,9 +655,9 @@ final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Senda
   }
 
   func stopTunnel(withReply reply: @escaping (NSString) -> Void) {
-    stateLock.lock()
-    stopTrackedProcessLocked()
-    stateLock.unlock()
+    withStateLock {
+      stopTrackedProcessLocked()
+    }
 
     reply(HelperXPCPayload.response(ok: true, running: false))
   }
@@ -695,24 +697,28 @@ final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Senda
     try rejectAlreadyRunningProcess()
     let paths = try validatedPaths(corePath: corePath, configPath: configPath, workDirectoryPath: workDirectoryPath)
 
-    stateLock.lock()
-    defer { stateLock.unlock() }
-    try rejectAlreadyRunningProcessLocked()
-    return try launchProcessLocked(paths: paths, secret: secret)
+    let launchedProcess = try withStateLock {
+      try rejectAlreadyRunningProcessLocked()
+      return try launchProcessLocked(paths: paths, secret: secret)
+    }
+    processDidLaunch?(launchedProcess)
+    return launchedProcess
   }
 
   private func restart(corePath: String, configPath: String, workDirectoryPath: String, secret: String) throws -> Process {
-    stateLock.lock()
-    defer { stateLock.unlock() }
-    stopTrackedProcessLocked()
-    let paths = try validatedPaths(corePath: corePath, configPath: configPath, workDirectoryPath: workDirectoryPath)
-    return try launchProcessLocked(paths: paths, secret: secret)
+    let launchedProcess = try withStateLock {
+      stopTrackedProcessLocked()
+      let paths = try validatedPaths(corePath: corePath, configPath: configPath, workDirectoryPath: workDirectoryPath)
+      return try launchProcessLocked(paths: paths, secret: secret)
+    }
+    processDidLaunch?(launchedProcess)
+    return launchedProcess
   }
 
   private func rejectAlreadyRunningProcess() throws {
-    stateLock.lock()
-    defer { stateLock.unlock() }
-    try rejectAlreadyRunningProcessLocked()
+    try withStateLock {
+      try rejectAlreadyRunningProcessLocked()
+    }
   }
 
   private func rejectAlreadyRunningProcessLocked() throws {
@@ -763,7 +769,6 @@ final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Senda
       HelperProcessOutputHandlers.clear(for: process)
       throw error
     }
-    processDidLaunch?(process)
     self.process = process
     return process
   }
@@ -826,6 +831,12 @@ final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Senda
     logLock.lock()
     logs.append(line)
     logLock.unlock()
+  }
+
+  private func withStateLock<T>(_ body: () throws -> T) rethrows -> T {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    return try body()
   }
 }
 

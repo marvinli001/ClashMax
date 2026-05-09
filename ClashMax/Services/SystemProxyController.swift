@@ -777,54 +777,42 @@ struct ProcessCommandRunner: CommandRunning {
   }
 
   func run(_ executable: String, _ arguments: [String]) async throws -> String {
-    let timeout = self.timeout
-    return try await Task.detached(priority: .userInitiated) {
-      try Self.runSync(executable: executable, arguments: arguments, timeout: timeout)
-    }.value
-  }
-
-  private static func runSync(executable: String, arguments: [String], timeout: TimeInterval) throws -> String {
     let process = Process()
     let pipe = Pipe()
     process.executableURL = URL(fileURLWithPath: executable)
     process.arguments = arguments
     process.standardOutput = pipe
     process.standardError = pipe
-    try process.run()
 
-    let waitGroup = DispatchGroup()
-    waitGroup.enter()
-    DispatchQueue.global(qos: .userInitiated).async {
-      process.waitUntilExit()
-      waitGroup.leave()
-    }
-
-    if waitGroup.wait(timeout: .now() + timeout) == .timedOut {
-      process.terminate()
-      if waitGroup.wait(timeout: .now() + 0.5) == .timedOut, process.isRunning {
-        kill(process.processIdentifier, SIGKILL)
-        waitGroup.wait()
+    let command = ([executable] + arguments).joined(separator: " ")
+    let result = try await CancellableProcessExecution(
+      process: process,
+      timeout: timeout,
+      timeoutError: { output in
+        NSError(
+          domain: "ClashMax.CommandRunner",
+          code: Int(ETIMEDOUT),
+          userInfo: [
+            NSLocalizedDescriptionKey: "Command timed out after \(timeout)s: \(command)\(output.isEmpty ? "" : "\n\(output)")"
+          ]
+        )
+      },
+      output: {
+        Self.output(from: pipe)
+      },
+      cleanup: {
+        pipe.fileHandleForReading.readabilityHandler = nil
       }
+    ).run()
 
-      let output = Self.output(from: pipe)
+    guard result.terminationStatus == 0 else {
       throw NSError(
         domain: "ClashMax.CommandRunner",
-        code: Int(ETIMEDOUT),
-        userInfo: [
-          NSLocalizedDescriptionKey: "Command timed out after \(timeout)s: \(([executable] + arguments).joined(separator: " "))\(output.isEmpty ? "" : "\n\(output)")"
-        ]
+        code: Int(result.terminationStatus),
+        userInfo: [NSLocalizedDescriptionKey: result.output]
       )
     }
-
-    let output = Self.output(from: pipe)
-    guard process.terminationStatus == 0 else {
-      throw NSError(
-        domain: "ClashMax.CommandRunner",
-        code: Int(process.terminationStatus),
-        userInfo: [NSLocalizedDescriptionKey: output]
-      )
-    }
-    return output
+    return result.output
   }
 
   private static func output(from pipe: Pipe) -> String {
