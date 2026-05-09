@@ -9,13 +9,14 @@ private enum AppStartupAbort: Error {
 }
 
 private struct RuntimeStopResult {
+  var coreStopError: Error?
   var helperStopError: Error?
   var systemProxyRestoreError: Error?
 
   static let success = RuntimeStopResult()
 
   var succeeded: Bool {
-    helperStopError == nil && systemProxyRestoreError == nil
+    coreStopError == nil && helperStopError == nil && systemProxyRestoreError == nil
   }
 
   var userFacingMessage: String? {
@@ -24,6 +25,9 @@ private struct RuntimeStopResult {
     }
     if let helperStopError {
       return "Could not stop TUN helper cleanly: \(UserFacingError.message(for: helperStopError))"
+    }
+    if let coreStopError {
+      return "Could not stop Mihomo cleanly: \(UserFacingError.message(for: coreStopError))"
     }
     return nil
   }
@@ -561,7 +565,10 @@ final class AppModel: ObservableObject {
 
   private func runStartSequence() async throws {
     if previewRuntimeActive {
-      await leavePreviewRuntime()
+      let previewStopResult = await leavePreviewRuntimeResult()
+      if !previewStopResult.succeeded {
+        throw AppError.coreStopFailed(previewStopResult.userFacingMessage ?? "Could not stop preview runtime.")
+      }
     }
     try Task.checkCancellation()
     let profile = try requireActiveProfile()
@@ -576,7 +583,7 @@ final class AppModel: ObservableObject {
     let coreURL = try bundledCoreURL()
     appendAppLog(level: "info", message: "Runtime config path: \(runtimeConfig.path)")
     appendAppLog(level: "info", message: "Mihomo core path: \(coreURL.path)")
-    let client = MihomoAPIClient(baseURL: overrides.endpoint.baseURL, secret: overrides.secret)
+    let client = MihomoAPIClient(baseURL: try overrides.endpoint.baseURL, secret: overrides.secret)
     apiClient = client
     try Task.checkCancellation()
 
@@ -614,7 +621,10 @@ final class AppModel: ObservableObject {
       tunnelCoreRunning = true
       tunEnabled = true
       runtimeOwner = .tunnel
-      coreController.stop()
+      let coreStopResult = await coreController.stop()
+      if let error = coreStopResult.error {
+        throw error
+      }
     } else {
       tunnelCoreRunning = false
       try await coreController.startUserMode(
@@ -1232,17 +1242,28 @@ final class AppModel: ObservableObject {
   }
 
   func leavePreviewRuntime() async {
+    _ = await leavePreviewRuntimeResult()
+  }
+
+  private func leavePreviewRuntimeResult() async -> RuntimeStopResult {
+    var result = RuntimeStopResult()
     previewTask?.cancel()
     previewTask = nil
-    guard previewRuntimeActive else { return }
+    guard previewRuntimeActive else { return result }
     apiClient = nil
     streamTasks.forEach { $0.cancel() }
     streamTasks.removeAll()
-    coreController.stop()
+    let coreStopResult = await coreController.stop()
+    if let error = coreStopResult.error {
+      result.coreStopError = error
+      handleStopResult(result)
+      return result
+    }
     proxyGroups = []
     proxyProviders = []
     previewRuntimeActive = false
     runtimeOwner = .stopped
+    return result
   }
 
   private func startPreviewRuntime() async {
@@ -1260,7 +1281,7 @@ final class AppModel: ObservableObject {
         overrides: quietOverrides,
         selections: previewSelections
       )
-      let client = MihomoAPIClient(baseURL: quietOverrides.endpoint.baseURL, secret: quietOverrides.secret)
+      let client = MihomoAPIClient(baseURL: try quietOverrides.endpoint.baseURL, secret: quietOverrides.secret)
       previewRuntimeActive = true
       runtimeOwner = .preview
       try Task.checkCancellation()
@@ -1287,12 +1308,18 @@ final class AppModel: ObservableObject {
       }
     } catch is CancellationError {
       previewRuntimeActive = false
-      coreController.stop()
+      let stopResult = await coreController.stop()
+      if let error = stopResult.error {
+        appendAppLog(level: "error", message: UserFacingError.message(for: error))
+      }
       apiClient = nil
       runtimeOwner = .stopped
     } catch {
       previewRuntimeActive = false
-      coreController.stop()
+      let stopResult = await coreController.stop()
+      if let stopError = stopResult.error {
+        appendAppLog(level: "error", message: UserFacingError.message(for: stopError))
+      }
       apiClient = nil
       runtimeOwner = .stopped
       appendAppLog(level: "debug", message: "Preview runtime unavailable: \(UserFacingError.message(for: error))")
@@ -1325,7 +1352,10 @@ final class AppModel: ObservableObject {
     cancelPublicIPInfoRefresh(clearState: true)
     streamTasks.forEach { $0.cancel() }
     streamTasks.removeAll()
-    coreController.stop()
+    let coreStopResult = await coreController.stop()
+    if let error = coreStopResult.error {
+      result.coreStopError = error
+    }
     runtimeData.clearRuntimeCollections()
     if tunEnabled || tunnelCoreRunning {
       do {

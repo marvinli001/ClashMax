@@ -44,6 +44,7 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(tun["stack"] as? String, "mixed")
     XCTAssertEqual(tun["auto-route"] as? Bool, true)
     XCTAssertEqual(tun["auto-detect-interface"] as? Bool, true)
+    XCTAssertNil(tun["route-exclude-address"])
     XCTAssertNil(tun["auto-redirect"])
   }
 
@@ -74,7 +75,7 @@ final class ConfigNormalizerTests: XCTestCase {
       autoDetectInterface: false,
       dnsHijack: ["any:53"],
       mtu: 1400,
-      routeExcludeAddresses: ["192.168.0.0/16"]
+      routeExcludeAddresses: [" 192.168.0.0/16 ", "10.0.0.0/8"]
     )
 
     let enabledOutput = try ConfigNormalizer().runtimeConfig(from: source, overrides: overrides)
@@ -89,7 +90,7 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(enabledTun["auto-detect-interface"] as? Bool, false)
     XCTAssertEqual(enabledTun["dns-hijack"] as? [String], ["any:53"])
     XCTAssertEqual(enabledTun["mtu"] as? Int, 1400)
-    XCTAssertEqual(enabledTun["route-exclude-address"] as? [String], ["192.168.0.0/16"])
+    XCTAssertEqual(enabledTun["route-exclude-address"] as? [String], ["10.0.0.0/8", "192.168.0.0/16"])
     XCTAssertNil(enabledTun["auto-redirect"])
 
     overrides.tunEnabled = false
@@ -100,6 +101,30 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(disabledTun["enable"] as? Bool, false)
     XCTAssertEqual(disabledTun["stack"] as? String, "system")
     XCTAssertNil(disabledTun["auto-redirect"])
+  }
+
+  func testRuntimeConfigPreservesProfileRouteExcludeAddressWhenTunSettingsAreDefault() throws {
+    let source = """
+    proxies:
+      - name: DIRECT
+        type: direct
+    tun:
+      enable: true
+      auto-redirect: true
+      route-exclude-address:
+        - " 10.0.0.0/8 "
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+    """
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.tunEnabled = true
+
+    let output = try ConfigNormalizer().runtimeConfig(from: source, overrides: overrides)
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let tun = try XCTUnwrap(yaml["tun"] as? [String: Any])
+
+    XCTAssertEqual(tun["route-exclude-address"] as? [String], ["10.0.0.0/8", "172.16.0.0/12"])
+    XCTAssertNil(tun["auto-redirect"])
   }
 
   func testRuntimeConfigAppliesUnifiedDelayAndExternalControllerCORS() throws {
@@ -211,6 +236,79 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(proxyGroup["use"] as? [String], ["Xboard"])
     XCTAssertEqual(proxyGroup["proxies"] as? [String], ["Auto", "DIRECT"])
     XCTAssertEqual(yaml["rules"] as? [String], ["MATCH,Proxy"])
+  }
+
+  func testRuntimeConfigAppliesProviderContentSelectionOverride() throws {
+    let source = """
+    vless://00000000-0000-0000-0000-000000000000@example.com:443?security=tls&sni=example.com#Provider%20Node%20A
+    hysteria2://password@example.net:8443?sni=example.net&insecure=1#Provider%20Node%20B
+    """
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: source,
+      providerContentPath: "/Users/test/Library/Application Support/ClashMax/Runtime/provider.txt",
+      profileName: "Sample Provider",
+      overrides: .defaultForLaunch(secret: "secret-token"),
+      selectionOverrides: ["Proxy": "Provider Node A"]
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let groups = try XCTUnwrap(yaml["proxy-groups"] as? [[String: Any]])
+    let proxyGroup = try XCTUnwrap(groups.first(where: { ($0["name"] as? String) == "Proxy" }))
+
+    XCTAssertEqual(proxyGroup["now"] as? String, "Provider Node A")
+  }
+
+  func testRuntimeConfigRejectsUnknownProviderContentSelectionOverride() throws {
+    let source = """
+    vless://00000000-0000-0000-0000-000000000000@example.com:443?security=tls&sni=example.com#Provider%20Node%20A
+    hysteria2://password@example.net:8443?sni=example.net&insecure=1#Provider%20Node%20B
+    """
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: source,
+      providerContentPath: "/Users/test/Library/Application Support/ClashMax/Runtime/provider.txt",
+      profileName: "Sample Provider",
+      overrides: .defaultForLaunch(secret: "secret-token"),
+      selectionOverrides: ["Proxy": "Missing Provider Node"]
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let groups = try XCTUnwrap(yaml["proxy-groups"] as? [[String: Any]])
+    let proxyGroup = try XCTUnwrap(groups.first(where: { ($0["name"] as? String) == "Proxy" }))
+
+    XCTAssertNil(proxyGroup["now"])
+  }
+
+  func testRuntimeConfigAllowsSelectionOverrideForDynamicProviderUseGroup() throws {
+    let source = """
+    proxy-providers:
+      Remote:
+        type: http
+        url: https://example.com/sub.yaml
+        path: ./remote.yaml
+    proxy-groups:
+      - name: MainGroup
+        type: select
+        use: [Remote]
+        proxies: [Auto, DIRECT]
+      - name: Auto
+        type: url-test
+        use: [Remote]
+    rules:
+      - MATCH,MainGroup
+    """
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: source,
+      overrides: .defaultForLaunch(secret: "secret-token"),
+      selectionOverrides: ["MainGroup": "Provider Node A"]
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let groups = try XCTUnwrap(yaml["proxy-groups"] as? [[String: Any]])
+    let mainGroup = try XCTUnwrap(groups.first(where: { ($0["name"] as? String) == "MainGroup" }))
+    let autoGroup = try XCTUnwrap(groups.first(where: { ($0["name"] as? String) == "Auto" }))
+
+    XCTAssertEqual(mainGroup["now"] as? String, "Provider Node A")
+    XCTAssertNil(autoGroup["now"])
   }
 
   func testPreviewGroupsExtractXboardStyleInlineYaml() throws {

@@ -2,6 +2,48 @@ import XCTest
 @testable import ClashMax
 
 final class MihomoAPIClientTests: XCTestCase {
+  func testCoreAPIEndpointBuildsBracketedIPv6BaseURL() throws {
+    let endpoint = CoreAPIEndpoint(host: "::1", port: 9097, secret: "abc")
+
+    let url = try endpoint.baseURL
+
+    XCTAssertEqual(url.absoluteString, "http://[::1]:9097")
+  }
+
+  func testCoreAPIEndpointRejectsEmptyHostInsteadOfCrashing() {
+    let endpoint = CoreAPIEndpoint(host: " ", port: 9097, secret: "abc")
+
+    XCTAssertThrowsError(try endpoint.baseURL) { error in
+      guard case MihomoAPIClient.ClientError.invalidURL = error else {
+        return XCTFail("Expected invalidURL, got \(error)")
+      }
+    }
+  }
+
+  func testRESTRequestRejectsInvalidBaseURLInsteadOfCrashing() async throws {
+    let recorder = URLProtocolRecorder()
+    let session = URLSession(configuration: recorder.configuration)
+    let client = MihomoAPIClient(baseURL: URL(string: "http://:9097")!, secret: "abc", session: session)
+
+    do {
+      _ = try await client.version()
+      XCTFail("Expected invalid URL to throw")
+    } catch MihomoAPIClient.ClientError.invalidURL {
+      XCTAssertNil(recorder.lastRequest)
+    }
+  }
+
+  func testWebSocketStreamRejectsInvalidBaseURLInsteadOfCrashing() async throws {
+    let client = MihomoAPIClient(baseURL: URL(string: "http://:9097")!, secret: "abc")
+    var iterator = client.trafficStream().makeAsyncIterator()
+
+    do {
+      _ = try await iterator.next()
+      XCTFail("Expected invalid URL to throw")
+    } catch MihomoAPIClient.ClientError.invalidURL {
+    }
+  }
+
   func testVersionRequestUsesConfiguredTimeout() async throws {
     let recorder = URLProtocolRecorder(responseBody: #"{"version":"v-test"}"#)
     let session = URLSession(configuration: recorder.configuration)

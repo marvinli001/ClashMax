@@ -27,14 +27,17 @@ struct ConfigNormalizer {
     selectionOverrides: [String: String] = [:]
   ) throws -> String {
     var root: [String: Any]
+    let providerContentProxyNames: Set<String>?
 
     if ProfileConfigInspector.isProxyProviderContent(source) {
       guard let providerContentPath else {
         throw NormalizerError.invalidProfile("Provider subscription content requires a runtime provider file path.")
       }
       root = providerBackedConfig(providerName: normalizedProviderName(profileName), providerContentPath: providerContentPath)
+      providerContentProxyNames = parsedProviderContentProxyNames(from: source)
     } else {
       root = try loadMapping(from: source)
+      providerContentProxyNames = nil
     }
 
     root["mixed-port"] = overrides.mixedPort
@@ -61,6 +64,7 @@ struct ConfigNormalizer {
     }
 
     var tun = root["tun"] as? [String: Any] ?? [:]
+    let profileRouteExcludeAddresses = normalizedStringList(from: tun["route-exclude-address"])
     tun["enable"] = overrides.tunEnabled
     tun.removeValue(forKey: "auto-redirect")
     if overrides.tunEnabled {
@@ -72,8 +76,11 @@ struct ConfigNormalizer {
       tun["auto-detect-interface"] = settings.autoDetectInterface
       tun["dns-hijack"] = settings.normalizedDNSHijack
       tun["mtu"] = settings.normalizedMTU
-      if !settings.normalizedRouteExcludeAddresses.isEmpty {
-        tun["route-exclude-address"] = settings.normalizedRouteExcludeAddresses
+      let routeExcludeAddresses = SystemProxySettings.normalizedBypassDomains(
+        profileRouteExcludeAddresses + settings.normalizedRouteExcludeAddresses
+      )
+      if !routeExcludeAddresses.isEmpty {
+        tun["route-exclude-address"] = routeExcludeAddresses
       } else {
         tun.removeValue(forKey: "route-exclude-address")
       }
@@ -86,7 +93,11 @@ struct ConfigNormalizer {
         guard var group = groups[index] as? [String: Any],
               let groupName = group["name"] as? String,
               let selected = selectionOverrides[groupName],
-              proxyNames(in: group).contains(selected)
+              selectionOverrideIsAllowed(
+                selected,
+                in: group,
+                providerContentProxyNames: providerContentProxyNames
+              )
         else { continue }
         group["now"] = selected
         groups[index] = group
@@ -100,6 +111,54 @@ struct ConfigNormalizer {
   private func proxyNames(in group: [String: Any]) -> Set<String> {
     let entries = group["proxies"] as? [Any] ?? []
     return Set(entries.compactMap { $0 as? String })
+  }
+
+  private func selectionOverrideIsAllowed(
+    _ selected: String,
+    in group: [String: Any],
+    providerContentProxyNames: Set<String>?
+  ) -> Bool {
+    guard !selected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+    if proxyNames(in: group).contains(selected) {
+      return true
+    }
+    if let providerContentProxyNames {
+      return providerContentProxyNames.contains(selected)
+    }
+    return !providerReferences(in: group).isEmpty
+  }
+
+  private func providerReferences(in group: [String: Any]) -> Set<String> {
+    let entries = group["use"] as? [Any] ?? []
+    return Set(
+      entries
+        .compactMap { $0 as? String }
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+    )
+  }
+
+  private func parsedProviderContentProxyNames(from source: String) -> Set<String> {
+    let groups = (try? ProfilePreviewBuilder().groups(from: source, profileName: "")) ?? []
+    return Set(
+      groups
+        .flatMap(\.nodes)
+        .filter(\.isSelectable)
+        .map(\.name)
+    )
+  }
+
+  private func normalizedStringList(from value: Any?) -> [String] {
+    switch value {
+    case let values as [String]:
+      return SystemProxySettings.normalizedBypassDomains(values)
+    case let values as [Any]:
+      return SystemProxySettings.normalizedBypassDomains(values.compactMap { $0 as? String })
+    case let value as String:
+      return SystemProxySettings.normalizedBypassDomains([value])
+    default:
+      return []
+    }
   }
 
   private func loadMapping(from source: String) throws -> [String: Any] {

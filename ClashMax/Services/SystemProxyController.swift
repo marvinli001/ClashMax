@@ -107,8 +107,14 @@ final class SystemProxyController: @unchecked Sendable {
   private let operationGate = AsyncOperationGate()
   private var snapshots: [String: ServiceProxySnapshot] = [:]
   private var expectedConfiguration: ExpectedSystemProxyConfiguration?
-  private(set) var guardState: SystemProxyGuardState = .idle
+  private var storedGuardState: SystemProxyGuardState = .idle
   private let lock = NSLock()
+
+  var guardState: SystemProxyGuardState {
+    lock.lock()
+    defer { lock.unlock() }
+    return storedGuardState
+  }
 
   init(
     commandRunner: CommandRunning = ProcessCommandRunner(timeout: SystemProxyController.commandTimeoutSeconds),
@@ -135,13 +141,14 @@ final class SystemProxyController: @unchecked Sendable {
   }
 
   func enableGuard(host: String, port: Int, bypassDomains: [String] = SystemProxyController.defaultBypassDomains) async throws {
-    writeExpectedConfiguration(ExpectedSystemProxyConfiguration(host: host, port: port, bypassDomains: bypassDomains))
-    guardState = .active
+    writeGuardConfiguration(
+      ExpectedSystemProxyConfiguration(host: host, port: port, bypassDomains: bypassDomains),
+      state: .active
+    )
   }
 
   func disableGuard() {
-    writeExpectedConfiguration(nil)
-    guardState = .idle
+    writeGuardConfiguration(nil, state: .idle)
   }
 
   func verifyGuardOnce() async throws -> Bool {
@@ -155,7 +162,7 @@ final class SystemProxyController: @unchecked Sendable {
   }
 
   private func verifyGuardOnceInner() async throws -> SystemProxyGuardVerification {
-    guard let expected = readExpectedConfiguration(), guardState == .active else {
+    guard let expected = readActiveGuardConfiguration() else {
       return SystemProxyGuardVerification(didRepair: false, warnings: [])
     }
     var didRepair = false
@@ -325,7 +332,7 @@ final class SystemProxyController: @unchecked Sendable {
     }
 
     clearSnapshots()
-    writeExpectedConfiguration(nil)
+    writeGuardConfiguration(nil, state: .idle)
     return SystemProxyRestoreResult(
       restoredSnapshotCount: capturedCount,
       didFallbackDisable: didFallbackDisable,
@@ -355,7 +362,7 @@ final class SystemProxyController: @unchecked Sendable {
     }
 
     if removeAfterRestore, readAllSnapshots().isEmpty {
-      writeExpectedConfiguration(nil)
+      writeGuardConfiguration(nil, state: .idle)
     }
     if let firstError {
       throw firstError
@@ -502,16 +509,21 @@ final class SystemProxyController: @unchecked Sendable {
     persistSnapshotsLocked()
   }
 
-  private func readExpectedConfiguration() -> ExpectedSystemProxyConfiguration? {
+  private func readActiveGuardConfiguration() -> ExpectedSystemProxyConfiguration? {
     lock.lock()
     defer { lock.unlock() }
+    guard storedGuardState == .active else { return nil }
     return expectedConfiguration
   }
 
-  private func writeExpectedConfiguration(_ configuration: ExpectedSystemProxyConfiguration?) {
+  private func writeGuardConfiguration(
+    _ configuration: ExpectedSystemProxyConfiguration?,
+    state: SystemProxyGuardState
+  ) {
     lock.lock()
     defer { lock.unlock() }
     expectedConfiguration = configuration
+    storedGuardState = state
   }
 
   private static func loadPersistedSnapshots(defaults: UserDefaults?, key: String) -> [String: ServiceProxySnapshot] {
@@ -554,7 +566,7 @@ private struct DefaultRouteInterfaces {
   }
 }
 
-private struct ExpectedSystemProxyConfiguration: Equatable {
+private struct ExpectedSystemProxyConfiguration: Equatable, Sendable {
   var host: String
   var port: Int
   var bypassDomains: [String]

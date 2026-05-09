@@ -4,8 +4,10 @@ import Foundation
 @MainActor
 protocol RunningCoreProcess: AnyObject {
   var processIdentifier: Int32 { get }
+  var isRunning: Bool { get }
   var onTermination: ((Int32) -> Void)? { get set }
   func terminate()
+  func kill()
   func recentOutputTail(maxBytes: Int) -> String
 }
 
@@ -33,6 +35,29 @@ struct PortListener: Equatable, Sendable {
   var port: Int
   var pid: Int32
   var command: String
+}
+
+struct CoreStopResult {
+  var processIdentifier: Int32?
+  var didTerminate: Bool
+  var didEscalate: Bool
+  var message: String?
+
+  static let notRunning = CoreStopResult(
+    processIdentifier: nil,
+    didTerminate: true,
+    didEscalate: false,
+    message: nil
+  )
+
+  var succeeded: Bool {
+    didTerminate
+  }
+
+  var error: Error? {
+    guard !succeeded else { return nil }
+    return AppError.coreStopFailed(message ?? "Could not stop Mihomo cleanly.")
+  }
 }
 
 protocol RuntimePortChecking: Sendable {
@@ -73,7 +98,10 @@ final class CoreProcessController: ObservableObject {
     api: CoreAPIEndpoint,
     proxyPort: Int? = nil
   ) async throws {
-    stop()
+    let stopResult = await stop()
+    guard stopResult.succeeded else {
+      throw stopResult.error ?? AppError.coreStopFailed("Could not stop the previous Mihomo process.")
+    }
     stopWasRequested = false
     status = .starting
     recentCoreLog = ""
@@ -164,9 +192,10 @@ final class CoreProcessController: ObservableObject {
       }
     } catch is CancellationError {
       stopWasRequested = true
-      runningProcess?.terminate()
-      runningProcess = nil
-      status = .stopped
+      let stopResult = await stopRunningProcess()
+      if stopResult.succeeded {
+        status = .stopped
+      }
       throw CancellationError()
     } catch {
       let message = userFacingMessage(for: error)
@@ -177,29 +206,119 @@ final class CoreProcessController: ObservableObject {
           recordStartup("Core tail: \(recentCoreLog)")
         }
       }
-      runningProcess?.terminate()
-      runningProcess = nil
+      if runningProcess != nil {
+        stopWasRequested = true
+        let stopResult = await stopRunningProcess()
+        if stopResult.succeeded {
+          status = .crashed(message: message)
+        } else if let stopMessage = stopResult.message {
+          status = .crashed(message: "\(message)\n\(stopMessage)")
+        }
+      }
       throw error
     }
   }
 
   func restart(coreURL: URL, configURL: URL, workDirectory: URL, api: CoreAPIEndpoint) async throws {
     status = .restarting
-    stop()
+    let stopResult = await stop()
+    guard stopResult.succeeded else {
+      throw stopResult.error ?? AppError.coreStopFailed("Could not stop the previous Mihomo process.")
+    }
     try await startUserMode(coreURL: coreURL, configURL: configURL, workDirectory: workDirectory, api: api)
   }
 
-  func stop() {
+  @discardableResult
+  func stop() async -> CoreStopResult {
     stopWasRequested = true
-    runningProcess?.terminate()
+    let result = await stopRunningProcess()
+    if result.succeeded {
+      status = .stopped
+    }
+    return result
+  }
+
+  private func stopRunningProcess() async -> CoreStopResult {
+    guard let process = runningProcess else {
+      return .notRunning
+    }
+
+    let processIdentifier = process.processIdentifier
+    process.terminate()
+
+    let terminatedAfterTerm: Bool
+    if process.isRunning {
+      terminatedAfterTerm = await waitForExit(process, processIdentifier: processIdentifier, timeout: 2)
+    } else {
+      terminatedAfterTerm = true
+    }
+    if terminatedAfterTerm {
+      clearStoppedProcess(processIdentifier: processIdentifier)
+      return CoreStopResult(
+        processIdentifier: processIdentifier,
+        didTerminate: true,
+        didEscalate: false,
+        message: nil
+      )
+    }
+
+    recordStartup("Mihomo pid \(processIdentifier) did not exit after SIGTERM; sending SIGKILL.")
+    process.kill()
+
+    let terminatedAfterKill: Bool
+    if process.isRunning {
+      terminatedAfterKill = await waitForExit(process, processIdentifier: processIdentifier, timeout: 1)
+    } else {
+      terminatedAfterKill = true
+    }
+    if terminatedAfterKill {
+      clearStoppedProcess(processIdentifier: processIdentifier)
+      return CoreStopResult(
+        processIdentifier: processIdentifier,
+        didTerminate: true,
+        didEscalate: true,
+        message: nil
+      )
+    }
+
+    let message = "Could not stop Mihomo pid \(processIdentifier); the process is still running after SIGTERM and SIGKILL."
+    recentCoreLog = process.recentOutputTail(maxBytes: 8192)
+    status = .crashed(message: message)
+    return CoreStopResult(
+      processIdentifier: processIdentifier,
+      didTerminate: false,
+      didEscalate: true,
+      message: message
+    )
+  }
+
+  private func clearStoppedProcess(processIdentifier: Int32) {
+    guard runningProcess?.processIdentifier == processIdentifier else { return }
     runningProcess = nil
-    status = .stopped
+  }
+
+  private func waitForExit(_ process: RunningCoreProcess, processIdentifier: Int32, timeout: TimeInterval) async -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while process.isRunning && Date() < deadline {
+      if runningProcess?.processIdentifier != processIdentifier {
+        return true
+      }
+      await Self.sleepIgnoringCancellation(nanoseconds: 50_000_000)
+    }
+    return !process.isRunning
+  }
+
+  private nonisolated static func sleepIgnoringCancellation(nanoseconds: UInt64) async {
+    let sleeper = Task.detached {
+      try? await Task.sleep(nanoseconds: nanoseconds)
+    }
+    await sleeper.value
   }
 
   private func userFacingMessage(for error: Error) -> String {
     if let appError = error as? AppError {
       switch appError {
-      case let .configValidationFailed(message), let .coreNotReady(message), let .helperResponse(message), let .portUnavailable(message):
+      case let .configValidationFailed(message), let .coreNotReady(message), let .coreStopFailed(message), let .helperResponse(message), let .portUnavailable(message):
         return message
       default:
         return appError.description
@@ -666,7 +785,7 @@ struct MihomoCoreReadinessProbe: CoreReadinessProbing {
 
   func waitUntilReady(api: CoreAPIEndpoint) async throws -> String {
     let client = MihomoAPIClient(
-      baseURL: api.baseURL,
+      baseURL: try api.baseURL,
       secret: api.secret,
       session: session,
       requestTimeout: requestTimeout
@@ -739,9 +858,18 @@ final class FoundationRunningProcess: RunningCoreProcess {
     process.processIdentifier
   }
 
+  var isRunning: Bool {
+    process.isRunning
+  }
+
   func terminate() {
     guard process.isRunning else { return }
     process.terminate()
+  }
+
+  func kill() {
+    guard process.isRunning else { return }
+    Darwin.kill(process.processIdentifier, SIGKILL)
   }
 
   func recentOutputTail(maxBytes: Int) -> String {

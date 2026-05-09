@@ -124,6 +124,58 @@ final class CoreProcessControllerTests: XCTestCase {
     XCTAssertTrue(firstProcess.didTerminate)
   }
 
+  func testStartUserModeWaitsForPreviousProcessTerminationBeforeRelaunching() async throws {
+    let firstProcess = DeferredTerminationRunningProcess(processIdentifier: 100)
+    let secondProcess = DeferredTerminationRunningProcess(processIdentifier: 200)
+    let launcher = SequencedProcessLauncher(processes: [firstProcess, secondProcess])
+    let portChecker = RecordingRuntimePortChecker()
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: portChecker
+    )
+    let api = CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+
+    try await controller.startUserMode(
+      coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+      configURL: URL(fileURLWithPath: "/tmp/config.yaml"),
+      workDirectory: URL(fileURLWithPath: "/tmp"),
+      api: api
+    )
+    XCTAssertEqual(launcher.launchCount, 1)
+    let initialPortCheckCount = await portChecker.currentCallCount()
+    XCTAssertEqual(initialPortCheckCount, 1)
+
+    let secondStart = Task { @MainActor in
+      try await controller.startUserMode(
+        coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+        configURL: URL(fileURLWithPath: "/tmp/config.yaml"),
+        workDirectory: URL(fileURLWithPath: "/tmp"),
+        api: api
+      )
+    }
+
+    for _ in 0..<20 where !firstProcess.didTerminate {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertTrue(firstProcess.didTerminate)
+    XCTAssertEqual(launcher.launchCount, 1)
+    let portCheckCountBeforeTermination = await portChecker.currentCallCount()
+    XCTAssertEqual(portCheckCountBeforeTermination, 1)
+
+    firstProcess.finish(exitCode: 15)
+    try await secondStart.value
+
+    XCTAssertEqual(launcher.launchCount, 2)
+    let finalPortCheckCount = await portChecker.currentCallCount()
+    XCTAssertEqual(finalPortCheckCount, 2)
+    XCTAssertEqual(controller.status, .running(version: "v-test"))
+  }
+
   func testStartFailsBeforeLaunchWhenControllerOrProxyPortIsOccupiedByExternalProcess() async throws {
     let launcher = FakeProcessLauncher()
     let portChecker = FakePortChecker(listeners: [
@@ -218,14 +270,29 @@ final class CoreProcessControllerTests: XCTestCase {
 
 @MainActor
 private final class SequencedProcessLauncher: CoreProcessLaunching {
-  private var processes: [FakeRunningProcess]
+  private var processes: [RunningCoreProcess]
+  private(set) var launchCount = 0
 
-  init(processes: [FakeRunningProcess]) {
+  init(processes: [RunningCoreProcess]) {
     self.processes = processes
   }
 
   func launch(executable: URL, arguments: [String], environment: [String: String], workDirectory: URL) throws -> RunningCoreProcess {
-    processes.removeFirst()
+    launchCount += 1
+    return processes.removeFirst()
+  }
+}
+
+private actor RecordingRuntimePortChecker: RuntimePortChecking {
+  private(set) var callCount = 0
+
+  func listeners(on ports: [Int]) async -> [PortListener] {
+    callCount += 1
+    return []
+  }
+
+  func currentCallCount() -> Int {
+    callCount
   }
 }
 
@@ -264,6 +331,7 @@ private final class SingleProcessLauncher: CoreProcessLaunching {
 @MainActor
 private final class AlreadyTerminatedRunningProcess: RunningCoreProcess {
   let processIdentifier: Int32 = 777
+  let isRunning = false
   private let exitCode: Int32
   private let outputTail: String
 
@@ -280,7 +348,39 @@ private final class AlreadyTerminatedRunningProcess: RunningCoreProcess {
 
   func terminate() {}
 
+  func kill() {}
+
   func recentOutputTail(maxBytes: Int) -> String {
     outputTail
+  }
+}
+
+@MainActor
+private final class DeferredTerminationRunningProcess: RunningCoreProcess {
+  let processIdentifier: Int32
+  var onTermination: ((Int32) -> Void)?
+  private(set) var didTerminate = false
+  private(set) var didKill = false
+  private(set) var isRunning = true
+
+  init(processIdentifier: Int32) {
+    self.processIdentifier = processIdentifier
+  }
+
+  func terminate() {
+    didTerminate = true
+  }
+
+  func kill() {
+    didKill = true
+  }
+
+  func finish(exitCode: Int32) {
+    isRunning = false
+    onTermination?(exitCode)
+  }
+
+  func recentOutputTail(maxBytes: Int) -> String {
+    ""
   }
 }

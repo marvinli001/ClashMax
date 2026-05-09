@@ -64,6 +64,7 @@ enum AppError: Error, CustomStringConvertible {
   case invalidProfileConfig(String)
   case configValidationFailed(String)
   case coreNotReady(String)
+  case coreStopFailed(String)
   case portUnavailable(String)
   case helperResponse(String)
 
@@ -81,6 +82,8 @@ enum AppError: Error, CustomStringConvertible {
       return "Mihomo config validation failed: \(message)"
     case let .coreNotReady(message):
       return "Mihomo controller did not become ready. \(message)"
+    case let .coreStopFailed(message):
+      return message
     case let .portUnavailable(message):
       return message
     case let .helperResponse(message):

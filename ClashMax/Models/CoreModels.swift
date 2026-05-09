@@ -665,7 +665,32 @@ struct CoreAPIEndpoint: Codable, Equatable {
   var secret: String
 
   var baseURL: URL {
-    URL(string: "http://\(host):\(port)")!
+    get throws {
+      let normalizedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+      let authorityHost = Self.authorityHost(for: normalizedHost)
+      let urlString = "http://\(authorityHost):\(port)"
+      guard !normalizedHost.isEmpty,
+            (1...65_535).contains(port),
+            let url = URL(string: urlString),
+            let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+            components.scheme == "http",
+            let componentHost = components.host,
+            !componentHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      else {
+        throw MihomoAPIClient.ClientError.invalidURL(urlString)
+      }
+      return url
+    }
+  }
+
+  private static func authorityHost(for host: String) -> String {
+    guard host.contains(":"),
+          !host.hasPrefix("["),
+          !host.hasSuffix("]")
+    else {
+      return host
+    }
+    return "[\(host)]"
   }
 }
 

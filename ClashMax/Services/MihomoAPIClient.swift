@@ -19,9 +19,21 @@ protocol MihomoAPIControlling: Sendable {
 }
 
 struct MihomoAPIClient: Sendable {
-  enum ClientError: Error {
+  enum ClientError: Error, LocalizedError {
+    case invalidURL(String)
     case invalidResponse
     case httpStatus(Int)
+
+    var errorDescription: String? {
+      switch self {
+      case let .invalidURL(url):
+        return "Invalid Mihomo controller URL: \(url)"
+      case .invalidResponse:
+        return "Mihomo controller returned an invalid response."
+      case let .httpStatus(status):
+        return "Mihomo controller returned HTTP \(status)."
+      }
+    }
   }
 
   let baseURL: URL
@@ -48,7 +60,7 @@ struct MihomoAPIClient: Sendable {
   }
 
   func updateMode(_ mode: RunMode) async throws {
-    var request = request(path: "/configs")
+    var request = try request(path: "/configs")
     request.httpMethod = "PATCH"
     request.httpBody = try JSONSerialization.data(withJSONObject: ["mode": mode.rawValue])
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -56,7 +68,7 @@ struct MihomoAPIClient: Sendable {
   }
 
   func restart(configPath: String? = nil) async throws {
-    var request = request(path: "/restart")
+    var request = try request(path: "/restart")
     request.httpMethod = "POST"
     if let configPath {
       request.httpBody = try JSONSerialization.data(withJSONObject: ["path": configPath], options: [.withoutEscapingSlashes])
@@ -66,7 +78,7 @@ struct MihomoAPIClient: Sendable {
   }
 
   func reloadConfig(path: String) async throws {
-    var request = request(path: "/configs")
+    var request = try request(path: "/configs")
     request.httpMethod = "PUT"
     request.httpBody = try JSONSerialization.data(withJSONObject: ["path": path], options: [.withoutEscapingSlashes])
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -161,7 +173,7 @@ struct MihomoAPIClient: Sendable {
   }
 
   func selectProxy(group: String, proxy: String) async throws {
-    var request = request(path: apiPath("proxies", group))
+    var request = try request(path: apiPath("proxies", group))
     request.httpMethod = "PUT"
     request.httpBody = try JSONSerialization.data(withJSONObject: ["name": proxy], options: [.withoutEscapingSlashes])
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -185,13 +197,13 @@ struct MihomoAPIClient: Sendable {
   }
 
   func closeConnection(id: String) async throws {
-    var request = request(path: apiPath("connections", id))
+    var request = try request(path: apiPath("connections", id))
     request.httpMethod = "DELETE"
     _ = try await data(for: request)
   }
 
   func closeAllConnections() async throws {
-    var request = request(path: "/connections")
+    var request = try request(path: "/connections")
     request.httpMethod = "DELETE"
     _ = try await data(for: request)
   }
@@ -216,13 +228,16 @@ struct MihomoAPIClient: Sendable {
     }
   }
 
-  private func request(path: String, queryItems: [URLQueryItem] = []) -> URLRequest {
-    var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
+  private func request(path: String, queryItems: [URLQueryItem] = []) throws -> URLRequest {
+    var components = try urlComponents()
     components.percentEncodedPath = path
     if !queryItems.isEmpty {
       components.queryItems = queryItems
     }
-    var request = URLRequest(url: components.url!)
+    guard let url = components.url else {
+      throw ClientError.invalidURL(components.string ?? baseURL.absoluteString)
+    }
+    var request = URLRequest(url: url)
     request.httpMethod = "GET"
     if let requestTimeout {
       request.timeoutInterval = requestTimeout
@@ -258,14 +273,13 @@ struct MihomoAPIClient: Sendable {
     decode: @Sendable @escaping (Data) throws -> T
   ) -> AsyncThrowingStream<T, Error> {
     AsyncThrowingStream { continuation in
-      var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
-      components.scheme = baseURL.scheme == "https" ? "wss" : "ws"
-      components.percentEncodedPath = path
-      if !queryItems.isEmpty {
-        components.queryItems = queryItems
+      let request: URLRequest
+      do {
+        request = try webSocketRequest(path: path, queryItems: queryItems)
+      } catch {
+        continuation.finish(throwing: error)
+        return
       }
-      var request = URLRequest(url: components.url!)
-      request.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")
       let task = session.webSocketTask(with: request)
 
       @Sendable func receiveNext() {
@@ -297,6 +311,35 @@ struct MihomoAPIClient: Sendable {
       task.resume()
       receiveNext()
     }
+  }
+
+  private func webSocketRequest(path: String, queryItems: [URLQueryItem]) throws -> URLRequest {
+    var components = try urlComponents()
+    let scheme = components.scheme?.lowercased()
+    components.scheme = scheme == "https" ? "wss" : "ws"
+    components.percentEncodedPath = path
+    if !queryItems.isEmpty {
+      components.queryItems = queryItems
+    }
+    guard let url = components.url else {
+      throw ClientError.invalidURL(components.string ?? baseURL.absoluteString)
+    }
+    var request = URLRequest(url: url)
+    request.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")
+    return request
+  }
+
+  private func urlComponents() throws -> URLComponents {
+    guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false),
+          let scheme = components.scheme?.lowercased(),
+          ["http", "https"].contains(scheme),
+          let host = components.host,
+          !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else {
+      throw ClientError.invalidURL(baseURL.absoluteString)
+    }
+    components.scheme = scheme
+    return components
   }
 
   private static func decodeConnections(from data: Data) throws -> [ConnectionSnapshot] {

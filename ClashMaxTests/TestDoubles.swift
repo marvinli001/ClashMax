@@ -153,6 +153,8 @@ final class FakeRunningProcess: RunningCoreProcess {
   let processIdentifier: Int32
   var onTermination: ((Int32) -> Void)?
   private(set) var didTerminate = false
+  private(set) var didKill = false
+  private(set) var isRunning = true
   var stubbedOutputTail = ""
 
   init(processIdentifier: Int32 = 42) {
@@ -161,9 +163,16 @@ final class FakeRunningProcess: RunningCoreProcess {
 
   func terminate() {
     didTerminate = true
+    isRunning = false
+  }
+
+  func kill() {
+    didKill = true
+    isRunning = false
   }
 
   func finish(exitCode: Int32) {
+    isRunning = false
     onTermination?(exitCode)
   }
 
