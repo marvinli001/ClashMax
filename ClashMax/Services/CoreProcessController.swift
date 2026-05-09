@@ -60,6 +60,21 @@ struct CoreStopResult {
   }
 }
 
+struct ProcessSignalResult: Equatable, Sendable {
+  var returnCode: Int32
+  var errnoCode: Int32
+
+  static let success = ProcessSignalResult(returnCode: 0, errnoCode: 0)
+
+  var succeeded: Bool {
+    returnCode == 0
+  }
+
+  var deniedByPermission: Bool {
+    !succeeded && errnoCode == EPERM
+  }
+}
+
 protocol RuntimePortChecking: Sendable {
   func listeners(on ports: [Int]) async -> [PortListener]
 }
@@ -624,37 +639,104 @@ final class CancellableProcessExecution: @unchecked Sendable {
 }
 
 struct MihomoOrphanProcessReaper: CoreProcessReaping {
+  private static let terminationGracePeriodSeconds: TimeInterval = 1
   private static let processListTimeoutSeconds: TimeInterval = 3
+  private static let terminationPollIntervalNanoseconds: UInt64 = 50_000_000
+  private let terminationGracePeriod: TimeInterval
+  private let processRowsProvider: @Sendable () async -> [(pid: Int32, command: String)]
+  private let signalSender: @Sendable (_ pid: Int32, _ signal: Int32) -> ProcessSignalResult
+  private let sleeper: @Sendable (_ nanoseconds: UInt64) async -> Void
+  private let now: @Sendable () -> Date
+  private let eventLogger: @Sendable (_ message: String) -> Void
 
-  func reapOrphans(coreURL: URL, configURL: URL, workDirectory: URL) async {
-    await Self.reapOrphansAsync(coreURL: coreURL, configURL: configURL, workDirectory: workDirectory)
+  init(
+    terminationGracePeriod: TimeInterval = Self.terminationGracePeriodSeconds,
+    processRowsProvider: @escaping @Sendable () async -> [(pid: Int32, command: String)] = {
+      await Self.processRows()
+    },
+    signalSender: @escaping @Sendable (_ pid: Int32, _ signal: Int32) -> ProcessSignalResult = { pid, signal in
+      Self.sendDarwinSignal(pid: pid, signal: signal)
+    },
+    sleeper: @escaping @Sendable (_ nanoseconds: UInt64) async -> Void = { nanoseconds in
+      try? await Task.sleep(nanoseconds: nanoseconds)
+    },
+    now: @escaping @Sendable () -> Date = { Date() },
+    eventLogger: @escaping @Sendable (_ message: String) -> Void = { message in
+      NSLog("%@", message)
+    }
+  ) {
+    self.terminationGracePeriod = terminationGracePeriod
+    self.processRowsProvider = processRowsProvider
+    self.signalSender = signalSender
+    self.sleeper = sleeper
+    self.now = now
+    self.eventLogger = eventLogger
   }
 
-  private nonisolated static func reapOrphansAsync(coreURL: URL, configURL: URL, workDirectory: URL) async {
-    let processRows = await Self.processRows()
+  func reapOrphans(coreURL: URL, configURL: URL, workDirectory: URL) async {
+    await Self.reapOrphansAsync(
+      coreURL: coreURL,
+      configURL: configURL,
+      workDirectory: workDirectory,
+      terminationGracePeriod: terminationGracePeriod,
+      processRowsProvider: processRowsProvider,
+      signalSender: signalSender,
+      sleeper: sleeper,
+      now: now,
+      eventLogger: eventLogger
+    )
+  }
+
+  private nonisolated static func reapOrphansAsync(
+    coreURL: URL,
+    configURL: URL,
+    workDirectory: URL,
+    terminationGracePeriod: TimeInterval,
+    processRowsProvider: @Sendable () async -> [(pid: Int32, command: String)],
+    signalSender: @Sendable (_ pid: Int32, _ signal: Int32) -> ProcessSignalResult,
+    sleeper: @Sendable (_ nanoseconds: UInt64) async -> Void,
+    now: @Sendable () -> Date,
+    eventLogger: @Sendable (_ message: String) -> Void
+  ) async {
+    let processRows = await processRowsProvider()
     let currentPID = getpid()
-    let managedPIDs = processRows.compactMap { row -> Int32? in
-      guard row.pid != currentPID,
-            Self.isManagedCoreCommand(
-              row.command,
-              coreURL: coreURL,
-              configURL: configURL,
-              workDirectory: workDirectory
-            )
-      else {
-        return nil
-      }
-      return row.pid
-    }
+    let managedPIDs = Self.managedPIDs(
+      from: processRows,
+      currentPID: currentPID,
+      coreURL: coreURL,
+      configURL: configURL,
+      workDirectory: workDirectory
+    )
 
     guard !managedPIDs.isEmpty else { return }
 
-    managedPIDs.forEach { kill($0, SIGTERM) }
-    let deadline = Date().addingTimeInterval(1)
-    while Date() < deadline && managedPIDs.contains(where: Self.isProcessAlive) {
-      try? await Task.sleep(nanoseconds: 50_000_000)
+    let signaledPIDs = managedPIDs.filter { pid in
+      let result = signalSender(pid, SIGTERM)
+      Self.logPermissionDeniedIfNeeded(result, pid: pid, operation: "SIGTERM", eventLogger: eventLogger)
+      return result.succeeded
     }
-    managedPIDs.filter(Self.isProcessAlive).forEach { kill($0, SIGKILL) }
+    guard !signaledPIDs.isEmpty else { return }
+
+    let deadline = now().addingTimeInterval(terminationGracePeriod)
+    while now() < deadline && signaledPIDs.contains(where: { pid in
+      Self.isProcessSignalableAlive(pid, signalSender: signalSender, eventLogger: eventLogger)
+    }) {
+      await sleeper(Self.terminationPollIntervalNanoseconds)
+    }
+    let latestManagedPIDs = Set(Self.managedPIDs(
+      from: await processRowsProvider(),
+      currentPID: currentPID,
+      coreURL: coreURL,
+      configURL: configURL,
+      workDirectory: workDirectory
+    ))
+    signaledPIDs
+      .filter { latestManagedPIDs.contains($0) }
+      .filter { Self.isProcessSignalableAlive($0, signalSender: signalSender, eventLogger: eventLogger) }
+      .forEach { pid in
+        let result = signalSender(pid, SIGKILL)
+        Self.logPermissionDeniedIfNeeded(result, pid: pid, operation: "SIGKILL", eventLogger: eventLogger)
+      }
   }
 
   nonisolated static func isManagedCoreCommand(_ command: String, coreURL: URL, configURL: URL, workDirectory: URL) -> Bool {
@@ -703,8 +785,65 @@ struct MihomoOrphanProcessReaper: CoreProcessReaping {
     }
   }
 
-  private nonisolated static func isProcessAlive(_ pid: Int32) -> Bool {
-    kill(pid, 0) == 0 || errno == EPERM
+  private nonisolated static func managedPIDs(
+    from processRows: [(pid: Int32, command: String)],
+    currentPID: Int32,
+    coreURL: URL,
+    configURL: URL,
+    workDirectory: URL
+  ) -> [Int32] {
+    processRows.compactMap { row -> Int32? in
+      guard row.pid != currentPID,
+            Self.isManagedCoreCommand(
+              row.command,
+              coreURL: coreURL,
+              configURL: configURL,
+              workDirectory: workDirectory
+            )
+      else {
+        return nil
+      }
+      return row.pid
+    }
+  }
+
+  private nonisolated static func sendDarwinSignal(pid: Int32, signal: Int32) -> ProcessSignalResult {
+    errno = 0
+    let returnCode = Darwin.kill(pid, signal)
+    return ProcessSignalResult(returnCode: returnCode, errnoCode: returnCode == 0 ? 0 : errno)
+  }
+
+  private nonisolated static func logPermissionDeniedIfNeeded(
+    _ result: ProcessSignalResult,
+    pid: Int32,
+    operation: String,
+    eventLogger: @Sendable (_ message: String) -> Void
+  ) {
+    guard result.deniedByPermission else { return }
+    eventLogger(
+      "[reaper] PID \(pid) returned EPERM during \(operation); skipping user-mode orphan cleanup. " +
+        "Privileged helper fallback is not implemented for orphan reaping."
+    )
+  }
+
+  /// Returns true only when the PID still exists and this app still has authority
+  /// to signal it. This is intentionally stricter than "alive": an EPERM PID no
+  /// longer keeps the SIGTERM grace loop waiting and is skipped during SIGKILL
+  /// escalation because waiting will not restore signaling authority, and SIGKILL
+  /// would fail the same way. User-mode orphan reaping logs and abandons EPERM
+  /// PIDs; privileged-helper orphan cleanup is not implemented.
+  private nonisolated static func isProcessSignalableAlive(
+    _ pid: Int32,
+    signalSender: @Sendable (_ pid: Int32, _ signal: Int32) -> ProcessSignalResult = { pid, signal in
+      Self.sendDarwinSignal(pid: pid, signal: signal)
+    },
+    eventLogger: @Sendable (_ message: String) -> Void = { message in
+      NSLog("%@", message)
+    }
+  ) -> Bool {
+    let result = signalSender(pid, 0)
+    Self.logPermissionDeniedIfNeeded(result, pid: pid, operation: "signal probe", eventLogger: eventLogger)
+    return result.succeeded
   }
 }
 

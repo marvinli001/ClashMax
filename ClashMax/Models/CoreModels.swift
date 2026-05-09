@@ -1,6 +1,16 @@
 import Darwin
 import Foundation
 
+private extension KeyedDecodingContainer {
+  func decodeDefault<T: Decodable>(
+    _ type: T.Type,
+    forKey key: Key,
+    default defaultValue: @autoclosure () -> T
+  ) -> T {
+    (try? decodeIfPresent(type, forKey: key)) ?? defaultValue()
+  }
+}
+
 enum ProfileSource: Codable, Equatable {
   case localFile(originalPath: String?)
   case subscription(id: UUID)
@@ -196,6 +206,12 @@ struct DelayTestSettings: Codable, Equatable {
   var unifiedDelay: Bool
   var timeoutMilliseconds: Int
 
+  private enum CodingKeys: String, CodingKey {
+    case mode
+    case unifiedDelay
+    case timeoutMilliseconds
+  }
+
   init(
     mode: DelayTestMode = .mihomoURL,
     unifiedDelay: Bool = false,
@@ -207,6 +223,18 @@ struct DelayTestSettings: Codable, Equatable {
   }
 
   static let `default` = DelayTestSettings()
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    let defaults = Self.default
+    mode = container.decodeDefault(DelayTestMode.self, forKey: .mode, default: defaults.mode)
+    unifiedDelay = container.decodeDefault(Bool.self, forKey: .unifiedDelay, default: defaults.unifiedDelay)
+    timeoutMilliseconds = container.decodeDefault(
+      Int.self,
+      forKey: .timeoutMilliseconds,
+      default: defaults.timeoutMilliseconds
+    )
+  }
 
   var normalizedTimeoutMilliseconds: Int {
     min(max(timeoutMilliseconds, 1_000), 30_000)
@@ -229,6 +257,12 @@ struct ExternalControllerCORSSettings: Codable, Equatable {
   var allowPrivateNetwork: Bool
   var allowedOrigins: [String]
 
+  private enum CodingKeys: String, CodingKey {
+    case enabled
+    case allowPrivateNetwork
+    case allowedOrigins
+  }
+
   init(
     enabled: Bool = true,
     allowPrivateNetwork: Bool = true,
@@ -240,6 +274,20 @@ struct ExternalControllerCORSSettings: Codable, Equatable {
   }
 
   static let `default` = ExternalControllerCORSSettings()
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    let defaults = Self.default
+    self.init(
+      enabled: container.decodeDefault(Bool.self, forKey: .enabled, default: defaults.enabled),
+      allowPrivateNetwork: container.decodeDefault(
+        Bool.self,
+        forKey: .allowPrivateNetwork,
+        default: defaults.allowPrivateNetwork
+      ),
+      allowedOrigins: container.decodeDefault([String].self, forKey: .allowedOrigins, default: defaults.allowedOrigins)
+    )
+  }
 
   var effectiveAllowedOrigins: [String] {
     Self.normalizedOrigins(Self.fixedLocalOrigins + allowedOrigins)
@@ -294,6 +342,14 @@ struct ExternalControllerSettings: Codable, Equatable {
   var secret: String
   var cors: ExternalControllerCORSSettings
 
+  private enum CodingKeys: String, CodingKey {
+    case enabled
+    case host
+    case port
+    case secret
+    case cors
+  }
+
   init(
     enabled: Bool = true,
     host: String = Self.defaultHost,
@@ -309,6 +365,18 @@ struct ExternalControllerSettings: Codable, Equatable {
   }
 
   static let `default` = ExternalControllerSettings()
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    let defaults = Self.default
+    self.init(
+      enabled: container.decodeDefault(Bool.self, forKey: .enabled, default: defaults.enabled),
+      host: container.decodeDefault(String.self, forKey: .host, default: defaults.host),
+      port: container.decodeDefault(Int.self, forKey: .port, default: defaults.port),
+      secret: container.decodeDefault(String.self, forKey: .secret, default: defaults.secret),
+      cors: container.decodeDefault(ExternalControllerCORSSettings.self, forKey: .cors, default: defaults.cors)
+    )
+  }
 
   var address: String {
     "\(normalizedHost):\(normalizedPort)"
@@ -373,6 +441,21 @@ struct RuntimeOverrides: Codable, Equatable {
   var tunEnabled: Bool
   var tunSettings: TunSettings
 
+  private enum CodingKeys: String, CodingKey {
+    case mixedPort
+    case externalControllerHost
+    case externalControllerPort
+    case secret
+    case allowLan
+    case mode
+    case logLevel
+    case unifiedDelay
+    case dnsEnabled
+    case externalControllerCORS
+    case tunEnabled
+    case tunSettings
+  }
+
   init(
     mixedPort: Int,
     externalControllerHost: String,
@@ -418,6 +501,35 @@ struct RuntimeOverrides: Codable, Equatable {
     )
   }
 
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    let defaults = Self.defaultForLaunch()
+    mixedPort = container.decodeDefault(Int.self, forKey: .mixedPort, default: defaults.mixedPort)
+    externalControllerHost = container.decodeDefault(
+      String.self,
+      forKey: .externalControllerHost,
+      default: defaults.externalControllerHost
+    )
+    externalControllerPort = container.decodeDefault(
+      Int.self,
+      forKey: .externalControllerPort,
+      default: defaults.externalControllerPort
+    )
+    secret = container.decodeDefault(String.self, forKey: .secret, default: defaults.secret)
+    allowLan = container.decodeDefault(Bool.self, forKey: .allowLan, default: defaults.allowLan)
+    mode = container.decodeDefault(RunMode.self, forKey: .mode, default: defaults.mode)
+    logLevel = container.decodeDefault(String.self, forKey: .logLevel, default: defaults.logLevel)
+    unifiedDelay = container.decodeDefault(Bool.self, forKey: .unifiedDelay, default: defaults.unifiedDelay)
+    dnsEnabled = container.decodeDefault(Bool?.self, forKey: .dnsEnabled, default: defaults.dnsEnabled)
+    externalControllerCORS = container.decodeDefault(
+      ExternalControllerCORSSettings.self,
+      forKey: .externalControllerCORS,
+      default: defaults.externalControllerCORS
+    )
+    tunEnabled = container.decodeDefault(Bool.self, forKey: .tunEnabled, default: defaults.tunEnabled)
+    tunSettings = container.decodeDefault(TunSettings.self, forKey: .tunSettings, default: defaults.tunSettings)
+  }
+
   var endpoint: CoreAPIEndpoint {
     CoreAPIEndpoint(host: externalControllerHost, port: externalControllerPort, secret: secret)
   }
@@ -448,6 +560,31 @@ struct SystemProxySettings: Codable, Equatable {
   var guardEnabled: Bool
   var guardIntervalSeconds: Int
 
+  private enum CodingKeys: String, CodingKey {
+    case proxyHost
+    case customBypassDomains
+    case useDefaultBypass
+    case validateBypass
+    case guardEnabled
+    case guardIntervalSeconds
+  }
+
+  init(
+    proxyHost: String,
+    customBypassDomains: [String],
+    useDefaultBypass: Bool,
+    validateBypass: Bool,
+    guardEnabled: Bool,
+    guardIntervalSeconds: Int
+  ) {
+    self.proxyHost = proxyHost
+    self.customBypassDomains = customBypassDomains
+    self.useDefaultBypass = useDefaultBypass
+    self.validateBypass = validateBypass
+    self.guardEnabled = guardEnabled
+    self.guardIntervalSeconds = guardIntervalSeconds
+  }
+
   static let `default` = SystemProxySettings(
     proxyHost: defaultProxyHost,
     customBypassDomains: [],
@@ -456,6 +593,27 @@ struct SystemProxySettings: Codable, Equatable {
     guardEnabled: false,
     guardIntervalSeconds: defaultGuardIntervalSeconds
   )
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    let defaults = Self.default
+    self.init(
+      proxyHost: container.decodeDefault(String.self, forKey: .proxyHost, default: defaults.proxyHost),
+      customBypassDomains: container.decodeDefault(
+        [String].self,
+        forKey: .customBypassDomains,
+        default: defaults.customBypassDomains
+      ),
+      useDefaultBypass: container.decodeDefault(Bool.self, forKey: .useDefaultBypass, default: defaults.useDefaultBypass),
+      validateBypass: container.decodeDefault(Bool.self, forKey: .validateBypass, default: defaults.validateBypass),
+      guardEnabled: container.decodeDefault(Bool.self, forKey: .guardEnabled, default: defaults.guardEnabled),
+      guardIntervalSeconds: container.decodeDefault(
+        Int.self,
+        forKey: .guardIntervalSeconds,
+        default: defaults.guardIntervalSeconds
+      )
+    )
+  }
 
   var normalizedProxyHost: String {
     let trimmed = proxyHost.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -570,6 +728,37 @@ struct TunSettings: Codable, Equatable {
   var mtu: Int
   var routeExcludeAddresses: [String]
 
+  private enum CodingKeys: String, CodingKey {
+    case stack
+    case device
+    case autoRoute
+    case strictRoute
+    case autoDetectInterface
+    case dnsHijack
+    case mtu
+    case routeExcludeAddresses
+  }
+
+  init(
+    stack: TunStack,
+    device: String,
+    autoRoute: Bool,
+    strictRoute: Bool,
+    autoDetectInterface: Bool,
+    dnsHijack: [String],
+    mtu: Int,
+    routeExcludeAddresses: [String]
+  ) {
+    self.stack = stack
+    self.device = device
+    self.autoRoute = autoRoute
+    self.strictRoute = strictRoute
+    self.autoDetectInterface = autoDetectInterface
+    self.dnsHijack = dnsHijack
+    self.mtu = mtu
+    self.routeExcludeAddresses = routeExcludeAddresses
+  }
+
   static let `default` = TunSettings(
     stack: .mixed,
     device: defaultDevice,
@@ -580,6 +769,29 @@ struct TunSettings: Codable, Equatable {
     mtu: defaultMTU,
     routeExcludeAddresses: []
   )
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    let defaults = Self.default
+    self.init(
+      stack: container.decodeDefault(TunStack.self, forKey: .stack, default: defaults.stack),
+      device: container.decodeDefault(String.self, forKey: .device, default: defaults.device),
+      autoRoute: container.decodeDefault(Bool.self, forKey: .autoRoute, default: defaults.autoRoute),
+      strictRoute: container.decodeDefault(Bool.self, forKey: .strictRoute, default: defaults.strictRoute),
+      autoDetectInterface: container.decodeDefault(
+        Bool.self,
+        forKey: .autoDetectInterface,
+        default: defaults.autoDetectInterface
+      ),
+      dnsHijack: container.decodeDefault([String].self, forKey: .dnsHijack, default: defaults.dnsHijack),
+      mtu: container.decodeDefault(Int.self, forKey: .mtu, default: defaults.mtu),
+      routeExcludeAddresses: container.decodeDefault(
+        [String].self,
+        forKey: .routeExcludeAddresses,
+        default: defaults.routeExcludeAddresses
+      )
+    )
+  }
 
   var normalizedDevice: String {
     let trimmed = device.trimmingCharacters(in: .whitespacesAndNewlines)

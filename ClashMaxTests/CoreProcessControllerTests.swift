@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 @testable import ClashMax
 
@@ -91,6 +92,105 @@ final class CoreProcessControllerTests: XCTestCase {
       configURL: configURL,
       workDirectory: workDirectory
     ))
+  }
+
+  func testOrphanReaperDoesNotEscalateWhenSigtermIsNotPermitted() async {
+    let fixture = orphanReaperFixture(pid: 4242)
+    let signalSpy = ReaperSignalSpy(mode: .denySIGTERM)
+    let sleepSpy = ReaperSleepSpy()
+    let eventRecorder = ReaperEventRecorder()
+    let reaper = MihomoOrphanProcessReaper(
+      processRowsProvider: {
+        [(pid: fixture.pid, command: fixture.command)]
+      },
+      signalSender: { pid, signal in
+        signalSpy.send(pid: pid, signal: signal)
+      },
+      sleeper: { nanoseconds in
+        await sleepSpy.sleep(nanoseconds)
+      },
+      eventLogger: { message in
+        eventRecorder.record(message)
+      }
+    )
+
+    await reaper.reapOrphans(
+      coreURL: fixture.coreURL,
+      configURL: fixture.configURL,
+      workDirectory: fixture.workDirectory
+    )
+
+    XCTAssertEqual(signalSpy.sentSignals(), [SIGTERM])
+    XCTAssertTrue(eventRecorder.messages().contains { message in
+      message.contains("EPERM")
+        && message.contains("SIGTERM")
+        && message.contains("Privileged helper fallback is not implemented")
+    })
+    let sleepCallCount = await sleepSpy.callCount()
+    XCTAssertEqual(sleepCallCount, 0)
+  }
+
+  func testOrphanReaperDoesNotEscalateWhenAliveProbeIsNotPermitted() async {
+    let fixture = orphanReaperFixture(pid: 4243)
+    let signalSpy = ReaperSignalSpy(mode: .denyAliveProbe)
+    let sleepSpy = ReaperSleepSpy()
+    let eventRecorder = ReaperEventRecorder()
+    let reaper = MihomoOrphanProcessReaper(
+      processRowsProvider: {
+        [(pid: fixture.pid, command: fixture.command)]
+      },
+      signalSender: { pid, signal in
+        signalSpy.send(pid: pid, signal: signal)
+      },
+      sleeper: { nanoseconds in
+        await sleepSpy.sleep(nanoseconds)
+      },
+      eventLogger: { message in
+        eventRecorder.record(message)
+      }
+    )
+
+    await reaper.reapOrphans(
+      coreURL: fixture.coreURL,
+      configURL: fixture.configURL,
+      workDirectory: fixture.workDirectory
+    )
+
+    XCTAssertEqual(signalSpy.sentSignals(), [SIGTERM, 0, 0])
+    XCTAssertFalse(signalSpy.didSend(SIGKILL))
+    XCTAssertEqual(eventRecorder.messages().filter { $0.contains("EPERM") }.count, 2)
+    XCTAssertTrue(eventRecorder.messages().allSatisfy { message in
+      message.contains("signal probe")
+        && message.contains("Privileged helper fallback is not implemented")
+    })
+    let sleepCallCount = await sleepSpy.callCount()
+    XCTAssertEqual(sleepCallCount, 0)
+  }
+
+  func testOrphanReaperRevalidatesManagedCommandBeforeEscalatingToSIGKILL() async {
+    let fixture = orphanReaperFixture(pid: 4244)
+    let signalSpy = ReaperSignalSpy(mode: .allow)
+    let rowsProvider = ReaperRowsProvider(rows: [
+      [(pid: fixture.pid, command: fixture.command)],
+      [(pid: fixture.pid, command: "/usr/bin/yes")]
+    ])
+    let reaper = MihomoOrphanProcessReaper(
+      terminationGracePeriod: 0,
+      processRowsProvider: {
+        await rowsProvider.nextRows()
+      },
+      signalSender: { pid, signal in
+        signalSpy.send(pid: pid, signal: signal)
+      }
+    )
+
+    await reaper.reapOrphans(
+      coreURL: fixture.coreURL,
+      configURL: fixture.configURL,
+      workDirectory: fixture.workDirectory
+    )
+
+    XCTAssertEqual(signalSpy.sentSignals(), [SIGTERM])
   }
 
   func testStaleProcessTerminationDoesNotOverwriteNewRunStatus() async throws {
@@ -265,6 +365,105 @@ final class CoreProcessControllerTests: XCTestCase {
     }
 
     XCTAssertEqual(receivedExitCode, 7)
+  }
+
+  private func orphanReaperFixture(pid: Int32) -> (
+    pid: Int32,
+    coreURL: URL,
+    configURL: URL,
+    workDirectory: URL,
+    command: String
+  ) {
+    let coreURL = URL(fileURLWithPath: "/Applications/ClashMax.app/Contents/Resources/Core/mihomo-darwin-arm64")
+    let configURL = URL(fileURLWithPath: "/Users/test/Library/Application Support/ClashMax/Runtime/profile.runtime.yaml")
+    let workDirectory = URL(fileURLWithPath: "/Users/test/Library/Application Support/ClashMax/Runtime")
+    let command = "\(coreURL.path) -f \(configURL.path) -d \(workDirectory.path)"
+    return (pid, coreURL, configURL, workDirectory, command)
+  }
+}
+
+private final class ReaperSignalSpy: @unchecked Sendable {
+  enum Mode {
+    case allow
+    case denySIGTERM
+    case denyAliveProbe
+  }
+
+  private let mode: Mode
+  private let lock = NSLock()
+  private var calls: [Int32] = []
+
+  init(mode: Mode) {
+    self.mode = mode
+  }
+
+  func send(pid: Int32, signal: Int32) -> ProcessSignalResult {
+    lock.withLock {
+      calls.append(signal)
+    }
+
+    switch (mode, signal) {
+    case (.denySIGTERM, SIGTERM), (.denyAliveProbe, 0):
+      return ProcessSignalResult(returnCode: -1, errnoCode: EPERM)
+    default:
+      return .success
+    }
+  }
+
+  func sentSignals() -> [Int32] {
+    lock.withLock {
+      calls
+    }
+  }
+
+  func didSend(_ signal: Int32) -> Bool {
+    lock.withLock {
+      calls.contains(signal)
+    }
+  }
+}
+
+private final class ReaperEventRecorder: @unchecked Sendable {
+  private let lock = NSLock()
+  private var recordedMessages: [String] = []
+
+  func record(_ message: String) {
+    lock.withLock {
+      recordedMessages.append(message)
+    }
+  }
+
+  func messages() -> [String] {
+    lock.withLock {
+      recordedMessages
+    }
+  }
+}
+
+private actor ReaperRowsProvider {
+  private var rows: [[(pid: Int32, command: String)]]
+
+  init(rows: [[(pid: Int32, command: String)]]) {
+    self.rows = rows
+  }
+
+  func nextRows() -> [(pid: Int32, command: String)] {
+    guard rows.count > 1 else {
+      return rows.first ?? []
+    }
+    return rows.removeFirst()
+  }
+}
+
+private actor ReaperSleepSpy {
+  private var calls: [UInt64] = []
+
+  func sleep(_ nanoseconds: UInt64) {
+    calls.append(nanoseconds)
+  }
+
+  func callCount() -> Int {
+    calls.count
   }
 }
 

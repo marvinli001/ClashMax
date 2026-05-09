@@ -7,6 +7,11 @@ import XCTest
 
 @MainActor
 final class DashboardRuntimeStateTests: XCTestCase {
+  private static let systemProxySettingsDefaultsKey = "io.github.clashmax.systemProxySettings"
+  private static let tunSettingsDefaultsKey = "io.github.clashmax.tunSettings"
+  private static let delayTestSettingsDefaultsKey = "io.github.clashmax.delayTestSettings"
+  private static let externalControllerSettingsDefaultsKey = "io.github.clashmax.externalControllerSettings"
+
   func testNoActiveProfileBlocksDashboard() throws {
     let paths = try Self.makeRuntimePaths()
     let model = AppModel(
@@ -352,6 +357,281 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertNotEqual(secondModel.overrides.secret, "saved-secret")
     XCTAssertFalse(secondModel.overrides.secret.isEmpty)
     XCTAssertFalse(secondModel.overrides.externalControllerCORS.enabled)
+  }
+
+  func testTunSettingsMigratesMissingRouteExcludeAddressesFromUserDefaults() throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    try Self.storeJSON(
+      [
+        "stack": "gvisor",
+        "device": "utun9",
+        "autoRoute": false,
+        "strictRoute": true,
+        "autoDetectInterface": false,
+        "dnsHijack": ["any:53"],
+        "mtu": 1400
+      ],
+      forKey: Self.tunSettingsDefaultsKey,
+      defaults: defaults
+    )
+
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: defaults
+    )
+
+    XCTAssertEqual(model.tunSettings.stack, .gvisor)
+    XCTAssertEqual(model.tunSettings.device, "utun9")
+    XCTAssertFalse(model.tunSettings.autoRoute)
+    XCTAssertTrue(model.tunSettings.strictRoute)
+    XCTAssertFalse(model.tunSettings.autoDetectInterface)
+    XCTAssertEqual(model.tunSettings.dnsHijack, ["any:53"])
+    XCTAssertEqual(model.tunSettings.mtu, 1400)
+    XCTAssertEqual(model.tunSettings.routeExcludeAddresses, [])
+    XCTAssertEqual(model.overrides.tunSettings, model.tunSettings)
+  }
+
+  func testExternalControllerSettingsMigratesMissingCORSFromUserDefaults() throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    try Self.storeJSON(
+      [
+        "enabled": false,
+        "host": "localhost",
+        "port": 19197,
+        "secret": "saved-secret"
+      ],
+      forKey: Self.externalControllerSettingsDefaultsKey,
+      defaults: defaults
+    )
+
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: defaults
+    )
+
+    XCTAssertFalse(model.externalControllerSettings.enabled)
+    XCTAssertEqual(model.externalControllerSettings.host, "localhost")
+    XCTAssertEqual(model.externalControllerSettings.port, 19197)
+    XCTAssertEqual(model.externalControllerSettings.cors, .default)
+    XCTAssertNotEqual(model.externalControllerSettings.secret, "saved-secret")
+    XCTAssertFalse(model.externalControllerSettings.secret.isEmpty)
+    XCTAssertEqual(model.overrides.externalControllerHost, "localhost")
+    XCTAssertEqual(model.overrides.externalControllerPort, 19197)
+    XCTAssertFalse(model.overrides.externalControllerCORS.enabled)
+  }
+
+  func testExternalControllerSettingsMigratesPartialNestedCORSFromUserDefaults() throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    try Self.storeJSON(
+      [
+        "enabled": true,
+        "host": "localhost",
+        "port": 19198,
+        "secret": "saved-secret",
+        "cors": [
+          "enabled": true
+        ]
+      ],
+      forKey: Self.externalControllerSettingsDefaultsKey,
+      defaults: defaults
+    )
+
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: defaults
+    )
+
+    XCTAssertTrue(model.externalControllerSettings.enabled)
+    XCTAssertEqual(model.externalControllerSettings.host, "localhost")
+    XCTAssertEqual(model.externalControllerSettings.port, 19198)
+    XCTAssertTrue(model.externalControllerSettings.cors.enabled)
+    XCTAssertEqual(model.externalControllerSettings.cors.allowPrivateNetwork, ExternalControllerCORSSettings.default.allowPrivateNetwork)
+    XCTAssertEqual(model.externalControllerSettings.cors.allowedOrigins, ExternalControllerCORSSettings.default.allowedOrigins)
+    XCTAssertNotEqual(model.externalControllerSettings.secret, "saved-secret")
+    XCTAssertTrue(model.overrides.externalControllerCORS.enabled)
+    XCTAssertEqual(model.overrides.externalControllerCORS.allowedOrigins, ExternalControllerCORSSettings.default.allowedOrigins)
+  }
+
+  func testRuntimeOverridesMigratesMissingNestedSettings() throws {
+    let data = try JSONSerialization.data(
+      withJSONObject: [
+        "mixedPort": 7891,
+        "externalControllerHost": "localhost",
+        "externalControllerPort": 19197,
+        "secret": "secret-token",
+        "allowLan": true,
+        "mode": "global",
+        "logLevel": "debug",
+        "unifiedDelay": true,
+        "dnsEnabled": true,
+        "tunEnabled": true
+      ]
+    )
+
+    let decoded = try JSONDecoder().decode(RuntimeOverrides.self, from: data)
+
+    XCTAssertEqual(decoded.mixedPort, 7891)
+    XCTAssertEqual(decoded.externalControllerHost, "localhost")
+    XCTAssertEqual(decoded.externalControllerPort, 19197)
+    XCTAssertEqual(decoded.secret, "secret-token")
+    XCTAssertTrue(decoded.allowLan)
+    XCTAssertEqual(decoded.mode, .global)
+    XCTAssertEqual(decoded.logLevel, "debug")
+    XCTAssertTrue(decoded.unifiedDelay)
+    XCTAssertEqual(decoded.dnsEnabled, true)
+    XCTAssertTrue(decoded.tunEnabled)
+    XCTAssertEqual(decoded.externalControllerCORS, .default)
+    XCTAssertEqual(decoded.tunSettings, .default)
+  }
+
+  func testDelayTestSettingsMigratesMissingTimeoutFromUserDefaults() throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    try Self.storeJSON(
+      [
+        "mode": "nativePing",
+        "unifiedDelay": true
+      ],
+      forKey: Self.delayTestSettingsDefaultsKey,
+      defaults: defaults
+    )
+
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: defaults
+    )
+
+    XCTAssertEqual(model.delayTestSettings.mode, .nativePing)
+    XCTAssertTrue(model.delayTestSettings.unifiedDelay)
+    XCTAssertEqual(model.delayTestSettings.timeoutMilliseconds, DelayTestSettings.default.timeoutMilliseconds)
+    XCTAssertTrue(model.overrides.unifiedDelay)
+  }
+
+  func testSystemProxySettingsMigratesMissingGuardIntervalFromUserDefaults() throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    try Self.storeJSON(
+      [
+        "proxyHost": "192.168.1.20",
+        "customBypassDomains": ["localhost", "*.corp"],
+        "useDefaultBypass": false,
+        "validateBypass": false,
+        "guardEnabled": true
+      ],
+      forKey: Self.systemProxySettingsDefaultsKey,
+      defaults: defaults
+    )
+
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: defaults
+    )
+
+    XCTAssertEqual(model.systemProxySettings.proxyHost, "192.168.1.20")
+    XCTAssertEqual(model.systemProxySettings.customBypassDomains, ["localhost", "*.corp"])
+    XCTAssertFalse(model.systemProxySettings.useDefaultBypass)
+    XCTAssertFalse(model.systemProxySettings.validateBypass)
+    XCTAssertTrue(model.systemProxySettings.guardEnabled)
+    XCTAssertEqual(model.systemProxySettings.guardIntervalSeconds, SystemProxySettings.default.guardIntervalSeconds)
+  }
+
+  func testSystemProxySettingsFallsBackForWrongTypedGuardIntervalWithoutResettingSiblings() throws {
+    let data = try JSONSerialization.data(
+      withJSONObject: [
+        "proxyHost": "192.168.1.20",
+        "customBypassDomains": ["localhost", "*.corp"],
+        "useDefaultBypass": false,
+        "validateBypass": false,
+        "guardEnabled": true,
+        "guardIntervalSeconds": "slow"
+      ]
+    )
+
+    let decoded = try JSONDecoder().decode(SystemProxySettings.self, from: data)
+
+    XCTAssertEqual(decoded.proxyHost, "192.168.1.20")
+    XCTAssertEqual(decoded.customBypassDomains, ["localhost", "*.corp"])
+    XCTAssertFalse(decoded.useDefaultBypass)
+    XCTAssertFalse(decoded.validateBypass)
+    XCTAssertTrue(decoded.guardEnabled)
+    XCTAssertEqual(decoded.guardIntervalSeconds, SystemProxySettings.default.guardIntervalSeconds)
+  }
+
+  func testPersistedSettingsRoundTripCurrentSchema() throws {
+    try assertRoundTrip(
+      DelayTestSettings(mode: .nativePing, unifiedDelay: true, timeoutMilliseconds: 2_500)
+    )
+    try assertRoundTrip(
+      ExternalControllerCORSSettings(
+        enabled: true,
+        allowPrivateNetwork: false,
+        allowedOrigins: ["https://custom.example", "https://yacd.metacubex.one"]
+      )
+    )
+    try assertRoundTrip(
+      ExternalControllerSettings(
+        enabled: true,
+        host: "localhost",
+        port: 19197,
+        secret: "secret-token",
+        cors: ExternalControllerCORSSettings(enabled: false, allowPrivateNetwork: false, allowedOrigins: ["https://custom.example"])
+      )
+    )
+    try assertRoundTrip(
+      SystemProxySettings(
+        proxyHost: "127.0.0.1",
+        customBypassDomains: ["localhost", "*.corp"],
+        useDefaultBypass: false,
+        validateBypass: true,
+        guardEnabled: true,
+        guardIntervalSeconds: 10
+      )
+    )
+    try assertRoundTrip(
+      TunSettings(
+        stack: .gvisor,
+        device: "utun9",
+        autoRoute: false,
+        strictRoute: true,
+        autoDetectInterface: false,
+        dnsHijack: ["any:53"],
+        mtu: 1400,
+        routeExcludeAddresses: ["10.0.0.0/8"]
+      )
+    )
+    try assertRoundTrip(
+      RuntimeOverrides(
+        mixedPort: 7891,
+        externalControllerHost: "localhost",
+        externalControllerPort: 19197,
+        secret: "secret-token",
+        allowLan: true,
+        mode: .global,
+        logLevel: "debug",
+        dnsEnabled: true,
+        tunEnabled: true,
+        unifiedDelay: true,
+        externalControllerCORS: ExternalControllerCORSSettings(enabled: true, allowPrivateNetwork: false, allowedOrigins: ["https://custom.example"]),
+        tunSettings: TunSettings(
+          stack: .system,
+          device: "utun10",
+          autoRoute: true,
+          strictRoute: true,
+          autoDetectInterface: true,
+          dnsHijack: ["any:53"],
+          mtu: 1500,
+          routeExcludeAddresses: ["192.168.0.0/16"]
+        )
+      )
+    )
   }
 
   func testLaunchSettingsUseMainAppLoginServiceAndPersistSilentStart() async throws {
@@ -1961,6 +2241,27 @@ final class DashboardRuntimeStateTests: XCTestCase {
       "/usr/sbin/networksetup -getsocksfirewallproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
       "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": "There aren't any bypass domains set.\n"
     ]
+  }
+
+  private func assertRoundTrip<T: Codable & Equatable>(
+    _ value: T,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) throws {
+    let data = try JSONEncoder().encode(value)
+    let decoded = try JSONDecoder().decode(T.self, from: data)
+    if decoded != value {
+      XCTFail("Round-trip decoded value did not match.", file: file, line: line)
+    }
+  }
+
+  private static func storeJSON(
+    _ object: [String: Any],
+    forKey key: String,
+    defaults: UserDefaults
+  ) throws {
+    let data = try JSONSerialization.data(withJSONObject: object)
+    defaults.set(data, forKey: key)
   }
 
   private static func makeRuntimePaths() throws -> RuntimePaths {
