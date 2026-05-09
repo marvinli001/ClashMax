@@ -784,6 +784,8 @@ struct ProcessCommandRunner: CommandRunning {
     process.standardOutput = pipe
     process.standardError = pipe
 
+    let drain = LiveOutputDrain(maxRetainedBytes: nil)
+    drain.attach(pipe.fileHandleForReading)
     let command = ([executable] + arguments).joined(separator: " ")
     let result = try await CancellableProcessExecution(
       process: process,
@@ -798,10 +800,10 @@ struct ProcessCommandRunner: CommandRunning {
         )
       },
       output: {
-        Self.output(from: pipe)
+        drain.flush(trimmed: false)
       },
       cleanup: {
-        pipe.fileHandleForReading.readabilityHandler = nil
+        drain.detachAll()
       }
     ).run()
 
@@ -813,10 +815,5 @@ struct ProcessCommandRunner: CommandRunning {
       )
     }
     return result.output
-  }
-
-  private static func output(from pipe: Pipe) -> String {
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-    return String(data: data, encoding: .utf8) ?? ""
   }
 }

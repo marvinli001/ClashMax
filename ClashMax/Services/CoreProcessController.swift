@@ -232,38 +232,45 @@ final class CoreProcessController: ObservableObject {
 }
 
 struct MihomoRuntimePortChecker: RuntimePortChecking {
+  private static let commandTimeoutSeconds: TimeInterval = 3
+
   func listeners(on ports: [Int]) async -> [PortListener] {
-    await Task.detached(priority: .utility) {
-      ports.flatMap(Self.listenersSync(on:))
-    }.value
+    var listeners: [PortListener] = []
+    for port in ports {
+      listeners.append(contentsOf: await Self.listeners(on: port))
+    }
+    return listeners
   }
 
-  private static func listenersSync(on port: Int) -> [PortListener] {
-    guard let output = run("/usr/sbin/lsof", ["-nP", "-iTCP:\(port)", "-sTCP:LISTEN"]) else {
+  private static func listeners(on port: Int) async -> [PortListener] {
+    guard let output = await run("/usr/sbin/lsof", ["-nP", "-iTCP:\(port)", "-sTCP:LISTEN"]) else {
       return []
     }
 
-    return output
-      .split(separator: "\n")
-      .dropFirst()
-      .compactMap { line -> PortListener? in
-        let fields = line.split(whereSeparator: \.isWhitespace)
-        guard fields.count >= 2, let pid = Int32(fields[1]) else {
-          return nil
-        }
-        let command = processCommand(pid: pid) ?? String(fields[0])
-        return PortListener(port: port, pid: pid, command: command)
+    var listeners: [PortListener] = []
+    for line in output.split(separator: "\n").dropFirst() {
+      let fields = line.split(whereSeparator: \.isWhitespace)
+      guard fields.count >= 2, let pid = Int32(fields[1]) else {
+        continue
       }
+      let command = await processCommand(pid: pid) ?? String(fields[0])
+      listeners.append(PortListener(port: port, pid: pid, command: command))
+    }
+    return listeners
   }
 
-  private static func processCommand(pid: Int32) -> String? {
-    run("/bin/ps", ["-p", String(pid), "-o", "command="])?
+  private static func processCommand(pid: Int32) async -> String? {
+    await run("/bin/ps", ["-p", String(pid), "-o", "command="])?
       .trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
-  private static func run(_ executable: String, _ arguments: [String]) -> String? {
+  private static func run(_ executable: String, _ arguments: [String]) async -> String? {
     do {
-      let output = try ProcessOutputCapture.run(executable: URL(fileURLWithPath: executable), arguments: arguments)
+      let output = try await ProcessOutputCapture.run(
+        executable: URL(fileURLWithPath: executable),
+        arguments: arguments,
+        timeout: commandTimeoutSeconds
+      )
       guard output.terminationStatus == 0 else {
         return nil
       }
@@ -278,7 +285,11 @@ struct ProcessOutputCapture: Sendable {
   let terminationStatus: Int32
   let text: String
 
-  static func run(executable: URL, arguments: [String]) throws -> ProcessOutputCapture {
+  static func run(
+    executable: URL,
+    arguments: [String],
+    timeout: TimeInterval = 5
+  ) async throws -> ProcessOutputCapture {
     let process = Process()
     let outputPipe = Pipe()
     process.executableURL = executable
@@ -286,13 +297,32 @@ struct ProcessOutputCapture: Sendable {
     process.standardOutput = outputPipe
     process.standardError = outputPipe
 
-    try process.run()
-    let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
-    process.waitUntilExit()
+    let drain = LiveOutputDrain(maxRetainedBytes: nil)
+    drain.attach(outputPipe.fileHandleForReading)
+    let command = ([executable.path] + arguments).joined(separator: " ")
+    let result = try await CancellableProcessExecution(
+      process: process,
+      timeout: timeout,
+      timeoutError: { output in
+        NSError(
+          domain: "ClashMax.ProcessOutputCapture",
+          code: Int(ETIMEDOUT),
+          userInfo: [
+            NSLocalizedDescriptionKey: "Command timed out after \(timeout)s: \(command)\(output.isEmpty ? "" : "\n\(output)")"
+          ]
+        )
+      },
+      output: {
+        drain.flush(trimmed: false)
+      },
+      cleanup: {
+        drain.detachAll()
+      }
+    ).run()
 
     return ProcessOutputCapture(
-      terminationStatus: process.terminationStatus,
-      text: String(data: data, encoding: .utf8) ?? ""
+      terminationStatus: result.terminationStatus,
+      text: result.output
     )
   }
 }
@@ -475,33 +505,37 @@ final class CancellableProcessExecution: @unchecked Sendable {
 }
 
 struct MihomoOrphanProcessReaper: CoreProcessReaping {
+  private static let processListTimeoutSeconds: TimeInterval = 3
+
   func reapOrphans(coreURL: URL, configURL: URL, workDirectory: URL) async {
-    await Task.detached(priority: .utility) {
-      let processRows = Self.processRows()
-      let currentPID = getpid()
-      let managedPIDs = processRows.compactMap { row -> Int32? in
-        guard row.pid != currentPID,
-              Self.isManagedCoreCommand(
-                row.command,
-                coreURL: coreURL,
-                configURL: configURL,
-                workDirectory: workDirectory
-              )
-        else {
-          return nil
-        }
-        return row.pid
-      }
+    await Self.reapOrphansAsync(coreURL: coreURL, configURL: configURL, workDirectory: workDirectory)
+  }
 
-      guard !managedPIDs.isEmpty else { return }
-
-      managedPIDs.forEach { kill($0, SIGTERM) }
-      let deadline = Date().addingTimeInterval(1)
-      while Date() < deadline && managedPIDs.contains(where: Self.isProcessAlive) {
-        usleep(50_000)
+  private nonisolated static func reapOrphansAsync(coreURL: URL, configURL: URL, workDirectory: URL) async {
+    let processRows = await Self.processRows()
+    let currentPID = getpid()
+    let managedPIDs = processRows.compactMap { row -> Int32? in
+      guard row.pid != currentPID,
+            Self.isManagedCoreCommand(
+              row.command,
+              coreURL: coreURL,
+              configURL: configURL,
+              workDirectory: workDirectory
+            )
+      else {
+        return nil
       }
-      managedPIDs.filter(Self.isProcessAlive).forEach { kill($0, SIGKILL) }
-    }.value
+      return row.pid
+    }
+
+    guard !managedPIDs.isEmpty else { return }
+
+    managedPIDs.forEach { kill($0, SIGTERM) }
+    let deadline = Date().addingTimeInterval(1)
+    while Date() < deadline && managedPIDs.contains(where: Self.isProcessAlive) {
+      try? await Task.sleep(nanoseconds: 50_000_000)
+    }
+    managedPIDs.filter(Self.isProcessAlive).forEach { kill($0, SIGKILL) }
   }
 
   nonisolated static func isManagedCoreCommand(_ command: String, coreURL: URL, configURL: URL, workDirectory: URL) -> Bool {
@@ -523,11 +557,12 @@ struct MihomoOrphanProcessReaper: CoreProcessReaping {
     return command.contains(coreURL.path) && command.contains(workDirectory.path)
   }
 
-  private nonisolated static func processRows() -> [(pid: Int32, command: String)] {
+  private nonisolated static func processRows() async -> [(pid: Int32, command: String)] {
     do {
-      let output = try ProcessOutputCapture.run(
+      let output = try await ProcessOutputCapture.run(
         executable: URL(fileURLWithPath: "/bin/ps"),
-        arguments: ["-axo", "pid=,command="]
+        arguments: ["-axo", "pid=,command="],
+        timeout: processListTimeoutSeconds
       )
       guard output.terminationStatus == 0 else {
         return []
@@ -725,8 +760,12 @@ final class FoundationRunningProcess: RunningCoreProcess {
 final class LiveOutputDrain: @unchecked Sendable {
   private let lock = NSLock()
   private var buffer = Data()
-  private let maxRetainedBytes = 65_536
+  private let maxRetainedBytes: Int?
   private var attached: [FileHandle] = []
+
+  init(maxRetainedBytes: Int? = 65_536) {
+    self.maxRetainedBytes = maxRetainedBytes
+  }
 
   func attach(_ handle: FileHandle) {
     handle.readabilityHandler = { [weak self] handle in
@@ -745,19 +784,19 @@ final class LiveOutputDrain: @unchecked Sendable {
   private func append(_ data: Data) {
     lock.lock()
     buffer.append(data)
-    if buffer.count > maxRetainedBytes {
+    if let maxRetainedBytes, buffer.count > maxRetainedBytes {
       buffer.removeFirst(buffer.count - maxRetainedBytes)
     }
     lock.unlock()
   }
 
-  func flush() -> String {
+  func flush(trimmed: Bool = true) -> String {
     lock.lock()
     let data = buffer
     buffer.removeAll(keepingCapacity: false)
     lock.unlock()
-    return String(data: data, encoding: .utf8)?
-      .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let text = String(data: data, encoding: .utf8) ?? ""
+    return trimmed ? text.trimmingCharacters(in: .whitespacesAndNewlines) : text
   }
 
   func tail(maxBytes: Int) -> String {

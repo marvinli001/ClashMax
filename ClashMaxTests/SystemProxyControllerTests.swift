@@ -128,6 +128,19 @@ final class SystemProxyControllerTests: XCTestCase {
     XCTAssertTrue(didExit)
   }
 
+  func testProcessCommandRunnerDrainsLargeOutputWithoutTimingOut() async throws {
+    let runner = ProcessCommandRunner(timeout: 2)
+    let startedAt = Date()
+
+    let output = try await runner.run(
+      "/bin/sh",
+      ["-c", "/usr/bin/yes 1234567890 | /usr/bin/head -c 200000"]
+    )
+
+    XCTAssertEqual(output.count, 200_000)
+    XCTAssertLessThan(Date().timeIntervalSince(startedAt), 2)
+  }
+
   func testProcessCommandRunnerTerminatesRunningProcessWhenCancelled() async throws {
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("ClashMaxCommandRunnerCancel-\(UUID().uuidString)", isDirectory: true)
