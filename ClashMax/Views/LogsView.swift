@@ -2,15 +2,16 @@ import SwiftUI
 
 struct LogsView: View {
   @EnvironmentObject private var appModel: AppModel
+  @EnvironmentObject private var runtimeData: RuntimeDataStore
   @State private var levelFilter: LogLevelFilter = .all
 
   var body: some View {
-    let retainedLogs = appModel.userVisibleLogs
+    let retainedLogs = runtimeData.visibleLogs(developerMode: appModel.developerMode)
     let visibleLogs = filteredLogs(from: retainedLogs)
 
     AdaptivePage(
       title: "Logs",
-      subtitle: "\(visibleLogs.count) visible / \(appModel.logs.count) retained"
+      subtitle: "\(visibleLogs.count) visible / \(runtimeData.logs.count) retained"
     ) {
       Picker("Level", selection: $levelFilter) {
         ForEach(LogLevelFilter.allCases) { filter in
@@ -22,9 +23,9 @@ struct LogsView: View {
     } content: {
       if visibleLogs.isEmpty {
         CenteredUnavailableState(
-          title: appModel.logs.isEmpty ? "No logs yet" : "No matching logs",
+          title: runtimeData.logs.isEmpty ? "No logs yet" : "No matching logs",
           systemImage: "text.alignleft",
-          message: appModel.logs.isEmpty
+          message: runtimeData.logs.isEmpty
             ? "Runtime and helper messages will be listed here."
             : "No retained logs match the selected level."
         )

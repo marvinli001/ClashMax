@@ -309,7 +309,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(AppTheme.dark.nsAppearanceName, .darkAqua)
   }
 
-  func testExternalControllerSettingsPersistAndSyncRuntimeOverrides() throws {
+  func testExternalControllerSettingsPersistButRegeneratesRuntimeSecret() throws {
     let paths = try Self.makeRuntimePaths()
     let defaults = try Self.makeIsolatedDefaults()
     let firstModel = AppModel(
@@ -342,10 +342,15 @@ final class DashboardRuntimeStateTests: XCTestCase {
       defaults: defaults
     )
 
-    XCTAssertEqual(secondModel.externalControllerSettings, settings)
+    XCTAssertEqual(secondModel.externalControllerSettings.enabled, settings.enabled)
+    XCTAssertEqual(secondModel.externalControllerSettings.host, settings.host)
+    XCTAssertEqual(secondModel.externalControllerSettings.port, settings.port)
+    XCTAssertEqual(secondModel.externalControllerSettings.cors, settings.cors)
+    XCTAssertNotEqual(secondModel.externalControllerSettings.secret, settings.secret)
     XCTAssertEqual(secondModel.overrides.externalControllerHost, "localhost")
     XCTAssertEqual(secondModel.overrides.externalControllerPort, 19197)
-    XCTAssertEqual(secondModel.overrides.secret, "saved-secret")
+    XCTAssertNotEqual(secondModel.overrides.secret, "saved-secret")
+    XCTAssertFalse(secondModel.overrides.secret.isEmpty)
     XCTAssertFalse(secondModel.overrides.externalControllerCORS.enabled)
   }
 
@@ -381,6 +386,35 @@ final class DashboardRuntimeStateTests: XCTestCase {
       defaults: defaults
     )
     XCTAssertTrue(reloaded.launchSettings.silentStart)
+  }
+
+  func testLaunchAtLoginToggleReportsRegistrationErrors() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let service = FakeLoginItemService(
+      status: .notRegistered,
+      registerError: NSError(
+        domain: "ClashMaxTests.LoginItem",
+        code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "registration denied"]
+      )
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      loginItemService: service,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    model.setLaunchAtLogin(true)
+
+    for _ in 0..<50 where model.lastError == nil {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(service.registerCount, 1)
+    XCTAssertEqual(model.lastError, "registration denied")
+    XCTAssertFalse(model.launchSettings.launchAtLogin)
   }
 
   func testSystemProxySettingsNormalizeUnspecifiedHostBeforeApplyingProxy() async throws {
@@ -1667,6 +1701,43 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertGreaterThan(changeCount, 0)
   }
 
+  func testCoreControllerStatusChangesPublishAppModelChanges() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let launcher = FakeProcessLauncher()
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      coreController: controller
+    )
+    var changeCount = 0
+    let cancellable = model.objectWillChange.sink { changeCount += 1 }
+    defer { cancellable.cancel() }
+
+    try await controller.startUserMode(
+      coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+      configURL: URL(fileURLWithPath: "/tmp/config.yaml"),
+      workDirectory: URL(fileURLWithPath: "/tmp"),
+      api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+    )
+    changeCount = 0
+
+    launcher.process.finish(exitCode: 2)
+
+    for _ in 0..<20 where changeCount == 0 {
+      await Task.yield()
+    }
+
+    XCTAssertEqual(model.statusSummary, "Crashed: mihomo exited with code 2")
+    XCTAssertGreaterThan(changeCount, 0)
+  }
+
   func testSelectingTunPreparesHelperAndBlocksStartDuringApproval() async throws {
     let paths = try Self.makeRuntimePaths()
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
@@ -2255,21 +2326,31 @@ private final class StaticHelperService: HelperServiceManaging {
 
 private final class FakeLoginItemService: LoginItemManaging {
   var status: SMAppService.Status
+  private let registerError: Error?
+  private let unregisterError: Error?
   private(set) var registerCount = 0
   private(set) var unregisterCount = 0
   private(set) var openSettingsCount = 0
 
-  init(status: SMAppService.Status) {
+  init(status: SMAppService.Status, registerError: Error? = nil, unregisterError: Error? = nil) {
     self.status = status
+    self.registerError = registerError
+    self.unregisterError = unregisterError
   }
 
   func register() throws {
     registerCount += 1
+    if let registerError {
+      throw registerError
+    }
     status = .enabled
   }
 
   func unregister() async throws {
     unregisterCount += 1
+    if let unregisterError {
+      throw unregisterError
+    }
     status = .notRegistered
   }
 

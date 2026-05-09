@@ -3,6 +3,7 @@ import SwiftUI
 
 struct SettingsView: View {
   @EnvironmentObject private var appModel: AppModel
+  @EnvironmentObject private var settings: PersistedSettingsStore
   @EnvironmentObject private var appUpdateController: AppUpdateController
   private let bundledCoreInfo: BundledCoreInfo
 
@@ -22,10 +23,10 @@ struct SettingsView: View {
           SettingsToggleRow(
             "Developer Mode",
             description: "Show helper diagnostics and advanced recovery details.",
-            isOn: $appModel.developerMode
+            isOn: $settings.developerMode
           )
           SettingsControlRow("Appearance", description: "Choose the app color scheme.") {
-            Picker("Appearance", selection: $appModel.appTheme) {
+            Picker("Appearance", selection: $settings.appTheme) {
               ForEach(AppTheme.allCases) { theme in
                 Text(theme.displayName).tag(theme)
               }
@@ -71,7 +72,7 @@ struct SettingsView: View {
             "Launch at Login",
             description: "Register ClashMax as a macOS login item.",
             isOn: Binding(
-              get: { appModel.launchSettings.launchAtLogin },
+              get: { settings.launchSettings.launchAtLogin },
               set: { appModel.setLaunchAtLogin($0) }
             )
           )
@@ -80,13 +81,13 @@ struct SettingsView: View {
             "Silent Start",
             description: "Hide the main window when launched by the login item.",
             isOn: Binding(
-              get: { appModel.launchSettings.silentStart },
+              get: { settings.launchSettings.silentStart },
               set: { appModel.setSilentStart($0) }
             )
           )
           .help("When enabled, ClashMax hides its main window during login-item startup. Open it from the menu bar when needed.")
 
-          SettingsControlRow("Login Item Status", description: appModel.launchSettings.statusMessage) {
+          SettingsControlRow("Login Item Status", description: settings.launchSettings.statusMessage) {
             Button {
               appModel.openLoginItemsSettings()
             } label: {
@@ -101,28 +102,28 @@ struct SettingsView: View {
           PortControl(
             title: "Mixed Port",
             description: "HTTP and SOCKS inbound port used by Mihomo.",
-            value: $appModel.overrides.mixedPort
+            value: $settings.overrides.mixedPort
           )
           PortControl(
             title: "Controller Port",
             description: "Local controller API port bound to 127.0.0.1.",
-            value: $appModel.externalControllerSettings.port
+            value: $settings.externalControllerSettings.port
           )
           SettingsToggleRow(
             "Allow LAN",
             description: "Allow devices on this LAN to use the proxy port.",
-            isOn: $appModel.overrides.allowLan
+            isOn: $settings.overrides.allowLan
           )
           SettingsToggleRow(
             "Enable DNS Override",
             description: "Write app-managed DNS options into the runtime profile.",
             isOn: Binding(
-              get: { appModel.overrides.dnsEnabled ?? false },
-              set: { appModel.overrides.dnsEnabled = $0 }
+              get: { settings.overrides.dnsEnabled ?? false },
+              set: { settings.overrides.dnsEnabled = $0 }
             )
           )
-          SettingsControlRow("Delay Test Mode", description: appModel.delayTestSettings.mode.description) {
-            Picker("Delay Test Mode", selection: $appModel.delayTestSettings.mode) {
+          SettingsControlRow("Delay Test Mode", description: settings.delayTestSettings.mode.description) {
+            Picker("Delay Test Mode", selection: $settings.delayTestSettings.mode) {
               ForEach(DelayTestMode.allCases) { mode in
                 Text(mode.displayName).tag(mode)
               }
@@ -134,11 +135,11 @@ struct SettingsView: View {
           SettingsToggleRow(
             "Unified Delay",
             description: "Run manual delay tests twice and use the second result to reduce handshake bias.",
-            isOn: $appModel.delayTestSettings.unifiedDelay
+            isOn: $settings.delayTestSettings.unifiedDelay
           )
           ExternalControlSettingsRow()
           SettingsControlRow("Log Level", description: "Runtime logging verbosity.") {
-            Picker("Log Level", selection: $appModel.overrides.logLevel) {
+            Picker("Log Level", selection: $settings.overrides.logLevel) {
               Text("Info").tag("info")
               Text("Warning").tag("warning")
               Text("Error").tag("error")
@@ -153,7 +154,7 @@ struct SettingsView: View {
         Section("System") {
           SettingsControlRow("Proxy Routing", description: "Routing mode used when the core starts.") {
             Picker("Proxy Routing", selection: Binding(
-              get: { appModel.proxyRoutingMode },
+              get: { settings.proxyRoutingMode },
               set: { appModel.requestProxyRoutingMode($0) }
             )) {
               ForEach(ProxyRoutingMode.allCases) { mode in
@@ -166,7 +167,7 @@ struct SettingsView: View {
             .help("Start uses this routing mode.")
           }
 
-          if appModel.proxyRoutingMode == .tun {
+          if settings.proxyRoutingMode == .tun {
             SettingsControlRow("TUN Helper Status", description: appModel.tunHelperPreparationState.message) {
               ViewThatFits(in: .horizontal) {
                 helperActionButtons
@@ -177,7 +178,7 @@ struct SettingsView: View {
               appModel.refreshHelperRegistrationStatus()
             }
 
-            if appModel.developerMode {
+            if settings.developerMode {
               Text("LaunchDaemon approval is managed by macOS. Registering may open System Settings instead of showing an app permission sheet.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -218,7 +219,7 @@ struct SettingsView: View {
       helperOpenSettingsButton
       helperRepairButton
       helperStatusButton
-      if appModel.developerMode {
+      if settings.developerMode {
         helperLogsButton
       }
     }
@@ -233,7 +234,7 @@ struct SettingsView: View {
       }
       HStack(spacing: 8) {
         helperStatusButton
-        if appModel.developerMode {
+        if settings.developerMode {
           helperLogsButton
         }
       }
@@ -422,6 +423,7 @@ private struct UpdateVersionRow<Action: View>: View {
 
 private struct ExternalControlSettingsRow: View {
   @EnvironmentObject private var appModel: AppModel
+  @EnvironmentObject private var settings: PersistedSettingsStore
   @State private var isControllerPresented = false
   @State private var isCORSPresented = false
   @State private var draft = ExternalControllerSettings.default
@@ -484,12 +486,12 @@ private struct ExternalControlSettingsRow: View {
   }
 
   private var description: String {
-    let settings = appModel.externalControllerSettings
-    let state = settings.enabled ? String(localized: "Enabled") : String(localized: "Disabled")
+    let controllerSettings = settings.externalControllerSettings
+    let state = controllerSettings.enabled ? String(localized: "Enabled") : String(localized: "Disabled")
     return String(
       format: String(localized: "%@ for external web dashboards at %@ with Bearer auth."),
       state,
-      settings.address
+      controllerSettings.address
     )
   }
 
@@ -531,14 +533,14 @@ private struct ExternalControlSettingsRow: View {
   }
 
   private func syncDraft() {
-    draft = appModel.externalControllerSettings
+    draft = settings.externalControllerSettings
     addressDraft = draft.address
     secretDraft = draft.normalizedSecret
     error = nil
   }
 
   private func syncCORSDraft() {
-    corsDraft = appModel.externalControllerSettings.cors
+    corsDraft = settings.externalControllerSettings.cors
     corsDraft.allowedOrigins = ExternalControllerCORSSettings.normalizedOrigins(corsDraft.allowedOrigins)
     originDraft = ""
     corsError = nil
@@ -558,7 +560,7 @@ private struct ExternalControlSettingsRow: View {
       error = validationError
       return
     }
-    appModel.externalControllerSettings = draft
+    settings.externalControllerSettings = draft
     isControllerPresented = false
   }
 
@@ -568,10 +570,10 @@ private struct ExternalControlSettingsRow: View {
       corsError = validationError
       return
     }
-    var settings = appModel.externalControllerSettings
-    corsDraft.enabled = settings.enabled
-    settings.cors = corsDraft
-    appModel.externalControllerSettings = settings
+    var controllerSettings = settings.externalControllerSettings
+    corsDraft.enabled = controllerSettings.enabled
+    controllerSettings.cors = corsDraft
+    settings.externalControllerSettings = controllerSettings
     isCORSPresented = false
   }
 

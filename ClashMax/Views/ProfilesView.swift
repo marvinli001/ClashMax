@@ -2,6 +2,8 @@ import SwiftUI
 
 struct ProfilesView: View {
   @EnvironmentObject private var appModel: AppModel
+  @EnvironmentObject private var profileStore: ProfileStore
+  @EnvironmentObject private var profileOperations: ProfileOperationsStore
   @State private var subscriptionURL = ""
   @State private var profileBeingEdited: Profile?
   @State private var editProfileName = ""
@@ -11,7 +13,7 @@ struct ProfilesView: View {
   var body: some View {
     AdaptivePage(
       title: "Profiles",
-      subtitle: appModel.profileStore.profiles.isEmpty ? "Import a local YAML file or add a subscription." : "\(appModel.profileStore.profiles.count) profiles"
+      subtitle: profileStore.profiles.isEmpty ? "Import a local YAML file or add a subscription." : "\(profileStore.profiles.count) profiles"
     ) {
       Button {
         appModel.importLocalProfile()
@@ -22,7 +24,7 @@ struct ProfilesView: View {
       VStack(alignment: .leading, spacing: 14) {
         subscriptionControls
 
-        if appModel.profileStore.profiles.isEmpty {
+        if profileStore.profiles.isEmpty {
           CenteredUnavailableState(
             title: "No profiles",
             systemImage: "doc.badge.plus",
@@ -31,12 +33,12 @@ struct ProfilesView: View {
         } else {
           ScrollView {
             LazyVGrid(columns: profileGridColumns, alignment: .leading, spacing: 12) {
-              ForEach(appModel.profileStore.profiles) { profile in
+              ForEach(profileStore.profiles) { profile in
                 ProfileCard(
                   profile: profile,
-                  isActive: appModel.profileStore.activeProfileID == profile.id,
-                  isUpdating: appModel.updatingProfileIDs.contains(profile.id),
-                  sourceURLString: appModel.profileStore.subscriptionURLString(for: profile),
+                  isActive: profileStore.activeProfileID == profile.id,
+                  isUpdating: profileOperations.updatingProfileIDs.contains(profile.id),
+                  sourceURLString: profileStore.subscriptionURLString(for: profile),
                   selectAction: { appModel.selectProfile(profile) },
                   editAction: { beginEditing(profile) },
                   updateAction: {
@@ -53,7 +55,7 @@ struct ProfilesView: View {
           }
         }
 
-        if let message = appModel.profileOperationMessage {
+        if let message = profileOperations.message {
           Label(message, systemImage: "checkmark.circle.fill")
             .font(.callout)
             .foregroundStyle(.green)
@@ -110,11 +112,11 @@ struct ProfilesView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
 
-        if appModel.isAddingSubscription {
+        if profileOperations.isAddingSubscription {
           subscriptionLoadingIndicator
         }
       }
-      .animation(.easeInOut(duration: 0.16), value: appModel.isAddingSubscription)
+      .animation(.easeInOut(duration: 0.16), value: profileOperations.isAddingSubscription)
     }
   }
 
@@ -122,7 +124,7 @@ struct ProfilesView: View {
     TextField("Subscription URL", text: $subscriptionURL)
       .textFieldStyle(.roundedBorder)
       .frame(minWidth: 320)
-      .disabled(appModel.isAddingSubscription)
+      .disabled(profileOperations.isAddingSubscription)
   }
 
   private var addSubscriptionButton: some View {
@@ -136,17 +138,17 @@ struct ProfilesView: View {
       }
     } label: {
       HStack(spacing: 6) {
-        if appModel.isAddingSubscription {
+        if profileOperations.isAddingSubscription {
           ProgressView()
             .controlSize(.small)
         } else {
           Image(systemName: "plus")
         }
-        Text(appModel.isAddingSubscription ? "Adding" : "Add")
+        Text(profileOperations.isAddingSubscription ? "Adding" : "Add")
       }
       .frame(minWidth: 64)
     }
-    .disabled(subscriptionURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || appModel.isAddingSubscription)
+    .disabled(subscriptionURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || profileOperations.isAddingSubscription)
   }
 
   private var profileGridColumns: [GridItem] {
@@ -190,7 +192,7 @@ struct ProfilesView: View {
 
   private func beginEditing(_ profile: Profile) {
     editProfileName = profile.name
-    editSubscriptionURL = appModel.profileStore.subscriptionURLString(for: profile) ?? ""
+    editSubscriptionURL = profileStore.subscriptionURLString(for: profile) ?? ""
     profileBeingEdited = profile
   }
 
@@ -201,14 +203,14 @@ struct ProfilesView: View {
   }
 
   private func currentProfile(matching profile: Profile) -> Profile? {
-    appModel.profileStore.profiles.first { $0.id == profile.id }
+    profileStore.profiles.first { $0.id == profile.id }
   }
 
   private func saveProfileEdits(_ profile: Profile) {
     let trimmedName = editProfileName.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmedName.isEmpty else { return }
     let trimmedURL = editSubscriptionURL.trimmingCharacters(in: .whitespacesAndNewlines)
-    let originalURL = appModel.profileStore.subscriptionURLString(for: profile)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let originalURL = profileStore.subscriptionURLString(for: profile)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
     if profile.isSubscription, trimmedURL != originalURL {
       Task { @MainActor in

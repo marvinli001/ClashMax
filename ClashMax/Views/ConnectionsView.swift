@@ -2,31 +2,32 @@ import SwiftUI
 
 struct ConnectionsView: View {
   @EnvironmentObject private var appModel: AppModel
+  @EnvironmentObject private var runtimeData: RuntimeDataStore
 
   var body: some View {
     AdaptivePage(
       title: "Connections",
-      subtitle: "\(appModel.connections.count) active"
+      subtitle: "\(runtimeData.connections.count) active"
     ) {
       Button {
         appModel.closeAllRuntimeConnections()
       } label: {
-        if appModel.closingAllConnections {
+        if runtimeData.closingAllConnections {
           Label("Closing", systemImage: "clock.arrow.circlepath")
         } else {
           Label("Close All", systemImage: "xmark.circle")
         }
       }
-      .disabled(appModel.connections.isEmpty || appModel.closingAllConnections || !appModel.canControlRuntimeProxies)
+      .disabled(runtimeData.connections.isEmpty || runtimeData.closingAllConnections || !appModel.canControlRuntimeProxies)
     } content: {
-      if appModel.connections.isEmpty {
+      if runtimeData.connections.isEmpty {
         CenteredUnavailableState(
           title: "No active connections",
           systemImage: "network.slash",
           message: "Connections will appear here after apps send traffic through ClashMax."
         )
       } else {
-        Table(appModel.connections) {
+        Table(runtimeData.connections) {
           TableColumn("Host") { connection in
             Text(connection.host)
           }
@@ -52,14 +53,14 @@ struct ConnectionsView: View {
             Button {
               appModel.closeConnection(connection)
             } label: {
-              if appModel.closingConnectionIDs.contains(connection.id) {
+              if runtimeData.closingConnectionIDs.contains(connection.id) {
                 Image(systemName: "clock.arrow.circlepath")
               } else {
                 Image(systemName: "xmark.circle")
               }
             }
             .buttonStyle(.borderless)
-            .disabled(appModel.closingConnectionIDs.contains(connection.id) || !appModel.canControlRuntimeProxies)
+            .disabled(runtimeData.closingConnectionIDs.contains(connection.id) || !appModel.canControlRuntimeProxies)
             .help("Close connection")
             .accessibilityLabel("Close connection to \(connection.host)")
           }

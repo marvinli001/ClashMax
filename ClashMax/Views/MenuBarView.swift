@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MenuBarView: View {
   @EnvironmentObject private var appModel: AppModel
+  @EnvironmentObject private var runtimeData: RuntimeDataStore
   @EnvironmentObject private var appUpdateController: AppUpdateController
 
   var body: some View {
@@ -46,7 +47,7 @@ struct MenuBarView: View {
     Text(appModel.statusSummary)
     Text("Owner: \(appModel.runtimeOwner.rawValue)")
     Text(appModel.profileStore.activeProfile?.name ?? "No Profile")
-    Text(appModel.trafficSample.shortLabel)
+    Text(runtimeData.trafficSample.shortLabel)
 
     Button(appModel.systemProxyEnabled ? "Disable System Proxy" : "Enable System Proxy") {
       appModel.setSystemProxyEnabled(!appModel.systemProxyEnabled)

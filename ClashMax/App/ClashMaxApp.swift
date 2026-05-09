@@ -12,8 +12,14 @@ struct ClashMaxApp: App {
     WindowGroup("ClashMax", id: "main") {
       ContentView()
         .environmentObject(appModel)
+        .environmentObject(appModel.settings)
+        .environmentObject(appModel.profileStore)
+        .environmentObject(appModel.profileOperations)
+        .environmentObject(appModel.systemProxy)
+        .environmentObject(appModel.runtimeData)
+        .environmentObject(appModel.publicIP)
         .environmentObject(appUpdateController)
-        .appThemeAppearance(appModel.appTheme)
+        .appThemeAppearance(appModel.settings.appTheme)
         .frame(minWidth: 980, minHeight: 660)
         .onAppear {
           appDelegate.appModel = appModel
@@ -35,26 +41,47 @@ struct ClashMaxApp: App {
     MenuBarExtra {
       MenuBarView()
         .environmentObject(appModel)
+        .environmentObject(appModel.settings)
+        .environmentObject(appModel.profileStore)
+        .environmentObject(appModel.profileOperations)
+        .environmentObject(appModel.systemProxy)
+        .environmentObject(appModel.runtimeData)
+        .environmentObject(appModel.publicIP)
         .environmentObject(appUpdateController)
-        .appThemeAppearance(appModel.appTheme)
+        .appThemeAppearance(appModel.settings.appTheme)
         .onAppear {
           appDelegate.appModel = appModel
         }
     } label: {
-      HStack(spacing: 4) {
-        Image(systemName: appModel.isRunning ? "shield.lefthalf.filled" : "shield")
-        Text(appModel.trafficSample.shortLabel)
-      }
+      MenuBarStatusLabel(appModel: appModel, runtimeData: appModel.runtimeData)
     }
 
     Settings {
       SettingsView(bundledCoreInfo: bundledCoreInfo)
         .environmentObject(appModel)
+        .environmentObject(appModel.settings)
+        .environmentObject(appModel.profileStore)
+        .environmentObject(appModel.profileOperations)
+        .environmentObject(appModel.systemProxy)
+        .environmentObject(appModel.runtimeData)
+        .environmentObject(appModel.publicIP)
         .environmentObject(appUpdateController)
-        .appThemeAppearance(appModel.appTheme)
+        .appThemeAppearance(appModel.settings.appTheme)
         .onAppear {
           appDelegate.appModel = appModel
         }
+    }
+  }
+}
+
+private struct MenuBarStatusLabel: View {
+  @ObservedObject var appModel: AppModel
+  @ObservedObject var runtimeData: RuntimeDataStore
+
+  var body: some View {
+    HStack(spacing: 4) {
+      Image(systemName: appModel.isRunning ? "shield.lefthalf.filled" : "shield")
+      Text(runtimeData.trafficSample.shortLabel)
     }
   }
 }

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ProxiesView: View {
   @EnvironmentObject private var appModel: AppModel
+  @EnvironmentObject private var runtimeData: RuntimeDataStore
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var searchText = ""
   @State private var sortOrder: ProxyNodeSort = .name
@@ -68,9 +69,9 @@ struct ProxiesView: View {
 
           if ProxyPageVisibilityPolicy.showsProviderSummary(
             developerMode: appModel.developerMode,
-            providerCount: appModel.proxyProviders.count
+            providerCount: runtimeData.proxyProviders.count
           ) {
-            ProxyProviderList(providers: appModel.proxyProviders)
+            ProxyProviderList(providers: runtimeData.proxyProviders)
           }
 
           ScrollView {
@@ -103,7 +104,7 @@ struct ProxiesView: View {
         await appModel.leavePreviewRuntime()
       }
     }
-    .onChange(of: appModel.visibleProxyGroups.map(\.id)) { _, _ in
+    .onChange(of: appModel.visibleProxyGroups.map(\.id) + runtimeData.proxyGroups.map(\.id)) { _, _ in
       withAnimation(ProxyInteractionAnimation.list(reduceMotion: reduceMotion)) {
         expandedGroupIDs = ProxyGroupExpansionPolicy.retainedExpansion(
           current: expandedGroupIDs,
@@ -323,6 +324,7 @@ enum ProxyGroupExpansionPolicy {
 
 private struct ProxyProviderList: View {
   @EnvironmentObject private var appModel: AppModel
+  @EnvironmentObject private var runtimeData: RuntimeDataStore
   let providers: [ProxyProvider]
 
   var body: some View {
@@ -347,14 +349,14 @@ private struct ProxyProviderList: View {
           Button {
             appModel.healthCheckProvider(provider)
           } label: {
-            if appModel.providerHealthChecksInFlight.contains(provider.id) {
+            if runtimeData.providerHealthChecksInFlight.contains(provider.id) {
               Image(systemName: "clock.arrow.circlepath")
             } else {
               Image(systemName: "waveform.path.ecg")
             }
           }
           .buttonStyle(.borderless)
-          .disabled(!appModel.canControlRuntimeProxies || appModel.providerHealthChecksInFlight.contains(provider.id))
+          .disabled(!appModel.canControlRuntimeProxies || runtimeData.providerHealthChecksInFlight.contains(provider.id))
           .help("Run provider health check")
           .accessibilityLabel("Run health check for \(provider.name)")
         }

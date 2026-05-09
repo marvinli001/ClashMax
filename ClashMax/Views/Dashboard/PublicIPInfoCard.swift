@@ -2,6 +2,7 @@ import SwiftUI
 
 struct PublicIPInfoCard: View {
   @EnvironmentObject private var appModel: AppModel
+  @EnvironmentObject private var publicIP: PublicIPCoordinator
   let availableWidth: CGFloat
   @State private var showsFullIP = false
 
@@ -18,7 +19,7 @@ struct PublicIPInfoCard: View {
   }
 
   private func content(now: Date) -> some View {
-    let state = appModel.publicIPInfoState
+    let state = publicIP.state
 
     return VStack(alignment: .leading, spacing: 12) {
       HStack(spacing: 10) {

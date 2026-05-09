@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import ServiceManagement
 import UniformTypeIdentifiers
@@ -31,80 +32,116 @@ private struct RuntimeStopResult {
 @MainActor
 final class AppModel: ObservableObject {
   @Published var selectedSection: AppSection = .home
-  @Published var overrides = RuntimeOverrides.defaultForLaunch()
-  @Published var proxyRoutingMode: ProxyRoutingMode = .systemProxy
-  @Published var systemProxySettings = SystemProxySettings.default {
-    didSet {
-      saveCodable(systemProxySettings, forKey: Self.systemProxySettingsDefaultsKey)
-    }
+  var overrides: RuntimeOverrides {
+    get { settings.overrides }
+    set { settings.overrides = newValue }
   }
-  @Published var tunSettings = TunSettings.default {
-    didSet {
-      overrides.tunSettings = tunSettings
-      saveCodable(tunSettings, forKey: Self.tunSettingsDefaultsKey)
-    }
+  var proxyRoutingMode: ProxyRoutingMode {
+    get { settings.proxyRoutingMode }
+    set { settings.proxyRoutingMode = newValue }
   }
-  @Published var delayTestSettings = DelayTestSettings.default {
-    didSet {
-      overrides.unifiedDelay = delayTestSettings.unifiedDelay
-      saveCodable(delayTestSettings, forKey: Self.delayTestSettingsDefaultsKey)
-    }
+  var systemProxySettings: SystemProxySettings {
+    get { settings.systemProxySettings }
+    set { settings.systemProxySettings = newValue }
   }
-  @Published var appTheme = AppTheme.system {
-    didSet {
-      saveCodable(appTheme, forKey: Self.appThemeDefaultsKey)
-    }
+  var tunSettings: TunSettings {
+    get { settings.tunSettings }
+    set { settings.tunSettings = newValue }
   }
-  @Published var externalControllerSettings = ExternalControllerSettings.default {
-    didSet {
-      syncExternalControllerSettings()
-      saveCodable(externalControllerSettings, forKey: Self.externalControllerSettingsDefaultsKey)
-    }
+  var delayTestSettings: DelayTestSettings {
+    get { settings.delayTestSettings }
+    set { settings.delayTestSettings = newValue }
   }
-  @Published private(set) var launchSettings = LaunchSettings.default
+  var appTheme: AppTheme {
+    get { settings.appTheme }
+    set { settings.appTheme = newValue }
+  }
+  var externalControllerSettings: ExternalControllerSettings {
+    get { settings.externalControllerSettings }
+    set { settings.externalControllerSettings = newValue }
+  }
+  var launchSettings: LaunchSettings { settings.launchSettings }
+  var developerMode: Bool {
+    get { settings.developerMode }
+    set { settings.developerMode = newValue }
+  }
   @Published private(set) var runtimeOwner: RuntimeOwner = .stopped
-  @Published var systemProxyEnabled = false
+  var systemProxyEnabled: Bool {
+    get { systemProxy.enabled }
+    set { systemProxy.enabled = newValue }
+  }
   @Published var tunEnabled = false
   @Published var tunnelCoreRunning = false
   @Published private(set) var tunHelperPreparationState: TunHelperPreparationState = .idle
-  @Published private(set) var isAddingSubscription = false
+  var isAddingSubscription: Bool { profileOperations.isAddingSubscription }
   @Published private(set) var startInFlight = false
   @Published private(set) var sessionStartedAt: Date?
-  @Published var proxyGroups: [ProxyGroup] = []
-  @Published var proxyProviders: [ProxyProvider] = []
-  @Published var rules: [String] = []
-  @Published var connections: [ConnectionSnapshot] = []
-  @Published var logs: [LogEntry] = []
+  var proxyGroups: [ProxyGroup] {
+    get { runtimeData.proxyGroups }
+    set { runtimeData.proxyGroups = newValue }
+  }
+  var proxyProviders: [ProxyProvider] {
+    get { runtimeData.proxyProviders }
+    set { runtimeData.proxyProviders = newValue }
+  }
+  var rules: [String] {
+    get { runtimeData.rules }
+    set { runtimeData.rules = newValue }
+  }
+  var connections: [ConnectionSnapshot] {
+    get { runtimeData.connections }
+    set { runtimeData.replaceConnections(newValue) }
+  }
+  var logs: [LogEntry] {
+    get { runtimeData.logs }
+    set { runtimeData.logs = newValue }
+  }
   @Published var helperLogs: [String] = []
-  @Published var trafficSample: TrafficSample = .zero
-  @Published var trafficHistory: [TrafficSample] = []
-  @Published private(set) var publicIPInfoState: PublicIPInfoState = .idle
+  var trafficSample: TrafficSample {
+    get { runtimeData.trafficSample }
+    set { runtimeData.trafficSample = newValue }
+  }
+  var trafficHistory: [TrafficSample] {
+    get { runtimeData.trafficHistory }
+    set { runtimeData.trafficHistory = newValue }
+  }
+  var publicIPInfoState: PublicIPInfoState { publicIP.state }
   @Published var lastError: String?
-  @Published private(set) var updatingProfileIDs: Set<Profile.ID> = []
-  @Published private(set) var profileOperationMessage: String?
-  @Published private(set) var profilePreviewGroups: [ProxyGroup] = []
-  @Published private(set) var previewRuntimeActive = false
-  @Published private(set) var previewSelections: [String: String] = [:]
-  @Published private(set) var providerHealthChecksInFlight: Set<ProxyProvider.ID> = []
-  @Published private(set) var closingConnectionIDs: Set<ConnectionSnapshot.ID> = []
-  @Published private(set) var closingAllConnections = false
-  @Published var developerMode = false {
-    didSet {
-      defaults.set(developerMode, forKey: Self.developerModeDefaultsKey)
-    }
+  var updatingProfileIDs: Set<Profile.ID> { profileOperations.updatingProfileIDs }
+  var profileOperationMessage: String? { profileOperations.message }
+  var profilePreviewGroups: [ProxyGroup] {
+    get { proxyPreview.profilePreviewGroups }
+    set { proxyPreview.profilePreviewGroups = newValue }
+  }
+  var previewRuntimeActive: Bool {
+    get { proxyPreview.previewRuntimeActive }
+    set { proxyPreview.previewRuntimeActive = newValue }
+  }
+  var previewSelections: [String: String] {
+    get { proxyPreview.previewSelections }
+    set { proxyPreview.previewSelections = newValue }
+  }
+  var providerHealthChecksInFlight: Set<ProxyProvider.ID> { runtimeData.providerHealthChecksInFlight }
+  var closingConnectionIDs: Set<ConnectionSnapshot.ID> { runtimeData.closingConnectionIDs }
+  var closingAllConnections: Bool {
+    get { runtimeData.closingAllConnections }
+    set { runtimeData.closingAllConnections = newValue }
   }
 
+  let settings: PersistedSettingsStore
+  let runtimeData = RuntimeDataStore()
+  let publicIP: PublicIPCoordinator
+  let profileOperations: ProfileOperationsStore
+  let proxyPreview: ProxyPreviewStore
+  let systemProxy: SystemProxyCoordinator
   let profileStore: ProfileStore
   let coreController: CoreProcessController
-  let systemProxyController: SystemProxyController
+  var systemProxyController: SystemProxyController { systemProxy.controller }
   let helperClient: TunnelHelperClient
-  private let loginItemService: any LoginItemManaging
   private let tunnelReadinessProbe: CoreReadinessProbing
   private let pingTester: any PingTesting
-  private let publicIPInfoClient: any PublicIPInfoFetching
   private let paths: RuntimePaths
   private let normalizer = ConfigNormalizer()
-  private let profilePreviewBuilder = ProfilePreviewBuilder()
   private var apiClient: (any MihomoAPIControlling)?
   private var startTask: Task<Void, Never>?
   private var previewTask: Task<Void, Never>?
@@ -112,23 +149,10 @@ final class AppModel: ObservableObject {
   private var pendingModeTask: Task<Void, Never>?
   private var pendingRoutingModeTask: Task<Void, Never>?
   private var tunHelperPreparationTask: Task<Void, Never>?
-  private var systemProxyGuardTask: Task<Void, Never>?
-  private var publicIPInfoTask: Task<Void, Never>?
   private var streamTasks: [Task<Void, Never>] = []
-  private var logBuffer = BoundedBuffer<LogEntry>(limit: AppConstants.retainedLogLimit)
-  private var connectionBuffer = BoundedBuffer<ConnectionSnapshot>(limit: AppConstants.retainedConnectionLimit)
-  private let defaults: UserDefaults
-  private static let previewSelectionsDefaultsKey = "io.github.clashmax.previewSelections"
-  private static let developerModeDefaultsKey = "io.github.clashmax.developerMode"
-  private static let systemProxySettingsDefaultsKey = "io.github.clashmax.systemProxySettings"
-  private static let systemProxyManagedDefaultsKey = "io.github.clashmax.systemProxyManaged"
-  private static let tunSettingsDefaultsKey = "io.github.clashmax.tunSettings"
-  private static let delayTestSettingsDefaultsKey = "io.github.clashmax.delayTestSettings"
-  private static let appThemeDefaultsKey = "io.github.clashmax.appTheme"
-  private static let externalControllerSettingsDefaultsKey = "io.github.clashmax.externalControllerSettings"
-  private static let externalControllerCORSSettingsDefaultsKey = "io.github.clashmax.externalControllerCORSSettings"
+  private var storeCancellables: Set<AnyCancellable> = []
   static let publicIPRefreshInterval: TimeInterval = 300
-  static let silentStartDefaultsKey = "io.github.clashmax.silentStart"
+  static let silentStartDefaultsKey = PersistedSettingsStore.silentStartDefaultsKey
   static let startWallClockSeconds: TimeInterval = 22
   private static let tunHelperApprovalPollingAttempts = 8
   private static let tunHelperApprovalPollingIntervalNanoseconds: UInt64 = 1_000_000_000
@@ -168,50 +192,37 @@ final class AppModel: ObservableObject {
   ) {
     self.paths = paths
     self.profileStore = profileStore ?? ProfileStore(paths: paths)
+    self.profileOperations = ProfileOperationsStore(profileStore: self.profileStore)
+    self.proxyPreview = ProxyPreviewStore(defaults: defaults)
     self.coreController = coreController
     self.helperClient = helperClient
-    self.loginItemService = loginItemService
     self.tunnelReadinessProbe = tunnelReadinessProbe
     self.pingTester = pingTester
-    self.publicIPInfoClient = publicIPInfoClient
+    self.publicIP = PublicIPCoordinator(
+      client: publicIPInfoClient,
+      refreshInterval: Self.publicIPRefreshInterval
+    )
     self.apiClient = apiClient
-    self.defaults = defaults
-    self.systemProxyController = systemProxyController ?? SystemProxyController(snapshotDefaults: defaults)
-    developerMode = defaults.bool(forKey: Self.developerModeDefaultsKey)
-    systemProxySettings = Self.loadCodable(
-      SystemProxySettings.self,
-      forKey: Self.systemProxySettingsDefaultsKey,
-      defaults: defaults
-    ) ?? .default
-    tunSettings = Self.loadCodable(
-      TunSettings.self,
-      forKey: Self.tunSettingsDefaultsKey,
-      defaults: defaults
-    ) ?? .default
-    delayTestSettings = Self.loadCodable(
-      DelayTestSettings.self,
-      forKey: Self.delayTestSettingsDefaultsKey,
-      defaults: defaults
-    ) ?? .default
-    appTheme = Self.loadCodable(
-      AppTheme.self,
-      forKey: Self.appThemeDefaultsKey,
-      defaults: defaults
-    ) ?? .system
-    let migratedCORSSettings = Self.loadCodable(
-      ExternalControllerCORSSettings.self,
-      forKey: Self.externalControllerCORSSettingsDefaultsKey,
+    self.systemProxy = SystemProxyCoordinator(
+      controller: systemProxyController ?? SystemProxyController(snapshotDefaults: defaults),
       defaults: defaults
     )
-    externalControllerSettings = Self.loadCodable(
-      ExternalControllerSettings.self,
-      forKey: Self.externalControllerSettingsDefaultsKey,
-      defaults: defaults
-    ) ?? ExternalControllerSettings(cors: migratedCORSSettings ?? .default)
-    overrides.tunSettings = tunSettings
-    overrides.unifiedDelay = delayTestSettings.unifiedDelay
-    syncExternalControllerSettings()
-    refreshLaunchSettings()
+    settings = PersistedSettingsStore(loginItemService: loginItemService, defaults: defaults)
+    settings.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &storeCancellables)
+    profileOperations.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &storeCancellables)
+    proxyPreview.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &storeCancellables)
+    systemProxy.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &storeCancellables)
+    coreController.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &storeCancellables)
     recoverDanglingSystemProxyIfNeeded()
     refreshProfilePreview()
     loadPreviewSelectionsForActiveProfile()
@@ -323,45 +334,37 @@ final class AppModel: ObservableObject {
     panel.canChooseDirectories = false
     guard panel.runModal() == .OK, let url = panel.url else { return }
     do {
-      let profile = try profileStore.importLocalConfig(from: url)
+      _ = try profileOperations.importLocalProfile(from: url)
       refreshProfilePreview()
       loadPreviewSelectionsForActiveProfile()
       lastError = nil
-      profileOperationMessage = "Imported profile \(profile.name)."
     } catch {
-      profileOperationMessage = nil
+      profileOperations.clearMessage()
       lastError = UserFacingError.message(for: error)
     }
   }
 
   @discardableResult
   func addSubscription(name: String = "", urlString: String, session: URLSession = .shared) async -> Bool {
-    guard !isAddingSubscription else { return false }
-
     let trimmedURLString = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
     guard let url = URL(string: trimmedURLString) else {
-      profileOperationMessage = nil
+      profileOperations.clearMessage()
       lastError = "Invalid subscription URL."
       return false
     }
 
-    isAddingSubscription = true
     lastError = nil
-    profileOperationMessage = nil
-    defer { isAddingSubscription = false }
+    profileOperations.clearMessage()
 
     do {
-      let profile = try await profileStore.addSubscription(
-        name: name.trimmingCharacters(in: .whitespacesAndNewlines),
-        url: url,
-        session: session
-      )
+      guard try await profileOperations.addSubscription(name: name, url: url, session: session) != nil else {
+        return false
+      }
       refreshProfilePreview()
       loadPreviewSelectionsForActiveProfile()
-      profileOperationMessage = "Added subscription \(profile.name)."
       return true
     } catch {
-      profileOperationMessage = nil
+      profileOperations.clearMessage()
       lastError = UserFacingError.message(for: error)
       return false
     }
@@ -376,26 +379,15 @@ final class AppModel: ObservableObject {
 
   @discardableResult
   func updateSubscription(_ profile: Profile, session: URLSession = .shared) async -> Bool {
-    guard profile.isSubscription else {
-      profileOperationMessage = nil
-      lastError = "Only subscription profiles can be updated."
-      return false
-    }
-    guard !updatingProfileIDs.contains(profile.id) else { return false }
-
-    setProfile(profile.id, updating: true)
     lastError = nil
-    profileOperationMessage = nil
-    defer { setProfile(profile.id, updating: false) }
+    profileOperations.clearMessage()
 
     do {
-      try await profileStore.updateSubscription(profile, session: session)
+      let updated = try await profileOperations.updateSubscription(profile, session: session)
       refreshProfilePreview()
-      let name = profileStore.profiles.first { $0.id == profile.id }?.name ?? profile.name
-      profileOperationMessage = "Updated subscription \(name)."
-      return true
+      return updated
     } catch {
-      profileOperationMessage = nil
+      profileOperations.clearMessage()
       lastError = UserFacingError.message(for: error)
       return false
     }
@@ -403,92 +395,86 @@ final class AppModel: ObservableObject {
 
   @discardableResult
   func updateSubscriptionSource(_ profile: Profile, urlString: String, session: URLSession = .shared) async -> Bool {
-    guard profile.isSubscription else {
-      profileOperationMessage = nil
-      lastError = "Only subscription profiles can update their source URL."
-      return false
-    }
-    guard !updatingProfileIDs.contains(profile.id) else { return false }
     let trimmedURLString = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
     guard let url = URL(string: trimmedURLString) else {
-      profileOperationMessage = nil
+      profileOperations.clearMessage()
       lastError = "Invalid subscription URL."
       return false
     }
 
-    setProfile(profile.id, updating: true)
     lastError = nil
-    profileOperationMessage = nil
-    defer { setProfile(profile.id, updating: false) }
+    profileOperations.clearMessage()
 
     do {
-      try await profileStore.updateSubscriptionSource(profile, url: url, session: session)
+      let updated = try await profileOperations.updateSubscriptionSource(profile, url: url, session: session)
       refreshProfilePreview()
       loadPreviewSelectionsForActiveProfile()
-      let name = profileStore.profiles.first { $0.id == profile.id }?.name ?? profile.name
-      profileOperationMessage = "Updated subscription source for \(name)."
-      return true
+      return updated
     } catch {
-      profileOperationMessage = nil
+      profileOperations.clearMessage()
       lastError = UserFacingError.message(for: error)
       return false
     }
   }
 
   func renameActiveProfile(to name: String) {
-    guard let profile = profileStore.activeProfile else { return }
-    renameProfile(profile, to: name)
+    do {
+      try profileOperations.renameActiveProfile(to: name)
+      refreshProfilePreview()
+      lastError = nil
+    } catch {
+      profileOperations.clearMessage()
+      lastError = UserFacingError.message(for: error)
+    }
   }
 
   func renameProfile(_ profile: Profile, to name: String) {
-    let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmedName.isEmpty else {
-      profileOperationMessage = nil
-      lastError = "Profile name cannot be empty."
-      return
-    }
-
     do {
-      try profileStore.rename(profile, to: trimmedName)
+      try profileOperations.renameProfile(profile, to: name)
       refreshProfilePreview()
       lastError = nil
-      profileOperationMessage = "Renamed profile to \(trimmedName)."
     } catch {
-      profileOperationMessage = nil
+      profileOperations.clearMessage()
       lastError = UserFacingError.message(for: error)
     }
   }
 
   func resetSubscriptionName(_ profile: Profile) {
     do {
-      try profileStore.resetSubscriptionName(profile)
+      try profileOperations.resetSubscriptionName(profile)
       refreshProfilePreview()
       lastError = nil
-      if let name = profileStore.profiles.first(where: { $0.id == profile.id })?.name {
-        profileOperationMessage = "Restored subscription name to \(name)."
-      }
     } catch {
-      profileOperationMessage = nil
+      profileOperations.clearMessage()
       lastError = UserFacingError.message(for: error)
     }
   }
 
   func deleteActiveProfile() {
-    guard let profile = profileStore.activeProfile else { return }
-    deleteProfile(profile)
+    do {
+      let deletedID = profileStore.activeProfileID
+      try profileOperations.deleteActiveProfile()
+      previewSelections = [:]
+      saveCurrentPreviewSelections(forProfileID: deletedID)
+      refreshProfilePreview()
+      loadPreviewSelectionsForActiveProfile()
+      lastError = nil
+    } catch {
+      profileOperations.clearMessage()
+      lastError = UserFacingError.message(for: error)
+    }
   }
 
   func deleteProfile(_ profile: Profile) {
     do {
-      try profileStore.delete(profile)
+      try profileOperations.deleteProfile(profile)
       previewSelections = [:]
       saveCurrentPreviewSelections(forProfileID: profile.id)
       refreshProfilePreview()
       loadPreviewSelectionsForActiveProfile()
       lastError = nil
-      profileOperationMessage = "Deleted profile \(profile.name)."
     } catch {
-      profileOperationMessage = nil
+      profileOperations.clearMessage()
       lastError = UserFacingError.message(for: error)
     }
   }
@@ -498,7 +484,7 @@ final class AppModel: ObservableObject {
     guard isChangingProfile else { return }
     do {
       let shouldRestart = isRunning || startInFlight
-      try profileStore.select(profile)
+      guard try profileOperations.selectProfile(profile) else { return }
       proxyGroups = []
       refreshProfilePreview()
       loadPreviewSelectionsForActiveProfile()
@@ -507,39 +493,17 @@ final class AppModel: ObservableObject {
         restart()
       }
     } catch {
-      profileOperationMessage = nil
+      profileOperations.clearMessage()
       lastError = UserFacingError.message(for: error)
     }
   }
 
-  private func setProfile(_ id: Profile.ID, updating isUpdating: Bool) {
-    var ids = updatingProfileIDs
-    if isUpdating {
-      ids.insert(id)
-    } else {
-      ids.remove(id)
-    }
-    updatingProfileIDs = ids
-  }
-
   private func setProvider(_ id: ProxyProvider.ID, healthCheckInFlight isRunning: Bool) {
-    var ids = providerHealthChecksInFlight
-    if isRunning {
-      ids.insert(id)
-    } else {
-      ids.remove(id)
-    }
-    providerHealthChecksInFlight = ids
+    runtimeData.setProvider(id, healthCheckInFlight: isRunning)
   }
 
   private func setConnection(_ id: ConnectionSnapshot.ID, closing isClosing: Bool) {
-    var ids = closingConnectionIDs
-    if isClosing {
-      ids.insert(id)
-    } else {
-      ids.remove(id)
-    }
-    closingConnectionIDs = ids
+    runtimeData.setConnection(id, closing: isClosing)
   }
 
   func start() {
@@ -603,7 +567,7 @@ final class AppModel: ObservableObject {
     let profile = try requireActiveProfile()
     let routingMode = proxyRoutingMode
     let shouldUseTun = routingMode == .tun
-    syncExternalControllerSettings()
+    settings.syncExternalControllerSettings()
     overrides.tunEnabled = shouldUseTun
     overrides.tunSettings = tunSettings
     systemProxyEnabled = false
@@ -892,11 +856,7 @@ final class AppModel: ObservableObject {
   }
 
   func refreshLaunchSettings() {
-    launchSettings = LaunchSettings(
-      launchAtLogin: Self.isLoginItemRegistered(loginItemService.status),
-      silentStart: defaults.bool(forKey: Self.silentStartDefaultsKey),
-      statusMessage: Self.loginItemStatusMessage(for: loginItemService.status)
-    )
+    settings.refreshLaunchSettings()
   }
 
   func setLaunchAtLogin(_ enabled: Bool) {
@@ -909,15 +869,7 @@ final class AppModel: ObservableObject {
   func updateLaunchAtLogin(_ enabled: Bool) async -> Bool {
     do {
       lastError = nil
-      if enabled {
-        try loginItemService.register()
-      } else {
-        try await loginItemService.unregister()
-      }
-      refreshLaunchSettings()
-      if loginItemService.status == .requiresApproval {
-        loginItemService.openSystemSettingsLoginItems()
-      }
+      try await settings.updateLaunchAtLogin(enabled)
       return true
     } catch {
       refreshLaunchSettings()
@@ -927,12 +879,11 @@ final class AppModel: ObservableObject {
   }
 
   func setSilentStart(_ enabled: Bool) {
-    defaults.set(enabled, forKey: Self.silentStartDefaultsKey)
-    refreshLaunchSettings()
+    settings.setSilentStart(enabled)
   }
 
   func openLoginItemsSettings() {
-    loginItemService.openSystemSettingsLoginItems()
+    settings.openLoginItemsSettings()
   }
 
   func reloadRuntimeData(clearAfterConfirmation: Bool = false) {
@@ -979,39 +930,11 @@ final class AppModel: ObservableObject {
   }
 
   func publicIPInfoNeedsRefresh(now: Date = Date()) -> Bool {
-    guard isCoreRunning else { return false }
-    if publicIPInfoState.isLoading { return false }
-    guard let anchor = publicIPInfoState.refreshAnchor else { return true }
-    return now.timeIntervalSince(anchor) >= Self.publicIPRefreshInterval
+    publicIP.needsRefresh(isCoreRunning: isCoreRunning, now: now)
   }
 
   func refreshPublicIPInfo(force: Bool = false, now: Date = Date()) {
-    guard isCoreRunning else {
-      cancelPublicIPInfoRefresh(clearState: true)
-      return
-    }
-    guard force || publicIPInfoNeedsRefresh(now: now) else { return }
-    guard !publicIPInfoState.isLoading else { return }
-
-    let previous = publicIPInfoState.info
-    publicIPInfoState = .loading(previous: previous, startedAt: now)
-    publicIPInfoTask = Task { @MainActor [weak self] in
-      guard let self else { return }
-      do {
-        let info = try await self.publicIPInfoClient.fetchPublicIPInfo()
-        guard !Task.isCancelled else { return }
-        self.publicIPInfoState = .loaded(info)
-      } catch is CancellationError {
-      } catch {
-        guard !Task.isCancelled else { return }
-        self.publicIPInfoState = .failed(
-          message: UserFacingError.message(for: error),
-          previous: previous,
-          failedAt: Date()
-        )
-      }
-      self.publicIPInfoTask = nil
-    }
+    publicIP.refresh(isCoreRunning: isCoreRunning, force: force, now: now)
   }
 
   func refreshHelperStatus() {
@@ -1185,8 +1108,7 @@ final class AppModel: ObservableObject {
       defer { self.closingAllConnections = false }
       do {
         try await apiClient.closeAllConnections()
-        self.connectionBuffer.replace(with: [])
-        self.connections = []
+        self.runtimeData.replaceConnections([])
       } catch {
         self.lastError = UserFacingError.message(for: error)
       }
@@ -1240,84 +1162,41 @@ final class AppModel: ObservableObject {
   }
 
   private func applySystemProxySettings() async throws {
-    if let validationError = systemProxySettings.validationError {
-      throw AppError.invalidProfileConfig(validationError)
-    }
-    markSystemProxyManaged(true)
-    do {
-      try await systemProxyController.apply(
-        host: systemProxySettings.normalizedProxyHost,
-        port: overrides.mixedPort,
-        bypassDomains: systemProxySettings.effectiveBypassDomains
-      )
-    } catch {
-      if !systemProxyController.hasManagedSystemProxyState {
-        markSystemProxyManaged(false)
-      }
-      throw error
-    }
+    try await systemProxy.apply(settings: systemProxySettings, mixedPort: overrides.mixedPort)
   }
 
   private func activateSystemProxyGuardIfNeeded() async throws {
-    stopSystemProxyGuard()
-    guard systemProxySettings.guardEnabled else { return }
-    try await systemProxyController.enableGuard(
-      host: systemProxySettings.normalizedProxyHost,
-      port: overrides.mixedPort,
-      bypassDomains: systemProxySettings.effectiveBypassDomains
-    )
-    startSystemProxyGuardLoop(intervalSeconds: systemProxySettings.normalizedGuardIntervalSeconds)
-  }
-
-  private func startSystemProxyGuardLoop(intervalSeconds: Int) {
-    systemProxyGuardTask?.cancel()
-    systemProxyGuardTask = Task { @MainActor [weak self] in
-      guard let self else { return }
-      while !Task.isCancelled {
-        do {
-          let result = try await self.systemProxyController.verifyGuardOnceDetailed()
-          for warning in result.warnings {
-            self.appendAppLog(level: "warn", message: warning)
-          }
-        } catch is CancellationError {
-          return
-        } catch {
-          self.lastError = UserFacingError.message(for: error)
-        }
-        let delay = UInt64(intervalSeconds) * 1_000_000_000
-        try? await Task.sleep(nanoseconds: delay)
+    try await systemProxy.activateGuardIfNeeded(
+      settings: systemProxySettings,
+      mixedPort: overrides.mixedPort,
+      onWarning: { [weak self] warning in
+        self?.appendAppLog(level: "warn", message: warning)
+      },
+      onError: { [weak self] error in
+        self?.lastError = UserFacingError.message(for: error)
       }
-    }
+    )
   }
 
   private func stopSystemProxyGuard() {
-    systemProxyGuardTask?.cancel()
-    systemProxyGuardTask = nil
-    systemProxyController.disableGuard()
+    systemProxy.stopGuard()
   }
 
   @discardableResult
   private func restoreSystemProxyState(disableWhenNoSnapshot: Bool) async throws -> SystemProxyRestoreResult {
-    stopSystemProxyGuard()
-    let result = try await systemProxyController.restoreAndVerify(
-      hosts: Self.localProxyHosts(for: systemProxySettings),
-      ports: [overrides.mixedPort],
+    try await systemProxy.restore(
+      settings: systemProxySettings,
+      mixedPort: overrides.mixedPort,
       disableWhenNoSnapshot: disableWhenNoSnapshot
     )
-    if !systemProxyController.hasManagedSystemProxyState {
-      markSystemProxyManaged(false)
-    }
-    return result
   }
 
   var needsTerminationCleanup: Bool {
     startInFlight
       || isCoreRunning
-      || systemProxyEnabled
       || tunEnabled
       || tunnelCoreRunning
-      || systemProxyController.hasManagedSystemProxyState
-      || defaults.bool(forKey: Self.systemProxyManagedDefaultsKey)
+      || systemProxy.needsTerminationCleanup
   }
 
   @discardableResult
@@ -1447,15 +1326,7 @@ final class AppModel: ObservableObject {
     streamTasks.forEach { $0.cancel() }
     streamTasks.removeAll()
     coreController.stop()
-    proxyGroups = []
-    proxyProviders = []
-    rules = []
-    connections = []
-    closingConnectionIDs = []
-    closingAllConnections = false
-    providerHealthChecksInFlight = []
-    trafficSample = .zero
-    trafficHistory = []
+    runtimeData.clearRuntimeCollections()
     if tunEnabled || tunnelCoreRunning {
       do {
         _ = try await helperClient.stopTunnel()
@@ -1468,31 +1339,19 @@ final class AppModel: ObservableObject {
     previewRuntimeActive = false
     runtimeOwner = .stopped
     refreshProfilePreview()
-    if systemProxyEnabled
-      || systemProxyController.hasManagedSystemProxyState
-      || defaults.bool(forKey: Self.systemProxyManagedDefaultsKey)
-    {
+    if systemProxy.needsTerminationCleanup {
       do {
         _ = try await restoreSystemProxyState(disableWhenNoSnapshot: systemProxyEnabled)
-        systemProxyEnabled = false
       } catch {
         result.systemProxyRestoreError = error
       }
-    }
-    if result.systemProxyRestoreError == nil, !systemProxyController.hasManagedSystemProxyState {
-      markSystemProxyManaged(false)
-      systemProxyEnabled = false
     }
     tunEnabled = false
     return result
   }
 
   private func cancelPublicIPInfoRefresh(clearState: Bool) {
-    publicIPInfoTask?.cancel()
-    publicIPInfoTask = nil
-    if clearState {
-      publicIPInfoState = .idle
-    }
+    publicIP.cancel(clearState: clearState)
   }
 
   private func requireActiveProfile() throws -> Profile {
@@ -1503,17 +1362,7 @@ final class AppModel: ObservableObject {
   }
 
   private func refreshProfilePreview() {
-    guard let profile = profileStore.activeProfile else {
-      profilePreviewGroups = []
-      return
-    }
-
-    do {
-      let source = try String(contentsOfFile: profile.originalConfigPath, encoding: .utf8)
-      profilePreviewGroups = try profilePreviewBuilder.groups(from: source, profileName: profile.name)
-    } catch {
-      profilePreviewGroups = []
-    }
+    proxyPreview.refreshPreview(for: profileStore.activeProfile)
   }
 
   private func runtimeAPIClientForProxyAction() -> (any MihomoAPIControlling)? {
@@ -1564,8 +1413,7 @@ final class AppModel: ObservableObject {
 
   private func removeConnection(id: ConnectionSnapshot.ID) {
     let remaining = connections.filter { $0.id != id }
-    connectionBuffer.replace(with: remaining)
-    connections = remaining
+    runtimeData.replaceConnections(remaining)
   }
 
   private func proxyDelayMap(from groups: [ProxyGroup]) -> [String: Int] {
@@ -1641,11 +1489,7 @@ final class AppModel: ObservableObject {
   }
 
   private func syncExternalControllerSettings() {
-    let settings = externalControllerSettings
-    overrides.externalControllerHost = settings.normalizedHost
-    overrides.externalControllerPort = settings.normalizedPort
-    overrides.secret = settings.normalizedSecret
-    overrides.externalControllerCORS = settings.runtimeCORS
+    settings.syncExternalControllerSettings()
   }
 
   private func generateRuntimeConfig(
@@ -1695,7 +1539,6 @@ final class AppModel: ObservableObject {
         do {
           for try await sample in client.trafficStream() {
             await MainActor.run {
-              self?.trafficSample = sample
               self?.appendTrafficSample(sample)
             }
           }
@@ -1705,8 +1548,7 @@ final class AppModel: ObservableObject {
         do {
           for try await entry in client.logStream(level: logLevel) {
             await MainActor.run {
-              self?.logBuffer.append(entry)
-              self?.logs = self?.logBuffer.elements ?? []
+              self?.runtimeData.appendLog(entry)
             }
           }
         } catch {}
@@ -1715,8 +1557,7 @@ final class AppModel: ObservableObject {
         do {
           for try await snapshot in client.connectionStream(interval: 1000) {
             await MainActor.run {
-              self?.connectionBuffer.replace(with: snapshot)
-              self?.connections = self?.connectionBuffer.elements ?? []
+              self?.runtimeData.replaceConnections(snapshot)
             }
           }
         } catch {}
@@ -1726,15 +1567,11 @@ final class AppModel: ObservableObject {
   }
 
   private func appendTrafficSample(_ sample: TrafficSample) {
-    trafficHistory.append(sample)
-    if trafficHistory.count > 72 {
-      trafficHistory.removeFirst(trafficHistory.count - 72)
-    }
+    runtimeData.appendTrafficSample(sample)
   }
 
   private func appendAppLog(level: String, message: String) {
-    logBuffer.append(LogEntry(level: level, message: message))
-    logs = logBuffer.elements
+    runtimeData.appendLog(level: level, message: message)
   }
 
   private func publishStartupDiagnostics(level: String = "info") {
@@ -1755,103 +1592,34 @@ final class AppModel: ObservableObject {
   }
 
   private func mergedPreviewSelections(into groups: [ProxyGroup]) -> [ProxyGroup] {
-    guard !previewSelections.isEmpty else { return groups }
-    return groups.map { group in
-      var group = group
-      if let chosen = previewSelections[group.name],
-         group.nodes.contains(where: { $0.name == chosen }) {
-        group.selected = chosen
-      }
-      return group
-    }
+    proxyPreview.mergedPreviewSelections(into: groups)
   }
 
   private func loadPreviewSelectionsForActiveProfile() {
-    guard let id = profileStore.activeProfileID else {
-      previewSelections = [:]
-      return
-    }
-    let store = defaults.dictionary(forKey: Self.previewSelectionsDefaultsKey) as? [String: [String: String]] ?? [:]
-    previewSelections = store[id.uuidString] ?? [:]
+    proxyPreview.loadSelections(for: profileStore.activeProfileID)
   }
 
   private func saveCurrentPreviewSelections(forProfileID overrideID: Profile.ID? = nil) {
-    let id = overrideID ?? profileStore.activeProfileID
-    guard let id else { return }
-    var store = defaults.dictionary(forKey: Self.previewSelectionsDefaultsKey) as? [String: [String: String]] ?? [:]
-    if previewSelections.isEmpty {
-      store.removeValue(forKey: id.uuidString)
-    } else {
-      store[id.uuidString] = previewSelections
-    }
-    defaults.set(store, forKey: Self.previewSelectionsDefaultsKey)
-  }
-
-  private func markSystemProxyManaged(_ isManaged: Bool) {
-    defaults.set(isManaged, forKey: Self.systemProxyManagedDefaultsKey)
+    proxyPreview.saveSelections(for: overrideID ?? profileStore.activeProfileID)
   }
 
   private func recoverDanglingSystemProxyIfNeeded() {
-    guard defaults.bool(forKey: Self.systemProxyManagedDefaultsKey) else { return }
-    Task { @MainActor [weak self] in
-      guard let self else { return }
-      do {
-        let result = try await restoreSystemProxyState(disableWhenNoSnapshot: false)
-        if result.didFallbackDisable {
-          appendAppLog(level: "info", message: "Cleared stale System Proxy settings left by a previous ClashMax session after restore verification.")
+    systemProxy.recoverDanglingIfNeeded(
+      settingsProvider: { [weak self] in
+        guard let self else {
+          return (.default, RuntimeOverrides.defaultForLaunch().mixedPort)
         }
-      } catch {
-        lastError = "Could not verify stale System Proxy settings from a previous ClashMax session: \(UserFacingError.message(for: error))"
+        return (systemProxySettings, overrides.mixedPort)
+      },
+      onRecovered: { [weak self] in
+        self?.appendAppLog(level: "info", message: "Cleared stale System Proxy settings left by a previous ClashMax session after restore verification.")
+      },
+      onError: { [weak self] error in
+        self?.lastError = "Could not verify stale System Proxy settings from a previous ClashMax session: \(UserFacingError.message(for: error))"
       }
-    }
+    )
   }
 
-  private static func localProxyHosts(for settings: SystemProxySettings) -> Set<String> {
-    let rawProxyHost = settings.proxyHost.trimmingCharacters(in: .whitespacesAndNewlines)
-    var hosts = [settings.normalizedProxyHost, "127.0.0.1", "localhost", "::1"]
-    if !rawProxyHost.isEmpty, !SystemProxySettings.isUnspecifiedBindHost(rawProxyHost) {
-      hosts.append(rawProxyHost)
-    }
-    return Set(hosts
-      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-      .filter { !$0.isEmpty })
-  }
-
-  private func saveCodable<T: Encodable>(_ value: T, forKey key: String) {
-    guard let data = try? JSONEncoder().encode(value) else { return }
-    defaults.set(data, forKey: key)
-  }
-
-  private static func loadCodable<T: Decodable>(_ type: T.Type, forKey key: String, defaults: UserDefaults) -> T? {
-    guard let data = defaults.data(forKey: key) else { return nil }
-    return try? JSONDecoder().decode(type, from: data)
-  }
-
-  private static func isLoginItemRegistered(_ status: SMAppService.Status) -> Bool {
-    switch status {
-    case .enabled, .requiresApproval:
-      return true
-    case .notRegistered, .notFound:
-      return false
-    @unknown default:
-      return false
-    }
-  }
-
-  private static func loginItemStatusMessage(for status: SMAppService.Status) -> String {
-    switch status {
-    case .enabled:
-      return String(localized: "ClashMax will launch when you log in.")
-    case .requiresApproval:
-      return String(localized: "Approve ClashMax in System Settings > General > Login Items & Extensions.")
-    case .notRegistered:
-      return String(localized: "Launch at login is not registered.")
-    case .notFound:
-      return String(localized: "macOS could not find the ClashMax login item service.")
-    @unknown default:
-      return String(localized: "macOS reported an unknown login item state.")
-    }
-  }
 }
 
 private enum DelayTestError: LocalizedError {

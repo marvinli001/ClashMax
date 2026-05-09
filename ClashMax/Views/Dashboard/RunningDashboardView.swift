@@ -3,6 +3,7 @@ import SwiftUI
 
 struct RunningDashboardView: View {
   @EnvironmentObject private var appModel: AppModel
+  @EnvironmentObject private var runtimeData: RuntimeDataStore
   @State private var selectedProxyGroupName: String?
   let state: DashboardRuntimeState
   let namespace: Namespace.ID
@@ -32,29 +33,29 @@ struct RunningDashboardView: View {
       LazyVGrid(columns: metricColumns, spacing: DashboardLayoutMetrics.dashboardGridSpacing) {
         DashboardMetricTile(
           title: "Download",
-          value: TrafficSample.format(appModel.trafficSample.download),
+          value: TrafficSample.format(runtimeData.trafficSample.download),
           footnote: trafficFootnote,
           symbolName: "arrow.down",
           tint: .cyan
         )
         DashboardMetricTile(
           title: "Upload",
-          value: TrafficSample.format(appModel.trafficSample.upload),
+          value: TrafficSample.format(runtimeData.trafficSample.upload),
           footnote: trafficFootnote,
           symbolName: "arrow.up",
           tint: .indigo
         )
         DashboardMetricTile(
           title: "Connections",
-          value: "\(appModel.connections.count)",
-          footnote: appModel.connections.isEmpty ? "Waiting for runtime data" : "Live stream",
+          value: "\(runtimeData.connections.count)",
+          footnote: runtimeData.connections.isEmpty ? "Waiting for runtime data" : "Live stream",
           symbolName: "network",
           tint: .orange
         )
         DashboardMetricTile(
           title: "Rules",
-          value: "\(appModel.rules.count)",
-          footnote: appModel.rules.isEmpty ? "Waiting for runtime data" : "Loaded rules",
+          value: "\(runtimeData.rules.count)",
+          footnote: runtimeData.rules.isEmpty ? "Waiting for runtime data" : "Loaded rules",
           symbolName: "list.bullet.rectangle",
           tint: .green
         )
@@ -102,7 +103,7 @@ struct RunningDashboardView: View {
   }
 
   private var trafficFootnote: String {
-    appModel.trafficHistory.isEmpty ? "Waiting for runtime data" : "Live traffic"
+    runtimeData.trafficHistory.isEmpty ? "Waiting for runtime data" : "Live traffic"
   }
 
   private var runtimeInfoCardWidth: CGFloat {
@@ -113,7 +114,7 @@ struct RunningDashboardView: View {
   }
 
   private var chartSamples: [TrafficSample] {
-    appModel.trafficHistory.isEmpty ? [.zero, .zero, .zero, .zero, .zero, .zero] : appModel.trafficHistory
+    runtimeData.trafficHistory.isEmpty ? [.zero, .zero, .zero, .zero, .zero, .zero] : runtimeData.trafficHistory
   }
 }
 
@@ -303,12 +304,13 @@ enum DashboardProxySelectionState {
 
 private struct CurrentProxyRuntimeCard: View {
   @EnvironmentObject private var appModel: AppModel
+  @EnvironmentObject private var runtimeData: RuntimeDataStore
   let state: DashboardRuntimeState
   let availableWidth: CGFloat
   @Binding var selectedGroupName: String?
 
   var body: some View {
-    let groups = DashboardProxySelectionState.selectableGroups(from: appModel.proxyGroups)
+    let groups = DashboardProxySelectionState.selectableGroups(from: runtimeData.proxyGroups)
     let group = DashboardProxySelectionState.resolvedGroup(from: groups, preferredName: selectedGroupName)
     let node = group.flatMap(DashboardProxySelectionState.currentNode)
 
@@ -479,6 +481,7 @@ private struct DashboardLabeledControl<Content: View>: View {
 
 private struct RunningStatusCard: View {
   @EnvironmentObject private var appModel: AppModel
+  @EnvironmentObject private var runtimeData: RuntimeDataStore
 
   var body: some View {
     VStack(alignment: .leading, spacing: 14) {
@@ -487,7 +490,7 @@ private struct RunningStatusCard: View {
       TimelineView(.periodic(from: Date(), by: 1)) { context in
         HStack(spacing: 10) {
           RuntimeStat(title: "Uptime", value: dashboardDurationString(from: appModel.sessionStartedAt, now: context.date), tint: .cyan)
-          RuntimeStat(title: "Connections", value: "\(appModel.connections.count)", tint: .orange)
+          RuntimeStat(title: "Connections", value: "\(runtimeData.connections.count)", tint: .orange)
           RuntimeStat(title: "Memory", value: "Runtime", tint: .green)
         }
       }
@@ -563,6 +566,7 @@ private struct TrafficRuntimeCard: View {
 
 private struct ProxyGroupsRuntimeCard: View {
   @EnvironmentObject private var appModel: AppModel
+  @EnvironmentObject private var runtimeData: RuntimeDataStore
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
@@ -577,11 +581,11 @@ private struct ProxyGroupsRuntimeCard: View {
         .help("Refresh")
       }
 
-      if appModel.proxyGroups.isEmpty {
+      if runtimeData.proxyGroups.isEmpty {
         DashboardEmptyRuntimeView(title: "Waiting for runtime data", symbolName: "hourglass")
       } else {
         VStack(spacing: 8) {
-          ForEach(Array(appModel.proxyGroups.prefix(6))) { group in
+          ForEach(Array(runtimeData.proxyGroups.prefix(6))) { group in
             HStack(spacing: 10) {
               Image(systemName: "circle.grid.cross")
                 .foregroundStyle(.cyan)
@@ -611,17 +615,17 @@ private struct ProxyGroupsRuntimeCard: View {
 }
 
 private struct ConnectionsRulesRuntimeCard: View {
-  @EnvironmentObject private var appModel: AppModel
+  @EnvironmentObject private var runtimeData: RuntimeDataStore
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
-      DashboardSectionHeader(title: "Connections", symbolName: "network", trailing: "\(appModel.rules.count) rules")
+      DashboardSectionHeader(title: "Connections", symbolName: "network", trailing: "\(runtimeData.rules.count) rules")
 
-      if appModel.connections.isEmpty {
+      if runtimeData.connections.isEmpty {
         DashboardEmptyRuntimeView(title: "Waiting for runtime data", symbolName: "network.slash")
       } else {
         VStack(spacing: 8) {
-          ForEach(Array(appModel.connections.prefix(6))) { connection in
+          ForEach(Array(runtimeData.connections.prefix(6))) { connection in
             HStack(spacing: 10) {
               VStack(alignment: .leading, spacing: 2) {
                 Text(connection.host)
@@ -649,9 +653,10 @@ private struct ConnectionsRulesRuntimeCard: View {
 
 private struct RecentLogsRuntimeCard: View {
   @EnvironmentObject private var appModel: AppModel
+  @EnvironmentObject private var runtimeData: RuntimeDataStore
 
   var body: some View {
-    let visibleLogs = appModel.userVisibleLogs
+    let visibleLogs = runtimeData.visibleLogs(developerMode: appModel.developerMode)
 
     VStack(alignment: .leading, spacing: 12) {
       DashboardSectionHeader(title: "Recent Logs", symbolName: "terminal", trailing: "\(visibleLogs.count)")
