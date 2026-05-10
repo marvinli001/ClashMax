@@ -152,6 +152,21 @@ final class AppModel: ObservableObject {
   private var pendingModeTask: Task<Void, Never>?
   private var pendingRoutingModeTask: Task<Void, Never>?
   private var tunHelperPreparationTask: Task<Void, Never>?
+  private var modeUpdateTask: Task<Void, Never>?
+  private var modeUpdateToken: UUID?
+  private var proxySelectionTasks: [ProxyGroup.ID: Task<Void, Never>] = [:]
+  private var proxySelectionTokens: [ProxyGroup.ID: UUID] = [:]
+  private var delayTestTasks: [ProxyNode.ID: Task<Void, Never>] = [:]
+  private var delayTestTokens: [ProxyNode.ID: UUID] = [:]
+  private var providerHealthCheckTasks: [ProxyProvider.ID: Task<Void, Never>] = [:]
+  private var providerHealthCheckTokens: [ProxyProvider.ID: UUID] = [:]
+  private var connectionCloseTasks: [ConnectionSnapshot.ID: Task<Void, Never>] = [:]
+  private var connectionCloseTokens: [ConnectionSnapshot.ID: UUID] = [:]
+  private var closeAllConnectionsTask: Task<Void, Never>?
+  private var closeAllConnectionsToken: UUID?
+  private var runtimeReloadTask: Task<Void, Never>?
+  private var runtimeReloadToken: UUID?
+  private var runtimeReloadPending = false
   private var streamTasks: [Task<Void, Never>] = []
   private var storeCancellables: Set<AnyCancellable> = []
   static let publicIPRefreshInterval: TimeInterval = 300
@@ -757,15 +772,30 @@ final class AppModel: ObservableObject {
   func setMode(_ mode: RunMode) {
     guard overrides.mode != mode else { return }
     overrides.mode = mode
+    modeUpdateTask?.cancel()
+    modeUpdateTask = nil
+    modeUpdateToken = nil
     guard isRunning else { return }
     guard let apiClient else {
       lastError = proxyRuntimeActionMessage
       return
     }
-    Task {
+    let token = UUID()
+    modeUpdateToken = token
+    modeUpdateTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer {
+        if modeUpdateToken == token {
+          modeUpdateTask = nil
+          modeUpdateToken = nil
+        }
+      }
       do {
         try await apiClient.updateMode(mode)
+      } catch is CancellationError {
+        return
       } catch {
+        guard modeUpdateToken == token else { return }
         lastError = UserFacingError.message(for: error)
       }
     }
@@ -948,6 +978,10 @@ final class AppModel: ObservableObject {
 
   func reloadRuntimeData(clearAfterConfirmation: Bool = false) {
     guard isCoreRunning, let apiClient else {
+      runtimeReloadTask?.cancel()
+      runtimeReloadTask = nil
+      runtimeReloadToken = nil
+      runtimeReloadPending = false
       proxyGroups = []
       proxyProviders = []
       rules = []
@@ -955,17 +989,47 @@ final class AppModel: ObservableObject {
       refreshProfilePreview()
       return
     }
-    Task {
+    if runtimeReloadTask != nil {
+      guard clearAfterConfirmation else {
+        runtimeReloadPending = true
+        return
+      }
+      runtimeReloadPending = false
+      runtimeReloadTask?.cancel()
+      runtimeReloadTask = nil
+      runtimeReloadToken = nil
+    }
+    startRuntimeReload(apiClient: apiClient, clearAfterConfirmation: clearAfterConfirmation)
+  }
+
+  private func startRuntimeReload(apiClient: any MihomoAPIControlling, clearAfterConfirmation: Bool) {
+    let token = UUID()
+    runtimeReloadToken = token
+    runtimeReloadTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer {
+        if self.runtimeReloadToken == token {
+          let shouldRunTrailing = self.runtimeReloadPending && self.isCoreRunning && self.apiClient != nil
+          self.runtimeReloadTask = nil
+          self.runtimeReloadToken = nil
+          self.runtimeReloadPending = false
+          if shouldRunTrailing {
+            self.reloadRuntimeData()
+          }
+        }
+      }
       do {
         let knownDelays = proxyDelayMap(from: proxyGroups)
         let cachedRuntimeGroups = proxyGroups
         let runtimeGroups = try await apiClient.proxyGroups()
+        guard runtimeReloadToken == token, !Task.isCancelled else { return }
         let refreshedProviders: [ProxyProvider]
         do {
           refreshedProviders = try await apiClient.structuredProxyProviders()
         } catch {
           refreshedProviders = []
         }
+        guard runtimeReloadToken == token, !Task.isCancelled else { return }
         proxyProviders = refreshedProviders
         proxyGroups = enrichProxyGroupsWithKnownEndpoints(
           runtimeGroups,
@@ -973,7 +1037,9 @@ final class AppModel: ObservableObject {
           cachedRuntimeGroups: cachedRuntimeGroups
         ).preservingKnownDelays(knownDelays)
         rules = try await apiClient.rules()
+        guard runtimeReloadToken == token, !Task.isCancelled else { return }
         connections = try await apiClient.connections()
+        guard runtimeReloadToken == token, !Task.isCancelled else { return }
         if clearAfterConfirmation, let activeID = profileStore.activeProfileID {
           let confirmed = previewSelections.allSatisfy { groupName, nodeName in
             proxyGroups.first(where: { $0.name == groupName })?.selected == nodeName
@@ -983,7 +1049,10 @@ final class AppModel: ObservableObject {
             saveCurrentPreviewSelections(forProfileID: activeID)
           }
         }
+      } catch is CancellationError {
+        return
       } catch {
+        guard runtimeReloadToken == token else { return }
         lastError = UserFacingError.message(for: error)
       }
     }
@@ -1045,12 +1114,27 @@ final class AppModel: ObservableObject {
       return
     }
     if isCoreRunning, let apiClient {
-      Task {
+      let groupID = group.id
+      proxySelectionTasks[groupID]?.cancel()
+      let token = UUID()
+      proxySelectionTokens[groupID] = token
+      proxySelectionTasks[groupID] = Task { @MainActor [weak self] in
+        guard let self else { return }
+        defer {
+          if proxySelectionTokens[groupID] == token {
+            proxySelectionTasks[groupID] = nil
+            proxySelectionTokens[groupID] = nil
+          }
+        }
         do {
           try await apiClient.selectProxy(group: group.name, proxy: node.name)
+          guard proxySelectionTokens[groupID] == token, !Task.isCancelled else { return }
           applySelectedProxy(groupName: group.name, nodeName: node.name)
           reloadRuntimeData()
+        } catch is CancellationError {
+          return
         } catch {
+          guard proxySelectionTokens[groupID] == token else { return }
           lastError = UserFacingError.message(for: error)
         }
       }
@@ -1070,12 +1154,27 @@ final class AppModel: ObservableObject {
     }
     guard let apiClient = runtimeAPIClientForProxyAction() else { return }
     let settings = delayTestSettings
-    Task {
+    let nodeID = node.id
+    delayTestTasks[nodeID]?.cancel()
+    let token = UUID()
+    delayTestTokens[nodeID] = token
+    delayTestTasks[nodeID] = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer {
+        if delayTestTokens[nodeID] == token {
+          delayTestTasks[nodeID] = nil
+          delayTestTokens[nodeID] = nil
+        }
+      }
       do {
         let delay = try await measureDelay(for: node, apiClient: apiClient, settings: settings)
+        guard delayTestTokens[nodeID] == token, !Task.isCancelled else { return }
         applyDelay(delay, to: node.name)
         reloadRuntimeData()
+      } catch is CancellationError {
+        return
       } catch {
+        guard delayTestTokens[nodeID] == token else { return }
         lastError = UserFacingError.message(for: error)
       }
     }
@@ -1083,14 +1182,30 @@ final class AppModel: ObservableObject {
 
   func healthCheckProvider(_ provider: ProxyProvider) {
     guard let apiClient = runtimeAPIClientForProxyAction() else { return }
+    guard !providerHealthChecksInFlight.contains(provider.id),
+          providerHealthCheckTasks[provider.id] == nil,
+          providerHealthCheckTokens[provider.id] == nil
+    else { return }
     setProvider(provider.id, healthCheckInFlight: true)
-    Task { @MainActor [weak self] in
+    let token = UUID()
+    providerHealthCheckTokens[provider.id] = token
+    providerHealthCheckTasks[provider.id] = Task { @MainActor [weak self] in
       guard let self else { return }
-      defer { self.setProvider(provider.id, healthCheckInFlight: false) }
+      defer {
+        if self.providerHealthCheckTokens[provider.id] == token {
+          self.providerHealthCheckTasks[provider.id] = nil
+          self.providerHealthCheckTokens[provider.id] = nil
+          self.setProvider(provider.id, healthCheckInFlight: false)
+        }
+      }
       do {
         try await apiClient.healthCheckProvider(named: provider.name)
+        guard self.providerHealthCheckTokens[provider.id] == token, !Task.isCancelled else { return }
         self.reloadRuntimeData()
+      } catch is CancellationError {
+        return
       } catch {
+        guard self.providerHealthCheckTokens[provider.id] == token, !Task.isCancelled else { return }
         self.lastError = UserFacingError.message(for: error)
       }
     }
@@ -1146,14 +1261,30 @@ final class AppModel: ObservableObject {
 
   func closeConnection(_ connection: ConnectionSnapshot) {
     guard let apiClient = runtimeAPIClientForProxyAction() else { return }
+    guard !closingConnectionIDs.contains(connection.id),
+          connectionCloseTasks[connection.id] == nil,
+          connectionCloseTokens[connection.id] == nil
+    else { return }
     setConnection(connection.id, closing: true)
-    Task { @MainActor [weak self] in
+    let token = UUID()
+    connectionCloseTokens[connection.id] = token
+    connectionCloseTasks[connection.id] = Task { @MainActor [weak self] in
       guard let self else { return }
-      defer { self.setConnection(connection.id, closing: false) }
+      defer {
+        if self.connectionCloseTokens[connection.id] == token {
+          self.connectionCloseTasks[connection.id] = nil
+          self.connectionCloseTokens[connection.id] = nil
+          self.setConnection(connection.id, closing: false)
+        }
+      }
       do {
         try await apiClient.closeConnection(id: connection.id)
+        guard self.connectionCloseTokens[connection.id] == token, !Task.isCancelled else { return }
         self.removeConnection(id: connection.id)
+      } catch is CancellationError {
+        return
       } catch {
+        guard self.connectionCloseTokens[connection.id] == token, !Task.isCancelled else { return }
         self.lastError = UserFacingError.message(for: error)
       }
     }
@@ -1162,14 +1293,32 @@ final class AppModel: ObservableObject {
   func closeAllRuntimeConnections() {
     guard let apiClient = runtimeAPIClientForProxyAction() else { return }
     guard !closingAllConnections else { return }
+    connectionCloseTasks.values.forEach { $0.cancel() }
+    connectionCloseTasks.removeAll()
+    connectionCloseTokens.removeAll()
+    for id in closingConnectionIDs {
+      setConnection(id, closing: false)
+    }
     closingAllConnections = true
-    Task { @MainActor [weak self] in
+    let token = UUID()
+    closeAllConnectionsToken = token
+    closeAllConnectionsTask = Task { @MainActor [weak self] in
       guard let self else { return }
-      defer { self.closingAllConnections = false }
+      defer {
+        if self.closeAllConnectionsToken == token {
+          self.closeAllConnectionsTask = nil
+          self.closeAllConnectionsToken = nil
+          self.closingAllConnections = false
+        }
+      }
       do {
         try await apiClient.closeAllConnections()
+        guard self.closeAllConnectionsToken == token, !Task.isCancelled else { return }
         self.runtimeData.replaceConnections([])
+      } catch is CancellationError {
+        return
       } catch {
+        guard self.closeAllConnectionsToken == token else { return }
         self.lastError = UserFacingError.message(for: error)
       }
     }
@@ -1271,6 +1420,7 @@ final class AppModel: ObservableObject {
     pendingModeTask = nil
     pendingRoutingModeTask?.cancel()
     pendingRoutingModeTask = nil
+    cancelRuntimeActionTasks()
     cancelTunHelperPreparation(resetState: false)
     let result = await stopRuntimeCoordinated()
     handleStopResult(result)
@@ -1301,6 +1451,7 @@ final class AppModel: ObservableObject {
     previewTask?.cancel()
     previewTask = nil
     guard previewRuntimeActive else { return result }
+    cancelRuntimeActionTasks()
     apiClient = nil
     streamTasks.forEach { $0.cancel() }
     streamTasks.removeAll()
@@ -1398,8 +1549,47 @@ final class AppModel: ObservableObject {
     appendAppLog(level: "error", message: message)
   }
 
+  private func cancelRuntimeActionTasks() {
+    modeUpdateTask?.cancel()
+    modeUpdateTask = nil
+    modeUpdateToken = nil
+
+    proxySelectionTasks.values.forEach { $0.cancel() }
+    proxySelectionTasks.removeAll()
+    proxySelectionTokens.removeAll()
+
+    delayTestTasks.values.forEach { $0.cancel() }
+    delayTestTasks.removeAll()
+    delayTestTokens.removeAll()
+
+    providerHealthCheckTasks.values.forEach { $0.cancel() }
+    providerHealthCheckTasks.removeAll()
+    providerHealthCheckTokens.removeAll()
+    for id in providerHealthChecksInFlight {
+      setProvider(id, healthCheckInFlight: false)
+    }
+
+    connectionCloseTasks.values.forEach { $0.cancel() }
+    connectionCloseTasks.removeAll()
+    connectionCloseTokens.removeAll()
+    for id in closingConnectionIDs {
+      setConnection(id, closing: false)
+    }
+
+    closeAllConnectionsTask?.cancel()
+    closeAllConnectionsTask = nil
+    closeAllConnectionsToken = nil
+    closingAllConnections = false
+
+    runtimeReloadTask?.cancel()
+    runtimeReloadTask = nil
+    runtimeReloadToken = nil
+    runtimeReloadPending = false
+  }
+
   private func stopRuntime() async -> RuntimeStopResult {
     var result = RuntimeStopResult()
+    cancelRuntimeActionTasks()
     apiClient = nil
     cancelPublicIPInfoRefresh(clearState: true)
     streamTasks.forEach { $0.cancel() }

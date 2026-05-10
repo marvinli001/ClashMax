@@ -1781,6 +1781,216 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(model.connections.isEmpty)
   }
 
+  func testRuntimeModeUpdatesUseLatestRequestOnly() async throws {
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [],
+      testDelayResult: 73,
+      modeUpdateDelayNanoseconds: 60_000_000
+    )
+    let model = try await makeRunningRuntimeModel(client: client)
+
+    model.setMode(.global)
+    model.setMode(.direct)
+
+    try? await Task.sleep(nanoseconds: 120_000_000)
+
+    let modes = await client.updatedModes()
+    XCTAssertEqual(modes, [.direct])
+  }
+
+  func testSelectingProxyUsesLatestRequestPerGroup() async throws {
+    let group = ProxyGroup(
+      name: "Proxy",
+      type: "select",
+      selected: "Japan",
+      nodes: [
+        ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
+        ProxyNode(name: "Hong Kong", type: "vless", delay: nil, isSelectable: true),
+        ProxyNode(name: "Singapore", type: "vless", delay: nil, isSelectable: true)
+      ]
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [
+        ProxyGroup(name: "Proxy", type: "select", selected: "Singapore", nodes: group.nodes)
+      ],
+      testDelayResult: 73,
+      selectProxyDelaysNanoseconds: [120_000_000, 10_000_000]
+    )
+    let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [group])
+
+    model.selectProxy(group: group, node: group.nodes[1])
+    model.selectProxy(group: group, node: group.nodes[2])
+
+    try? await Task.sleep(nanoseconds: 180_000_000)
+
+    let selectedProxyRequests = await client.selectedProxyRequests()
+    let selectedNode = try XCTUnwrap(model.proxyGroups.first?.selected)
+    XCTAssertEqual(selectedProxyRequests, ["Proxy:Singapore"])
+    XCTAssertEqual(selectedNode, "Singapore")
+  }
+
+  func testDelayTestingKeepsLatestResultForSameNode() async throws {
+    let group = ProxyGroup(
+      name: "Proxy",
+      type: "select",
+      selected: "Japan",
+      nodes: [ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true)]
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [group],
+      testDelayResults: [111, 73],
+      testDelayDelaysNanoseconds: [120_000_000, 10_000_000]
+    )
+    let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [group])
+
+    model.testDelay(for: group.nodes[0])
+    for _ in 0..<40 where await client.delayRequestCount() == 0 {
+      await Task.yield()
+    }
+    model.testDelay(for: group.nodes[0])
+
+    try? await Task.sleep(nanoseconds: 180_000_000)
+
+    XCTAssertEqual(model.proxyGroups.first?.nodes.first?.delay, 73)
+  }
+
+  func testProviderHealthCheckIgnoresDuplicateProviderWhileRunning() async throws {
+    let provider = ProxyProvider(name: "Remote", type: "http", vehicleType: "HTTP", updatedAt: nil, proxies: [])
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [],
+      testDelayResult: 73,
+      healthCheckDelayNanoseconds: 80_000_000
+    )
+    let model = try await makeRunningRuntimeModel(client: client)
+
+    model.healthCheckProvider(provider)
+    model.healthCheckProvider(provider)
+
+    try? await Task.sleep(nanoseconds: 120_000_000)
+
+    let healthCheckProviders = await client.healthCheckProviders()
+    XCTAssertEqual(healthCheckProviders, ["Remote"])
+  }
+
+  func testClosingConnectionIgnoresDuplicateConnectionWhileRunning() async throws {
+    let connection = ConnectionSnapshot(
+      id: "abc/123",
+      network: "tcp",
+      host: "example.com",
+      upload: 4,
+      download: 8,
+      chain: ["Proxy"],
+      rule: nil,
+      startedAt: nil
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [],
+      testDelayResult: 73,
+      closeConnectionDelayNanoseconds: 80_000_000
+    )
+    let model = try await makeRunningRuntimeModel(client: client)
+    model.connections = [connection]
+
+    model.closeConnection(connection)
+    model.closeConnection(connection)
+
+    try? await Task.sleep(nanoseconds: 120_000_000)
+
+    let closedConnectionIDs = await client.closedConnectionIDs()
+    XCTAssertEqual(closedConnectionIDs, ["abc/123"])
+  }
+
+  func testReloadRuntimeDataRunsTrailingRefreshForRequestsDuringInFlightReload() async throws {
+    let initialGroup = ProxyGroup(
+      name: "Proxy",
+      type: "select",
+      selected: "Japan",
+      nodes: [
+        ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
+        ProxyNode(name: "Singapore", type: "vless", delay: nil, isSelectable: true)
+      ]
+    )
+    let refreshedGroup = ProxyGroup(
+      name: "Proxy",
+      type: "select",
+      selected: "Singapore",
+      nodes: initialGroup.nodes
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponses: [[initialGroup], [refreshedGroup]],
+      testDelayResults: [73],
+      proxyGroupsDelayNanoseconds: 80_000_000
+    )
+    let model = try await makeRunningRuntimeModel(client: client)
+
+    model.reloadRuntimeData()
+    for _ in 0..<40 where await client.proxyGroupsRequestCount() == 0 {
+      await Task.yield()
+    }
+    model.reloadRuntimeData()
+    model.reloadRuntimeData()
+
+    for _ in 0..<160 {
+      let proxyGroupsRequestCount = await client.proxyGroupsRequestCount()
+      if proxyGroupsRequestCount == 2 && model.proxyGroups.first?.selected == "Singapore" {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let proxyGroupsRequestCount = await client.proxyGroupsRequestCount()
+    XCTAssertEqual(proxyGroupsRequestCount, 2)
+    XCTAssertEqual(model.proxyGroups.first?.selected, "Singapore")
+  }
+
+  func testCancelledRuntimeActionsDoNotPublishStaleErrorsAfterTermination() async throws {
+    let provider = ProxyProvider(name: "Remote", type: "http", vehicleType: "HTTP", updatedAt: nil, proxies: [])
+    let connection = ConnectionSnapshot(
+      id: "abc/123",
+      network: "tcp",
+      host: "example.com",
+      upload: 4,
+      download: 8,
+      chain: ["Proxy"],
+      rule: nil,
+      startedAt: nil
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [],
+      testDelayResult: 73,
+      healthCheckDelayNanoseconds: 80_000_000,
+      closeConnectionDelayNanoseconds: 80_000_000,
+      healthCheckFailureMessage: "stale provider failure",
+      closeConnectionFailureMessage: "stale close failure",
+      ignoreHealthCheckCancellation: true,
+      ignoreCloseConnectionCancellation: true
+    )
+    let model = try await makeRunningRuntimeModel(client: client)
+    model.connections = [connection]
+
+    model.healthCheckProvider(provider)
+    model.closeConnection(connection)
+
+    for _ in 0..<40 {
+      let healthCheckRequestCount = await client.healthCheckRequestCount()
+      let closedConnectionIDs = await client.closedConnectionIDs()
+      if healthCheckRequestCount > 0 && !closedConnectionIDs.isEmpty {
+        break
+      }
+      await Task.yield()
+    }
+
+    let didCleanUp = await model.prepareForTermination()
+    XCTAssertTrue(didCleanUp)
+
+    try? await Task.sleep(nanoseconds: 120_000_000)
+
+    XCTAssertNil(model.lastError)
+    XCTAssertFalse(model.providerHealthChecksInFlight.contains(provider.id))
+    XCTAssertFalse(model.closingConnectionIDs.contains(connection.id))
+  }
+
   func testUpdatingSubscriptionRefreshesStoppedProxyPreview() async throws {
     let paths = try Self.makeRuntimePaths()
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
@@ -2351,6 +2561,41 @@ final class DashboardRuntimeStateTests: XCTestCase {
     return defaults
   }
 
+  private func makeRunningRuntimeModel(
+    client: any MihomoAPIControlling,
+    initialProxyGroups: [ProxyGroup] = []
+  ) async throws -> AppModel {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let controller = CoreProcessController(
+      launcher: FakeProcessLauncher(),
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      apiClient: client,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.proxyGroups = initialProxyGroups
+
+    try await controller.startUserMode(
+      coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+      configURL: configURL,
+      workDirectory: paths.runtime,
+      api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+    )
+
+    return model
+  }
+
   private func assertSystemProxyRestoreIgnoresUnspecifiedRawProxyHost(
     _ rawHost: String,
     residualServer: String,
@@ -2491,10 +2736,24 @@ private actor RecordingPublicIPInfoFetcher: PublicIPInfoFetching {
 }
 
 private actor RecordingMihomoController: MihomoAPIControlling {
-  private let proxyGroupsResponse: [ProxyGroup]
+  private let proxyGroupsResponses: [[ProxyGroup]]
   private let proxyProvidersResponse: [ProxyProvider]
   private let connectionsResponse: [ConnectionSnapshot]
   private let testDelayResults: [Int]
+  private let modeUpdateDelayNanoseconds: UInt64
+  private let proxyGroupsDelayNanoseconds: UInt64
+  private let selectProxyDelaysNanoseconds: [UInt64]
+  private let testDelayDelaysNanoseconds: [UInt64]
+  private let healthCheckDelayNanoseconds: UInt64
+  private let closeConnectionDelayNanoseconds: UInt64
+  private let healthCheckFailureMessage: String?
+  private let closeConnectionFailureMessage: String?
+  private let ignoreHealthCheckCancellation: Bool
+  private let ignoreCloseConnectionCancellation: Bool
+  private var modeUpdates: [RunMode] = []
+  private var proxySelections: [String] = []
+  private var proxySelectionAttempts = 0
+  private var proxyGroupsRequests = 0
   private var delayRequests: [String] = []
   private var healthCheckRequests: [String] = []
   private var closedConnections: [String] = []
@@ -2504,13 +2763,33 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     proxyGroupsResponse: [ProxyGroup],
     proxyProvidersResponse: [ProxyProvider] = [],
     connectionsResponse: [ConnectionSnapshot] = [],
-    testDelayResult: Int
+    testDelayResult: Int,
+    modeUpdateDelayNanoseconds: UInt64 = 0,
+    proxyGroupsDelayNanoseconds: UInt64 = 0,
+    selectProxyDelaysNanoseconds: [UInt64] = [],
+    testDelayDelaysNanoseconds: [UInt64] = [],
+    healthCheckDelayNanoseconds: UInt64 = 0,
+    closeConnectionDelayNanoseconds: UInt64 = 0,
+    healthCheckFailureMessage: String? = nil,
+    closeConnectionFailureMessage: String? = nil,
+    ignoreHealthCheckCancellation: Bool = false,
+    ignoreCloseConnectionCancellation: Bool = false
   ) {
     self.init(
-      proxyGroupsResponse: proxyGroupsResponse,
+      proxyGroupsResponses: [proxyGroupsResponse],
       proxyProvidersResponse: proxyProvidersResponse,
       connectionsResponse: connectionsResponse,
-      testDelayResults: [testDelayResult]
+      testDelayResults: [testDelayResult],
+      modeUpdateDelayNanoseconds: modeUpdateDelayNanoseconds,
+      proxyGroupsDelayNanoseconds: proxyGroupsDelayNanoseconds,
+      selectProxyDelaysNanoseconds: selectProxyDelaysNanoseconds,
+      testDelayDelaysNanoseconds: testDelayDelaysNanoseconds,
+      healthCheckDelayNanoseconds: healthCheckDelayNanoseconds,
+      closeConnectionDelayNanoseconds: closeConnectionDelayNanoseconds,
+      healthCheckFailureMessage: healthCheckFailureMessage,
+      closeConnectionFailureMessage: closeConnectionFailureMessage,
+      ignoreHealthCheckCancellation: ignoreHealthCheckCancellation,
+      ignoreCloseConnectionCancellation: ignoreCloseConnectionCancellation
     )
   }
 
@@ -2518,18 +2797,79 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     proxyGroupsResponse: [ProxyGroup],
     proxyProvidersResponse: [ProxyProvider] = [],
     connectionsResponse: [ConnectionSnapshot] = [],
-    testDelayResults: [Int]
+    testDelayResults: [Int],
+    modeUpdateDelayNanoseconds: UInt64 = 0,
+    proxyGroupsDelayNanoseconds: UInt64 = 0,
+    selectProxyDelaysNanoseconds: [UInt64] = [],
+    testDelayDelaysNanoseconds: [UInt64] = [],
+    healthCheckDelayNanoseconds: UInt64 = 0,
+    closeConnectionDelayNanoseconds: UInt64 = 0,
+    healthCheckFailureMessage: String? = nil,
+    closeConnectionFailureMessage: String? = nil,
+    ignoreHealthCheckCancellation: Bool = false,
+    ignoreCloseConnectionCancellation: Bool = false
   ) {
-    self.proxyGroupsResponse = proxyGroupsResponse
+    self.init(
+      proxyGroupsResponses: [proxyGroupsResponse],
+      proxyProvidersResponse: proxyProvidersResponse,
+      connectionsResponse: connectionsResponse,
+      testDelayResults: testDelayResults,
+      modeUpdateDelayNanoseconds: modeUpdateDelayNanoseconds,
+      proxyGroupsDelayNanoseconds: proxyGroupsDelayNanoseconds,
+      selectProxyDelaysNanoseconds: selectProxyDelaysNanoseconds,
+      testDelayDelaysNanoseconds: testDelayDelaysNanoseconds,
+      healthCheckDelayNanoseconds: healthCheckDelayNanoseconds,
+      closeConnectionDelayNanoseconds: closeConnectionDelayNanoseconds,
+      healthCheckFailureMessage: healthCheckFailureMessage,
+      closeConnectionFailureMessage: closeConnectionFailureMessage,
+      ignoreHealthCheckCancellation: ignoreHealthCheckCancellation,
+      ignoreCloseConnectionCancellation: ignoreCloseConnectionCancellation
+    )
+  }
+
+  init(
+    proxyGroupsResponses: [[ProxyGroup]],
+    proxyProvidersResponse: [ProxyProvider] = [],
+    connectionsResponse: [ConnectionSnapshot] = [],
+    testDelayResults: [Int],
+    modeUpdateDelayNanoseconds: UInt64 = 0,
+    proxyGroupsDelayNanoseconds: UInt64 = 0,
+    selectProxyDelaysNanoseconds: [UInt64] = [],
+    testDelayDelaysNanoseconds: [UInt64] = [],
+    healthCheckDelayNanoseconds: UInt64 = 0,
+    closeConnectionDelayNanoseconds: UInt64 = 0,
+    healthCheckFailureMessage: String? = nil,
+    closeConnectionFailureMessage: String? = nil,
+    ignoreHealthCheckCancellation: Bool = false,
+    ignoreCloseConnectionCancellation: Bool = false
+  ) {
+    self.proxyGroupsResponses = proxyGroupsResponses
     self.proxyProvidersResponse = proxyProvidersResponse
     self.connectionsResponse = connectionsResponse
     self.testDelayResults = testDelayResults
+    self.modeUpdateDelayNanoseconds = modeUpdateDelayNanoseconds
+    self.proxyGroupsDelayNanoseconds = proxyGroupsDelayNanoseconds
+    self.selectProxyDelaysNanoseconds = selectProxyDelaysNanoseconds
+    self.testDelayDelaysNanoseconds = testDelayDelaysNanoseconds
+    self.healthCheckDelayNanoseconds = healthCheckDelayNanoseconds
+    self.closeConnectionDelayNanoseconds = closeConnectionDelayNanoseconds
+    self.healthCheckFailureMessage = healthCheckFailureMessage
+    self.closeConnectionFailureMessage = closeConnectionFailureMessage
+    self.ignoreHealthCheckCancellation = ignoreHealthCheckCancellation
+    self.ignoreCloseConnectionCancellation = ignoreCloseConnectionCancellation
   }
 
-  func updateMode(_ mode: RunMode) async throws {}
+  func updateMode(_ mode: RunMode) async throws {
+    try await sleepIfNeeded(modeUpdateDelayNanoseconds)
+    modeUpdates.append(mode)
+  }
 
   func proxyGroups() async throws -> [ProxyGroup] {
-    proxyGroupsResponse
+    let index = proxyGroupsRequests
+    proxyGroupsRequests += 1
+    try await sleepIfNeeded(proxyGroupsDelayNanoseconds)
+    let responseIndex = min(index, max(proxyGroupsResponses.count - 1, 0))
+    return proxyGroupsResponses[responseIndex]
   }
 
   func structuredProxyProviders() async throws -> [ProxyProvider] {
@@ -2544,20 +2884,35 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     connectionsResponse
   }
 
-  func selectProxy(group: String, proxy: String) async throws {}
+  func selectProxy(group: String, proxy: String) async throws {
+    let index = proxySelectionAttempts
+    proxySelectionAttempts += 1
+    try await sleepIfNeeded(delay(at: index, in: selectProxyDelaysNanoseconds))
+    proxySelections.append("\(group):\(proxy)")
+  }
 
   func testDelay(proxy: String, testURL: URL, timeout: Int) async throws -> Int {
+    let index = delayRequests.count
     delayRequests.append(proxy)
-    let index = min(delayRequests.count - 1, max(testDelayResults.count - 1, 0))
-    return testDelayResults[index]
+    try await sleepIfNeeded(delay(at: index, in: testDelayDelaysNanoseconds))
+    let resultIndex = min(index, max(testDelayResults.count - 1, 0))
+    return testDelayResults[resultIndex]
   }
 
   func healthCheckProvider(named provider: String) async throws {
     healthCheckRequests.append(provider)
+    try await sleepIfNeeded(healthCheckDelayNanoseconds, ignoringCancellation: ignoreHealthCheckCancellation)
+    if let healthCheckFailureMessage {
+      throw AppError.helperResponse(healthCheckFailureMessage)
+    }
   }
 
   func closeConnection(id: String) async throws {
     closedConnections.append(id)
+    try await sleepIfNeeded(closeConnectionDelayNanoseconds, ignoringCancellation: ignoreCloseConnectionCancellation)
+    if let closeConnectionFailureMessage {
+      throw AppError.helperResponse(closeConnectionFailureMessage)
+    }
   }
 
   func closeAllConnections() async throws {
@@ -2584,6 +2939,22 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     delayRequests.count
   }
 
+  func updatedModes() -> [RunMode] {
+    modeUpdates
+  }
+
+  func selectedProxyRequestCount() -> Int {
+    proxySelections.count
+  }
+
+  func selectedProxyRequests() -> [String] {
+    proxySelections
+  }
+
+  func proxyGroupsRequestCount() -> Int {
+    proxyGroupsRequests
+  }
+
   func healthCheckRequestCount() -> Int {
     healthCheckRequests.count
   }
@@ -2598,6 +2969,23 @@ private actor RecordingMihomoController: MihomoAPIControlling {
 
   func closeAllRequestCount() -> Int {
     closedAllRequestCount
+  }
+
+  private func delay(at index: Int, in delays: [UInt64]) -> UInt64 {
+    guard !delays.isEmpty else { return 0 }
+    return delays[min(index, delays.count - 1)]
+  }
+
+  private func sleepIfNeeded(_ nanoseconds: UInt64, ignoringCancellation: Bool = false) async throws {
+    guard nanoseconds > 0 else { return }
+    do {
+      try await Task.sleep(nanoseconds: nanoseconds)
+    } catch {
+      if ignoringCancellation, error is CancellationError {
+        return
+      }
+      throw error
+    }
   }
 }
 
