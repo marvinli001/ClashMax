@@ -567,6 +567,55 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(decoded.guardIntervalSeconds, SystemProxySettings.default.guardIntervalSeconds)
   }
 
+  func testExternalControllerCORSSettingsNormalizesOriginsWhenDecoded() throws {
+    let data = try JSONSerialization.data(
+      withJSONObject: [
+        "enabled": true,
+        "allowPrivateNetwork": false,
+        "allowedOrigins": [
+          " https://custom.example ",
+          "https://custom.example",
+          "\n",
+          "HTTPS://PANEL.EXAMPLE"
+        ]
+      ]
+    )
+
+    let decoded = try JSONDecoder().decode(ExternalControllerCORSSettings.self, from: data)
+
+    XCTAssertTrue(decoded.enabled)
+    XCTAssertFalse(decoded.allowPrivateNetwork)
+    XCTAssertEqual(decoded.allowedOrigins, ["https://custom.example", "HTTPS://PANEL.EXAMPLE"])
+  }
+
+  func testSystemProxySettingsNormalizesCustomBypassDomainsWhenDecoded() throws {
+    let data = try JSONSerialization.data(
+      withJSONObject: [
+        "proxyHost": "192.168.1.20",
+        "customBypassDomains": [
+          " localhost ",
+          "LOCALHOST",
+          "",
+          "\n",
+          " *.corp ",
+          "*.corp"
+        ],
+        "useDefaultBypass": false,
+        "validateBypass": true,
+        "guardEnabled": true,
+        "guardIntervalSeconds": 10
+      ]
+    )
+
+    let decoded = try JSONDecoder().decode(SystemProxySettings.self, from: data)
+
+    XCTAssertEqual(decoded.customBypassDomains, ["localhost", "*.corp"])
+    XCTAssertFalse(decoded.useDefaultBypass)
+    XCTAssertTrue(decoded.validateBypass)
+    XCTAssertTrue(decoded.guardEnabled)
+    XCTAssertEqual(decoded.guardIntervalSeconds, 10)
+  }
+
   func testPersistedSettingsRoundTripCurrentSchema() throws {
     try assertRoundTrip(
       DelayTestSettings(mode: .nativePing, unifiedDelay: true, timeoutMilliseconds: 2_500)
@@ -793,10 +842,15 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(model.updateSystemProxySettings(settings))
     model.setSystemProxyEnabled(true)
 
-    for _ in 0..<100 where !model.logs.contains(where: { $0.message.contains("could not read Wi-Fi proxy settings") }) {
+    for _ in 0..<100 {
+      model.runtimeData.flushPendingLogs()
+      if model.logs.contains(where: { $0.message.contains("could not read Wi-Fi proxy settings") }) {
+        break
+      }
       await Task.yield()
       try? await Task.sleep(nanoseconds: 2_000_000)
     }
+    model.runtimeData.flushPendingLogs()
 
     XCTAssertTrue(model.systemProxyEnabled)
     XCTAssertNil(model.lastError)

@@ -98,7 +98,6 @@ final class AppModel: ObservableObject {
   }
   var logs: [LogEntry] {
     get { runtimeData.logs }
-    set { runtimeData.logs = newValue }
   }
   @Published var helperLogs: [String] = []
   var trafficSample: TrafficSample {
@@ -1304,6 +1303,7 @@ final class AppModel: ObservableObject {
     apiClient = nil
     streamTasks.forEach { $0.cancel() }
     streamTasks.removeAll()
+    runtimeData.flushPendingLogs()
     let coreStopResult = await coreController.stop()
     if let error = coreStopResult.error {
       result.coreStopError = error
@@ -1403,6 +1403,7 @@ final class AppModel: ObservableObject {
     cancelPublicIPInfoRefresh(clearState: true)
     streamTasks.forEach { $0.cancel() }
     streamTasks.removeAll()
+    runtimeData.flushPendingLogs()
     let coreStopResult = await coreController.stop()
     if let error = coreStopResult.error {
       result.coreStopError = error

@@ -578,7 +578,7 @@ struct SystemProxySettings: Codable, Equatable, Sendable {
     guardIntervalSeconds: Int
   ) {
     self.proxyHost = proxyHost
-    self.customBypassDomains = customBypassDomains
+    self.customBypassDomains = Self.normalizedBypassDomains(customBypassDomains)
     self.useDefaultBypass = useDefaultBypass
     self.validateBypass = validateBypass
     self.guardEnabled = guardEnabled

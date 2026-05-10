@@ -2,11 +2,13 @@ import Foundation
 
 @MainActor
 final class RuntimeDataStore: ObservableObject {
+  private static let logPublishIntervalNanoseconds: UInt64 = 250_000_000
+
   @Published var proxyGroups: [ProxyGroup] = []
   @Published var proxyProviders: [ProxyProvider] = []
   @Published var rules: [String] = []
   @Published var connections: [ConnectionSnapshot] = []
-  @Published var logs: [LogEntry] = []
+  @Published private(set) var logs: [LogEntry] = []
   @Published var trafficSample: TrafficSample = .zero
   @Published var trafficHistory: [TrafficSample] = []
   @Published private(set) var providerHealthChecksInFlight: Set<ProxyProvider.ID> = []
@@ -15,6 +17,7 @@ final class RuntimeDataStore: ObservableObject {
 
   private var logBuffer = BoundedBuffer<LogEntry>(limit: AppConstants.retainedLogLimit)
   private var connectionBuffer = BoundedBuffer<ConnectionSnapshot>(limit: AppConstants.retainedConnectionLimit)
+  private var logPublishTask: Task<Void, Never>?
 
   var userVisibleLogs: [LogEntry] {
     LogVisibility.visibleEntries(in: logs, developerMode: false)
@@ -65,15 +68,25 @@ final class RuntimeDataStore: ObservableObject {
 
   func appendLog(level: String, message: String) {
     logBuffer.append(LogEntry(level: level, message: message))
-    logs = logBuffer.elements
+    scheduleLogPublish()
   }
 
   func appendLog(_ entry: LogEntry) {
     logBuffer.append(entry)
-    logs = logBuffer.elements
+    scheduleLogPublish()
+  }
+
+  func flushPendingLogs() {
+    logPublishTask?.cancel()
+    logPublishTask = nil
+
+    let nextLogs = logBuffer.elements
+    guard logs != nextLogs else { return }
+    logs = nextLogs
   }
 
   func clearRuntimeCollections() {
+    flushPendingLogs()
     proxyGroups = []
     proxyProviders = []
     rules = []
@@ -83,5 +96,18 @@ final class RuntimeDataStore: ObservableObject {
     providerHealthChecksInFlight = []
     trafficSample = .zero
     trafficHistory = []
+  }
+
+  private func scheduleLogPublish() {
+    guard logPublishTask == nil else { return }
+
+    logPublishTask = Task { @MainActor [weak self] in
+      do {
+        try await Task.sleep(nanoseconds: Self.logPublishIntervalNanoseconds)
+      } catch {
+        return
+      }
+      self?.flushPendingLogs()
+    }
   }
 }
