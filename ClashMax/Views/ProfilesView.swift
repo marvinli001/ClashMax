@@ -217,7 +217,7 @@ struct ProfilesView: View {
         let didUpdate = await appModel.updateSubscriptionSource(profile, urlString: trimmedURL)
         if didUpdate {
           if let updated = currentProfile(matching: profile), updated.name != trimmedName {
-            appModel.renameProfile(updated, to: trimmedName)
+            guard await appModel.renameProfileAsync(updated, to: trimmedName) else { return }
           }
           closeEditSheet()
         }
@@ -226,15 +226,22 @@ struct ProfilesView: View {
     }
 
     if let updated = currentProfile(matching: profile), updated.name != trimmedName {
-      appModel.renameProfile(updated, to: trimmedName)
+      Task { @MainActor in
+        if await appModel.renameProfileAsync(updated, to: trimmedName) {
+          closeEditSheet()
+        }
+      }
+      return
     }
     closeEditSheet()
   }
 
   private func resetRemoteName(_ profile: Profile) {
-    appModel.resetSubscriptionName(profile)
-    if let updated = currentProfile(matching: profile) {
-      editProfileName = updated.name
+    Task { @MainActor in
+      guard await appModel.resetSubscriptionName(profile) else { return }
+      if let updated = currentProfile(matching: profile) {
+        editProfileName = updated.name
+      }
     }
   }
 }

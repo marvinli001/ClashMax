@@ -2,7 +2,7 @@ import Foundation
 import Yams
 
 struct ConfigNormalizer {
-  enum NormalizerError: Error, CustomStringConvertible {
+  enum NormalizerError: Error, CustomStringConvertible, Sendable {
     case yaml(String)
     case rootIsNotMapping
     case invalidProfile(String)
@@ -216,12 +216,12 @@ struct ConfigNormalizer {
   }
 }
 
-enum ProfileConfigFormat: Equatable {
+enum ProfileConfigFormat: Equatable, Sendable {
   case clashConfig
   case proxyProviderContent
 }
 
-enum ProfileConfigFormatError: Error, CustomStringConvertible, LocalizedError {
+enum ProfileConfigFormatError: Error, CustomStringConvertible, LocalizedError, Sendable {
   case empty
   case yaml(String)
   case rootIsNotMapping

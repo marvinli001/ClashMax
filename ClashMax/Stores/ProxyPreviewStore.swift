@@ -7,29 +7,54 @@ final class ProxyPreviewStore: ObservableObject {
   @Published var previewSelections: [String: String] = [:]
 
   private let defaults: UserDefaults
-  private let previewBuilder: ProfilePreviewBuilder
+  private let previewMaterializer: ProfilePreviewMaterializer
+  private var refreshTask: Task<Void, Never>?
+  private var refreshGeneration = 0
   private static let previewSelectionsDefaultsKey = "io.github.clashmax.previewSelections"
 
   init(
     defaults: UserDefaults = .standard,
-    previewBuilder: ProfilePreviewBuilder = ProfilePreviewBuilder()
+    previewMaterializer: ProfilePreviewMaterializer = ProfilePreviewMaterializer()
   ) {
     self.defaults = defaults
-    self.previewBuilder = previewBuilder
+    self.previewMaterializer = previewMaterializer
   }
 
-  func refreshPreview(for profile: Profile?) {
+  deinit {
+    refreshTask?.cancel()
+  }
+
+  @discardableResult
+  func refreshPreview(for profile: Profile?) -> Task<Void, Never>? {
+    refreshTask?.cancel()
+    refreshGeneration += 1
+
     guard let profile else {
       profilePreviewGroups = []
-      return
+      refreshTask = nil
+      return nil
     }
 
-    do {
-      let source = try String(contentsOfFile: profile.originalConfigPath, encoding: .utf8)
-      profilePreviewGroups = try previewBuilder.groups(from: source, profileName: profile.name)
-    } catch {
-      profilePreviewGroups = []
+    let generation = refreshGeneration
+    let sourcePath = profile.originalConfigPath
+    let profileName = profile.name
+    let task = Task { [weak self, previewMaterializer] in
+      let groups: [ProxyGroup]
+      do {
+        groups = try await previewMaterializer.groups(from: sourcePath, profileName: profileName)
+      } catch {
+        groups = []
+      }
+      guard !Task.isCancelled else { return }
+      guard let self, self.refreshGeneration == generation else { return }
+      self.profilePreviewGroups = groups
     }
+    refreshTask = task
+    return task
+  }
+
+  func waitForRefresh() async {
+    await refreshTask?.value
   }
 
   func loadSelections(for profileID: Profile.ID?) {

@@ -207,6 +207,60 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertNil(yaml["external-controller-cors"])
   }
 
+  func testRuntimeConfigMaterializerWritesUniqueRuntimeAndProviderFiles() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxRuntimeMaterializerTests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let sourceURL = root.appendingPathComponent("source.txt")
+    try """
+    vless://00000000-0000-0000-0000-000000000000@example.com:443?security=tls&sni=example.com#Provider%20Node
+    """.write(to: sourceURL, atomically: true, encoding: .utf8)
+
+    let runtimeURL = root.appendingPathComponent("profile.runtime.yaml")
+    let providerURL = root.appendingPathComponent("profile.provider.txt")
+    let materializer = RuntimeConfigMaterializer()
+    var firstOverrides = RuntimeOverrides.defaultForLaunch(secret: "first-secret")
+    firstOverrides.mixedPort = 7891
+    var secondOverrides = RuntimeOverrides.defaultForLaunch(secret: "second-secret")
+    secondOverrides.mixedPort = 7892
+
+    let firstURL = try await materializer.materialize(
+      RuntimeConfigMaterializationRequest(
+        profileName: "Provider",
+        sourcePath: sourceURL.path,
+        runtimeConfigURL: runtimeURL,
+        providerContentURL: providerURL,
+        overrides: firstOverrides,
+        selectionOverrides: [:]
+      )
+    )
+    let secondURL = try await materializer.materialize(
+      RuntimeConfigMaterializationRequest(
+        profileName: "Provider",
+        sourcePath: sourceURL.path,
+        runtimeConfigURL: runtimeURL,
+        providerContentURL: providerURL,
+        overrides: secondOverrides,
+        selectionOverrides: [:]
+      )
+    )
+
+    XCTAssertNotEqual(firstURL, secondURL)
+    XCTAssertNotEqual(firstURL, runtimeURL)
+    XCTAssertNotEqual(secondURL, runtimeURL)
+
+    let firstYAML = try XCTUnwrap(Yams.load(yaml: String(contentsOf: firstURL, encoding: .utf8)) as? [String: Any])
+    let secondYAML = try XCTUnwrap(Yams.load(yaml: String(contentsOf: secondURL, encoding: .utf8)) as? [String: Any])
+    XCTAssertEqual(firstYAML["secret"] as? String, "first-secret")
+    XCTAssertEqual(secondYAML["secret"] as? String, "second-secret")
+
+    let firstProviders = try XCTUnwrap(firstYAML["proxy-providers"] as? [String: Any])
+    let firstProvider = try XCTUnwrap(firstProviders["Provider"] as? [String: Any])
+    let firstProviderPath = try XCTUnwrap(firstProvider["path"] as? String)
+    XCTAssertNotEqual(firstProviderPath, providerURL.path)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: firstProviderPath))
+  }
+
   func testURIProviderContentBuildsRuntimeConfigWithFileProvider() throws {
     let source = """
     vless://00000000-0000-0000-0000-000000000000@example.com:443?security=tls&sni=example.com#VLESS%20Node

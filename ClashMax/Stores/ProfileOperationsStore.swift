@@ -14,8 +14,8 @@ final class ProfileOperationsStore: ObservableObject {
   }
 
   @discardableResult
-  func importLocalProfile(from url: URL) throws -> Profile {
-    let profile = try profileStore.importLocalConfig(from: url)
+  func importLocalProfile(from url: URL) async throws -> Profile {
+    let profile = try await profileStore.importLocalConfig(from: url)
     message = "Imported profile \(profile.name)."
     return profile
   }
@@ -75,41 +75,41 @@ final class ProfileOperationsStore: ObservableObject {
     return true
   }
 
-  func renameActiveProfile(to name: String) throws {
+  func renameActiveProfile(to name: String) async throws {
     guard let profile = profileStore.activeProfile else { return }
-    try renameProfile(profile, to: name)
+    try await renameProfile(profile, to: name)
   }
 
-  func renameProfile(_ profile: Profile, to name: String) throws {
+  func renameProfile(_ profile: Profile, to name: String) async throws {
     let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmedName.isEmpty else {
       throw AppError.invalidProfileConfig("Profile name cannot be empty.")
     }
-    try profileStore.rename(profile, to: trimmedName)
+    try await profileStore.rename(profile, to: trimmedName)
     message = "Renamed profile to \(trimmedName)."
   }
 
-  func resetSubscriptionName(_ profile: Profile) throws {
-    try profileStore.resetSubscriptionName(profile)
+  func resetSubscriptionName(_ profile: Profile) async throws {
+    try await profileStore.resetSubscriptionName(profile)
     if let name = profileStore.profiles.first(where: { $0.id == profile.id })?.name {
       message = "Restored subscription name to \(name)."
     }
   }
 
-  func deleteActiveProfile() throws {
+  func deleteActiveProfile() async throws {
     guard let profile = profileStore.activeProfile else { return }
-    try deleteProfile(profile)
+    try await deleteProfile(profile)
   }
 
-  func deleteProfile(_ profile: Profile) throws {
-    try profileStore.delete(profile)
+  func deleteProfile(_ profile: Profile) async throws {
+    try await profileStore.delete(profile)
     message = "Deleted profile \(profile.name)."
   }
 
-  func selectProfile(_ profile: Profile) throws -> Bool {
+  func selectProfile(_ profile: Profile) async throws -> Bool {
     let isChangingProfile = profileStore.activeProfileID != profile.id
     guard isChangingProfile else { return false }
-    try profileStore.select(profile)
+    try await profileStore.select(profile)
     return true
   }
 

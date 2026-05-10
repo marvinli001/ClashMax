@@ -16,6 +16,22 @@ func XCTAssertThrowsErrorAsync<T>(
 }
 
 @MainActor
+func XCTAssertThrowsErrorAsync<T>(
+  _ expression: () async throws -> T,
+  _ message: @autoclosure () -> String = "",
+  file: StaticString = #filePath,
+  line: UInt = #line,
+  handler: (Error) -> Void
+) async {
+  do {
+    _ = try await expression()
+    XCTFail(message(), file: file, line: line)
+  } catch {
+    handler(error)
+  }
+}
+
+@MainActor
 func XCTAssertThrowsCancellationErrorAsync<T>(
   _ expression: () async throws -> T,
   _ message: @autoclosure () -> String = "",

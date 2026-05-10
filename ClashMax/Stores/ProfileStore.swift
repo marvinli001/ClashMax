@@ -1,162 +1,289 @@
 import Foundation
 import Yams
 
+private actor ProfileMutationGate {
+  private struct Waiter {
+    let id: UUID
+    let continuation: CheckedContinuation<Void, Error>
+  }
+
+  private var isLocked = false
+  private var waiters: [Waiter] = []
+
+  func acquire() async throws {
+    guard isLocked else {
+      isLocked = true
+      return
+    }
+
+    let waiterID = UUID()
+    try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        if Task.isCancelled {
+          continuation.resume(throwing: CancellationError())
+        } else {
+          waiters.append(Waiter(id: waiterID, continuation: continuation))
+        }
+      }
+    } onCancel: {
+      Task {
+        await self.cancelWaiter(id: waiterID)
+      }
+    }
+  }
+
+  func release() {
+    guard !waiters.isEmpty else {
+      isLocked = false
+      return
+    }
+    waiters.removeFirst().continuation.resume()
+  }
+
+  private func cancelWaiter(id: UUID) {
+    guard let index = waiters.firstIndex(where: { $0.id == id }) else {
+      return
+    }
+    waiters.remove(at: index).continuation.resume(throwing: CancellationError())
+  }
+}
+
 @MainActor
 final class ProfileStore: ObservableObject {
   @Published private(set) var profiles: [Profile] = []
-  @Published var activeProfileID: Profile.ID?
+  @Published private(set) var activeProfileID: Profile.ID?
+  @Published private(set) var subscriptionURLCache: [Profile.ID: String] = [:]
 
   private let paths: RuntimePaths
-  private let keychain: SecretStoring
-  private let fileManager: FileManager
+  private let diskIO: ProfileDiskIO
+  private let secretIO: ProfileSecretIO
   private let subscriptionFetcher = SubscriptionFetcher()
+  private let mutationGate = ProfileMutationGate()
+  private var manifestLoadTask: Task<Void, Never>?
 
-  init(paths: RuntimePaths, keychain: SecretStoring = KeychainStore(), fileManager: FileManager = .default) {
+  init(
+    paths: RuntimePaths,
+    keychain: any SecretStoring = KeychainStore(),
+    diskIO: ProfileDiskIO = ProfileDiskIO()
+  ) {
     self.paths = paths
-    self.keychain = keychain
-    self.fileManager = fileManager
-    loadManifest()
+    self.diskIO = diskIO
+    self.secretIO = ProfileSecretIO(store: keychain)
+    manifestLoadTask = Task { @MainActor [weak self] in
+      await self?.loadManifestFromDisk()
+    }
+  }
+
+  deinit {
+    manifestLoadTask?.cancel()
   }
 
   var activeProfile: Profile? {
     profiles.first { $0.id == activeProfileID }
   }
 
+  func waitForManifestLoad() async {
+    await manifestLoadTask?.value
+  }
+
   @discardableResult
-  func importLocalConfig(from sourceURL: URL) throws -> Profile {
-    let id = UUID()
-    let name = sourceURL.deletingPathExtension().lastPathComponent
-    let destination = paths.profiles.appendingPathComponent("\(id.uuidString).yaml")
-    let source = try String(contentsOf: sourceURL, encoding: .utf8)
-    try ProfileConfigValidator.validate(source)
-    try source.write(to: destination, atomically: true, encoding: .utf8)
-    let profile = Profile(
-      id: id,
-      name: name,
-      nameIsUserCustomized: true,
-      source: .localFile(originalPath: sourceURL.path),
-      originalConfigPath: destination.path
-    )
-    profiles.append(profile)
-    activeProfileID = profile.id
-    try saveManifest()
-    return profile
+  func importLocalConfig(from sourceURL: URL) async throws -> Profile {
+    await waitForManifestLoad()
+    return try await withMutationLock {
+      let id = UUID()
+      let name = sourceURL.deletingPathExtension().lastPathComponent
+      let destination = paths.profiles.appendingPathComponent("\(id.uuidString).yaml")
+      _ = try await diskIO.importLocalConfig(from: sourceURL, to: destination)
+      let profile = Profile(
+        id: id,
+        name: name,
+        nameIsUserCustomized: true,
+        source: .localFile(originalPath: sourceURL.path),
+        originalConfigPath: destination.path
+      )
+      let nextProfiles = profiles + [profile]
+      do {
+        try await saveManifest(profiles: nextProfiles, activeProfileID: profile.id)
+      } catch {
+        try? await diskIO.removeProfileConfig(atPath: destination.path)
+        throw error
+      }
+      profiles = nextProfiles
+      activeProfileID = profile.id
+      return profile
+    }
   }
 
   @discardableResult
   func addSubscription(name: String = "", url: URL, session: URLSession = .shared) async throws -> Profile {
-    let result = try await fetchSubscription(url: url, session: session)
-    let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-    let suggestedName = subscriptionDisplayName(metadata: result.metadata, source: result.source, url: url)
+    await waitForManifestLoad()
+    return try await withMutationLock {
+      let result = try await fetchSubscription(url: url, session: session)
+      let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+      let suggestedName = await Self.subscriptionDisplayNameAsync(
+        metadata: result.metadata,
+        source: result.source,
+        url: url
+      )
 
-    let id = UUID()
-    let destination = paths.profiles.appendingPathComponent("\(id.uuidString).yaml")
-    try result.source.write(to: destination, atomically: true, encoding: .utf8)
-    try keychain.save(url.absoluteString, account: subscriptionAccount(for: id))
+      let id = UUID()
+      let destination = paths.profiles.appendingPathComponent("\(id.uuidString).yaml")
+      try await diskIO.writeProfileSource(result.source, to: destination)
+      do {
+        try await secretIO.save(url.absoluteString, account: Self.subscriptionAccount(for: id))
+      } catch {
+        try? await diskIO.removeProfileConfig(atPath: destination.path)
+        throw error
+      }
 
-    let profile = Profile(
-      id: id,
-      name: trimmedName.isEmpty ? suggestedName : trimmedName,
-      nameIsUserCustomized: !trimmedName.isEmpty,
-      source: .subscription(id: id),
-      originalConfigPath: destination.path,
-      subscriptionMetadata: result.metadata
-    )
-    profiles.append(profile)
-    activeProfileID = profile.id
-    try saveManifest()
-    return profile
+      let profile = Profile(
+        id: id,
+        name: trimmedName.isEmpty ? suggestedName : trimmedName,
+        nameIsUserCustomized: !trimmedName.isEmpty,
+        source: .subscription(id: id),
+        originalConfigPath: destination.path,
+        subscriptionMetadata: result.metadata
+      )
+      let nextProfiles = profiles + [profile]
+      do {
+        try await saveManifest(profiles: nextProfiles, activeProfileID: profile.id)
+      } catch {
+        try? await diskIO.removeProfileConfig(atPath: destination.path)
+        try? await secretIO.delete(account: Self.subscriptionAccount(for: id))
+        throw error
+      }
+      profiles = nextProfiles
+      activeProfileID = profile.id
+      subscriptionURLCache[id] = url.absoluteString
+      return profile
+    }
   }
 
   func updateSubscription(_ profile: Profile, session: URLSession = .shared) async throws {
-    guard case let .subscription(id) = profile.source,
-          let rawURL = try keychain.load(account: subscriptionAccount(for: id)),
-          let url = URL(string: rawURL)
-    else { return }
+    await waitForManifestLoad()
+    try await withMutationLock {
+      guard profiles.contains(where: { $0.id == profile.id }),
+            case let .subscription(id) = profile.source,
+            let rawURL = try await storedSubscriptionURL(for: id),
+            let url = URL(string: rawURL)
+      else { return }
 
-    let result = try await fetchSubscription(url: url, session: session)
-    try result.source.write(to: URL(fileURLWithPath: profile.originalConfigPath), atomically: true, encoding: .utf8)
-    updateSubscriptionDetails(result, sourceURL: url, for: profile.id)
-    try saveManifest()
+      let previousSource = try? await diskIO.readProfileSource(atPath: profile.originalConfigPath)
+      let result = try await fetchSubscription(url: url, session: session)
+      let nextProfiles = await profilesByApplyingSubscriptionDetails(result, sourceURL: url, for: profile.id)
+      do {
+        try await diskIO.writeProfileSource(result.source, to: URL(fileURLWithPath: profile.originalConfigPath))
+        try await saveManifest(profiles: nextProfiles, activeProfileID: activeProfileID)
+      } catch {
+        if let previousSource {
+          try? await diskIO.writeProfileSource(previousSource, to: URL(fileURLWithPath: profile.originalConfigPath))
+        }
+        throw error
+      }
+      profiles = nextProfiles
+      subscriptionURLCache[id] = rawURL
+    }
   }
 
   func updateSubscriptionSource(_ profile: Profile, url: URL, session: URLSession = .shared) async throws {
-    guard case let .subscription(id) = profile.source else { return }
-    let result = try await fetchSubscription(url: url, session: session)
-    try result.source.write(to: URL(fileURLWithPath: profile.originalConfigPath), atomically: true, encoding: .utf8)
-    try keychain.save(url.absoluteString, account: subscriptionAccount(for: id))
-    updateSubscriptionDetails(result, sourceURL: url, for: profile.id)
-    try saveManifest()
-  }
-
-  func rename(_ profile: Profile, to name: String) throws {
-    guard let index = profiles.firstIndex(where: { $0.id == profile.id }) else { return }
-    profiles[index].name = name
-    profiles[index].nameIsUserCustomized = true
-    profiles[index].updatedAt = Date()
-    try saveManifest()
-  }
-
-  func resetSubscriptionName(_ profile: Profile) throws {
-    guard case let .subscription(id) = profile.source,
-          let index = profiles.firstIndex(where: { $0.id == profile.id }),
-          let rawURL = try keychain.load(account: subscriptionAccount(for: id)),
-          let url = URL(string: rawURL)
-    else { return }
-    let source = (try? String(contentsOfFile: profile.originalConfigPath, encoding: .utf8)) ?? ""
-    let metadata = profiles[index].subscriptionMetadata ?? SubscriptionMetadata()
-    profiles[index].name = subscriptionDisplayName(metadata: metadata, source: source, url: url)
-    profiles[index].nameIsUserCustomized = false
-    profiles[index].updatedAt = Date()
-    try saveManifest()
-  }
-
-  func delete(_ profile: Profile) throws {
-    profiles.removeAll { $0.id == profile.id }
-    try? fileManager.removeItem(atPath: profile.originalConfigPath)
-    if case let .subscription(id) = profile.source {
-      try? keychain.delete(account: subscriptionAccount(for: id))
-    }
-    if activeProfileID == profile.id {
-      activeProfileID = profiles.first?.id
-    }
-    try saveManifest()
-  }
-
-  func select(_ profile: Profile) throws {
-    guard activeProfileID != profile.id else { return }
-    activeProfileID = profile.id
-    try saveManifest()
-  }
-
-  private func touch(_ id: UUID) {
-    if let index = profiles.firstIndex(where: { $0.id == id }) {
-      profiles[index].updatedAt = Date()
+    await waitForManifestLoad()
+    try await withMutationLock {
+      guard profiles.contains(where: { $0.id == profile.id }),
+            case let .subscription(id) = profile.source
+      else { return }
+      let account = Self.subscriptionAccount(for: id)
+      let previousSource = try? await diskIO.readProfileSource(atPath: profile.originalConfigPath)
+      let previousURL = try await storedSubscriptionURL(for: id)
+      let result = try await fetchSubscription(url: url, session: session)
+      let nextProfiles = await profilesByApplyingSubscriptionDetails(result, sourceURL: url, for: profile.id)
+      do {
+        try await diskIO.writeProfileSource(result.source, to: URL(fileURLWithPath: profile.originalConfigPath))
+        try await secretIO.save(url.absoluteString, account: account)
+        try await saveManifest(profiles: nextProfiles, activeProfileID: activeProfileID)
+      } catch {
+        if let previousSource {
+          try? await diskIO.writeProfileSource(previousSource, to: URL(fileURLWithPath: profile.originalConfigPath))
+        }
+        if let previousURL {
+          try? await secretIO.save(previousURL, account: account)
+        } else {
+          try? await secretIO.delete(account: account)
+        }
+        throw error
+      }
+      profiles = nextProfiles
+      subscriptionURLCache[id] = url.absoluteString
     }
   }
 
-  private func updateMetadata(_ metadata: SubscriptionMetadata, for id: UUID) {
-    if let index = profiles.firstIndex(where: { $0.id == id }) {
-      profiles[index].subscriptionMetadata = metadata
-      profiles[index].updatedAt = Date()
+  func rename(_ profile: Profile, to name: String) async throws {
+    await waitForManifestLoad()
+    try await withMutationLock {
+      guard let index = profiles.firstIndex(where: { $0.id == profile.id }) else { return }
+      var nextProfiles = profiles
+      nextProfiles[index].name = name
+      nextProfiles[index].nameIsUserCustomized = true
+      nextProfiles[index].updatedAt = Date()
+      try await saveManifest(profiles: nextProfiles, activeProfileID: activeProfileID)
+      profiles = nextProfiles
     }
   }
 
-  private func updateSubscriptionDetails(_ result: SubscriptionFetchResult, sourceURL: URL, for id: UUID) {
-    guard let index = profiles.firstIndex(where: { $0.id == id }) else { return }
-    profiles[index].subscriptionMetadata = result.metadata
-    if !profiles[index].nameIsUserCustomized {
-      profiles[index].name = subscriptionDisplayName(metadata: result.metadata, source: result.source, url: sourceURL)
+  func resetSubscriptionName(_ profile: Profile) async throws {
+    await waitForManifestLoad()
+    try await withMutationLock {
+      guard case let .subscription(id) = profile.source,
+            let index = profiles.firstIndex(where: { $0.id == profile.id }),
+            let rawURL = try await storedSubscriptionURL(for: id),
+            let url = URL(string: rawURL)
+      else { return }
+      let source = (try? await diskIO.readProfileSource(atPath: profile.originalConfigPath)) ?? ""
+      let metadata = profiles[index].subscriptionMetadata ?? SubscriptionMetadata()
+      let displayName = await Self.subscriptionDisplayNameAsync(metadata: metadata, source: source, url: url)
+      var nextProfiles = profiles
+      nextProfiles[index].name = displayName
+      nextProfiles[index].nameIsUserCustomized = false
+      nextProfiles[index].updatedAt = Date()
+      try await saveManifest(profiles: nextProfiles, activeProfileID: activeProfileID)
+      profiles = nextProfiles
+      subscriptionURLCache[id] = rawURL
     }
-    profiles[index].updatedAt = Date()
+  }
+
+  func delete(_ profile: Profile) async throws {
+    await waitForManifestLoad()
+    try await withMutationLock {
+      guard let current = profiles.first(where: { $0.id == profile.id }) else { return }
+      var nextProfiles = profiles
+      nextProfiles.removeAll { $0.id == current.id }
+      let nextActiveProfileID = activeProfileID == current.id ? nextProfiles.first?.id : activeProfileID
+      try await saveManifest(profiles: nextProfiles, activeProfileID: nextActiveProfileID)
+      profiles = nextProfiles
+      activeProfileID = nextActiveProfileID
+      try? await diskIO.removeProfileConfig(atPath: current.originalConfigPath)
+      if case let .subscription(id) = current.source {
+        subscriptionURLCache.removeValue(forKey: id)
+        try? await secretIO.delete(account: Self.subscriptionAccount(for: id))
+      }
+    }
+  }
+
+  func select(_ profile: Profile) async throws {
+    await waitForManifestLoad()
+    try await withMutationLock {
+      guard activeProfileID != profile.id else { return }
+      guard profiles.contains(where: { $0.id == profile.id }) else { return }
+      try await saveManifest(profiles: profiles, activeProfileID: profile.id)
+      activeProfileID = profile.id
+    }
   }
 
   func subscriptionURLString(for profile: Profile) -> String? {
     guard case let .subscription(id) = profile.source else { return nil }
-    return try? keychain.load(account: subscriptionAccount(for: id))
+    return subscriptionURLCache[id]
   }
 
-  private func subscriptionAccount(for id: UUID) -> String {
+  nonisolated private static func subscriptionAccount(for id: UUID) -> String {
     "subscription.\(id.uuidString)"
   }
 
@@ -169,24 +296,91 @@ final class ProfileStore: ObservableObject {
     }
   }
 
-  private func loadManifest() {
-    guard let data = try? Data(contentsOf: paths.manifestURL) else { return }
-    let decoder = JSONDecoder()
-    decoder.dateDecodingStrategy = .iso8601
-    guard let manifest = try? decoder.decode(ProfileManifest.self, from: data) else { return }
-    profiles = manifest.profiles
-    activeProfileID = manifest.activeProfileID
+  private func loadManifestFromDisk() async {
+    do {
+      guard let manifest = try await diskIO.loadManifest(from: paths.manifestURL) else { return }
+      let loadedSubscriptionURLs = await secretIO.loadSubscriptionURLs(
+        for: Self.subscriptionIDs(in: manifest.profiles),
+        account: Self.subscriptionAccount(for:)
+      )
+      profiles = manifest.profiles
+      activeProfileID = manifest.activeProfileID
+      subscriptionURLCache = loadedSubscriptionURLs
+    } catch {
+      return
+    }
   }
 
-  private func saveManifest() throws {
-    let encoder = JSONEncoder()
-    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-    encoder.dateEncodingStrategy = .iso8601
-    let data = try encoder.encode(ProfileManifest(profiles: profiles, activeProfileID: activeProfileID))
-    try data.write(to: paths.manifestURL, options: [.atomic])
+  private func saveManifest(profiles: [Profile], activeProfileID: Profile.ID?) async throws {
+    try await diskIO.saveManifest(
+      ProfileManifest(profiles: profiles, activeProfileID: activeProfileID),
+      to: paths.manifestURL
+    )
   }
 
-  private func subscriptionDisplayName(metadata: SubscriptionMetadata, source: String, url: URL) -> String {
+  private func withMutationLock<T>(_ operation: () async throws -> T) async throws -> T {
+    try await mutationGate.acquire()
+    do {
+      try Task.checkCancellation()
+      let result = try await operation()
+      await mutationGate.release()
+      return result
+    } catch {
+      await mutationGate.release()
+      throw error
+    }
+  }
+
+  private func storedSubscriptionURL(for id: UUID) async throws -> String? {
+    if let cached = subscriptionURLCache[id] {
+      return cached
+    }
+    guard let loaded = try await secretIO.load(account: Self.subscriptionAccount(for: id)) else {
+      return nil
+    }
+    subscriptionURLCache[id] = loaded
+    return loaded
+  }
+
+  private func profilesByApplyingSubscriptionDetails(
+    _ result: SubscriptionFetchResult,
+    sourceURL: URL,
+    for id: UUID
+  ) async -> [Profile] {
+    var nextProfiles = profiles
+    guard let index = nextProfiles.firstIndex(where: { $0.id == id }) else { return nextProfiles }
+    nextProfiles[index].subscriptionMetadata = result.metadata
+    if !nextProfiles[index].nameIsUserCustomized {
+      nextProfiles[index].name = await Self.subscriptionDisplayNameAsync(
+        metadata: result.metadata,
+        source: result.source,
+        url: sourceURL
+      )
+    }
+    nextProfiles[index].updatedAt = Date()
+    return nextProfiles
+  }
+
+  private static func subscriptionIDs(in profiles: [Profile]) -> [UUID] {
+    profiles.compactMap { profile in
+      if case let .subscription(id) = profile.source {
+        return id
+      }
+      return nil
+    }
+  }
+
+  nonisolated private static func subscriptionDisplayNameAsync(
+    metadata: SubscriptionMetadata,
+    source: String,
+    url: URL
+  ) async -> String {
+    await Task.detached(priority: .userInitiated) {
+      Self.subscriptionDisplayName(metadata: metadata, source: source, url: url)
+    }.value
+  }
+
+  nonisolated private static func subscriptionDisplayName(metadata: SubscriptionMetadata, source: String, url: URL) -> String {
     if let remoteName = metadata.remoteFileName.map(Self.normalizedRemoteProfileName), !remoteName.isEmpty {
       return remoteName
     }
@@ -199,7 +393,7 @@ final class ProfileStore: ObservableObject {
     return "Subscription"
   }
 
-  private static func normalizedRemoteProfileName(_ value: String) -> String {
+  nonisolated private static func normalizedRemoteProfileName(_ value: String) -> String {
     let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
     let url = URL(fileURLWithPath: trimmed)
     let withoutExtension = ["yaml", "yml", "txt"].contains(url.pathExtension.lowercased())
@@ -208,7 +402,7 @@ final class ProfileStore: ObservableObject {
     return withoutExtension.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
-  private static func profileName(from source: String) -> String? {
+  nonisolated private static func profileName(from source: String) -> String? {
     guard let root = try? Yams.load(yaml: source) as? [String: Any] else { return nil }
     if let groups = root["proxy-groups"] as? [[String: Any]] {
       for group in groups {
@@ -224,11 +418,6 @@ final class ProfileStore: ObservableObject {
     }
     return nil
   }
-}
-
-private struct ProfileManifest: Codable {
-  var profiles: [Profile]
-  var activeProfileID: Profile.ID?
 }
 
 enum ProfileConfigValidator {

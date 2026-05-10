@@ -58,7 +58,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(store.profiles.count, 1)
   }
 
-  func testDeletingActiveProfilePublishesStatusMessage() throws {
+  func testDeletingActiveProfilePublishesStatusMessage() async throws {
     let paths = try Self.makeRuntimePaths()
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
     try """
@@ -68,17 +68,17 @@ final class DashboardRuntimeStateTests: XCTestCase {
     """.write(to: configURL, atomically: true, encoding: .utf8)
 
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
-    let profile = try store.importLocalConfig(from: configURL)
+    let profile = try await store.importLocalConfig(from: configURL)
     let model = AppModel(paths: paths, profileStore: store)
 
-    model.deleteProfile(profile)
+    await model.deleteProfileAsync(profile)
 
     XCTAssertTrue(store.profiles.isEmpty)
     XCTAssertNil(store.activeProfileID)
     XCTAssertEqual(model.profileOperationMessage, "Deleted profile profile.")
   }
 
-  func testRenamingSpecificProfileDoesNotChangeActiveSelection() throws {
+  func testRenamingSpecificProfileDoesNotChangeActiveSelection() async throws {
     let paths = try Self.makeRuntimePaths()
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
     try """
@@ -88,11 +88,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
     """.write(to: configURL, atomically: true, encoding: .utf8)
 
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
-    let firstProfile = try store.importLocalConfig(from: configURL)
-    let secondProfile = try store.importLocalConfig(from: configURL)
+    let firstProfile = try await store.importLocalConfig(from: configURL)
+    let secondProfile = try await store.importLocalConfig(from: configURL)
     let model = AppModel(paths: paths, profileStore: store)
 
-    model.renameProfile(firstProfile, to: "Office")
+    await model.renameProfileAsync(firstProfile, to: "Office")
 
     XCTAssertEqual(store.profiles.first(where: { $0.id == firstProfile.id })?.name, "Office")
     XCTAssertEqual(store.activeProfileID, secondProfile.id)
@@ -139,7 +139,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(model.profileOperationMessage, "Updated subscription Remote.")
   }
 
-  func testProxyGroupsUnavailableMessageExplainsMissingProfileGroupsBeforeStart() throws {
+  func testProxyGroupsUnavailableMessageExplainsMissingProfileGroupsBeforeStart() async throws {
     let paths = try Self.makeRuntimePaths()
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
     try """
@@ -149,7 +149,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     """.write(to: configURL, atomically: true, encoding: .utf8)
 
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
-    _ = try store.importLocalConfig(from: configURL)
+    _ = try await store.importLocalConfig(from: configURL)
     let model = AppModel(paths: paths, profileStore: store)
 
     XCTAssertEqual(
@@ -158,7 +158,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
   }
 
-  func testStoppedProfileShowsLocalProxyPreview() throws {
+  func testStoppedProfileShowsLocalProxyPreview() async throws {
     let paths = try Self.makeRuntimePaths()
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
     try """
@@ -172,8 +172,9 @@ final class DashboardRuntimeStateTests: XCTestCase {
     """.write(to: configURL, atomically: true, encoding: .utf8)
 
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
-    _ = try store.importLocalConfig(from: configURL)
+    _ = try await store.importLocalConfig(from: configURL)
     let model = AppModel(paths: paths, profileStore: store)
+    await model.waitForProfilePreviewRefresh()
 
     XCTAssertEqual(model.visibleProxyGroups.map(\.name), ["Elite"])
     XCTAssertEqual(model.visibleProxyGroups.first?.nodes.map(\.type), ["hysteria2", "vless", "direct"])
@@ -192,9 +193,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
     """.write(to: configURL, atomically: true, encoding: .utf8)
 
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
-    _ = try store.importLocalConfig(from: configURL)
+    _ = try await store.importLocalConfig(from: configURL)
     let defaults = UserDefaults(suiteName: "ClashMaxPreviewTests-\(UUID().uuidString)")!
     let model = AppModel(paths: paths, profileStore: store, defaults: defaults)
+    await model.waitForProfilePreviewRefresh()
     let group = try XCTUnwrap(model.visibleProxyGroups.first)
     let node = try XCTUnwrap(group.nodes.first)
 
@@ -221,7 +223,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     """.write(to: configURL, atomically: true, encoding: .utf8)
 
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
-    _ = try store.importLocalConfig(from: configURL)
+    _ = try await store.importLocalConfig(from: configURL)
     let group = ProxyGroup(
       name: "Elite",
       type: "select",
@@ -1174,7 +1176,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     """.write(to: configURL, atomically: true, encoding: .utf8)
 
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
-    _ = try store.importLocalConfig(from: configURL)
+    _ = try await store.importLocalConfig(from: configURL)
     let controller = CoreProcessController(
       launcher: FakeProcessLauncher(),
       validator: RecordingRuntimeConfigValidator(result: .success(())),
@@ -1183,6 +1185,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       portChecker: EmptyRuntimePortChecker()
     )
     let model = AppModel(paths: paths, profileStore: store, coreController: controller)
+    await model.waitForProfilePreviewRefresh()
 
     try await controller.startUserMode(
       coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
@@ -1201,7 +1204,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     try "proxies:\n  - { name: Japan, type: vless }\n"
       .write(to: configURL, atomically: true, encoding: .utf8)
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
-    _ = try store.importLocalConfig(from: configURL)
+    _ = try await store.importLocalConfig(from: configURL)
     let controller = CoreProcessController(
       launcher: FakeProcessLauncher(),
       validator: RecordingRuntimeConfigValidator(result: .success(())),
@@ -1255,7 +1258,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     try "proxies:\n  - { name: Japan, type: vless, server: jp.example, port: 443 }\n"
       .write(to: configURL, atomically: true, encoding: .utf8)
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
-    _ = try store.importLocalConfig(from: configURL)
+    _ = try await store.importLocalConfig(from: configURL)
     let controller = CoreProcessController(
       launcher: FakeProcessLauncher(),
       validator: RecordingRuntimeConfigValidator(result: .success(())),
@@ -1310,7 +1313,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     try "proxies:\n  - { name: Japan, type: vless, server: jp.example, port: 443 }\n"
       .write(to: configURL, atomically: true, encoding: .utf8)
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
-    _ = try store.importLocalConfig(from: configURL)
+    _ = try await store.importLocalConfig(from: configURL)
     let controller = CoreProcessController(
       launcher: FakeProcessLauncher(),
       validator: RecordingRuntimeConfigValidator(result: .success(())),
@@ -1334,6 +1337,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       pingTester: pingTester,
       defaults: try Self.makeIsolatedDefaults()
     )
+    await model.waitForProfilePreviewRefresh()
     model.delayTestSettings = DelayTestSettings(mode: .nativePing, unifiedDelay: false)
     model.proxyGroups = [group]
 
@@ -1372,7 +1376,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       - MATCH,Elite
     """.write(to: configURL, atomically: true, encoding: .utf8)
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
-    _ = try store.importLocalConfig(from: configURL)
+    _ = try await store.importLocalConfig(from: configURL)
     let controller = CoreProcessController(
       launcher: FakeProcessLauncher(),
       validator: RecordingRuntimeConfigValidator(result: .success(())),
@@ -1396,6 +1400,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       pingTester: pingTester,
       defaults: try Self.makeIsolatedDefaults()
     )
+    await model.waitForProfilePreviewRefresh()
     model.delayTestSettings = DelayTestSettings(mode: .nativePing, unifiedDelay: false)
     model.proxyGroups = [runtimeGroup]
 
@@ -1439,7 +1444,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       - MATCH,Elite
     """.write(to: configURL, atomically: true, encoding: .utf8)
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
-    _ = try store.importLocalConfig(from: configURL)
+    _ = try await store.importLocalConfig(from: configURL)
     let controller = CoreProcessController(
       launcher: FakeProcessLauncher(),
       validator: RecordingRuntimeConfigValidator(result: .success(())),
@@ -1522,7 +1527,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
     try Self.writeProxyConfig(named: "Japan", to: configURL)
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
-    _ = try store.importLocalConfig(from: configURL)
+    _ = try await store.importLocalConfig(from: configURL)
     let controller = CoreProcessController(
       launcher: FakeProcessLauncher(),
       validator: RecordingRuntimeConfigValidator(result: .success(())),
@@ -1574,7 +1579,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
     try Self.writeProxyConfig(named: "Japan", to: configURL)
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
-    _ = try store.importLocalConfig(from: configURL)
+    _ = try await store.importLocalConfig(from: configURL)
     let controller = CoreProcessController(
       launcher: FakeProcessLauncher(),
       validator: RecordingRuntimeConfigValidator(result: .success(())),
@@ -1636,7 +1641,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
     try Self.writeProxyConfig(named: "Japan", to: configURL)
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
-    _ = try store.importLocalConfig(from: configURL)
+    _ = try await store.importLocalConfig(from: configURL)
     let controller = CoreProcessController(
       launcher: FakeProcessLauncher(),
       validator: RecordingRuntimeConfigValidator(result: .success(())),
@@ -1780,7 +1785,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     """.write(to: configURL, atomically: true, encoding: .utf8)
 
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
-    let profile = try store.importLocalConfig(from: configURL)
+    let profile = try await store.importLocalConfig(from: configURL)
     try "mixed-port: 7890\nrules: []\n"
       .write(to: URL(fileURLWithPath: profile.originalConfigPath), atomically: true, encoding: .utf8)
     let model = AppModel(paths: paths, profileStore: store)
@@ -1790,8 +1795,9 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertFalse(model.startInFlight)
     XCTAssertNil(model.lastError)
 
-    for _ in 0..<20 where model.lastError == nil {
+    for _ in 0..<100 where model.lastError == nil {
       await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
     }
 
     XCTAssertFalse(model.startInFlight)
@@ -1806,7 +1812,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
     try Self.writeProxyConfig(named: "Japan", to: configURL)
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
-    _ = try store.importLocalConfig(from: configURL)
+    _ = try await store.importLocalConfig(from: configURL)
     let launcher = CountingProcessLauncher()
     let controller = CoreProcessController(
       launcher: launcher,
@@ -1826,8 +1832,9 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.start()
 
-    for _ in 0..<40 where !model.isRunning || !model.systemProxyEnabled {
+    for _ in 0..<120 where !model.isRunning || !model.systemProxyEnabled {
       await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
     }
 
     XCTAssertEqual(model.proxyRoutingMode, .systemProxy)
@@ -1842,7 +1849,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
     try Self.writeProxyConfig(named: "Japan", to: configURL)
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
-    _ = try store.importLocalConfig(from: configURL)
+    _ = try await store.importLocalConfig(from: configURL)
     let helperTransport = ReadyTunnelHelperTransport()
     let helper = TunnelHelperClient(
       transport: helperTransport,
@@ -1864,8 +1871,9 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.start()
 
-    for _ in 0..<40 where model.startInFlight || model.lastError == nil {
+    for _ in 0..<120 where model.startInFlight || model.lastError == nil {
       await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
     }
 
     let startCount = await helperTransport.startCount()
@@ -1885,9 +1893,9 @@ final class DashboardRuntimeStateTests: XCTestCase {
     try Self.writeProxyConfig(named: "Japan", to: firstConfigURL)
     try Self.writeProxyConfig(named: "Singapore", to: secondConfigURL)
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
-    _ = try store.importLocalConfig(from: firstConfigURL)
-    let secondProfile = try store.importLocalConfig(from: secondConfigURL)
-    try store.select(store.profiles[0])
+    _ = try await store.importLocalConfig(from: firstConfigURL)
+    let secondProfile = try await store.importLocalConfig(from: secondConfigURL)
+    try await store.select(store.profiles[0])
     let launcher = CountingProcessLauncher()
     let controller = CoreProcessController(
       launcher: launcher,
@@ -1905,14 +1913,16 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
 
     model.start()
-    for _ in 0..<40 where launcher.launchCount < 1 {
+    for _ in 0..<120 where launcher.launchCount < 1 {
       await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
     }
 
-    model.selectProfile(secondProfile)
+    await model.selectProfileAsync(secondProfile)
 
-    for _ in 0..<60 where launcher.launchCount < 2 {
+    for _ in 0..<160 where launcher.launchCount < 2 {
       await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
     }
 
     XCTAssertEqual(store.activeProfileID, secondProfile.id)
@@ -2023,7 +2033,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
     try Self.writeProxyConfig(named: "Japan", to: configURL)
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
-    _ = try store.importLocalConfig(from: configURL)
+    _ = try await store.importLocalConfig(from: configURL)
     let helperTransport = ReadyTunnelHelperTransport()
     let service = StaticHelperService(status: .requiresApproval)
     let helper = TunnelHelperClient(
@@ -2066,7 +2076,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
     try Self.writeProxyConfig(named: "Japan", to: configURL)
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
-    _ = try store.importLocalConfig(from: configURL)
+    _ = try await store.importLocalConfig(from: configURL)
     let service = StaticHelperService(status: .notRegistered, statusAfterRegister: .enabled)
     let helper = TunnelHelperClient(
       transport: ReadyTunnelHelperTransport(),
@@ -2585,7 +2595,7 @@ private actor ReadyTunnelHelperTransport: HelperXPCTransport {
   }
 
   func restartTunnel(coreURL: URL, configURL: URL, workDirectory: URL, secret: String) async throws -> HelperClientResponse {
-    try await stopTunnel()
+    _ = try await stopTunnel()
     return try await startTunnel(coreURL: coreURL, configURL: configURL, workDirectory: workDirectory, secret: secret)
   }
 

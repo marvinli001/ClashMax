@@ -145,7 +145,7 @@ final class AppModel: ObservableObject {
   private let tunnelReadinessProbe: CoreReadinessProbing
   private let pingTester: any PingTesting
   private let paths: RuntimePaths
-  private let normalizer = ConfigNormalizer()
+  private let runtimeConfigMaterializer = RuntimeConfigMaterializer()
   private var apiClient: (any MihomoAPIControlling)?
   private var startTask: Task<Void, Never>?
   private var previewTask: Task<Void, Never>?
@@ -221,6 +221,9 @@ final class AppModel: ObservableObject {
     proxyPreview.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
       .store(in: &storeCancellables)
+    self.profileStore.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &storeCancellables)
     systemProxy.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
       .store(in: &storeCancellables)
@@ -228,8 +231,17 @@ final class AppModel: ObservableObject {
       .sink { [weak self] _ in self?.objectWillChange.send() }
       .store(in: &storeCancellables)
     recoverDanglingSystemProxyIfNeeded()
+    let needsManifestRefresh = self.profileStore.activeProfileID == nil
     refreshProfilePreview()
     loadPreviewSelectionsForActiveProfile()
+    if needsManifestRefresh {
+      Task { @MainActor [weak self] in
+        guard let self else { return }
+        await self.profileStore.waitForManifestLoad()
+        await self.refreshProfilePreviewAndWait()
+        self.loadPreviewSelectionsForActiveProfile()
+      }
+    }
   }
 
   var isCoreRunning: Bool {
@@ -337,14 +349,17 @@ final class AppModel: ObservableObject {
     panel.allowsMultipleSelection = false
     panel.canChooseDirectories = false
     guard panel.runModal() == .OK, let url = panel.url else { return }
-    do {
-      _ = try profileOperations.importLocalProfile(from: url)
-      refreshProfilePreview()
-      loadPreviewSelectionsForActiveProfile()
-      lastError = nil
-    } catch {
-      profileOperations.clearMessage()
-      lastError = UserFacingError.message(for: error)
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      do {
+        _ = try await profileOperations.importLocalProfile(from: url)
+        await refreshProfilePreviewAndWait()
+        loadPreviewSelectionsForActiveProfile()
+        lastError = nil
+      } catch {
+        profileOperations.clearMessage()
+        lastError = UserFacingError.message(for: error)
+      }
     }
   }
 
@@ -364,7 +379,7 @@ final class AppModel: ObservableObject {
       guard try await profileOperations.addSubscription(name: name, url: url, session: session) != nil else {
         return false
       }
-      refreshProfilePreview()
+      await refreshProfilePreviewAndWait()
       loadPreviewSelectionsForActiveProfile()
       return true
     } catch {
@@ -388,7 +403,7 @@ final class AppModel: ObservableObject {
 
     do {
       let updated = try await profileOperations.updateSubscription(profile, session: session)
-      refreshProfilePreview()
+      await refreshProfilePreviewAndWait()
       return updated
     } catch {
       profileOperations.clearMessage()
@@ -411,7 +426,7 @@ final class AppModel: ObservableObject {
 
     do {
       let updated = try await profileOperations.updateSubscriptionSource(profile, url: url, session: session)
-      refreshProfilePreview()
+      await refreshProfilePreviewAndWait()
       loadPreviewSelectionsForActiveProfile()
       return updated
     } catch {
@@ -421,84 +436,120 @@ final class AppModel: ObservableObject {
     }
   }
 
-  func renameActiveProfile(to name: String) {
+  @discardableResult
+  func renameActiveProfile(to name: String) async -> Bool {
     do {
-      try profileOperations.renameActiveProfile(to: name)
-      refreshProfilePreview()
+      try await profileOperations.renameActiveProfile(to: name)
+      await refreshProfilePreviewAndWait()
       lastError = nil
+      return true
     } catch {
       profileOperations.clearMessage()
       lastError = UserFacingError.message(for: error)
+      return false
     }
   }
 
   func renameProfile(_ profile: Profile, to name: String) {
-    do {
-      try profileOperations.renameProfile(profile, to: name)
-      refreshProfilePreview()
-      lastError = nil
-    } catch {
-      profileOperations.clearMessage()
-      lastError = UserFacingError.message(for: error)
+    Task { @MainActor [weak self] in
+      await self?.renameProfileAsync(profile, to: name)
     }
   }
 
-  func resetSubscriptionName(_ profile: Profile) {
+  @discardableResult
+  func renameProfileAsync(_ profile: Profile, to name: String) async -> Bool {
     do {
-      try profileOperations.resetSubscriptionName(profile)
-      refreshProfilePreview()
+      try await profileOperations.renameProfile(profile, to: name)
+      await refreshProfilePreviewAndWait()
       lastError = nil
+      return true
     } catch {
       profileOperations.clearMessage()
       lastError = UserFacingError.message(for: error)
+      return false
+    }
+  }
+
+  @discardableResult
+  func resetSubscriptionName(_ profile: Profile) async -> Bool {
+    do {
+      try await profileOperations.resetSubscriptionName(profile)
+      await refreshProfilePreviewAndWait()
+      lastError = nil
+      return true
+    } catch {
+      profileOperations.clearMessage()
+      lastError = UserFacingError.message(for: error)
+      return false
     }
   }
 
   func deleteActiveProfile() {
-    do {
-      let deletedID = profileStore.activeProfileID
-      try profileOperations.deleteActiveProfile()
-      previewSelections = [:]
-      saveCurrentPreviewSelections(forProfileID: deletedID)
-      refreshProfilePreview()
-      loadPreviewSelectionsForActiveProfile()
-      lastError = nil
-    } catch {
-      profileOperations.clearMessage()
-      lastError = UserFacingError.message(for: error)
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      do {
+        let deletedID = profileStore.activeProfileID
+        try await profileOperations.deleteActiveProfile()
+        previewSelections = [:]
+        saveCurrentPreviewSelections(forProfileID: deletedID)
+        await refreshProfilePreviewAndWait()
+        loadPreviewSelectionsForActiveProfile()
+        lastError = nil
+      } catch {
+        profileOperations.clearMessage()
+        lastError = UserFacingError.message(for: error)
+      }
     }
   }
 
   func deleteProfile(_ profile: Profile) {
+    Task { @MainActor [weak self] in
+      await self?.deleteProfileAsync(profile)
+    }
+  }
+
+  @discardableResult
+  func deleteProfileAsync(_ profile: Profile) async -> Bool {
     do {
-      try profileOperations.deleteProfile(profile)
+      try await profileOperations.deleteProfile(profile)
       previewSelections = [:]
       saveCurrentPreviewSelections(forProfileID: profile.id)
-      refreshProfilePreview()
+      await refreshProfilePreviewAndWait()
       loadPreviewSelectionsForActiveProfile()
       lastError = nil
+      return true
     } catch {
       profileOperations.clearMessage()
       lastError = UserFacingError.message(for: error)
+      return false
     }
   }
 
   func selectProfile(_ profile: Profile) {
+    Task { @MainActor [weak self] in
+      await self?.selectProfileAsync(profile)
+    }
+  }
+
+  @discardableResult
+  func selectProfileAsync(_ profile: Profile) async -> Bool {
     let isChangingProfile = profileStore.activeProfileID != profile.id
-    guard isChangingProfile else { return }
+    guard isChangingProfile else { return false }
     do {
       let shouldRestart = isRunning || startInFlight
-      guard try profileOperations.selectProfile(profile) else { return }
+      guard try await profileOperations.selectProfile(profile) else { return false }
       proxyGroups = []
-      refreshProfilePreview()
+      await refreshProfilePreviewAndWait()
       loadPreviewSelectionsForActiveProfile()
       lastError = nil
       if shouldRestart {
         restart()
       }
+      return true
     } catch {
       profileOperations.clearMessage()
       lastError = UserFacingError.message(for: error)
+      return false
     }
   }
 
@@ -579,7 +630,7 @@ final class AppModel: ObservableObject {
     overrides.tunSettings = tunSettings
     systemProxyEnabled = false
     tunEnabled = false
-    let runtimeConfig = try generateRuntimeConfig(for: profile, selections: previewSelections)
+    let runtimeConfig = try await generateRuntimeConfig(for: profile, selections: previewSelections)
     let coreURL = try bundledCoreURL()
     appendAppLog(level: "info", message: "Runtime config path: \(runtimeConfig.path)")
     appendAppLog(level: "info", message: "Mihomo core path: \(coreURL.path)")
@@ -646,7 +697,7 @@ final class AppModel: ObservableObject {
     }
     try Task.checkCancellation()
     sessionStartedAt = Date()
-    refreshProfilePreview()
+    await refreshProfilePreviewAndWait()
     startStreams(client: client)
     reloadRuntimeData(clearAfterConfirmation: !previewSelections.isEmpty)
     refreshPublicIPInfo()
@@ -1276,7 +1327,7 @@ final class AppModel: ObservableObject {
       quietOverrides.tunEnabled = false
       quietOverrides.mode = .direct
       quietOverrides.allowLan = false
-      let runtimeConfig = try generateRuntimeConfig(
+      let runtimeConfig = try await generateRuntimeConfig(
         for: profile,
         overrides: quietOverrides,
         selections: previewSelections
@@ -1368,7 +1419,7 @@ final class AppModel: ObservableObject {
     sessionStartedAt = nil
     previewRuntimeActive = false
     runtimeOwner = .stopped
-    refreshProfilePreview()
+    await refreshProfilePreviewAndWait()
     if systemProxy.needsTerminationCleanup {
       do {
         _ = try await restoreSystemProxyState(disableWhenNoSnapshot: systemProxyEnabled)
@@ -1391,8 +1442,17 @@ final class AppModel: ObservableObject {
     return profile
   }
 
-  private func refreshProfilePreview() {
+  @discardableResult
+  private func refreshProfilePreview() -> Task<Void, Never>? {
     proxyPreview.refreshPreview(for: profileStore.activeProfile)
+  }
+
+  private func refreshProfilePreviewAndWait() async {
+    await refreshProfilePreview()?.value
+  }
+
+  func waitForProfilePreviewRefresh() async {
+    await proxyPreview.waitForRefresh()
   }
 
   private func runtimeAPIClientForProxyAction() -> (any MihomoAPIControlling)? {
@@ -1526,27 +1586,18 @@ final class AppModel: ObservableObject {
     for profile: Profile,
     overrides: RuntimeOverrides? = nil,
     selections: [String: String] = [:]
-  ) throws -> URL {
+  ) async throws -> URL {
     let effectiveOverrides = overrides ?? self.overrides
-    let source = try String(contentsOfFile: profile.originalConfigPath, encoding: .utf8)
-    let providerContentPath: String?
-    if try ProfileConfigInspector.format(of: source) == .proxyProviderContent {
-      let providerContentURL = paths.runtimeProviderContentURL(for: profile)
-      try source.write(to: providerContentURL, atomically: true, encoding: .utf8)
-      providerContentPath = providerContentURL.path
-    } else {
-      providerContentPath = nil
-    }
-    let output = try normalizer.runtimeConfig(
-      from: source,
-      providerContentPath: providerContentPath,
-      profileName: profile.name,
-      overrides: effectiveOverrides,
-      selectionOverrides: selections
+    return try await runtimeConfigMaterializer.materialize(
+      RuntimeConfigMaterializationRequest(
+        profileName: profile.name,
+        sourcePath: profile.originalConfigPath,
+        runtimeConfigURL: paths.runtimeConfigURL(for: profile),
+        providerContentURL: paths.runtimeProviderContentURL(for: profile),
+        overrides: effectiveOverrides,
+        selectionOverrides: selections
+      )
     )
-    let url = paths.runtimeConfigURL(for: profile)
-    try output.write(to: url, atomically: true, encoding: .utf8)
-    return url
   }
 
   private func bundledCoreURL() throws -> URL {

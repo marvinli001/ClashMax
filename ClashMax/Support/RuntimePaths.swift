@@ -1,6 +1,6 @@
 import Foundation
 
-struct RuntimePaths {
+struct RuntimePaths: Sendable {
   let appSupport: URL
   let profiles: URL
   let runtime: URL

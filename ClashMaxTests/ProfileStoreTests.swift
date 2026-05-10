@@ -5,35 +5,95 @@ import XCTest
 
 @MainActor
 final class ProfileStoreTests: XCTestCase {
-  func testImportRenameDeleteAndPersistActiveProfile() throws {
+  func testImportRenameDeleteAndPersistActiveProfile() async throws {
     let fixture = try TemporaryProfileFixture()
     let store = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
 
-    let profile = try store.importLocalConfig(from: fixture.configURL)
-    try store.rename(profile, to: "Work")
+    let profile = try await store.importLocalConfig(from: fixture.configURL)
+    try await store.rename(profile, to: "Work")
 
     let renamed = try XCTUnwrap(store.profiles.first)
     XCTAssertEqual(renamed.name, "Work")
     XCTAssertEqual(store.activeProfileID, profile.id)
 
     let reloaded = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
+    await reloaded.waitForManifestLoad()
     XCTAssertEqual(reloaded.profiles.first?.name, "Work")
     XCTAssertEqual(reloaded.activeProfileID, profile.id)
 
-    try store.delete(renamed)
+    try await store.delete(renamed)
     XCTAssertTrue(store.profiles.isEmpty)
     XCTAssertFalse(FileManager.default.fileExists(atPath: renamed.originalConfigPath))
   }
 
-  func testSelectingAlreadyActiveProfileDoesNotPublishChanges() throws {
+  func testConcurrentRenameAndDeleteDoNotRestoreDeletedProfile() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let secrets = InMemorySecretStore()
+    let store = ProfileStore(paths: fixture.paths, keychain: secrets)
+    let profile = try await store.importLocalConfig(from: fixture.configURL)
+
+    let renameTask = Task { @MainActor in
+      try await store.rename(profile, to: "Work")
+    }
+    let deleteTask = Task { @MainActor in
+      try await store.delete(profile)
+    }
+
+    try await renameTask.value
+    try await deleteTask.value
+
+    XCTAssertFalse(store.profiles.contains { $0.id == profile.id })
+    XCTAssertNil(store.activeProfileID)
+
+    let reloaded = ProfileStore(paths: fixture.paths, keychain: secrets)
+    await reloaded.waitForManifestLoad()
+    XCTAssertFalse(reloaded.profiles.contains { $0.id == profile.id })
+    XCTAssertNil(reloaded.activeProfileID)
+  }
+
+  func testDeleteUsesStoredProfileSnapshotInsteadOfStaleArgumentPath() async throws {
     let fixture = try TemporaryProfileFixture()
     let store = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
-    let profile = try store.importLocalConfig(from: fixture.configURL)
+    let profile = try await store.importLocalConfig(from: fixture.configURL)
+    let unrelatedURL = fixture.root.appendingPathComponent("unrelated.yaml")
+    try "proxies:\n  - name: unrelated\n    type: direct\n"
+      .write(to: unrelatedURL, atomically: true, encoding: .utf8)
+    var staleProfile = profile
+    staleProfile.originalConfigPath = unrelatedURL.path
+
+    try await store.delete(staleProfile)
+
+    XCTAssertTrue(store.profiles.isEmpty)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: profile.originalConfigPath))
+    XCTAssertTrue(FileManager.default.fileExists(atPath: unrelatedURL.path))
+  }
+
+  func testDeletingUnknownProfileDoesNotRewriteManifestOrRemoveFiles() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let store = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
+    let profile = try await store.importLocalConfig(from: fixture.configURL)
+    let unknown = Profile(
+      name: "Unknown",
+      source: .localFile(originalPath: nil),
+      originalConfigPath: profile.originalConfigPath
+    )
+
+    try await store.delete(unknown)
+
+    XCTAssertEqual(store.profiles.map(\.id), [profile.id])
+    XCTAssertEqual(store.activeProfileID, profile.id)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: profile.originalConfigPath))
+  }
+
+  func testSelectingAlreadyActiveProfileDoesNotPublishChanges() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let store = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
+    let profile = try await store.importLocalConfig(from: fixture.configURL)
     var changeCount = 0
     let cancellable = store.objectWillChange.sink { changeCount += 1 }
     defer { cancellable.cancel() }
 
-    try store.select(profile)
+    try await store.select(profile)
 
     XCTAssertEqual(changeCount, 0)
   }
@@ -122,7 +182,7 @@ final class ProfileStoreTests: XCTestCase {
       session: initialSession
     )
 
-    try store.rename(profile, to: "Custom")
+    try await store.rename(profile, to: "Custom")
 
     let updateSession = URLSession(configuration: URLProtocolRecorder(
       responseBody: "proxies:\n  - name: DIRECT\n    type: direct\n",
@@ -171,6 +231,33 @@ final class ProfileStoreTests: XCTestCase {
     XCTAssertEqual(store.profiles.first?.name, "New")
   }
 
+  func testEditingSubscriptionSourceRestoresConfigWhenURLStorageFails() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let secrets = InMemorySecretStore()
+    let store = ProfileStore(paths: fixture.paths, keychain: secrets)
+    let initialSession = URLSession(configuration: URLProtocolRecorder.configurationReturning("proxies:\n  - name: DIRECT\n    type: direct\n"))
+    let profile = try await store.addSubscription(
+      name: "Remote",
+      url: URL(string: "https://example.com/old")!,
+      session: initialSession
+    )
+    let originalConfig = try String(contentsOfFile: profile.originalConfigPath, encoding: .utf8)
+    secrets.rejectSaving("https://example.com/new")
+
+    let validSession = URLSession(configuration: URLProtocolRecorder.configurationReturning("proxies:\n  - name: New\n    type: direct\n"))
+    await XCTAssertThrowsErrorAsync {
+      try await store.updateSubscriptionSource(
+        profile,
+        url: URL(string: "https://example.com/new")!,
+        session: validSession
+      )
+    }
+
+    XCTAssertEqual(try secrets.load(account: "subscription.\(profile.id.uuidString)"), "https://example.com/old")
+    XCTAssertEqual(try String(contentsOfFile: profile.originalConfigPath, encoding: .utf8), originalConfig)
+    XCTAssertEqual(store.profiles.first?.name, "Remote")
+  }
+
   func testSubscriptionAcceptsBase64URIProviderContentAndStoresRawSource() async throws {
     let fixture = try TemporaryProfileFixture()
     let secrets = InMemorySecretStore()
@@ -193,11 +280,13 @@ final class ProfileStoreTests: XCTestCase {
     XCTAssertEqual(try secrets.load(account: "subscription.\(profile.id.uuidString)"), "https://example.com/api/v1/client/subscribe?token=test")
   }
 
-  func testImportRejectsConfigWithoutProxyDefinitions() throws {
+  func testImportRejectsConfigWithoutProxyDefinitions() async throws {
     let fixture = try TemporaryProfileFixture(config: "mixed-port: 7890\nrules: []\n")
     let store = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
 
-    XCTAssertThrowsError(try store.importLocalConfig(from: fixture.configURL)) { error in
+    await XCTAssertThrowsErrorAsync {
+      try await store.importLocalConfig(from: fixture.configURL)
+    } handler: { error in
       XCTAssertTrue(
         String(describing: error)
           .contains(String(localized: "Profile must include at least one proxy or proxy provider."))
@@ -273,10 +362,18 @@ private struct TemporaryProfileFixture {
   }
 }
 
-final class InMemorySecretStore: SecretStoring {
+final class InMemorySecretStore: SecretStoring, @unchecked Sendable {
   private var values: [String: String] = [:]
+  private var rejectedSavedValues: Set<String> = []
+
+  func rejectSaving(_ value: String) {
+    rejectedSavedValues.insert(value)
+  }
 
   func save(_ value: String, account: String) throws {
+    if rejectedSavedValues.contains(value) {
+      throw NSError(domain: "InMemorySecretStore", code: 1)
+    }
     values[account] = value
   }
 

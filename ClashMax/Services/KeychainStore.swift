@@ -1,7 +1,7 @@
 import Foundation
 import Security
 
-protocol SecretStoring {
+protocol SecretStoring: Sendable {
   func save(_ value: String, account: String) throws
   func load(account: String) throws -> String?
   func delete(account: String) throws

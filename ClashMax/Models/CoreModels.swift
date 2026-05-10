@@ -11,7 +11,7 @@ private extension KeyedDecodingContainer {
   }
 }
 
-enum ProfileSource: Codable, Equatable {
+enum ProfileSource: Codable, Equatable, Sendable {
   case localFile(originalPath: String?)
   case subscription(id: UUID)
 
@@ -56,7 +56,7 @@ extension ProfileSource {
   }
 }
 
-struct Profile: Identifiable, Codable, Equatable {
+struct Profile: Identifiable, Codable, Equatable, Sendable {
   var id: UUID
   var name: String
   var nameIsUserCustomized: Bool
@@ -123,7 +123,7 @@ extension ProfileSource {
   }
 }
 
-enum RunMode: String, Codable, CaseIterable, Identifiable {
+enum RunMode: String, Codable, CaseIterable, Identifiable, Sendable {
   case rule
   case global
   case direct
@@ -139,7 +139,7 @@ enum RunMode: String, Codable, CaseIterable, Identifiable {
   }
 }
 
-enum AppTheme: String, Codable, CaseIterable, Identifiable {
+enum AppTheme: String, Codable, CaseIterable, Identifiable, Sendable {
   case system
   case light
   case dark
@@ -155,7 +155,7 @@ enum AppTheme: String, Codable, CaseIterable, Identifiable {
   }
 }
 
-enum ProxyRoutingMode: String, Codable, CaseIterable, Identifiable {
+enum ProxyRoutingMode: String, Codable, CaseIterable, Identifiable, Sendable {
   case systemProxy
   case tun
 
@@ -176,7 +176,7 @@ enum ProxyRoutingMode: String, Codable, CaseIterable, Identifiable {
   }
 }
 
-enum DelayTestMode: String, Codable, CaseIterable, Identifiable {
+enum DelayTestMode: String, Codable, CaseIterable, Identifiable, Sendable {
   case mihomoURL
   case nativePing
 
@@ -199,7 +199,7 @@ enum DelayTestMode: String, Codable, CaseIterable, Identifiable {
   }
 }
 
-struct DelayTestSettings: Codable, Equatable {
+struct DelayTestSettings: Codable, Equatable, Sendable {
   static let defaultTimeoutMilliseconds = 5_000
 
   var mode: DelayTestMode
@@ -241,7 +241,7 @@ struct DelayTestSettings: Codable, Equatable {
   }
 }
 
-struct ExternalControllerCORSSettings: Codable, Equatable {
+struct ExternalControllerCORSSettings: Codable, Equatable, Sendable {
   static let fixedLocalOrigins = [
     "tauri://localhost",
     "http://tauri.localhost",
@@ -331,7 +331,7 @@ struct ExternalControllerCORSSettings: Codable, Equatable {
   }
 }
 
-struct ExternalControllerSettings: Codable, Equatable {
+struct ExternalControllerSettings: Codable, Equatable, Sendable {
   static let defaultHost = "127.0.0.1"
   static let defaultPort = 9097
   static let portRange = 1024...65535
@@ -427,7 +427,7 @@ struct ExternalControllerSettings: Codable, Equatable {
   }
 }
 
-struct RuntimeOverrides: Codable, Equatable {
+struct RuntimeOverrides: Codable, Equatable, Sendable {
   var mixedPort: Int
   var externalControllerHost: String
   var externalControllerPort: Int
@@ -535,7 +535,7 @@ struct RuntimeOverrides: Codable, Equatable {
   }
 }
 
-struct SystemProxySettings: Codable, Equatable {
+struct SystemProxySettings: Codable, Equatable, Sendable {
   static let defaultProxyHost = "127.0.0.1"
   static let defaultGuardIntervalSeconds = 30
   static let minimumGuardIntervalSeconds = 5
@@ -698,7 +698,7 @@ struct SystemProxySettings: Codable, Equatable {
   }
 }
 
-enum TunStack: String, Codable, CaseIterable, Identifiable {
+enum TunStack: String, Codable, CaseIterable, Identifiable, Sendable {
   case system
   case gvisor
   case mixed
@@ -714,7 +714,7 @@ enum TunStack: String, Codable, CaseIterable, Identifiable {
   }
 }
 
-struct TunSettings: Codable, Equatable {
+struct TunSettings: Codable, Equatable, Sendable {
   static let defaultDevice = "utun1024"
   static let defaultDNSHijack = ["any:53"]
   static let defaultMTU = 1500
@@ -871,7 +871,7 @@ struct LaunchSettings: Equatable {
   )
 }
 
-struct CoreAPIEndpoint: Codable, Equatable {
+struct CoreAPIEndpoint: Codable, Equatable, Sendable {
   var host: String
   var port: Int
   var secret: String
@@ -906,7 +906,7 @@ struct CoreAPIEndpoint: Codable, Equatable {
   }
 }
 
-enum CoreStatus: Equatable {
+enum CoreStatus: Equatable, Sendable {
   case stopped
   case starting
   case running(version: String?)
@@ -924,7 +924,7 @@ enum CoreStatus: Equatable {
   }
 }
 
-struct ProxyNode: Identifiable, Codable, Equatable {
+struct ProxyNode: Identifiable, Codable, Equatable, Sendable {
   var id: String { name }
   var name: String
   var type: String
@@ -934,7 +934,7 @@ struct ProxyNode: Identifiable, Codable, Equatable {
   var serverPort: Int?
 }
 
-struct ProxyGroup: Identifiable, Codable, Equatable {
+struct ProxyGroup: Identifiable, Codable, Equatable, Sendable {
   var id: String { name }
   var name: String
   var type: String
@@ -942,7 +942,7 @@ struct ProxyGroup: Identifiable, Codable, Equatable {
   var nodes: [ProxyNode]
 }
 
-struct ConnectionSnapshot: Identifiable, Codable, Equatable {
+struct ConnectionSnapshot: Identifiable, Codable, Equatable, Sendable {
   var id: String
   var network: String
   var host: String
@@ -953,7 +953,7 @@ struct ConnectionSnapshot: Identifiable, Codable, Equatable {
   var startedAt: Date?
 }
 
-struct TrafficSample: Codable, Equatable {
+struct TrafficSample: Codable, Equatable, Sendable {
   var upload: Int
   var download: Int
 
@@ -989,7 +989,7 @@ struct TrafficSample: Codable, Equatable {
   }
 }
 
-struct LogEntry: Identifiable, Codable, Equatable {
+struct LogEntry: Identifiable, Codable, Equatable, Sendable {
   var id: UUID
   var date: Date
   var level: String
@@ -1031,14 +1031,14 @@ enum LogVisibility {
   }
 }
 
-struct SubscriptionTrafficUsage: Codable, Equatable {
+struct SubscriptionTrafficUsage: Codable, Equatable, Sendable {
   var upload: Int?
   var download: Int?
   var total: Int?
   var expireAt: Date?
 }
 
-struct SubscriptionMetadata: Codable, Equatable {
+struct SubscriptionMetadata: Codable, Equatable, Sendable {
   var traffic: SubscriptionTrafficUsage?
   var remoteFileName: String?
   var updateIntervalMinutes: Int?
@@ -1100,12 +1100,12 @@ struct SubscriptionFetchOptions: Equatable, Sendable {
   }
 }
 
-struct SubscriptionFetchResult: Equatable {
+struct SubscriptionFetchResult: Equatable, Sendable {
   var source: String
   var metadata: SubscriptionMetadata
 }
 
-struct ProxyProvider: Identifiable, Codable, Equatable {
+struct ProxyProvider: Identifiable, Codable, Equatable, Sendable {
   var id: String { name }
   var name: String
   var type: String
@@ -1114,7 +1114,7 @@ struct ProxyProvider: Identifiable, Codable, Equatable {
   var proxies: [ProxyNode]
 }
 
-enum RuntimeOwner: String, Codable, Equatable {
+enum RuntimeOwner: String, Codable, Equatable, Sendable {
   case stopped
   case user
   case tunnel
