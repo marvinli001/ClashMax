@@ -195,6 +195,25 @@ final class TunnelHelperClientTests: XCTestCase {
     XCTAssertEqual(client.statusMessage, TunnelHelperClient.bootstrappedMessage)
   }
 
+  func testRepairHelperOpensSettingsWithoutReregisteringWhenApprovalIsPending() async throws {
+    let service = FakeHelperService(status: .requiresApproval)
+    let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
+    let client = TunnelHelperClient(
+      transport: FakeHelperTransport(),
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "current"),
+      registrationRecordStore: recordStore
+    )
+
+    try await client.repairRegistration()
+
+    XCTAssertEqual(service.unregisterCount, 0)
+    XCTAssertEqual(service.registerCount, 0)
+    XCTAssertEqual(service.openSettingsCount, 1)
+    XCTAssertEqual(recordStore.storedFingerprint, "current")
+    XCTAssertEqual(client.statusMessage, TunnelHelperClient.statusMessage(for: .requiresApproval))
+  }
+
   func testHelperRegistrationStatusMessagesGuideRegistrationAndApproval() {
     XCTAssertEqual(
       TunnelHelperClient.statusMessage(for: .notRegistered),

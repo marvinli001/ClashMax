@@ -816,7 +816,7 @@ struct TunSettings: Codable, Equatable, Sendable {
   }
 }
 
-enum TunHelperPreparationState: Equatable {
+enum TunHelperPreparationState: Equatable, Sendable {
   case idle
   case checking
   case ready

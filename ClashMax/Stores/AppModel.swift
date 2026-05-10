@@ -846,7 +846,12 @@ final class AppModel: ObservableObject {
         tunHelperPreparationState = .checking
         lastError = nil
         try await helperClient.repairRegistration()
-        prepareTunHelperIfNeeded(force: true)
+        guard proxyRoutingMode == .tun else {
+          cancelTunHelperPreparation(resetState: true)
+          return
+        }
+        let state = await helperClient.currentPreparationState()
+        applyTunHelperPreparationState(state)
       } catch {
         let message = UserFacingError.message(for: error)
         helperClient.statusMessage = message
@@ -1070,19 +1075,19 @@ final class AppModel: ObservableObject {
     Task { @MainActor [weak self] in
       guard let self else { return }
       do {
-        let response = try await withTimeout(seconds: 4) { @Sendable [helperClient] in
-          try await helperClient.status()
+        let state = try await withTimeout(seconds: 4) { @Sendable [helperClient] in
+          await helperClient.currentPreparationState()
         }
-        self.helperClient.statusMessage = response.running
-          ? "Helper running with pid \(response.pid)"
-          : "Helper registered but not running"
+        self.applyTunHelperPreparationState(state)
       } catch is OperationTimedOutError {
-        let message = "Helper not responding. Open System Settings > General > Login Items & Extensions, approve ClashMax, then click Repair or switch to System Proxy."
+        let message = "Helper not responding. Approve ClashMax in System Settings > General > Login Items & Extensions, then click Status. If it remains stuck, restart macOS or reset Background Items approval state before retrying."
         self.helperClient.statusMessage = message
+        self.tunHelperPreparationState = .notBootstrapped(message)
         self.lastError = message
       } catch {
         let message = UserFacingError.message(for: error)
         self.helperClient.statusMessage = message
+        self.tunHelperPreparationState = .notBootstrapped(message)
         self.lastError = message
       }
     }
@@ -1097,7 +1102,7 @@ final class AppModel: ObservableObject {
         }
         self.helperLogs = lines
       } catch is OperationTimedOutError {
-        let message = "Helper not responding. Open System Settings > General > Login Items & Extensions, approve ClashMax, then click Repair or switch to System Proxy."
+        let message = "Helper not responding. Approve ClashMax in System Settings > General > Login Items & Extensions, then click Status. If it remains stuck, restart macOS or reset Background Items approval state before retrying."
         self.helperClient.statusMessage = message
         self.lastError = message
       } catch {

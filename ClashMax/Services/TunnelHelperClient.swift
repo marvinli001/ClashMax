@@ -255,10 +255,15 @@ final class TunnelHelperClient: ObservableObject {
   }
 
   static let bootstrappedMessage = String(localized: "Helper registered and bootstrapped.")
-  static let notBootstrappedMessage = String(localized: "Helper registered but not bootstrapped. Open System Settings > General > Login Items & Extensions, approve ClashMax, then click Repair or restart macOS.")
+  static let notBootstrappedMessage = String(localized: "Helper registered but not bootstrapped. Approve ClashMax in System Settings > General > Login Items & Extensions, then click Status. If Repair keeps failing after approval, restart macOS or reset Background Items approval state before retrying.")
 
   private func repairRegistration(fingerprint: String) async throws {
     switch service.status {
+    case .requiresApproval:
+      registrationRecordStore.setHelperFingerprint(fingerprint)
+      statusMessage = Self.statusMessage(for: .requiresApproval)
+      openApprovalSettings()
+      return
     case .notRegistered, .notFound:
       break
     default:

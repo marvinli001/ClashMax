@@ -3,6 +3,19 @@
     <channel>
         <title>ClashMax</title>
         <item>
+            <title>1.0.3</title>
+            <pubDate>Sun, 10 May 2026 20:01:36 +1200</pubDate>
+            <sparkle:version>5</sparkle:version>
+            <sparkle:shortVersionString>1.0.3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/marvinli001/ClashMax/releases/download/v1.0.3/ClashMax-1.0.3.zip" length="31291645" type="application/octet-stream" sparkle:edSignature="iKWkPj0KZjaX2dKCj+W+y3StiBHXQ7T4WO/HTwX0h6uTj0xQueq9xOV9e/DTdL2d6WhWlhOYwbq1D4DK6oOaDQ=="/>
+            <sparkle:deltas>
+                <enclosure url="https://github.com/marvinli001/ClashMax/releases/download/v1.0.3/ClashMax5-4.delta" sparkle:deltaFrom="4" length="308394" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977840" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="AOeoYi3jBjrgopji5Yjwh16tTwM6DHGiepvrLISBdB7KbmFf0RYC+mkI1TE9aFFZgQ8QecCmWKecbMYfg3FQBQ=="/>
+                <enclosure url="https://github.com/marvinli001/ClashMax/releases/download/v1.0.3/ClashMax5-3.delta" sparkle:deltaFrom="3" length="777870" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977840" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="IGu15/EmRU7KcptQgYCgyfJ9I4BoZ9wd20dFcLBseh0ZgnYuvS+ML4tAXTuhQoPGh4RhyHO01ghlzH1zf6kHDA=="/>
+                <enclosure url="https://github.com/marvinli001/ClashMax/releases/download/v1.0.3/ClashMax5-2.delta" sparkle:deltaFrom="2" length="1113550" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977840" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="d5IoLucMWgGVqSOn8cy/Mrv4mLdxGeznTcJiHOlKsoPykGWulT3eFgEjyyGLQxKWVupoRxtqe3uYUi+G8hU6DA=="/>
+            </sparkle:deltas>
+        </item>
+        <item>
             <title>1.0.2</title>
             <pubDate>Sun, 10 May 2026 16:07:39 +1200</pubDate>
             <sparkle:version>4</sparkle:version>

@@ -2335,6 +2335,101 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertNil(model.lastError)
   }
 
+  func testRepairHelperRefreshesVisibleApprovalStateWithoutReregistering() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let service = StaticHelperService(status: .requiresApproval)
+    let helper = TunnelHelperClient(
+      transport: ReadyTunnelHelperTransport(),
+      service: service,
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      helperClient: helper,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.proxyRoutingMode = .tun
+
+    model.repairHelperRegistration()
+
+    for _ in 0..<40 where model.tunHelperPreparationState == .idle || model.tunHelperPreparationState == .checking {
+      await Task.yield()
+    }
+
+    XCTAssertEqual(
+      model.tunHelperPreparationState,
+      .requiresApproval(TunnelHelperClient.statusMessage(for: .requiresApproval))
+    )
+    XCTAssertEqual(service.registerCount, 0)
+    XCTAssertEqual(service.unregisterCount, 0)
+    XCTAssertEqual(service.openSettingsCount, 1)
+    XCTAssertNil(model.lastError)
+  }
+
+  func testRefreshingHelperStatusReflectsApprovalStateInTunStatusRow() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let service = StaticHelperService(status: .requiresApproval)
+    let helper = TunnelHelperClient(
+      transport: ReadyTunnelHelperTransport(),
+      service: service,
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      helperClient: helper,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.proxyRoutingMode = .tun
+
+    model.refreshHelperStatus()
+
+    for _ in 0..<40 where model.tunHelperPreparationState == .idle {
+      await Task.yield()
+    }
+
+    XCTAssertEqual(
+      model.tunHelperPreparationState,
+      .requiresApproval(TunnelHelperClient.statusMessage(for: .requiresApproval))
+    )
+    XCTAssertEqual(service.registerCount, 0)
+    XCTAssertEqual(service.unregisterCount, 0)
+    XCTAssertEqual(service.openSettingsCount, 0)
+    XCTAssertNil(model.lastError)
+  }
+
+  func testRefreshingHelperStatusReflectsBootstrappingFailureInTunStatusRow() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let helper = TunnelHelperClient(
+      transport: FailingStatusTunnelHelperTransport(),
+      service: StaticHelperService(status: .enabled),
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      helperClient: helper,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.proxyRoutingMode = .tun
+
+    model.refreshHelperStatus()
+
+    for _ in 0..<40 where model.tunHelperPreparationState == .idle {
+      await Task.yield()
+    }
+
+    XCTAssertEqual(
+      model.tunHelperPreparationState,
+      .notBootstrapped(TunnelHelperClient.notBootstrappedMessage)
+    )
+    XCTAssertNil(model.lastError)
+  }
+
   func testSelectingTunRegistersAndMarksReadyHelper() async throws {
     let paths = try Self.makeRuntimePaths()
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
@@ -2481,7 +2576,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
   }
 
-  func testHelperOperationNotPermittedExplainsDebugLaunchDaemonConstraint() {
+  func testHelperOperationNotPermittedExplainsApprovalAndBackgroundItemsRecovery() {
     let error = NSError(
       domain: "SMAppServiceErrorDomain",
       code: 1,
@@ -2492,7 +2587,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     XCTAssertEqual(
       UserFacingError.message(for: error),
-      "macOS rejected TUN helper registration. LaunchDaemon helpers registered with SMAppService must come from a trusted signed and notarized app. Run the exported/notarized app instead of a Debug or Products archive build, approve ClashMax in System Settings, then retry."
+      "macOS did not permit TUN helper registration yet. Approve ClashMax in System Settings > General > Login Items & Extensions, then click Status. If this exported/notarized app is already approved and the helper still will not start, restart macOS or reset the Background Items approval state before retrying."
     )
   }
 
@@ -3047,6 +3142,28 @@ private actor ReadyTunnelHelperTransport: HelperXPCTransport {
 
   func startCount() -> Int { starts }
   func stopCount() -> Int { stops }
+}
+
+private actor FailingStatusTunnelHelperTransport: HelperXPCTransport {
+  func status() async throws -> HelperClientResponse {
+    throw AppError.helperResponse("lookup failed")
+  }
+
+  func startTunnel(coreURL: URL, configURL: URL, workDirectory: URL, secret: String) async throws -> HelperClientResponse {
+    .failure("unused")
+  }
+
+  func stopTunnel() async throws -> HelperClientResponse {
+    .failure("unused")
+  }
+
+  func restartTunnel(coreURL: URL, configURL: URL, workDirectory: URL, secret: String) async throws -> HelperClientResponse {
+    .failure("unused")
+  }
+
+  func recentLogs() async throws -> [String] {
+    []
+  }
 }
 
 @MainActor

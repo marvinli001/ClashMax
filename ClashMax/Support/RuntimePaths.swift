@@ -100,7 +100,7 @@ extension AppError: LocalizedError {
 
 enum UserFacingError {
   private static let helperCodeSigningRecovery = "TUN helper could not be registered because ClashMax or its helper is not correctly signed, notarized, or approved by macOS. Verify signing, approve the helper in System Settings, then retry."
-  private static let helperOperationNotPermittedRecovery = "macOS rejected TUN helper registration. LaunchDaemon helpers registered with SMAppService must come from a trusted signed and notarized app. Run the exported/notarized app instead of a Debug or Products archive build, approve ClashMax in System Settings, then retry."
+  private static let helperOperationNotPermittedRecovery = "macOS did not permit TUN helper registration yet. Approve ClashMax in System Settings > General > Login Items & Extensions, then click Status. If this exported/notarized app is already approved and the helper still will not start, restart macOS or reset the Background Items approval state before retrying."
 
   static func message(for error: Error) -> String {
     if let appError = error as? AppError {
