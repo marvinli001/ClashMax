@@ -1176,7 +1176,8 @@ final class AppModel: ObservableObject {
   }
 
   func setSystemProxyEnabled(_ enabled: Bool) {
-    Task { [self] in
+    Task { @MainActor [weak self] in
+      guard let self else { return }
       do {
         if enabled {
           proxyRoutingMode = .systemProxy
