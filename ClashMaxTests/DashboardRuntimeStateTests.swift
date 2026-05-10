@@ -247,6 +247,102 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(delayRequestCount, 0)
   }
 
+  func testPreviewRuntimeRequestStartsWhenProfilePreviewBecomesAvailable() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let launcher = CountingProcessLauncher()
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    await model.waitForProfilePreviewRefresh()
+    let group = ProxyGroup(
+      name: "Proxy",
+      type: "select",
+      selected: "Japan",
+      nodes: [ProxyNode(name: "Japan", type: "direct", delay: nil, isSelectable: true)]
+    )
+    model.profilePreviewGroups = []
+
+    model.enterPreviewRuntime()
+    model.profilePreviewGroups = [group]
+
+    for _ in 0..<500 where launcher.launchCount < 1 || !model.previewRuntimeActive {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(launcher.launchCount, 1)
+    XCTAssertTrue(model.previewRuntimeActive)
+    XCTAssertFalse(model.isRunning)
+    XCTAssertTrue(model.canControlRuntimeProxies)
+  }
+
+  func testPreviewRuntimeAllowsDelayTestingWhileMainProxySwitchIsOff() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let controller = CoreProcessController(
+      launcher: FakeProcessLauncher(),
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let group = ProxyGroup(
+      name: "Proxy",
+      type: "select",
+      selected: "Japan",
+      nodes: [ProxyNode(name: "Japan", type: "direct", delay: nil, isSelectable: true)]
+    )
+    let client = RecordingMihomoController(proxyGroupsResponse: [group], testDelayResult: 73)
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      apiClient: client,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.proxyGroups = [group]
+    try await controller.startUserMode(
+      coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+      configURL: configURL,
+      workDirectory: paths.runtime,
+      api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+    )
+    model.previewRuntimeActive = true
+
+    XCTAssertFalse(model.isRunning)
+    XCTAssertTrue(model.canControlRuntimeProxies)
+
+    model.testDelay(for: group.nodes[0])
+
+    for _ in 0..<30 where await client.delayRequestCount() == 0 {
+      await Task.yield()
+    }
+    for _ in 0..<30 where model.proxyGroups.first?.nodes.first?.delay != 73 {
+      await Task.yield()
+    }
+
+    let delayRequestCount = await client.delayRequestCount()
+    XCTAssertEqual(delayRequestCount, 1)
+    XCTAssertEqual(model.proxyGroups.first?.nodes.first?.delay, 73)
+  }
+
   func testProxyPageActionsAreDisabledWhileRuntimeIsStarting() {
     XCTAssertFalse(
       ProxiesPageActionState.canStart(
@@ -2387,7 +2483,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.refreshHelperStatus()
 
-    for _ in 0..<40 where model.tunHelperPreparationState == .idle {
+    for _ in 0..<40 where model.tunHelperPreparationState == .idle || model.tunHelperPreparationState == .checking {
       await Task.yield()
     }
 
@@ -2419,7 +2515,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.refreshHelperStatus()
 
-    for _ in 0..<40 where model.tunHelperPreparationState == .idle {
+    for _ in 0..<40 where model.tunHelperPreparationState == .idle || model.tunHelperPreparationState == .checking {
       await Task.yield()
     }
 

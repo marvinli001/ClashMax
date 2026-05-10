@@ -105,6 +105,7 @@ struct ProxiesView: View {
       }
     }
     .onChange(of: appModel.visibleProxyGroups.map(\.id) + runtimeData.proxyGroups.map(\.id)) { _, _ in
+      appModel.enterPreviewRuntime()
       withAnimation(ProxyInteractionAnimation.list(reduceMotion: reduceMotion)) {
         expandedGroupIDs = ProxyGroupExpansionPolicy.retainedExpansion(
           current: expandedGroupIDs,

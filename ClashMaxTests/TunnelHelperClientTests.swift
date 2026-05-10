@@ -176,10 +176,51 @@ final class TunnelHelperClientTests: XCTestCase {
     XCTAssertEqual(client.statusMessage, TunnelHelperClient.bootstrappedMessage)
   }
 
-  func testRepairHelperAlwaysUnregistersThenRegistersAndVerifies() async throws {
+  func testRepairHelperReregistersWhenFingerprintMismatchOnEnabledHelper() async throws {
     let service = FakeHelperService(status: .enabled)
     let transport = FakeHelperTransport(statusResponse: HelperClientResponse(payload: HelperXPCPayload.response(ok: true)))
     let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: "stale")
+    let client = TunnelHelperClient(
+      transport: transport,
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "current"),
+      registrationRecordStore: recordStore
+    )
+
+    try await client.repairRegistration()
+
+    XCTAssertEqual(service.unregisterCount, 1)
+    XCTAssertEqual(service.registerCount, 1)
+    XCTAssertEqual(recordStore.storedFingerprint, "current")
+    XCTAssertEqual(client.statusMessage, TunnelHelperClient.bootstrappedMessage)
+  }
+
+  func testRepairHelperPingsXPCInsteadOfReregisteringWhenFingerprintMatchesAndXPCIsHealthy() async throws {
+    let service = FakeHelperService(status: .enabled)
+    let transport = FakeHelperTransport(statusResponse: HelperClientResponse(payload: HelperXPCPayload.response(ok: true)))
+    let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: "current")
+    let client = TunnelHelperClient(
+      transport: transport,
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "current"),
+      registrationRecordStore: recordStore
+    )
+
+    try await client.repairRegistration()
+
+    XCTAssertEqual(service.unregisterCount, 0)
+    XCTAssertEqual(service.registerCount, 0)
+    XCTAssertEqual(recordStore.storedFingerprint, "current")
+    XCTAssertEqual(client.statusMessage, TunnelHelperClient.bootstrappedMessage)
+  }
+
+  func testRepairHelperFallsBackToReregistrationWhenFingerprintMatchesButXPCIsUnhealthy() async throws {
+    let service = FakeHelperService(status: .enabled)
+    let transport = ToggleableHelperTransport(
+      initialStatus: .failure("xpc unavailable"),
+      subsequentStatus: HelperClientResponse(payload: HelperXPCPayload.response(ok: true))
+    )
+    let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: "current")
     let client = TunnelHelperClient(
       transport: transport,
       service: service,
@@ -379,6 +420,50 @@ private final class FakeHelperTransport: HelperXPCTransport, @unchecked Sendable
 
   func recentLogs() async throws -> [String] {
     response
+  }
+}
+
+private actor ToggleableHelperState {
+  var nextStatus: HelperClientResponse
+  let subsequentStatus: HelperClientResponse
+
+  init(initialStatus: HelperClientResponse, subsequentStatus: HelperClientResponse) {
+    self.nextStatus = initialStatus
+    self.subsequentStatus = subsequentStatus
+  }
+
+  func consume() -> HelperClientResponse {
+    let response = nextStatus
+    nextStatus = subsequentStatus
+    return response
+  }
+}
+
+private final class ToggleableHelperTransport: HelperXPCTransport, Sendable {
+  private let state: ToggleableHelperState
+
+  init(initialStatus: HelperClientResponse, subsequentStatus: HelperClientResponse) {
+    self.state = ToggleableHelperState(initialStatus: initialStatus, subsequentStatus: subsequentStatus)
+  }
+
+  func status() async throws -> HelperClientResponse {
+    await state.consume()
+  }
+
+  func startTunnel(coreURL: URL, configURL: URL, workDirectory: URL, secret: String) async throws -> HelperClientResponse {
+    .failure("unused")
+  }
+
+  func stopTunnel() async throws -> HelperClientResponse {
+    .failure("unused")
+  }
+
+  func restartTunnel(coreURL: URL, configURL: URL, workDirectory: URL, secret: String) async throws -> HelperClientResponse {
+    .failure("unused")
+  }
+
+  func recentLogs() async throws -> [String] {
+    []
   }
 }
 

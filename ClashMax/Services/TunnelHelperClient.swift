@@ -264,9 +264,19 @@ final class TunnelHelperClient: ObservableObject {
       statusMessage = Self.statusMessage(for: .requiresApproval)
       openApprovalSettings()
       return
+    case .enabled:
+      if registrationRecordStore.helperFingerprint() == fingerprint {
+        do {
+          try await verifyBootstrapped()
+          return
+        } catch {
+          // XPC unhealthy — fall through to re-register.
+        }
+      }
+      try await service.unregister()
     case .notRegistered, .notFound:
       break
-    default:
+    @unknown default:
       try await service.unregister()
     }
     try service.register()

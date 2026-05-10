@@ -213,8 +213,23 @@ struct SettingsView: View {
     }
   }
 
+  private var isHelperBusy: Bool {
+    appModel.tunHelperPreparationState == .checking
+  }
+
+  private var helperBusyIndicator: some View {
+    Group {
+      if isHelperBusy {
+        ProgressView()
+          .controlSize(.small)
+          .help("Talking to the TUN helper…")
+      }
+    }
+  }
+
   private var helperActionButtons: some View {
     HStack(spacing: 8) {
+      helperBusyIndicator
       helperRegisterButton
       helperOpenSettingsButton
       helperRepairButton
@@ -233,6 +248,7 @@ struct SettingsView: View {
         helperRepairButton
       }
       HStack(spacing: 8) {
+        helperBusyIndicator
         helperStatusButton
         if settings.developerMode {
           helperLogsButton
@@ -247,6 +263,7 @@ struct SettingsView: View {
     } label: {
       Label("Register", systemImage: "checkmark.shield")
     }
+    .disabled(isHelperBusy)
   }
 
   private var helperOpenSettingsButton: some View {
@@ -264,6 +281,7 @@ struct SettingsView: View {
     } label: {
       Label("Repair", systemImage: "wrench.and.screwdriver")
     }
+    .disabled(isHelperBusy)
   }
 
   private var helperStatusButton: some View {
@@ -272,6 +290,7 @@ struct SettingsView: View {
     } label: {
       Label("Status", systemImage: "waveform.path.ecg")
     }
+    .disabled(isHelperBusy)
   }
 
   private var helperLogsButton: some View {

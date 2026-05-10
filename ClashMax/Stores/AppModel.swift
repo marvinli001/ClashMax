@@ -148,6 +148,7 @@ final class AppModel: ObservableObject {
   private var apiClient: (any MihomoAPIControlling)?
   private var startTask: Task<Void, Never>?
   private var previewTask: Task<Void, Never>?
+  private var previewRuntimeRequested = false
   private var stopTask: Task<RuntimeStopResult, Never>?
   private var pendingModeTask: Task<Void, Never>?
   private var pendingRoutingModeTask: Task<Void, Never>?
@@ -234,6 +235,11 @@ final class AppModel: ObservableObject {
       .store(in: &storeCancellables)
     proxyPreview.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &storeCancellables)
+    proxyPreview.$profilePreviewGroups
+      .sink { [weak self] groups in
+        self?.schedulePreviewRuntimeStartIfReady(profilePreviewGroups: groups)
+      }
       .store(in: &storeCancellables)
     self.profileStore.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
@@ -1074,8 +1080,12 @@ final class AppModel: ObservableObject {
   func refreshHelperStatus() {
     Task { @MainActor [weak self] in
       guard let self else { return }
+      tunHelperPreparationTask?.cancel()
+      tunHelperPreparationTask = nil
+      tunHelperPreparationState = .checking
+      lastError = nil
       do {
-        let state = try await withTimeout(seconds: 4) { @Sendable [helperClient] in
+        let state = try await withTimeout(seconds: 2.5) { @Sendable [helperClient] in
           await helperClient.currentPreparationState()
         }
         self.applyTunHelperPreparationState(state)
@@ -1416,6 +1426,7 @@ final class AppModel: ObservableObject {
 
   @discardableResult
   func prepareForTermination() async -> Bool {
+    previewRuntimeRequested = false
     startTask?.cancel()
     startTask = nil
     startInFlight = false
@@ -1433,21 +1444,36 @@ final class AppModel: ObservableObject {
   }
 
   func enterPreviewRuntime() {
+    previewRuntimeRequested = true
+    schedulePreviewRuntimeStartIfReady()
+  }
+
+  private func schedulePreviewRuntimeStartIfReady(profilePreviewGroups groups: [ProxyGroup]? = nil) {
     guard previewTask == nil else { return }
+    guard previewRuntimeRequested else { return }
     guard !startInFlight else { return }
     guard !isCoreRunning else { return }
     guard profileStore.activeProfile != nil else { return }
     guard readinessIssue == nil else { return }
-    guard !profilePreviewGroups.isEmpty else { return }
+    guard !(groups ?? profilePreviewGroups).isEmpty else { return }
 
     previewTask = Task { [weak self] in
       try? await Task.sleep(nanoseconds: 50_000_000)
       guard let self, !Task.isCancelled else { return }
+      guard self.previewRuntimeRequested else {
+        self.previewTask = nil
+        return
+      }
+      guard !self.profilePreviewGroups.isEmpty else {
+        self.previewTask = nil
+        return
+      }
       await self.startPreviewRuntime()
     }
   }
 
   func leavePreviewRuntime() async {
+    previewRuntimeRequested = false
     _ = await leavePreviewRuntimeResult()
   }
 
@@ -1625,6 +1651,9 @@ final class AppModel: ObservableObject {
       }
     }
     tunEnabled = false
+    if result.succeeded {
+      schedulePreviewRuntimeStartIfReady()
+    }
     return result
   }
 
