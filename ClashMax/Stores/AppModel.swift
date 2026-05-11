@@ -599,6 +599,7 @@ final class AppModel: ObservableObject {
       }
       return
     }
+    cancelPendingPreviewRuntimeStart()
     startTask = Task { [weak self] in
       await Task.yield()
       guard let self, !Task.isCancelled else { return }
@@ -635,6 +636,7 @@ final class AppModel: ObservableObject {
   }
 
   private func runStartSequence() async throws {
+    cancelPendingPreviewRuntimeStart()
     if previewRuntimeActive {
       let previewStopResult = await leavePreviewRuntimeResult()
       if !previewStopResult.succeeded {
@@ -727,8 +729,7 @@ final class AppModel: ObservableObject {
     startTask?.cancel()
     startTask = nil
     startInFlight = false
-    previewTask?.cancel()
-    previewTask = nil
+    cancelPendingPreviewRuntimeStart()
     Task { @MainActor [weak self] in
       guard let self else { return }
       let result = await stopRuntimeCoordinated()
@@ -1430,8 +1431,7 @@ final class AppModel: ObservableObject {
     startTask?.cancel()
     startTask = nil
     startInFlight = false
-    previewTask?.cancel()
-    previewTask = nil
+    cancelPendingPreviewRuntimeStart()
     pendingModeTask?.cancel()
     pendingModeTask = nil
     pendingRoutingModeTask?.cancel()
@@ -1450,26 +1450,31 @@ final class AppModel: ObservableObject {
 
   private func schedulePreviewRuntimeStartIfReady(profilePreviewGroups groups: [ProxyGroup]? = nil) {
     guard previewTask == nil else { return }
-    guard previewRuntimeRequested else { return }
-    guard !startInFlight else { return }
-    guard !isCoreRunning else { return }
-    guard profileStore.activeProfile != nil else { return }
-    guard readinessIssue == nil else { return }
-    guard !(groups ?? profilePreviewGroups).isEmpty else { return }
+    guard canStartPreviewRuntime(profilePreviewGroups: groups) else { return }
 
     previewTask = Task { [weak self] in
       try? await Task.sleep(nanoseconds: 50_000_000)
       guard let self, !Task.isCancelled else { return }
-      guard self.previewRuntimeRequested else {
-        self.previewTask = nil
-        return
-      }
-      guard !self.profilePreviewGroups.isEmpty else {
+      guard self.canStartPreviewRuntime() else {
         self.previewTask = nil
         return
       }
       await self.startPreviewRuntime()
     }
+  }
+
+  private func canStartPreviewRuntime(profilePreviewGroups groups: [ProxyGroup]? = nil) -> Bool {
+    previewRuntimeRequested
+      && !startInFlight
+      && !isCoreRunning
+      && profileStore.activeProfile != nil
+      && readinessIssue == nil
+      && !(groups ?? profilePreviewGroups).isEmpty
+  }
+
+  private func cancelPendingPreviewRuntimeStart() {
+    previewTask?.cancel()
+    previewTask = nil
   }
 
   func leavePreviewRuntime() async {
@@ -1479,8 +1484,7 @@ final class AppModel: ObservableObject {
 
   private func leavePreviewRuntimeResult() async -> RuntimeStopResult {
     var result = RuntimeStopResult()
-    previewTask?.cancel()
-    previewTask = nil
+    cancelPendingPreviewRuntimeStart()
     guard previewRuntimeActive else { return result }
     cancelRuntimeActionTasks()
     apiClient = nil

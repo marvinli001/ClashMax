@@ -265,9 +265,11 @@ final class TunnelHelperClient: ObservableObject {
       openApprovalSettings()
       return
     case .enabled:
-      if registrationRecordStore.helperFingerprint() == fingerprint {
+      let storedFingerprint = registrationRecordStore.helperFingerprint()
+      if storedFingerprint == nil || storedFingerprint == fingerprint {
         do {
           try await verifyBootstrapped()
+          registrationRecordStore.setHelperFingerprint(fingerprint)
           return
         } catch {
           // XPC unhealthy — fall through to re-register.

@@ -290,6 +290,50 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(model.canControlRuntimeProxies)
   }
 
+  func testStartCancelsPendingPreviewRuntimeRequestBeforeItCanLaunch() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let launcher = CountingProcessLauncher()
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    let group = ProxyGroup(
+      name: "Proxy",
+      type: "select",
+      selected: "Japan",
+      nodes: [ProxyNode(name: "Japan", type: "direct", delay: nil, isSelectable: true)]
+    )
+    model.profilePreviewGroups = [group]
+
+    model.enterPreviewRuntime()
+    model.start()
+
+    for _ in 0..<300 where !model.isRunning {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    try? await Task.sleep(nanoseconds: 120_000_000)
+
+    XCTAssertEqual(launcher.launchCount, 1)
+    XCTAssertTrue(model.isRunning)
+    XCTAssertFalse(model.previewRuntimeActive)
+    XCTAssertEqual(model.runtimeOwner, .user)
+  }
+
   func testPreviewRuntimeAllowsDelayTestingWhileMainProxySwitchIsOff() async throws {
     let paths = try Self.makeRuntimePaths()
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")

@@ -67,8 +67,8 @@ targets:
         PRODUCT_NAME: ClashMax
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_USER_SCRIPT_SANDBOXING: NO
-        MARKETING_VERSION: 1.0.3
-        CURRENT_PROJECT_VERSION: 5
+        MARKETING_VERSION: 1.0.4
+        CURRENT_PROJECT_VERSION: 6
     entitlements:
       path: Config/ClashMax.entitlements
     postCompileScripts:
