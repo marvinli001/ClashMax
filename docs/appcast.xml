@@ -3,6 +3,20 @@
     <channel>
         <title>ClashMax</title>
         <item>
+            <title>1.0.4</title>
+            <pubDate>Mon, 11 May 2026 17:26:02 +1200</pubDate>
+            <sparkle:version>6</sparkle:version>
+            <sparkle:shortVersionString>1.0.4</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/marvinli001/ClashMax/releases/download/v1.0.4/ClashMax-1.0.4.zip" length="31290110" type="application/octet-stream" sparkle:edSignature="QOiBaUSoCfiuDeqgwlMwOL6BZEqq4jkk75PZF7WgpITzO9vig4fp9Lb1iy3pQcnXtNIpV/JrqbObRGHXnLXiBA=="/>
+            <sparkle:deltas>
+                <enclosure url="https://github.com/marvinli001/ClashMax/releases/download/v1.0.4/ClashMax6-5.delta" sparkle:deltaFrom="5" length="493358" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977840" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="l4trqg0L1qEGqUBSEDcNZTiaA34hA7wg7eruZTDxT2OqlNiZv4s3Pi2M51AOOtH4cCQfOP3rEIiXlAUnYbz8Cw=="/>
+                <enclosure url="https://github.com/marvinli001/ClashMax/releases/download/v1.0.4/ClashMax6-4.delta" sparkle:deltaFrom="4" length="500506" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977840" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="+LJhhoPi1mPKjLbqU6tkQBm3SW7yTCQsFUYuJFButssUHtAHxbwqSkLqKNHriclUrB5nR1Gxyb2upyfqBM+LBg=="/>
+                <enclosure url="https://github.com/marvinli001/ClashMax/releases/download/v1.0.4/ClashMax6-3.delta" sparkle:deltaFrom="3" length="756646" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977840" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="CGXO590u9uycI1pHMggI2vJVQPQae3k9g8Dsjhlpeil8pVANhVlznk1TtXalavlXZeED9VWEvwDo/W9nujs0Cg=="/>
+                <enclosure url="https://github.com/marvinli001/ClashMax/releases/download/v1.0.4/ClashMax6-2.delta" sparkle:deltaFrom="2" length="1093110" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977840" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="TNxgghuT0cYpITN9SXyzE4+//hD07vrLPT1Smawa86Q4BWfQNZzuc3g02cEYjGxRGboS8lc3a2u/ywNmpWnSCg=="/>
+            </sparkle:deltas>
+        </item>
+        <item>
             <title>1.0.3</title>
             <pubDate>Sun, 10 May 2026 20:01:36 +1200</pubDate>
             <sparkle:version>5</sparkle:version>
@@ -25,17 +39,6 @@
             <sparkle:deltas>
                 <enclosure url="https://github.com/marvinli001/ClashMax/releases/download/v1.0.2/ClashMax4-3.delta" sparkle:deltaFrom="3" length="771154" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977840" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="xbLR+XEB08SsDqFzH+D6vZlPqenpXrU7tWXJ0g3XJ1BMXUZ6zmCapic1WkjzSbmSYTkX1xB4q1nU5IpgQdWOBg=="/>
                 <enclosure url="https://github.com/marvinli001/ClashMax/releases/download/v1.0.2/ClashMax4-2.delta" sparkle:deltaFrom="2" length="1113022" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977840" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="+noNxg3U95BeVHUvp0NnfyISoOItKkSpel6PvnsriqWjeGGDdk3tmBE3qW3VUdbgXK/5zlsXA6ByYDP5YIRPAg=="/>
-            </sparkle:deltas>
-        </item>
-        <item>
-            <title>1.0.1</title>
-            <pubDate>Sat, 09 May 2026 17:14:44 +1200</pubDate>
-            <sparkle:version>3</sparkle:version>
-            <sparkle:shortVersionString>1.0.1</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/marvinli001/ClashMax/releases/download/v1.0.1/ClashMax-1.0.1.zip" length="31131319" type="application/octet-stream" sparkle:edSignature="zYMldRJ0loHhQfp4XH6XcZ0goSZOGr+6h/dDfoOT6fJwDU8SpNU5lwijbq/hm0l2EoUc9YdOG//MwN3po5u9CA=="/>
-            <sparkle:deltas>
-                <enclosure url="https://github.com/marvinli001/ClashMax/releases/download/v1.0.1/ClashMax3-2.delta" sparkle:deltaFrom="2" length="871438" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977840" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="70redFh3iRfIQiNAzr14/phQSLQBRBQw9DYlAQajpRQMdqeXpkltddvqNDrG3BcnW4SqBBY+zaA20vPJVICXBA=="/>
             </sparkle:deltas>
         </item>
     </channel>
