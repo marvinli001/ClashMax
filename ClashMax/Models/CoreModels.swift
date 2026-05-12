@@ -940,6 +940,11 @@ struct ProxyGroup: Identifiable, Codable, Equatable, Sendable {
   var type: String
   var selected: String?
   var nodes: [ProxyNode]
+
+  var allowsManualProxySelection: Bool {
+    let normalizedType = type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    return normalizedType == "select" || normalizedType == "selector"
+  }
 }
 
 struct ConnectionSnapshot: Identifiable, Codable, Equatable, Sendable {

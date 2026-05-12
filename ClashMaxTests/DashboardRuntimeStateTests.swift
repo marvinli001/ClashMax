@@ -1357,6 +1357,43 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(DashboardProxySelectionState.delayLabel(for: node), "No delay")
   }
 
+  func testDashboardProxySelectionIgnoresAutomaticGroups() throws {
+    let groups = [
+      ProxyGroup(
+        name: "Auto",
+        type: "URLTest",
+        selected: "Japan",
+        nodes: [
+          ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
+          ProxyNode(name: "Singapore", type: "vless", delay: nil, isSelectable: true)
+        ]
+      ),
+      ProxyGroup(
+        name: "Fallback",
+        type: "Fallback",
+        selected: "Singapore",
+        nodes: [
+          ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
+          ProxyNode(name: "Singapore", type: "vless", delay: nil, isSelectable: true)
+        ]
+      ),
+      ProxyGroup(
+        name: "Elite",
+        type: "Selector",
+        selected: "Japan",
+        nodes: [
+          ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
+          ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: true)
+        ]
+      )
+    ]
+
+    XCTAssertEqual(DashboardProxySelectionState.selectableGroups(from: groups).map(\.name), ["Elite"])
+
+    let group = try XCTUnwrap(DashboardProxySelectionState.resolvedGroup(from: groups, preferredName: "Auto"))
+    XCTAssertEqual(group.name, "Elite")
+  }
+
   func testRunningWithoutRuntimeProxyGroupsDoesNotFallBackToStoppedPreview() async throws {
     let paths = try Self.makeRuntimePaths()
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
@@ -1967,6 +2004,93 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let selectedNode = try XCTUnwrap(model.proxyGroups.first?.selected)
     XCTAssertEqual(selectedProxyRequests, ["Proxy:Singapore"])
     XCTAssertEqual(selectedNode, "Singapore")
+    XCTAssertEqual(model.previewSelections["Proxy"], "Singapore")
+  }
+
+  func testSelectingAutomaticProxyGroupDoesNotCallRuntimeAPI() async throws {
+    let group = ProxyGroup(
+      name: "Auto",
+      type: "url-test",
+      selected: "Japan",
+      nodes: [
+        ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
+        ProxyNode(name: "Singapore", type: "vless", delay: nil, isSelectable: true)
+      ]
+    )
+    let client = RecordingMihomoController(proxyGroupsResponse: [group], testDelayResult: 73)
+    let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [group])
+
+    model.selectProxy(group: group, node: group.nodes[1])
+
+    let selectedProxyRequestCount = await client.selectedProxyRequestCount()
+    XCTAssertEqual(selectedProxyRequestCount, 0)
+    XCTAssertEqual(model.proxyGroups.first?.selected, "Japan")
+    XCTAssertEqual(model.lastError, "Auto is managed automatically by Mihomo.")
+    XCTAssertNil(model.previewSelections["Auto"])
+  }
+
+  func testSelectingProxyInPreviewRuntimePersistsAndCallsRuntimeAPI() async throws {
+    let group = ProxyGroup(
+      name: "Proxy",
+      type: "select",
+      selected: "Japan",
+      nodes: [
+        ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
+        ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: true)
+      ]
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [
+        ProxyGroup(name: "Proxy", type: "select", selected: "DIRECT", nodes: group.nodes)
+      ],
+      testDelayResult: 73
+    )
+    let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [group])
+    model.previewRuntimeActive = true
+
+    model.selectProxy(group: group, node: group.nodes[1])
+
+    XCTAssertEqual(model.previewSelections["Proxy"], "DIRECT")
+    XCTAssertEqual(model.proxyGroups.first?.selected, "DIRECT")
+    for _ in 0..<40 where await client.selectedProxyRequestCount() == 0 {
+      await Task.yield()
+    }
+
+    let selectedProxyRequests = await client.selectedProxyRequests()
+    XCTAssertEqual(selectedProxyRequests, ["Proxy:DIRECT"])
+  }
+
+  func testSelectingProxyInRuntimePersistsSelectionAfterSuccessfulAPIRequest() async throws {
+    let group = ProxyGroup(
+      name: "Proxy",
+      type: "select",
+      selected: "Japan",
+      nodes: [
+        ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
+        ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: true)
+      ]
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [
+        ProxyGroup(name: "Proxy", type: "select", selected: "DIRECT", nodes: group.nodes)
+      ],
+      testDelayResult: 73
+    )
+    let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [group])
+
+    model.selectProxy(group: group, node: group.nodes[1])
+
+    for _ in 0..<40 where await client.selectedProxyRequestCount() == 0 {
+      await Task.yield()
+    }
+    for _ in 0..<40 where model.proxyGroups.first?.selected != "DIRECT" {
+      await Task.yield()
+    }
+
+    let selectedProxyRequests = await client.selectedProxyRequests()
+    XCTAssertEqual(selectedProxyRequests, ["Proxy:DIRECT"])
+    XCTAssertEqual(model.proxyGroups.first?.selected, "DIRECT")
+    XCTAssertEqual(model.previewSelections["Proxy"], "DIRECT")
   }
 
   func testDelayTestingKeepsLatestResultForSameNode() async throws {

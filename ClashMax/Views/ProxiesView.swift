@@ -536,7 +536,9 @@ private struct ProxyNodeCard: View {
   let node: ProxyNode
 
   var body: some View {
-    let canSelect = node.isSelectable && (appModel.canControlRuntimeProxies || appModel.canSelectProxyOffline)
+    let canSelect = group.allowsManualProxySelection
+      && node.isSelectable
+      && (appModel.canControlRuntimeProxies || appModel.canSelectProxyOffline)
     let canTest = node.isSelectable && appModel.canControlRuntimeProxies
     let delayDisplay = ProxyDelayDisplay(delay: node.delay)
     let isSelected = group.selected == node.name
@@ -580,7 +582,7 @@ private struct ProxyNodeCard: View {
       }
       .buttonStyle(.plain)
       .disabled(!canSelect)
-      .help(canSelect ? "Select \(node.name)" : appModel.proxyRuntimeActionMessage)
+      .help(selectionHelp(canSelect: canSelect))
 
       Button {
         appModel.testDelay(for: node)
@@ -620,6 +622,16 @@ private struct ProxyNodeCard: View {
   private func nodeScale(canSelect: Bool) -> Double {
     guard canSelect, isPressing, !reduceMotion else { return 1 }
     return 0.992
+  }
+
+  private func selectionHelp(canSelect: Bool) -> String {
+    if canSelect {
+      return "Select \(node.name)"
+    }
+    if !group.allowsManualProxySelection {
+      return "\(group.name) is managed automatically by Mihomo."
+    }
+    return appModel.proxyRuntimeActionMessage
   }
 
   private func nodeInteractionTint(isSelected: Bool, canSelect: Bool) -> Color {

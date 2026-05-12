@@ -1129,8 +1129,17 @@ final class AppModel: ObservableObject {
       lastError = "\(node.name) cannot be selected from the runtime."
       return
     }
+    guard group.allowsManualProxySelection else {
+      lastError = "\(group.name) is managed automatically by Mihomo."
+      return
+    }
     if isCoreRunning, let apiClient {
       let groupID = group.id
+      if previewRuntimeActive {
+        persistSelectedProxy(groupName: group.name, nodeName: node.name)
+        applySelectedProxy(groupName: group.name, nodeName: node.name)
+        lastError = nil
+      }
       proxySelectionTasks[groupID]?.cancel()
       let token = UUID()
       proxySelectionTokens[groupID] = token
@@ -1145,7 +1154,11 @@ final class AppModel: ObservableObject {
         do {
           try await apiClient.selectProxy(group: group.name, proxy: node.name)
           guard proxySelectionTokens[groupID] == token, !Task.isCancelled else { return }
+          if !previewRuntimeActive {
+            persistSelectedProxy(groupName: group.name, nodeName: node.name)
+          }
           applySelectedProxy(groupName: group.name, nodeName: node.name)
+          lastError = nil
           reloadRuntimeData()
         } catch is CancellationError {
           return
@@ -1155,8 +1168,8 @@ final class AppModel: ObservableObject {
         }
       }
     } else if canSelectProxyOffline {
-      previewSelections[group.name] = node.name
-      saveCurrentPreviewSelections()
+      persistSelectedProxy(groupName: group.name, nodeName: node.name)
+      applySelectedProxy(groupName: group.name, nodeName: node.name)
       lastError = nil
     } else {
       lastError = proxyRuntimeActionMessage
@@ -1698,6 +1711,11 @@ final class AppModel: ObservableObject {
       guard let index = groups.firstIndex(where: { $0.name == groupName }) else { return }
       groups[index].selected = nodeName
     }
+  }
+
+  private func persistSelectedProxy(groupName: String, nodeName: String) {
+    previewSelections[groupName] = nodeName
+    saveCurrentPreviewSelections()
   }
 
   private func applyDelay(_ delay: Int, to nodeName: String) {

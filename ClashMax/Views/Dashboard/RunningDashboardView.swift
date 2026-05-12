@@ -262,7 +262,9 @@ private struct DashboardResponsivePair<Leading: View, Trailing: View>: View {
 
 enum DashboardProxySelectionState {
   static func selectableGroups(from groups: [ProxyGroup]) -> [ProxyGroup] {
-    groups.filter { !$0.nodes.filter(\.isSelectable).isEmpty }
+    groups.filter { group in
+      group.allowsManualProxySelection && !group.nodes.filter(\.isSelectable).isEmpty
+    }
   }
 
   static func resolvedGroup(from groups: [ProxyGroup], preferredName: String?) -> ProxyGroup? {
