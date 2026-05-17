@@ -42,6 +42,15 @@ discipline is recorded.
 - Local test verification may disable signing with `CODE_SIGNING_ALLOWED=NO`.
   Packaging, helper, entitlement, or notarization changes still require the
   appropriate signed-release verification before shipping.
+- The `NE Transparent Proxy Experimental` routing mode is Developer Mode only.
+  It uses a macOS System Extension containing a transparent app-proxy provider and requires
+  Developer ID signing with Network Extension, System Extension, and App Group
+  capabilities before it can run on a real machine.
+- The current Network Extension stage targets TCP transparent proxying only:
+  system TCP flows enter the transparent proxy provider, which bridges them to
+  the local Mihomo SOCKS5/mixed port. UDP, DNS hijack, and full domain-rule
+  fidelity are intentionally out of scope until separately implemented and
+  tested.
 
 ## Build And Verification
 
@@ -61,6 +70,33 @@ Run command:
 
 ```bash
 ./script/build_and_run.sh
+```
+
+Network Extension signed-build checks:
+
+```bash
+codesign -dvvv --entitlements :- /path/to/ClashMax.app
+codesign -dvvv --entitlements :- /path/to/ClashMax.app/Contents/Library/SystemExtensions/io.github.clashmax.ClashMax.NetworkExtension.systemextension
+spctl --assess --type execute --verbose /path/to/ClashMax.app
+systemextensionsctl list
+```
+
+Real-device Network Extension validation must use an app bundle installed in
+`/Applications`, then approve the System Extension in System Settings and
+confirm `systemextensionsctl list` reports it as activated and enabled.
+If `nesessionmanager` reports `The VPN app used by the VPN configuration is not
+installed` or `Plugin was disabled` after installing a signed build, verify that
+LaunchServices sees the installed bundle:
+
+```bash
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -dump | rg -n "path: +/Applications/ClashMax.app" -C 20
+```
+
+ClashMax refreshes the `/Applications/ClashMax.app` LaunchServices registration
+before installing or starting the NE transparent proxy, using:
+
+```bash
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f -R /Applications/ClashMax.app
 ```
 
 Before claiming progress, run the narrowest command that proves the claim and

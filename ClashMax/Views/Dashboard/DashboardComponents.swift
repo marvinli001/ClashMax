@@ -57,16 +57,33 @@ struct RunModePicker: View {
 
 struct ProxyRoutingModePicker: View {
   let selection: Binding<ProxyRoutingMode>
+  let developerMode: Bool
+
+  init(selection: Binding<ProxyRoutingMode>, developerMode: Bool = false) {
+    self.selection = selection
+    self.developerMode = developerMode
+  }
 
   var body: some View {
     Picker("Proxy Routing", selection: selection) {
-      ForEach(ProxyRoutingMode.allCases) { mode in
-        Label(mode.displayName, systemImage: mode.symbolName).tag(mode)
+      ForEach(ProxyRoutingMode.visibleCases(developerMode: developerMode)) { mode in
+        Text(segmentTitle(for: mode))
+          .lineLimit(1)
+          .tag(mode)
       }
     }
     .labelsHidden()
     .pickerStyle(.segmented)
-    .fixedSize(horizontal: true, vertical: false)
+    .help(selection.wrappedValue.displayName)
+  }
+
+  private func segmentTitle(for mode: ProxyRoutingMode) -> String {
+    switch mode {
+    case .networkExtensionExperimental:
+      String(localized: "NE Proxy")
+    default:
+      mode.displayName
+    }
   }
 }
 
@@ -115,6 +132,8 @@ struct ProxyRoutingSettingsButton: View {
         onReset: { tunDraft = .default },
         onSave: saveTunSettings
       )
+    case .networkExtensionExperimental:
+      NetworkExtensionSettingsPopover()
     }
   }
 
@@ -139,6 +158,70 @@ struct ProxyRoutingSettingsButton: View {
   private func saveTunSettings() {
     appModel.updateTunSettings(tunDraft)
     isPresented = false
+  }
+}
+
+private struct NetworkExtensionSettingsPopover: View {
+  @EnvironmentObject private var appModel: AppModel
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      VStack(alignment: .leading, spacing: 8) {
+        SettingsRuntimeLine(title: "System Extension", value: appModel.networkExtensionController.statusMessage)
+        SettingsRuntimeLine(title: "Transparent Proxy", value: appModel.networkExtensionController.vpnStatus.displayName)
+        SettingsRuntimeLine(title: "System Proxy", value: "Off")
+        SettingsRuntimeLine(title: "TUN Helper", value: "Untouched")
+        Text(appModel.networkExtensionController.tunnelStatusMessage)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+
+      if let error = appModel.networkExtensionController.recentError {
+        Text(error)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(3)
+      }
+
+      HStack(spacing: 8) {
+        Button {
+          appModel.installNetworkExtension()
+        } label: {
+          Label("Install", systemImage: "puzzlepiece")
+        }
+        Button {
+          appModel.openNetworkExtensionSettings()
+        } label: {
+          Label("Approve", systemImage: "gearshape")
+        }
+        .help("Open System Settings > General > Login Items & Extensions > Network Extensions.")
+        Button {
+          appModel.refreshNetworkExtensionStatus()
+        } label: {
+          Label("Refresh", systemImage: "arrow.clockwise")
+        }
+      }
+    }
+    .onAppear {
+      appModel.refreshNetworkExtensionStatus()
+    }
+  }
+}
+
+private struct SettingsRuntimeLine: View {
+  let title: String
+  let value: String
+
+  var body: some View {
+    HStack(spacing: 12) {
+      Text(title)
+        .foregroundStyle(.secondary)
+      Spacer()
+      Text(value)
+        .multilineTextAlignment(.trailing)
+    }
+    .font(.callout)
   }
 }
 

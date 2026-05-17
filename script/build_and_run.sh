@@ -9,17 +9,7 @@ DEFAULT_DERIVED_DATA="$HOME/Library/Developer/Xcode/DerivedData/ClashMaxLocal"
 DERIVED_DATA="${CLASHMAX_DERIVED_DATA:-$DEFAULT_DERIVED_DATA}"
 APP_BUNDLE="$DERIVED_DATA/Build/Products/Debug/$APP_NAME.app"
 DESTINATION="${CLASHMAX_BUILD_DESTINATION:-generic/platform=macOS}"
-
-detect_codesigning_identity() {
-  if [[ -n "${CLASHMAX_CODESIGN_IDENTITY:-}" ]]; then
-    printf '%s\n' "$CLASHMAX_CODESIGN_IDENTITY"
-    return 0
-  fi
-
-  local identity
-  identity="$(security find-identity -v -p codesigning 2>/dev/null | awk '/"Apple Development:/ || /"Developer ID Application:/ { print $2; exit }')"
-  printf '%s\n' "$identity"
-}
+SYSTEM_EXTENSION="$APP_BUNDLE/Contents/Library/SystemExtensions/io.github.clashmax.ClashMax.NetworkExtension.systemextension"
 
 pkill -x "$APP_NAME" >/dev/null 2>&1 || true
 rm -rf "$APP_BUNDLE"
@@ -31,30 +21,17 @@ xcodebuild \
   -derivedDataPath "$DERIVED_DATA" \
   build
 
-SIGNING_IDENTITY="$(detect_codesigning_identity || true)"
-if [[ -n "$SIGNING_IDENTITY" ]]; then
-  codesign --force --sign "$SIGNING_IDENTITY" --timestamp=none \
-    --entitlements "$ROOT_DIR/Config/ClashMaxHelper.entitlements" \
-    "$APP_BUNDLE/Contents/Library/LaunchServices/ClashMaxHelper"
-
-  for nested_binary in \
-    "$APP_BUNDLE/Contents/MacOS/ClashMax.debug.dylib" \
-    "$APP_BUNDLE/Contents/MacOS/__preview.dylib"
-  do
-    if [[ -f "$nested_binary" ]]; then
-      codesign --force --sign "$SIGNING_IDENTITY" --timestamp=none "$nested_binary"
-    fi
-  done
-
-  codesign --force --sign "$SIGNING_IDENTITY" --timestamp=none \
-    --entitlements "$ROOT_DIR/Config/ClashMax.entitlements" \
-    "$APP_BUNDLE"
-else
-  echo "warning: no Apple Development or Developer ID signing identity found; TUN helper registration will not work with ad-hoc signing." >&2
-fi
-
 open_app() {
   /usr/bin/open -n "$APP_BUNDLE"
+}
+
+verify_signatures() {
+  codesign --verify --strict --verbose=2 "$APP_BUNDLE"
+  if [[ ! -d "$SYSTEM_EXTENSION" ]]; then
+    echo "error: missing embedded Network Extension: $SYSTEM_EXTENSION" >&2
+    return 1
+  fi
+  codesign --verify --strict --verbose=2 "$SYSTEM_EXTENSION"
 }
 
 case "$MODE" in
@@ -73,6 +50,7 @@ case "$MODE" in
     /usr/bin/log stream --info --style compact --predicate "subsystem == \"$BUNDLE_ID\""
     ;;
   --verify|verify)
+    verify_signatures
     open_app
     sleep 1
     pgrep -x "$APP_NAME" >/dev/null

@@ -8,15 +8,34 @@ private enum AppStartupAbort: Error {
   case waitingForTunHelper
 }
 
+private enum RuntimeStopPurpose {
+  case userInitiated
+  case termination
+
+  var continuesAfterNetworkExtensionStopFailure: Bool {
+    self == .termination
+  }
+
+  var schedulesPreviewRestart: Bool {
+    self == .userInitiated
+  }
+}
+
 private struct RuntimeStopResult {
   var coreStopError: Error?
   var helperStopError: Error?
+  var networkExtensionStopError: Error?
   var systemProxyRestoreError: Error?
+  var didRunLocalCleanup = false
 
-  static let success = RuntimeStopResult()
+  static let success = RuntimeStopResult(didRunLocalCleanup: true)
 
   var succeeded: Bool {
-    coreStopError == nil && helperStopError == nil && systemProxyRestoreError == nil
+    coreStopError == nil && helperStopError == nil && networkExtensionStopError == nil && systemProxyRestoreError == nil
+  }
+
+  var localCleanupSucceeded: Bool {
+    didRunLocalCleanup && coreStopError == nil && helperStopError == nil && systemProxyRestoreError == nil
   }
 
   var userFacingMessage: String? {
@@ -26,15 +45,44 @@ private struct RuntimeStopResult {
     if let helperStopError {
       return "Could not stop TUN helper cleanly: \(UserFacingError.message(for: helperStopError))"
     }
+    if let networkExtensionStopError {
+      return "Could not stop Network Extension cleanly: \(UserFacingError.message(for: networkExtensionStopError))"
+    }
     if let coreStopError {
       return "Could not stop Mihomo cleanly: \(UserFacingError.message(for: coreStopError))"
     }
     return nil
   }
+
+}
+
+private enum LastErrorOrigin {
+  case networkExtension
+}
+
+struct AppNotice: Equatable {
+  enum Tone: Equatable {
+    case info
+    case success
+  }
+
+  var message: String
+  var tone: Tone
+
+  var symbolName: String {
+    switch tone {
+    case .info:
+      return "info.circle.fill"
+    case .success:
+      return "checkmark.circle.fill"
+    }
+  }
 }
 
 @MainActor
 final class AppModel: ObservableObject {
+  static let developerModeFallbackNoticeMessage = "Developer Mode is off, so NE Transparent Proxy Experimental is hidden. ClashMax switched back to System Proxy."
+
   @Published var selectedSection: AppSection = .home
   var overrides: RuntimeOverrides {
     get { settings.overrides }
@@ -67,7 +115,7 @@ final class AppModel: ObservableObject {
   var launchSettings: LaunchSettings { settings.launchSettings }
   var developerMode: Bool {
     get { settings.developerMode }
-    set { settings.developerMode = newValue }
+    set { setDeveloperMode(newValue) }
   }
   @Published private(set) var runtimeOwner: RuntimeOwner = .stopped
   var systemProxyEnabled: Bool {
@@ -75,6 +123,9 @@ final class AppModel: ObservableObject {
     set { systemProxy.enabled = newValue }
   }
   @Published var tunEnabled = false
+  var networkExtensionEnabled: Bool {
+    runtimeOwner == .networkExtension && networkExtensionController.vpnStatus.isActive
+  }
   @Published var tunnelCoreRunning = false
   @Published private(set) var tunHelperPreparationState: TunHelperPreparationState = .idle
   var isAddingSubscription: Bool { profileOperations.isAddingSubscription }
@@ -109,7 +160,16 @@ final class AppModel: ObservableObject {
     set { runtimeData.trafficHistory = newValue }
   }
   var publicIPInfoState: PublicIPInfoState { publicIP.state }
-  @Published var lastError: String?
+  @Published private(set) var appNotice: AppNotice?
+  private var lastErrorOrigin: LastErrorOrigin?
+  private var isPublishingNetworkExtensionLastError = false
+  @Published var lastError: String? {
+    didSet {
+      if !isPublishingNetworkExtensionLastError {
+        lastErrorOrigin = nil
+      }
+    }
+  }
   var updatingProfileIDs: Set<Profile.ID> { profileOperations.updatingProfileIDs }
   var profileOperationMessage: String? { profileOperations.message }
   var profilePreviewGroups: [ProxyGroup] {
@@ -141,7 +201,9 @@ final class AppModel: ObservableObject {
   let coreController: CoreProcessController
   var systemProxyController: SystemProxyController { systemProxy.controller }
   let helperClient: TunnelHelperClient
+  let networkExtensionController: NetworkExtensionController
   private let tunnelReadinessProbe: CoreReadinessProbing
+  private let proxyPortReadinessProbe: any ProxyPortReadinessProbing
   private let pingTester: any PingTesting
   private let paths: RuntimePaths
   private let runtimeConfigMaterializer = RuntimeConfigMaterializer()
@@ -150,6 +212,8 @@ final class AppModel: ObservableObject {
   private var previewTask: Task<Void, Never>?
   private var previewRuntimeRequested = false
   private var stopTask: Task<RuntimeStopResult, Never>?
+  private var stopTaskID: UUID?
+  private var stopTaskPurpose: RuntimeStopPurpose?
   private var pendingModeTask: Task<Void, Never>?
   private var pendingRoutingModeTask: Task<Void, Never>?
   private var tunHelperPreparationTask: Task<Void, Never>?
@@ -202,8 +266,10 @@ final class AppModel: ObservableObject {
     coreController: CoreProcessController = CoreProcessController(),
     systemProxyController: SystemProxyController? = nil,
     helperClient: TunnelHelperClient = TunnelHelperClient(),
+    networkExtensionController: NetworkExtensionController = NetworkExtensionController(),
     loginItemService: any LoginItemManaging = MainAppLoginItemService(),
     tunnelReadinessProbe: CoreReadinessProbing = MihomoCoreReadinessProbe(),
+    proxyPortReadinessProbe: any ProxyPortReadinessProbing = SocksProxyReadinessProbe(),
     apiClient: (any MihomoAPIControlling)? = nil,
     pingTester: any PingTesting = SystemPingTester(),
     publicIPInfoClient: any PublicIPInfoFetching = PublicIPInfoClient(),
@@ -215,7 +281,9 @@ final class AppModel: ObservableObject {
     self.proxyPreview = ProxyPreviewStore(defaults: defaults)
     self.coreController = coreController
     self.helperClient = helperClient
+    self.networkExtensionController = networkExtensionController
     self.tunnelReadinessProbe = tunnelReadinessProbe
+    self.proxyPortReadinessProbe = proxyPortReadinessProbe
     self.pingTester = pingTester
     self.publicIP = PublicIPCoordinator(
       client: publicIPInfoClient,
@@ -250,6 +318,12 @@ final class AppModel: ObservableObject {
     coreController.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
       .store(in: &storeCancellables)
+    networkExtensionController.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &storeCancellables)
+    if settings.didFallbackUnsupportedProxyRoutingMode {
+      publishDeveloperModeFallbackNotice()
+    }
     recoverDanglingSystemProxyIfNeeded()
     let needsManifestRefresh = self.profileStore.activeProfileID == nil
     refreshProfilePreview()
@@ -273,6 +347,13 @@ final class AppModel: ObservableObject {
     isCoreRunning && !previewRuntimeActive
   }
 
+  var canStopRuntime: Bool {
+    isRunning
+      || dashboardRuntimeState.isStarting
+      || runtimeOwner == .networkExtension
+      || networkExtensionController.vpnStatus.isActive
+  }
+
   var dashboardRuntimeState: DashboardRuntimeState {
     let effectiveCoreStatus: CoreStatus = previewRuntimeActive ? .stopped : coreController.status
     return DashboardRuntimeState.resolve(
@@ -289,6 +370,12 @@ final class AppModel: ObservableObject {
     }
     if tunnelCoreRunning {
       return "Running TUN"
+    }
+    if case let .crashed(message) = coreController.status {
+      return "Crashed: \(message)"
+    }
+    if runtimeOwner == .networkExtension {
+      return "Running NE"
     }
     switch coreController.status {
     case .stopped:
@@ -313,6 +400,9 @@ final class AppModel: ObservableObject {
     }
     if proxyRoutingMode == .tun, !tunHelperPreparationState.isReady {
       return tunHelperPreparationState.message
+    }
+    if proxyRoutingMode.requiresDeveloperMode, !developerMode {
+      return "NE Transparent Proxy Experimental requires Developer Mode."
     }
     return nil
   }
@@ -610,6 +700,7 @@ final class AppModel: ObservableObject {
   private func performStart() async {
     startInFlight = true
     lastError = nil
+    appNotice = nil
     defer {
       startInFlight = false
       startTask = nil
@@ -647,6 +738,7 @@ final class AppModel: ObservableObject {
     let profile = try requireActiveProfile()
     let routingMode = proxyRoutingMode
     let shouldUseTun = routingMode == .tun
+    let shouldUseNetworkExtension = routingMode == .networkExtensionExperimental
     settings.syncExternalControllerSettings()
     overrides.tunEnabled = shouldUseTun
     overrides.tunSettings = tunSettings
@@ -712,7 +804,13 @@ final class AppModel: ObservableObject {
     }
     try Task.checkCancellation()
 
-    if routingMode == .systemProxy {
+    if shouldUseNetworkExtension {
+      try await proxyPortReadinessProbe.waitUntilReady(host: "127.0.0.1", port: overrides.mixedPort)
+      appendAppLog(level: "info", message: "Starting NE transparent proxy; System Proxy off, TUN helper untouched.")
+      try await networkExtensionController.startTransparentProxy(configuration: .clashMax(overrides: overrides))
+      runtimeOwner = .networkExtension
+      appendAppLog(level: "info", message: "NE transparent proxy requested: \(networkExtensionController.vpnStatus.displayName)")
+    } else if routingMode == .systemProxy {
       try await applySystemProxySettings()
       systemProxyEnabled = true
       try await activateSystemProxyGuardIfNeeded()
@@ -752,8 +850,14 @@ final class AppModel: ObservableObject {
 
   func setProxyRoutingMode(_ mode: ProxyRoutingMode) {
     guard proxyRoutingMode != mode else { return }
+    guard !mode.requiresDeveloperMode || developerMode else {
+      appNotice = nil
+      lastError = "NE Transparent Proxy Experimental requires Developer Mode."
+      return
+    }
+    appNotice = nil
     let shouldRestart = isRunning || startInFlight
-    if mode == .tun, systemProxyEnabled {
+    if mode != .systemProxy, systemProxyEnabled {
       stopSystemProxyGuard()
       Task { @MainActor [weak self] in
         guard let self else { return }
@@ -772,6 +876,20 @@ final class AppModel: ObservableObject {
       cancelTunHelperPreparation(resetState: true)
     }
     if mode != .tun, shouldRestart {
+      restart()
+    }
+  }
+
+  func setDeveloperMode(_ enabled: Bool) {
+    let wasDeveloperOnlyMode = proxyRoutingMode.requiresDeveloperMode
+    let shouldRestart = !enabled && wasDeveloperOnlyMode && (isRunning || startInFlight)
+    settings.developerMode = enabled
+    if enabled {
+      appNotice = nil
+    }
+    guard !enabled, wasDeveloperOnlyMode, proxyRoutingMode == .systemProxy else { return }
+    publishDeveloperModeFallbackNotice()
+    if shouldRestart {
       restart()
     }
   }
@@ -870,6 +988,41 @@ final class AppModel: ObservableObject {
 
   func openHelperApprovalSettings() {
     helperClient.openApprovalSettings()
+  }
+
+  func installNetworkExtension() {
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      await networkExtensionController.activateSystemExtension()
+      publishNetworkExtensionControllerError()
+    }
+  }
+
+  func refreshNetworkExtensionStatus() {
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      await networkExtensionController.refreshStatus()
+      publishNetworkExtensionControllerError()
+    }
+  }
+
+  func openNetworkExtensionSettings() {
+    networkExtensionController.openSystemExtensionSettings()
+  }
+
+  private func publishNetworkExtensionControllerError() {
+    if let error = networkExtensionController.recentError {
+      setNetworkExtensionLastError(error)
+    } else if lastErrorOrigin == .networkExtension {
+      setNetworkExtensionLastError(nil)
+    }
+  }
+
+  private func setNetworkExtensionLastError(_ message: String?) {
+    isPublishingNetworkExtensionLastError = true
+    lastError = message
+    lastErrorOrigin = message == nil ? nil : .networkExtension
+    isPublishingNetworkExtensionLastError = false
   }
 
   private func prepareTunHelperIfNeeded(
@@ -1421,6 +1574,22 @@ final class AppModel: ObservableObject {
     systemProxy.stopGuard()
   }
 
+  private var shouldStopNetworkExtensionRuntime: Bool {
+    runtimeOwner == .networkExtension
+      || networkExtensionController.vpnStatus.isActive
+  }
+
+  private func stopNetworkExtensionIfNeeded() async -> Error? {
+    guard shouldStopNetworkExtensionRuntime else { return nil }
+    do {
+      _ = try await networkExtensionController.stopTransparentProxy()
+      publishNetworkExtensionControllerError()
+      return nil
+    } catch {
+      return error
+    }
+  }
+
   @discardableResult
   private func restoreSystemProxyState(disableWhenNoSnapshot: Bool) async throws -> SystemProxyRestoreResult {
     try await systemProxy.restore(
@@ -1435,6 +1604,8 @@ final class AppModel: ObservableObject {
       || isCoreRunning
       || tunEnabled
       || tunnelCoreRunning
+      || runtimeOwner == .networkExtension
+      || networkExtensionController.vpnStatus.isActive
       || systemProxy.needsTerminationCleanup
   }
 
@@ -1451,9 +1622,9 @@ final class AppModel: ObservableObject {
     pendingRoutingModeTask = nil
     cancelRuntimeActionTasks()
     cancelTunHelperPreparation(resetState: false)
-    let result = await stopRuntimeCoordinated()
+    let result = await stopRuntimeCoordinated(.termination)
     handleStopResult(result)
-    return result.succeeded
+    return result.localCleanupSucceeded
   }
 
   func enterPreviewRuntime() {
@@ -1500,10 +1671,15 @@ final class AppModel: ObservableObject {
     cancelPendingPreviewRuntimeStart()
     guard previewRuntimeActive else { return result }
     cancelRuntimeActionTasks()
+    runtimeData.flushPendingLogs()
+    if let error = await stopNetworkExtensionIfNeeded() {
+      result.networkExtensionStopError = error
+      handleStopResult(result)
+      return result
+    }
     apiClient = nil
     streamTasks.forEach { $0.cancel() }
     streamTasks.removeAll()
-    runtimeData.flushPendingLogs()
     let coreStopResult = await coreController.stop()
     if let error = coreStopResult.error {
       result.coreStopError = error
@@ -1577,23 +1753,52 @@ final class AppModel: ObservableObject {
     }
   }
 
-  private func stopRuntimeCoordinated() async -> RuntimeStopResult {
-    if let stopTask {
-      return await stopTask.value
+  private func stopRuntimeCoordinated(_ purpose: RuntimeStopPurpose = .userInitiated) async -> RuntimeStopResult {
+    if let activeStopTask = stopTask {
+      let inFlightPurpose = stopTaskPurpose
+      let result = await activeStopTask.value
+      guard purpose == .termination,
+            inFlightPurpose != .termination,
+            result.networkExtensionStopError != nil,
+            !result.didRunLocalCleanup,
+            needsTerminationCleanup else {
+        return result
+      }
+      stopTask = nil
+      stopTaskID = nil
+      stopTaskPurpose = nil
+      return await runStopRuntimeTask(purpose: .termination)
     }
+    return await runStopRuntimeTask(purpose: purpose)
+  }
+
+  private func runStopRuntimeTask(purpose: RuntimeStopPurpose) async -> RuntimeStopResult {
+    let taskID = UUID()
     let task = Task { @MainActor [weak self] in
       guard let self else { return RuntimeStopResult.success }
-      return await self.stopRuntime()
+      return await self.stopRuntime(purpose: purpose)
     }
     stopTask = task
+    stopTaskID = taskID
+    stopTaskPurpose = purpose
     let result = await task.value
-    stopTask = nil
+    if stopTaskID == taskID {
+      stopTask = nil
+      stopTaskID = nil
+      stopTaskPurpose = nil
+    }
     return result
   }
 
   private func handleStopResult(_ result: RuntimeStopResult) {
     guard !result.succeeded, let message = result.userFacingMessage else { return }
-    lastError = message
+    if result.systemProxyRestoreError == nil,
+       result.helperStopError == nil,
+       result.networkExtensionStopError != nil {
+      setNetworkExtensionLastError(message)
+    } else {
+      lastError = message
+    }
     appendAppLog(level: "error", message: message)
   }
 
@@ -1635,14 +1840,21 @@ final class AppModel: ObservableObject {
     runtimeReloadPending = false
   }
 
-  private func stopRuntime() async -> RuntimeStopResult {
+  private func stopRuntime(purpose: RuntimeStopPurpose) async -> RuntimeStopResult {
     var result = RuntimeStopResult()
     cancelRuntimeActionTasks()
+    runtimeData.flushPendingLogs()
+    if let error = await stopNetworkExtensionIfNeeded() {
+      result.networkExtensionStopError = error
+      guard purpose.continuesAfterNetworkExtensionStopFailure else {
+        return result
+      }
+    }
+    result.didRunLocalCleanup = true
     apiClient = nil
     cancelPublicIPInfoRefresh(clearState: true)
     streamTasks.forEach { $0.cancel() }
     streamTasks.removeAll()
-    runtimeData.flushPendingLogs()
     let coreStopResult = await coreController.stop()
     if let error = coreStopResult.error {
       result.coreStopError = error
@@ -1668,7 +1880,7 @@ final class AppModel: ObservableObject {
       }
     }
     tunEnabled = false
-    if result.succeeded {
+    if result.succeeded, purpose.schedulesPreviewRestart {
       schedulePreviewRuntimeStartIfReady()
     }
     return result
@@ -1901,6 +2113,13 @@ final class AppModel: ObservableObject {
 
   private func appendAppLog(level: String, message: String) {
     runtimeData.appendLog(level: level, message: message)
+  }
+
+  private func publishDeveloperModeFallbackNotice() {
+    let message = Self.developerModeFallbackNoticeMessage
+    lastError = nil
+    appNotice = AppNotice(message: message, tone: .info)
+    appendAppLog(level: "info", message: message)
   }
 
   private func publishStartupDiagnostics(level: String = "info") {

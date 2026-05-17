@@ -2,7 +2,7 @@ import XCTest
 @testable import ClashMax
 
 final class SystemProxyControllerTests: XCTestCase {
-  func testRunScriptAllowsCodesigningForHelperRegistration() throws {
+  func testRunScriptUsesXcodeManagedSigningAndVerifyOnlyChecks() throws {
     let testFile = URL(fileURLWithPath: #filePath)
     let projectRoot = testFile.deletingLastPathComponent().deletingLastPathComponent()
     let scriptURL = projectRoot.appendingPathComponent("script/build_and_run.sh")
@@ -11,11 +11,16 @@ final class SystemProxyControllerTests: XCTestCase {
     XCTAssertFalse(script.contains("CODE_SIGNING_ALLOWED=NO"))
     XCTAssertTrue(script.contains("CLASHMAX_DERIVED_DATA"))
     XCTAssertTrue(script.contains("Library/Developer/Xcode/DerivedData/ClashMaxLocal"))
-    XCTAssertTrue(script.contains("security find-identity -v -p codesigning"))
-    XCTAssertTrue(script.contains("CLASHMAX_CODESIGN_IDENTITY"))
-    XCTAssertTrue(script.contains("Config/ClashMaxHelper.entitlements"))
-    XCTAssertTrue(script.contains("Config/ClashMax.entitlements"))
-    XCTAssertTrue(script.contains("TUN helper registration will not work with ad-hoc signing"))
+    XCTAssertTrue(script.contains("verify_signatures"))
+    XCTAssertTrue(script.contains(#"codesign --verify --strict --verbose=2 "$APP_BUNDLE""#))
+    XCTAssertTrue(script.contains(#"codesign --verify --strict --verbose=2 "$SYSTEM_EXTENSION""#))
+    XCTAssertFalse(script.contains("security find-identity -v -p codesigning"))
+    XCTAssertFalse(script.contains("CLASHMAX_CODESIGN_IDENTITY"))
+    XCTAssertFalse(script.contains("Developer ID Application"))
+    XCTAssertFalse(script.contains("Apple Development"))
+    XCTAssertFalse(script.contains("Config/ClashMaxHelper.entitlements"))
+    XCTAssertFalse(script.contains("Config/ClashMax.entitlements"))
+    XCTAssertFalse(script.contains("codesign --force"))
   }
 
   func testAppBundleExtendedAttributesAreClearedBeforeSigning() throws {

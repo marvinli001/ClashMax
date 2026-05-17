@@ -11,7 +11,11 @@ struct LogsView: View {
 
     AdaptivePage(
       title: "Logs",
-      subtitle: "\(visibleLogs.count) visible / \(runtimeData.logs.count) retained"
+      subtitle: String.localizedStringWithFormat(
+        NSLocalizedString("%lld visible / %lld retained", comment: ""),
+        Int64(visibleLogs.count),
+        Int64(runtimeData.logs.count)
+      )
     ) {
       Picker("Level", selection: $levelFilter) {
         ForEach(LogLevelFilter.allCases) { filter in
@@ -75,11 +79,11 @@ private enum LogLevelFilter: String, CaseIterable, Identifiable {
 
   var displayName: String {
     switch self {
-    case .all: "All"
-    case .info: "Info"
-    case .warning: "Warn"
-    case .error: "Error"
-    case .debug: "Debug"
+    case .all: String(localized: "All")
+    case .info: String(localized: "Info")
+    case .warning: String(localized: "Warn")
+    case .error: String(localized: "Error")
+    case .debug: String(localized: "Debug")
     }
   }
 }

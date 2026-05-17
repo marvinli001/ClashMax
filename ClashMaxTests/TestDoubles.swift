@@ -245,3 +245,102 @@ final class SequencedRecordingCommandRunner: CommandRunning, @unchecked Sendable
     }
   }
 }
+
+@MainActor
+final class StaticSystemExtensionRequester: SystemExtensionRequesting {
+  var activationState: NetworkExtensionInstallState
+  var snapshots: [SystemExtensionSnapshot]
+  private(set) var activatedIdentifiers: [String] = []
+  private(set) var propertyIdentifiers: [String] = []
+
+  init(
+    activationState: NetworkExtensionInstallState = .activated,
+    snapshots: [SystemExtensionSnapshot] = []
+  ) {
+    self.activationState = activationState
+    self.snapshots = snapshots
+  }
+
+  func activate(identifier: String) async -> NetworkExtensionInstallState {
+    activatedIdentifiers.append(identifier)
+    return activationState
+  }
+
+  func properties(identifier: String) async -> [SystemExtensionSnapshot] {
+    propertyIdentifiers.append(identifier)
+    return snapshots
+  }
+}
+
+final class RecordingLaunchServicesRegistrar: LaunchServicesRegistering {
+  var error: Error?
+  var onRegister: (() -> Void)?
+  private(set) var registerCallCount = 0
+
+  func registerCurrentApplicationIfNeeded() async throws {
+    registerCallCount += 1
+    onRegister?()
+    if let error {
+      throw error
+    }
+  }
+}
+
+@MainActor
+final class RecordingTransparentProxyManager: TransparentProxyManaging {
+  var currentStatus: NetworkExtensionTunnelStatus
+  var startStatus: NetworkExtensionTunnelStatus
+  var stopStatus: NetworkExtensionTunnelStatus
+  var startError: Error?
+  var stopError: Error?
+  var lastDisconnectErrorMessage: String?
+  var onStart: (() -> Void)?
+  var onStop: (() -> Void)?
+  private(set) var startConfigurations: [NetworkExtensionRuntimeConfiguration] = []
+  private(set) var statusIdentifiers: [String] = []
+  private(set) var stopIdentifiers: [String] = []
+  private(set) var legacyCleanupIdentifiers: [String] = []
+
+  init(
+    currentStatus: NetworkExtensionTunnelStatus = .disconnected,
+    startStatus: NetworkExtensionTunnelStatus = .connected,
+    stopStatus: NetworkExtensionTunnelStatus = .disconnected
+  ) {
+    self.currentStatus = currentStatus
+    self.startStatus = startStatus
+    self.stopStatus = stopStatus
+  }
+
+  func status(forProviderBundleIdentifier identifier: String) async throws -> NetworkExtensionTunnelStatus {
+    statusIdentifiers.append(identifier)
+    return currentStatus
+  }
+
+  func removeLegacyPacketTunnelConfiguration(providerBundleIdentifier identifier: String) async throws {
+    legacyCleanupIdentifiers.append(identifier)
+  }
+
+  func startProxy(configuration: NetworkExtensionRuntimeConfiguration) async throws -> NetworkExtensionTunnelStatus {
+    startConfigurations.append(configuration)
+    onStart?()
+    if let startError {
+      throw startError
+    }
+    currentStatus = startStatus
+    return startStatus
+  }
+
+  func stopProxy(providerBundleIdentifier identifier: String) async throws -> NetworkExtensionTunnelStatus {
+    stopIdentifiers.append(identifier)
+    onStop?()
+    if let stopError {
+      throw stopError
+    }
+    currentStatus = stopStatus
+    return stopStatus
+  }
+
+  func lastDisconnectError(forProviderBundleIdentifier identifier: String) async -> String? {
+    lastDisconnectErrorMessage
+  }
+}

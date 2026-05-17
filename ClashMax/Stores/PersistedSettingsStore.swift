@@ -4,7 +4,11 @@ import ServiceManagement
 @MainActor
 final class PersistedSettingsStore: ObservableObject {
   @Published var overrides: RuntimeOverrides
-  @Published var proxyRoutingMode: ProxyRoutingMode = .systemProxy
+  @Published var proxyRoutingMode: ProxyRoutingMode = .systemProxy {
+    didSet {
+      saveCodable(proxyRoutingMode, forKey: Self.proxyRoutingModeDefaultsKey)
+    }
+  }
   @Published var systemProxySettings = SystemProxySettings.default {
     didSet {
       saveCodable(systemProxySettings, forKey: Self.systemProxySettingsDefaultsKey)
@@ -37,13 +41,19 @@ final class PersistedSettingsStore: ObservableObject {
   @Published var developerMode = false {
     didSet {
       defaults.set(developerMode, forKey: Self.developerModeDefaultsKey)
+      if !developerMode, proxyRoutingMode.requiresDeveloperMode {
+        didFallbackUnsupportedProxyRoutingMode = true
+        proxyRoutingMode = .systemProxy
+      }
     }
   }
+  private(set) var didFallbackUnsupportedProxyRoutingMode = false
 
   private let defaults: UserDefaults
   private let loginItemService: any LoginItemManaging
 
   static let silentStartDefaultsKey = "io.github.clashmax.silentStart"
+  private static let proxyRoutingModeDefaultsKey = "io.github.clashmax.proxyRoutingMode"
   private static let developerModeDefaultsKey = "io.github.clashmax.developerMode"
   private static let systemProxySettingsDefaultsKey = "io.github.clashmax.systemProxySettings"
   private static let tunSettingsDefaultsKey = "io.github.clashmax.tunSettings"
@@ -61,6 +71,18 @@ final class PersistedSettingsStore: ObservableObject {
     self.defaults = defaults
     overrides = RuntimeOverrides.defaultForLaunch()
     developerMode = defaults.bool(forKey: Self.developerModeDefaultsKey)
+    let storedProxyRoutingMode = Self.loadCodable(
+      ProxyRoutingMode.self,
+      forKey: Self.proxyRoutingModeDefaultsKey,
+      defaults: defaults
+    ) ?? .systemProxy
+    if storedProxyRoutingMode.requiresDeveloperMode, !developerMode {
+      proxyRoutingMode = .systemProxy
+      saveCodable(proxyRoutingMode, forKey: Self.proxyRoutingModeDefaultsKey)
+      didFallbackUnsupportedProxyRoutingMode = true
+    } else {
+      proxyRoutingMode = storedProxyRoutingMode
+    }
     systemProxySettings = Self.loadCodable(
       SystemProxySettings.self,
       forKey: Self.systemProxySettingsDefaultsKey,

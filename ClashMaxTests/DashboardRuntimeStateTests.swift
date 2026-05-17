@@ -3,14 +3,27 @@ import Combine
 import ServiceManagement
 import SwiftUI
 import XCTest
+import Yams
 @testable import ClashMax
 
 @MainActor
 final class DashboardRuntimeStateTests: XCTestCase {
+  private static let proxyRoutingModeDefaultsKey = "io.github.clashmax.proxyRoutingMode"
   private static let systemProxySettingsDefaultsKey = "io.github.clashmax.systemProxySettings"
   private static let tunSettingsDefaultsKey = "io.github.clashmax.tunSettings"
   private static let delayTestSettingsDefaultsKey = "io.github.clashmax.delayTestSettings"
   private static let externalControllerSettingsDefaultsKey = "io.github.clashmax.externalControllerSettings"
+  private static let developerModeDefaultsKey = "io.github.clashmax.developerMode"
+
+  override func setUp() {
+    super.setUp()
+    Self.clearSharedRoutingDefaults()
+  }
+
+  override func tearDown() {
+    Self.clearSharedRoutingDefaults()
+    super.tearDown()
+  }
 
   func testNoActiveProfileBlocksDashboard() throws {
     let paths = try Self.makeRuntimePaths()
@@ -2372,6 +2385,753 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setwebproxy Wi-Fi 127.0.0.1 7890"))
   }
 
+  func testNetworkExtensionModeStartsUserCoreWithoutSystemProxyOrTunHelper() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let launcher = CountingProcessLauncher()
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+    let helperTransport = ReadyTunnelHelperTransport()
+    let helper = TunnelHelperClient(
+      transport: helperTransport,
+      service: StaticHelperService(status: .enabled),
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
+    )
+    let proxyManager = RecordingTransparentProxyManager(startStatus: .connected)
+    let proxyPortReadiness = RecordingProxyPortReadinessProbe()
+    let networkExtensionController = NetworkExtensionController(
+      systemExtensionRequester: StaticSystemExtensionRequester(activationState: .activated),
+      transparentProxyManager: proxyManager
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: SystemProxyController(commandRunner: commandRunner),
+      helperClient: helper,
+      networkExtensionController: networkExtensionController,
+      proxyPortReadinessProbe: proxyPortReadiness,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.developerMode = true
+    model.requestProxyRoutingMode(.networkExtensionExperimental)
+    for _ in 0..<40 where model.proxyRoutingMode != .networkExtensionExperimental {
+      await Task.yield()
+    }
+
+    model.start()
+
+    for _ in 0..<160 where model.runtimeOwner != .networkExtension || model.startInFlight {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(model.runtimeOwner, .networkExtension)
+    XCTAssertFalse(model.startInFlight)
+    XCTAssertTrue(model.isRunning)
+    XCTAssertFalse(model.systemProxyEnabled)
+    XCTAssertFalse(model.tunEnabled)
+    XCTAssertEqual(launcher.launchCount, 1)
+    let helperStartCount = await helperTransport.startCount()
+    XCTAssertEqual(helperStartCount, 0)
+    XCTAssertFalse(commandRunner.commands.contains { $0.contains("-setwebproxy") })
+    XCTAssertEqual(proxyManager.legacyCleanupIdentifiers, [NetworkExtensionController.providerBundleIdentifier])
+    XCTAssertEqual(proxyManager.startConfigurations.count, 1)
+    XCTAssertEqual(proxyManager.startConfigurations.first?.socksHost, "127.0.0.1")
+    XCTAssertEqual(proxyManager.startConfigurations.first?.socksPort, 7890)
+    XCTAssertEqual(proxyPortReadiness.requests, [ProxyPortReadinessRequest(host: "127.0.0.1", port: 7890)])
+
+    let runtimeConfigPath = try XCTUnwrap(launcher.launchedConfigPaths.last)
+    let runtimeConfig = try String(contentsOfFile: runtimeConfigPath, encoding: .utf8)
+    let yaml = try XCTUnwrap(Yams.load(yaml: runtimeConfig) as? [String: Any])
+    let tun = try XCTUnwrap(yaml["tun"] as? [String: Any])
+    XCTAssertEqual(tun["enable"] as? Bool, false)
+    XCTAssertNil(tun["auto-redirect"])
+    XCTAssertEqual(yaml["mixed-port"] as? Int, 7890)
+    XCTAssertEqual(yaml["external-controller"] as? String, "127.0.0.1:9097")
+  }
+
+  func testNetworkExtensionModeChecksMixedPortBeforeStartingTransparentProxy() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let events = StopEventRecorder()
+    let launcher = OrderedProcessLauncher(events: events)
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let proxyManager = RecordingTransparentProxyManager(startStatus: .connected)
+    proxyManager.onStart = { events.append("networkExtensionStart") }
+    let proxyPortReadiness = RecordingProxyPortReadinessProbe()
+    proxyPortReadiness.onProbe = { events.append("proxyPortReady") }
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      networkExtensionController: NetworkExtensionController(
+        systemExtensionRequester: StaticSystemExtensionRequester(activationState: .activated),
+        transparentProxyManager: proxyManager
+      ),
+      proxyPortReadinessProbe: proxyPortReadiness,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.developerMode = true
+    model.setProxyRoutingMode(.networkExtensionExperimental)
+
+    model.start()
+
+    for _ in 0..<160 where model.runtimeOwner != .networkExtension || model.startInFlight {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(Array(events.values.prefix(2)), ["proxyPortReady", "networkExtensionStart"])
+    XCTAssertEqual(proxyPortReadiness.requests, [ProxyPortReadinessRequest(host: "127.0.0.1", port: 7890)])
+  }
+
+  func testNetworkExtensionMixedPortReadinessFailureStopsCoreAndSkipsTransparentProxy() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let events = StopEventRecorder()
+    let launcher = OrderedProcessLauncher(events: events)
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let proxyManager = RecordingTransparentProxyManager(startStatus: .connected)
+    let proxyPortReadiness = RecordingProxyPortReadinessProbe(
+      result: .failure(AppError.coreNotReady("mixed-port refused"))
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      networkExtensionController: NetworkExtensionController(
+        systemExtensionRequester: StaticSystemExtensionRequester(activationState: .activated),
+        transparentProxyManager: proxyManager
+      ),
+      proxyPortReadinessProbe: proxyPortReadiness,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.developerMode = true
+    model.setProxyRoutingMode(.networkExtensionExperimental)
+
+    model.start()
+
+    for _ in 0..<160 where model.startInFlight || model.lastError == nil {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(model.runtimeOwner, .stopped)
+    XCTAssertFalse(model.isRunning)
+    XCTAssertTrue(model.lastError?.contains("mixed-port refused") == true)
+    XCTAssertEqual(proxyManager.startConfigurations, [])
+    XCTAssertEqual(events.values, ["coreStop"])
+  }
+
+  func testStoppingNetworkExtensionStopsTunnelBeforeMihomoCore() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let events = StopEventRecorder()
+    let launcher = OrderedProcessLauncher(events: events)
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let proxyManager = RecordingTransparentProxyManager(startStatus: .connected)
+    proxyManager.onStop = { events.append("networkExtensionStop") }
+    let networkExtensionController = NetworkExtensionController(
+      systemExtensionRequester: StaticSystemExtensionRequester(activationState: .activated),
+      transparentProxyManager: proxyManager
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      networkExtensionController: networkExtensionController,
+      proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.developerMode = true
+    model.setProxyRoutingMode(.networkExtensionExperimental)
+    model.start()
+    for _ in 0..<160 where model.runtimeOwner != .networkExtension || model.startInFlight {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    XCTAssertFalse(model.startInFlight)
+
+    model.stop()
+
+    for _ in 0..<160 where model.runtimeOwner != .stopped {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(Array(events.values.prefix(2)), ["networkExtensionStop", "coreStop"])
+    XCTAssertEqual(proxyManager.stopIdentifiers, [NetworkExtensionController.providerBundleIdentifier])
+  }
+
+  func testNetworkExtensionCoreCrashKeepsStopAvailableAndStopsTransparentProxy() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let launcher = FakeProcessLauncher()
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let proxyManager = RecordingTransparentProxyManager(startStatus: .connected)
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      networkExtensionController: NetworkExtensionController(
+        systemExtensionRequester: StaticSystemExtensionRequester(activationState: .activated),
+        transparentProxyManager: proxyManager
+      ),
+      proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.developerMode = true
+    model.setProxyRoutingMode(.networkExtensionExperimental)
+    model.start()
+    for _ in 0..<160 where model.runtimeOwner != .networkExtension || model.startInFlight {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    launcher.process.finish(exitCode: 2)
+    for _ in 0..<60 {
+      if case .crashed = model.dashboardRuntimeState {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(model.dashboardRuntimeState, .crashed(message: "mihomo exited with code 2"))
+    XCTAssertEqual(model.statusSummary, "Crashed: mihomo exited with code 2")
+    XCTAssertFalse(model.isRunning)
+    XCTAssertTrue(model.canStopRuntime)
+
+    model.stop()
+
+    for _ in 0..<160 where model.runtimeOwner != .stopped {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(model.runtimeOwner, .stopped)
+    XCTAssertEqual(proxyManager.stopIdentifiers, [NetworkExtensionController.providerBundleIdentifier])
+  }
+
+  func testNetworkExtensionStopErrorKeepsMihomoCoreRunning() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let events = StopEventRecorder()
+    let launcher = OrderedProcessLauncher(events: events)
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let proxyManager = RecordingTransparentProxyManager(startStatus: .connected)
+    proxyManager.stopError = AppError.coreNotReady("transparent proxy stop refused")
+    proxyManager.onStop = { events.append("networkExtensionStop") }
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      networkExtensionController: NetworkExtensionController(
+        systemExtensionRequester: StaticSystemExtensionRequester(activationState: .activated),
+        transparentProxyManager: proxyManager
+      ),
+      proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.developerMode = true
+    model.setProxyRoutingMode(.networkExtensionExperimental)
+    model.start()
+    for _ in 0..<160 where model.runtimeOwner != .networkExtension || model.startInFlight {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    model.stop()
+
+    for _ in 0..<160 where model.lastError == nil {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(proxyManager.stopIdentifiers, [NetworkExtensionController.providerBundleIdentifier])
+    XCTAssertEqual(events.values, ["networkExtensionStop"])
+    XCTAssertEqual(model.runtimeOwner, .networkExtension)
+    XCTAssertTrue(model.isRunning)
+    XCTAssertTrue(model.lastError?.contains("Could not stop Network Extension cleanly") == true)
+    XCTAssertTrue(model.lastError?.contains("transparent proxy stop refused") == true)
+  }
+
+  func testNetworkExtensionStopStillActiveKeepsMihomoCoreRunning() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let events = StopEventRecorder()
+    let launcher = OrderedProcessLauncher(events: events)
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let proxyManager = RecordingTransparentProxyManager(startStatus: .connected, stopStatus: .disconnecting)
+    proxyManager.onStop = { events.append("networkExtensionStop") }
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      networkExtensionController: NetworkExtensionController(
+        systemExtensionRequester: StaticSystemExtensionRequester(activationState: .activated),
+        transparentProxyManager: proxyManager
+      ),
+      proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.developerMode = true
+    model.setProxyRoutingMode(.networkExtensionExperimental)
+    model.start()
+    for _ in 0..<160 where model.runtimeOwner != .networkExtension || model.startInFlight {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    model.stop()
+
+    for _ in 0..<160 where model.lastError == nil {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(proxyManager.stopIdentifiers, [NetworkExtensionController.providerBundleIdentifier])
+    XCTAssertEqual(events.values, ["networkExtensionStop"])
+    XCTAssertEqual(model.runtimeOwner, .networkExtension)
+    XCTAssertTrue(model.isRunning)
+    XCTAssertEqual(model.networkExtensionController.vpnStatus, .disconnecting)
+    XCTAssertTrue(model.lastError?.contains("Could not stop Network Extension cleanly") == true)
+    XCTAssertTrue(model.lastError?.contains("Disconnecting") == true)
+  }
+
+  func testTerminationAfterNetworkExtensionStopErrorStopsMihomoCoreAndClearsLocalRuntime() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let events = StopEventRecorder()
+    let launcher = OrderedProcessLauncher(events: events)
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let proxyManager = RecordingTransparentProxyManager(startStatus: .connected)
+    proxyManager.stopError = AppError.coreNotReady("transparent proxy stop refused")
+    proxyManager.onStop = { events.append("networkExtensionStop") }
+    let publicIPInfo = Self.makePublicIPInfo(ip: "203.0.113.9", fetchedAt: Date(timeIntervalSince1970: 1_000))
+    let publicIPFetcher = RecordingPublicIPInfoFetcher(infos: [publicIPInfo], delayNanoseconds: 800_000_000)
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      networkExtensionController: NetworkExtensionController(
+        systemExtensionRequester: StaticSystemExtensionRequester(activationState: .activated),
+        transparentProxyManager: proxyManager
+      ),
+      proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
+      publicIPInfoClient: publicIPFetcher,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.developerMode = true
+    model.setProxyRoutingMode(.networkExtensionExperimental)
+    model.start()
+    for _ in 0..<160 where model.runtimeOwner != .networkExtension || model.startInFlight {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    model.refreshPublicIPInfo(force: true)
+    try? await Task.sleep(nanoseconds: 20_000_000)
+
+    let didCleanUp = await model.prepareForTermination()
+
+    XCTAssertTrue(didCleanUp)
+    XCTAssertEqual(proxyManager.stopIdentifiers, [NetworkExtensionController.providerBundleIdentifier])
+    XCTAssertEqual(Array(events.values.prefix(2)), ["networkExtensionStop", "coreStop"])
+    XCTAssertEqual(model.runtimeOwner, .stopped)
+    XCTAssertFalse(model.isRunning)
+    XCTAssertEqual(model.publicIPInfoState, .idle)
+    XCTAssertTrue(model.lastError?.contains("Could not stop Network Extension cleanly") == true)
+    XCTAssertTrue(model.lastError?.contains("transparent proxy stop refused") == true)
+  }
+
+  func testTerminationAfterNetworkExtensionStopStillActiveStopsMihomoCoreAndKeepsError() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let events = StopEventRecorder()
+    let launcher = OrderedProcessLauncher(events: events)
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let proxyManager = RecordingTransparentProxyManager(startStatus: .connected, stopStatus: .disconnecting)
+    proxyManager.onStop = { events.append("networkExtensionStop") }
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      networkExtensionController: NetworkExtensionController(
+        systemExtensionRequester: StaticSystemExtensionRequester(activationState: .activated),
+        transparentProxyManager: proxyManager
+      ),
+      proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.developerMode = true
+    model.setProxyRoutingMode(.networkExtensionExperimental)
+    model.start()
+    for _ in 0..<160 where model.runtimeOwner != .networkExtension || model.startInFlight {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let didCleanUp = await model.prepareForTermination()
+
+    XCTAssertTrue(didCleanUp)
+    XCTAssertEqual(proxyManager.stopIdentifiers, [NetworkExtensionController.providerBundleIdentifier])
+    XCTAssertEqual(Array(events.values.prefix(2)), ["networkExtensionStop", "coreStop"])
+    XCTAssertEqual(model.runtimeOwner, .stopped)
+    XCTAssertFalse(model.isRunning)
+    XCTAssertEqual(model.networkExtensionController.vpnStatus, .disconnecting)
+    XCTAssertTrue(model.lastError?.contains("Could not stop Network Extension cleanly") == true)
+    XCTAssertTrue(model.lastError?.contains("Disconnecting") == true)
+  }
+
+  func testTerminationReturnsFalseWhenMihomoCoreCannotStop() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let events = StopEventRecorder()
+    let launcher = UnstoppableProcessLauncher(events: events)
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let proxyManager = RecordingTransparentProxyManager(startStatus: .connected)
+    proxyManager.stopError = AppError.coreNotReady("transparent proxy stop refused")
+    proxyManager.onStop = { events.append("networkExtensionStop") }
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      networkExtensionController: NetworkExtensionController(
+        systemExtensionRequester: StaticSystemExtensionRequester(activationState: .activated),
+        transparentProxyManager: proxyManager
+      ),
+      proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.developerMode = true
+    model.setProxyRoutingMode(.networkExtensionExperimental)
+    model.start()
+    for _ in 0..<160 where model.runtimeOwner != .networkExtension || model.startInFlight {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let didCleanUp = await model.prepareForTermination()
+
+    XCTAssertFalse(didCleanUp)
+    XCTAssertEqual(Array(events.values.prefix(3)), ["networkExtensionStop", "coreStop", "coreKill"])
+    XCTAssertTrue(launcher.process.isRunning)
+    XCTAssertTrue(model.lastError?.contains("Could not stop Network Extension cleanly") == true)
+  }
+
+  func testNetworkExtensionStartFailureStopsMihomoCore() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let events = StopEventRecorder()
+    let launcher = OrderedProcessLauncher(events: events)
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let proxyManager = RecordingTransparentProxyManager(startStatus: .disconnected)
+    proxyManager.lastDisconnectErrorMessage = "transparent proxy refused"
+    proxyManager.onStop = { events.append("networkExtensionStop") }
+    let networkExtensionController = NetworkExtensionController(
+      systemExtensionRequester: StaticSystemExtensionRequester(activationState: .activated),
+      transparentProxyManager: proxyManager
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      networkExtensionController: networkExtensionController,
+      proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.developerMode = true
+    model.setProxyRoutingMode(.networkExtensionExperimental)
+    model.start()
+
+    for _ in 0..<160 where model.startInFlight || model.lastError == nil {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(model.runtimeOwner, .stopped)
+    XCTAssertFalse(model.isRunning)
+    XCTAssertEqual(model.lastError, "transparent proxy refused")
+    XCTAssertEqual(events.values, ["coreStop"])
+    XCTAssertEqual(proxyManager.stopIdentifiers, [])
+  }
+
+  func testNetworkExtensionStartTimeoutWithActiveStatusStopsTransparentProxyBeforeCore() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let events = StopEventRecorder()
+    let launcher = OrderedProcessLauncher(events: events)
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let proxyManager = RecordingTransparentProxyManager(currentStatus: .connecting, startStatus: .connecting)
+    proxyManager.startError = NetworkExtensionControllerError.transparentProxyStartTimedOut(.connecting)
+    proxyManager.onStop = { events.append("networkExtensionStop") }
+    let networkExtensionController = NetworkExtensionController(
+      systemExtensionRequester: StaticSystemExtensionRequester(activationState: .activated),
+      transparentProxyManager: proxyManager
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      networkExtensionController: networkExtensionController,
+      proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.developerMode = true
+    model.setProxyRoutingMode(.networkExtensionExperimental)
+    model.start()
+
+    for _ in 0..<160 where model.startInFlight || model.lastError == nil {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(model.runtimeOwner, .stopped)
+    XCTAssertFalse(model.isRunning)
+    XCTAssertTrue(model.lastError?.contains("NE transparent proxy did not become connected before timeout") == true)
+    XCTAssertEqual(Array(events.values.prefix(2)), ["networkExtensionStop", "coreStop"])
+    XCTAssertEqual(proxyManager.stopIdentifiers, [NetworkExtensionController.providerBundleIdentifier])
+  }
+
+  func testNetworkExtensionPersistedModeFallsBackWhenDeveloperModeIsOff() throws {
+    let defaults = try Self.makeIsolatedDefaults()
+    defaults.set(
+      try JSONEncoder().encode(ProxyRoutingMode.networkExtensionExperimental),
+      forKey: Self.proxyRoutingModeDefaultsKey
+    )
+    let paths = try Self.makeRuntimePaths()
+
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: defaults
+    )
+
+    XCTAssertFalse(model.developerMode)
+    XCTAssertEqual(model.proxyRoutingMode, .systemProxy)
+    XCTAssertNil(model.lastError)
+    XCTAssertEqual(
+      model.appNotice,
+      AppNotice(message: AppModel.developerModeFallbackNoticeMessage, tone: .info)
+    )
+    let persistedData = try XCTUnwrap(defaults.data(forKey: Self.proxyRoutingModeDefaultsKey))
+    let persistedMode = try JSONDecoder().decode(ProxyRoutingMode.self, from: persistedData)
+    XCTAssertEqual(persistedMode, .systemProxy)
+  }
+
+  func testDisablingDeveloperModePublishesInformationalFallbackNotice() throws {
+    let paths = try Self.makeRuntimePaths()
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    model.developerMode = true
+    model.setProxyRoutingMode(.networkExtensionExperimental)
+    model.developerMode = false
+
+    XCTAssertEqual(model.proxyRoutingMode, .systemProxy)
+    XCTAssertNil(model.lastError)
+    XCTAssertEqual(
+      model.appNotice,
+      AppNotice(message: AppModel.developerModeFallbackNoticeMessage, tone: .info)
+    )
+  }
+
+  func testNetworkExtensionRefreshClearsPublishedApprovalErrorAfterApproval() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let requester = StaticSystemExtensionRequester(activationState: .requiresApproval)
+    let proxyManager = RecordingTransparentProxyManager(currentStatus: .notConfigured)
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      networkExtensionController: NetworkExtensionController(
+        systemExtensionRequester: requester,
+        transparentProxyManager: proxyManager
+      ),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    model.installNetworkExtension()
+    for _ in 0..<60 where model.lastError == nil {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    XCTAssertEqual(model.lastError, "System Extension requires approval in System Settings.")
+
+    requester.snapshots = [
+      SystemExtensionSnapshot(
+        isEnabled: true,
+        isAwaitingUserApproval: false,
+        isUninstalling: false
+      )
+    ]
+    model.refreshNetworkExtensionStatus()
+    for _ in 0..<60 where model.lastError != nil {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertNil(model.lastError)
+    XCTAssertEqual(model.networkExtensionController.systemExtensionState, .activated)
+    XCTAssertEqual(model.networkExtensionController.vpnStatus, .notConfigured)
+  }
+
+  func testNetworkExtensionRefreshDoesNotClearNonNetworkExtensionError() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let requester = StaticSystemExtensionRequester(
+      snapshots: [
+        SystemExtensionSnapshot(
+          isEnabled: true,
+          isAwaitingUserApproval: false,
+          isUninstalling: false
+        )
+      ]
+    )
+    let proxyManager = RecordingTransparentProxyManager(currentStatus: .notConfigured)
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      networkExtensionController: NetworkExtensionController(
+        systemExtensionRequester: requester,
+        transparentProxyManager: proxyManager
+      ),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.lastError = "Non-NE validation failed."
+
+    model.refreshNetworkExtensionStatus()
+    for _ in 0..<60 where requester.propertyIdentifiers.isEmpty {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(model.lastError, "Non-NE validation failed.")
+    XCTAssertEqual(model.networkExtensionController.systemExtensionState, .activated)
+  }
+
   func testTunStartWaitsForControllerReadinessBeforePublishingRunningState() async throws {
     let paths = try Self.makeRuntimePaths()
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
@@ -2855,6 +3615,13 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
   }
 
+  func testNetworkExtensionAppNotInstalledErrorExplainsLaunchServicesRecovery() {
+    XCTAssertEqual(
+      UserFacingError.message(from: "VPN配置所使用的VPN App尚未安装"),
+      "macOS has not registered /Applications/ClashMax.app for this Network Extension configuration yet. ClashMax refreshes LaunchServices before starting NE mode; retry once, and restart macOS if the stale system extension state still reports the VPN app is not installed."
+    )
+  }
+
   private static func writeProxyConfig(named proxyName: String, to url: URL) throws {
     try """
     proxies:
@@ -2918,6 +3685,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
     defaults.removePersistentDomain(forName: suiteName)
     return defaults
+  }
+
+  private static func clearSharedRoutingDefaults() {
+    UserDefaults.standard.removeObject(forKey: proxyRoutingModeDefaultsKey)
+    UserDefaults.standard.removeObject(forKey: developerModeDefaultsKey)
   }
 
   private func makeRunningRuntimeModel(
@@ -3377,6 +4149,23 @@ private struct EmptyRuntimePortChecker: RuntimePortChecking {
   }
 }
 
+@MainActor
+private final class RecordingProxyPortReadinessProbe: ProxyPortReadinessProbing {
+  private(set) var requests: [ProxyPortReadinessRequest] = []
+  var result: Result<Void, Error>
+  var onProbe: (() -> Void)?
+
+  init(result: Result<Void, Error> = .success(())) {
+    self.result = result
+  }
+
+  func waitUntilReady(host: String, port: Int) async throws {
+    requests.append(ProxyPortReadinessRequest(host: host, port: port))
+    onProbe?()
+    try result.get()
+  }
+}
+
 private actor ReadyTunnelHelperTransport: HelperXPCTransport {
   private var starts = 0
   private var stops = 0
@@ -3591,5 +4380,92 @@ private final class CountingProcessLauncher: CoreProcessLaunching {
       launchedConfigPaths.append(arguments[configFlagIndex + 1])
     }
     return FakeRunningProcess(processIdentifier: Int32(1000 + launchCount))
+  }
+}
+
+@MainActor
+private final class StopEventRecorder {
+  private(set) var values: [String] = []
+
+  func append(_ value: String) {
+    values.append(value)
+  }
+}
+
+@MainActor
+private final class OrderedProcessLauncher: CoreProcessLaunching {
+  private let events: StopEventRecorder
+
+  init(events: StopEventRecorder) {
+    self.events = events
+  }
+
+  func launch(executable: URL, arguments: [String], environment: [String: String], workDirectory: URL) throws -> RunningCoreProcess {
+    OrderedRunningProcess(events: events)
+  }
+}
+
+@MainActor
+private final class OrderedRunningProcess: RunningCoreProcess {
+  let processIdentifier: Int32 = 4242
+  var onTermination: ((Int32) -> Void)?
+  private(set) var isRunning = true
+  private let events: StopEventRecorder
+
+  init(events: StopEventRecorder) {
+    self.events = events
+  }
+
+  func terminate() {
+    events.append("coreStop")
+    isRunning = false
+    onTermination?(0)
+  }
+
+  func kill() {
+    isRunning = false
+  }
+
+  func recentOutputTail(maxBytes: Int) -> String {
+    ""
+  }
+}
+
+@MainActor
+private final class UnstoppableProcessLauncher: CoreProcessLaunching {
+  private let events: StopEventRecorder
+  let process: UnstoppableRunningProcess
+
+  init(events: StopEventRecorder) {
+    self.events = events
+    process = UnstoppableRunningProcess(events: events)
+  }
+
+  func launch(executable: URL, arguments: [String], environment: [String: String], workDirectory: URL) throws -> RunningCoreProcess {
+    process
+  }
+}
+
+@MainActor
+private final class UnstoppableRunningProcess: RunningCoreProcess {
+  let processIdentifier: Int32 = 4343
+  var onTermination: ((Int32) -> Void)?
+  let isRunning = true
+  private let events: StopEventRecorder
+
+  init(events: StopEventRecorder) {
+    self.events = events
+  }
+
+  func terminate() {
+    events.append("coreStop")
+  }
+
+  func kill() {
+    events.append("coreKill")
+  }
+
+  func recentOutputTail(maxBytes: Int) -> String {
+    ""
   }
 }
