@@ -21,29 +21,27 @@ struct ContentView: View {
             ))
 
             Button {
-              appModel.isRunning ? appModel.stop() : appModel.start()
+              if appModel.canStopRuntime {
+                appModel.stop()
+              } else {
+                appModel.start()
+              }
             } label: {
               Label(toolbarRunTitle, systemImage: toolbarRunSymbol)
             }
             .keyboardShortcut("r", modifiers: [.command])
-            .disabled(appModel.dashboardRuntimeState.isStarting || (!appModel.isRunning && appModel.readinessIssue != nil))
+            .disabled(!appModel.canStopRuntime && appModel.readinessIssue != nil)
           }
         }
     }
   }
 
   private var toolbarRunTitle: String {
-    if appModel.dashboardRuntimeState.isStarting {
-      return "Starting"
-    }
-    return appModel.isRunning ? "Stop" : "Start"
+    appModel.canStopRuntime ? "Stop" : "Start"
   }
 
   private var toolbarRunSymbol: String {
-    if appModel.dashboardRuntimeState.isStarting {
-      return "clock.arrow.circlepath"
-    }
-    return appModel.isRunning ? "stop.fill" : "play.fill"
+    appModel.canStopRuntime ? "stop.fill" : "play.fill"
   }
 
   @ViewBuilder
@@ -98,6 +96,10 @@ private struct StatusStrip: View {
         Text(error)
           .foregroundStyle(.red)
           .lineLimit(1)
+      } else if let notice = appModel.appNotice {
+        Label(notice.message, systemImage: notice.symbolName)
+          .foregroundStyle(noticeColor(for: notice.tone))
+          .lineLimit(1)
       }
     }
     .font(.callout)
@@ -139,7 +141,16 @@ private struct StatusStrip: View {
   }
 
   private var proxyRoutingStatus: String {
-    let isActive = appModel.systemProxyEnabled || appModel.tunEnabled
+    let isActive = appModel.systemProxyEnabled || appModel.tunEnabled || appModel.networkExtensionEnabled
     return "\(appModel.proxyRoutingMode.displayName) \(isActive ? "On" : "Ready")"
+  }
+
+  private func noticeColor(for tone: AppNotice.Tone) -> Color {
+    switch tone {
+    case .info:
+      return .blue
+    case .success:
+      return .green
+    }
   }
 }

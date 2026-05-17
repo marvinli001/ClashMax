@@ -6,7 +6,10 @@ struct RulesView: View {
   var body: some View {
     AdaptivePage(
       title: "Rules",
-      subtitle: "\(runtimeData.rules.count) loaded"
+      subtitle: String.localizedStringWithFormat(
+        NSLocalizedString("%lld loaded", comment: ""),
+        Int64(runtimeData.rules.count)
+      )
     ) {
       EmptyView()
     } content: {

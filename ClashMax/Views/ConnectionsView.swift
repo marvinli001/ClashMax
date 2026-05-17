@@ -7,7 +7,10 @@ struct ConnectionsView: View {
   var body: some View {
     AdaptivePage(
       title: "Connections",
-      subtitle: "\(runtimeData.connections.count) active"
+      subtitle: String.localizedStringWithFormat(
+        NSLocalizedString("%lld active", comment: ""),
+        Int64(runtimeData.connections.count)
+      )
     ) {
       Button {
         appModel.closeAllRuntimeConnections()

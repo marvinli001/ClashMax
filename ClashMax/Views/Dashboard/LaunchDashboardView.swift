@@ -27,8 +27,8 @@ struct LaunchDashboardView: View {
           namespace: namespace,
           reduceMotion: reduceMotion,
           availableWidth: availableSize.width,
-          startDisabled: startDisabled,
-          startAction: startRuntime
+          primaryActionDisabled: primaryActionDisabled,
+          primaryAction: runRuntime
         )
           .frame(maxWidth: DashboardLayoutMetrics.launchControlsMaxWidth(availableWidth: availableSize.width))
           .frame(maxWidth: .infinity)
@@ -47,7 +47,7 @@ struct LaunchDashboardView: View {
   private func headerRow(visualSide: CGFloat) -> some View {
     HStack(alignment: .center, spacing: 18) {
       Button {
-        startRuntime()
+        runRuntime()
       } label: {
         CoreVisualView(
           state: state,
@@ -58,8 +58,8 @@ struct LaunchDashboardView: View {
           .contentShape(Circle())
       }
       .buttonStyle(.plain)
-      .disabled(startDisabled)
-      .help(startDisabled ? launchTitle : "Start ClashMax")
+      .disabled(primaryActionDisabled)
+      .help(primaryActionDisabled ? launchTitle : (appModel.canStopRuntime ? "Stop ClashMax" : "Start ClashMax"))
       .matchedGeometryEffect(id: "core-visual", in: namespace)
 
       VStack(alignment: .leading, spacing: 4) {
@@ -87,16 +87,21 @@ struct LaunchDashboardView: View {
     .frame(maxWidth: .infinity)
   }
 
-  private var startDisabled: Bool {
+  private var primaryActionDisabled: Bool {
+    if appModel.canStopRuntime { return false }
     if state.isStarting { return true }
     return appModel.readinessIssue != nil
   }
 
-  private func startRuntime() {
-    guard !startDisabled else { return }
+  private func runRuntime() {
+    guard !primaryActionDisabled else { return }
     coreActivationTrigger += 1
     withAnimation(.spring(response: 0.52, dampingFraction: 0.82)) {
-      appModel.start()
+      if appModel.canStopRuntime {
+        appModel.stop()
+      } else {
+        appModel.start()
+      }
     }
   }
 
@@ -142,8 +147,8 @@ private struct LaunchControlDeck: View {
   let namespace: Namespace.ID
   let reduceMotion: Bool
   let availableWidth: CGFloat
-  let startDisabled: Bool
-  let startAction: () -> Void
+  let primaryActionDisabled: Bool
+  let primaryAction: () -> Void
 
   var body: some View {
     let compact = availableWidth < 620
@@ -156,7 +161,7 @@ private struct LaunchControlDeck: View {
             modeControl
             mixedPortControl
           }
-          routingControl
+          routingControl(fillsWidth: true)
         }
       } else {
         HStack(alignment: .bottom, spacing: 30) {
@@ -173,9 +178,14 @@ private struct LaunchControlDeck: View {
         VStack(alignment: .leading, spacing: 12) {
           startButton
         }
+      } else if appModel.developerMode {
+        HStack(spacing: 14) {
+          routingControl(fillsWidth: true)
+          startButton
+        }
       } else {
         HStack(spacing: 14) {
-          routingControl
+          routingControl(fillsWidth: false)
           Spacer(minLength: 0)
           startButton
         }
@@ -238,20 +248,31 @@ private struct LaunchControlDeck: View {
     .frame(width: DashboardLayoutMetrics.runModePickerWidth, alignment: .leading)
   }
 
-  private var routingControl: some View {
-    VStack(alignment: .leading, spacing: 6) {
+  @ViewBuilder
+  private func routingControl(fillsWidth: Bool) -> some View {
+    let content = VStack(alignment: .leading, spacing: 6) {
       Text("Proxy")
         .font(.caption2)
         .foregroundStyle(.secondary)
       HStack(spacing: 6) {
-        ProxyRoutingModePicker(selection: Binding(
-          get: { appModel.proxyRoutingMode },
-          set: { appModel.requestProxyRoutingMode($0) }
-        ))
+        routingModePicker
         ProxyRoutingSettingsButton()
       }
     }
-    .frame(width: DashboardLayoutMetrics.proxyRoutingModePickerWidth, alignment: .leading)
+
+    if fillsWidth {
+      content.frame(maxWidth: .infinity, alignment: .leading)
+    } else {
+      content.frame(width: DashboardLayoutMetrics.proxyRoutingModePickerWidth, alignment: .leading)
+    }
+  }
+
+  private var routingModePicker: some View {
+    ProxyRoutingModePicker(selection: Binding(
+      get: { appModel.proxyRoutingMode },
+      set: { appModel.requestProxyRoutingMode($0) }
+    ), developerMode: appModel.developerMode)
+    .fixedSize(horizontal: true, vertical: false)
   }
 
   private var mixedPortControl: some View {
@@ -267,17 +288,25 @@ private struct LaunchControlDeck: View {
 
   private var startButton: some View {
     Button {
-      startAction()
+      primaryAction()
     } label: {
-      Label("Start", systemImage: "play.fill")
+      Label(primaryActionTitle, systemImage: primaryActionSymbol)
         .font(.system(.headline, design: .rounded).weight(.semibold))
         .frame(width: DashboardLayoutMetrics.launchStartButtonWidth)
     }
     .buttonStyle(.borderedProminent)
     .controlSize(.regular)
-    .disabled(startDisabled)
+    .disabled(primaryActionDisabled)
     .matchedGeometryEffect(id: "primary-run-control", in: namespace)
     .changeEffect(.shine(duration: reduceMotion ? 0.18 : 0.72), value: state)
+  }
+
+  private var primaryActionTitle: String {
+    appModel.canStopRuntime ? "Stop" : "Start"
+  }
+
+  private var primaryActionSymbol: String {
+    appModel.canStopRuntime ? "stop.fill" : "play.fill"
   }
 }
 
@@ -286,34 +315,65 @@ private struct LaunchStatusMessage: View {
   let state: DashboardRuntimeState
 
   var body: some View {
-    if let message = state.detailMessage ?? appModel.lastError {
-      Label(message, systemImage: messageSymbol)
+    if let presentation {
+      Label(presentation.message, systemImage: presentation.symbolName)
         .font(.callout)
-        .foregroundStyle(messageColor)
+        .foregroundStyle(presentation.color)
         .lineLimit(3)
         .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .background(messageColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(presentation.color.opacity(0.07), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay {
           RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .stroke(messageColor.opacity(0.22), lineWidth: 1)
+            .stroke(presentation.color.opacity(0.22), lineWidth: 1)
         }
-        .changeEffect(.shake, value: message)
+        .changeEffect(.shake, value: presentation.shakesOnChange ? presentation.message : "")
     }
   }
 
-  private var messageSymbol: String {
-    if appModel.tunHelperPreparationState.isFailure { return "xmark.octagon.fill" }
-    if case .blocked = state { return "exclamationmark.triangle.fill" }
-    return "xmark.octagon.fill"
+  private var presentation: LaunchStatusPresentation? {
+    if let message = state.detailMessage {
+      if appModel.tunHelperPreparationState.isFailure {
+        return LaunchStatusPresentation(message: message, symbolName: "xmark.octagon.fill", color: .red, shakesOnChange: true)
+      }
+      if case .blocked = state {
+        return LaunchStatusPresentation(message: message, symbolName: "exclamationmark.triangle.fill", color: .secondary, shakesOnChange: false)
+      }
+      return LaunchStatusPresentation(message: message, symbolName: "xmark.octagon.fill", color: .red, shakesOnChange: true)
+    }
+
+    if let error = appModel.lastError {
+      return LaunchStatusPresentation(message: error, symbolName: "xmark.octagon.fill", color: .red, shakesOnChange: true)
+    }
+
+    if let notice = appModel.appNotice {
+      return LaunchStatusPresentation(
+        message: notice.message,
+        symbolName: notice.symbolName,
+        color: noticeColor(for: notice.tone),
+        shakesOnChange: false
+      )
+    }
+
+    return nil
   }
 
-  private var messageColor: Color {
-    if appModel.tunHelperPreparationState.isFailure { return .red }
-    if case .blocked = state { return .secondary }
-    return .red
+  private func noticeColor(for tone: AppNotice.Tone) -> Color {
+    switch tone {
+    case .info:
+      return .blue
+    case .success:
+      return .green
+    }
   }
+}
+
+private struct LaunchStatusPresentation {
+  var message: String
+  var symbolName: String
+  var color: Color
+  var shakesOnChange: Bool
 }

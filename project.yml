@@ -9,8 +9,9 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     MACOSX_DEPLOYMENT_TARGET: "26.0"
-    DEVELOPMENT_TEAM: ""
-    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: 678WA95W4U
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "Developer ID Application"
     ENABLE_HARDENED_RUNTIME: YES
     ARCHS: "$(ARCHS_STANDARD)"
     ONLY_ACTIVE_ARCH: NO
@@ -19,6 +20,7 @@ settings:
       ONLY_ACTIVE_ARCH: YES
     Release:
       ONLY_ACTIVE_ARCH: NO
+      CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
 packages:
   Yams:
     url: https://github.com/jpsim/Yams.git
@@ -50,6 +52,7 @@ targets:
         LSApplicationCategoryType: public.app-category.utilities
         NSPrincipalClass: NSApplication
         NSHumanReadableCopyright: GPL-3.0
+        NSSystemExtensionUsageDescription: ClashMax uses an experimental transparent proxy Network Extension to route TCP traffic through its local Mihomo proxy without enabling System Proxy or the privileged TUN helper.
         SUFeedURL: https://marvinli001.github.io/ClashMax/appcast.xml
         SUPublicEDKey: "Gh5U2F2/392N+X0I2t1ojmM3uHPYKR2Ceww618dTaLc="
         SUEnableAutomaticChecks: true
@@ -61,6 +64,9 @@ targets:
       - target: ClashMaxHelper
         embed: false
         link: false
+      - target: ClashMaxNetworkExtension
+        embed: false
+        link: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.clashmax.ClashMax
@@ -68,9 +74,16 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_USER_SCRIPT_SANDBOXING: NO
         MARKETING_VERSION: 1.0.5
-        CURRENT_PROJECT_VERSION: 7
+        CURRENT_PROJECT_VERSION: 11
+        PROVISIONING_PROFILE_SPECIFIER: ClashMax Developer ID
     entitlements:
       path: Config/ClashMax.entitlements
+      properties:
+        com.apple.developer.networking.networkextension:
+          - app-proxy-provider-systemextension
+        com.apple.developer.system-extension.install: true
+        com.apple.security.application-groups:
+          - group.678WA95W4U.io.github.clashmax.ClashMax.network-extension
     postCompileScripts:
       - name: Embed Helper
         inputFiles:
@@ -97,6 +110,26 @@ targets:
           cp "$BUILT_PRODUCTS_DIR/ClashMaxHelper" "$launch_services/ClashMaxHelper"
           cp "$SRCROOT/Config/io.github.clashmax.ClashMax.Helper.plist" "$launch_daemons/io.github.clashmax.ClashMax.Helper.plist"
           cp -R "$SRCROOT/Resources/Core/." "$core_resources/"
+      - name: Embed Network Extension
+        basedOnDependencyAnalysis: false
+        inputFiles:
+          - "$(BUILT_PRODUCTS_DIR)/io.github.clashmax.ClashMax.NetworkExtension.systemextension"
+        outputFiles:
+          - "$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Library/SystemExtensions/io.github.clashmax.ClashMax.NetworkExtension.systemextension"
+        script: |
+          set -euo pipefail
+          source_extension="$BUILT_PRODUCTS_DIR/io.github.clashmax.ClashMax.NetworkExtension.systemextension"
+          system_extensions="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Library/SystemExtensions"
+          target_extension="$system_extensions/io.github.clashmax.ClashMax.NetworkExtension.systemextension"
+
+          mkdir -p "$system_extensions"
+          rm -rf "$target_extension"
+          cp -R -L "$source_extension" "$target_extension"
+          if [ -L "$target_extension" ] || [ ! -d "$target_extension/Contents" ]; then
+            echo "Embedded Network Extension copy is invalid: $target_extension"
+            exit 1
+          fi
+          xattr -cr "$target_extension" || true
       - name: Sign Nested Core Binaries
         basedOnDependencyAnalysis: false
         script: |
@@ -118,6 +151,14 @@ targets:
             should_sign="NO"
           fi
 
+          core_signing_identifier() {
+            case "$(basename "$1")" in
+              mihomo-darwin-arm64) printf '%s\n' "io.github.clashmax.ClashMax.Mihomo.arm64" ;;
+              mihomo-darwin-amd64) printf '%s\n' "io.github.clashmax.ClashMax.Mihomo.amd64" ;;
+              *) return 1 ;;
+            esac
+          }
+
           for core_binary in "$core_resources"/mihomo-darwin-*; do
             if [ ! -f "$core_binary" ]; then
               continue
@@ -130,16 +171,25 @@ targets:
               echo "Skipping nested core signing for $core_binary because code signing is disabled or no identity is available."
               continue
             fi
+            if ! core_identifier="$(core_signing_identifier "$core_binary")"; then
+              echo "Skipping nested core signing for unknown Mihomo binary: $core_binary"
+              continue
+            fi
 
             timestamp_arg="--timestamp=none"
-            case "$sign_identity_label" in
-              Developer\ ID\ Application:*) timestamp_arg="--timestamp" ;;
-            esac
+            if [ "${CONFIGURATION:-Debug}" = "Release" ]; then
+              case "$sign_identity_label" in
+                Developer\ ID\ Application:*) timestamp_arg="--timestamp" ;;
+              esac
+            fi
 
-            echo "Signing nested core binary with hardened runtime: $core_binary"
-            /usr/bin/codesign --force --options runtime "$timestamp_arg" --sign "$sign_identity" "$core_binary"
+            echo "Signing nested core binary with hardened runtime: $core_binary ($core_identifier)"
+            /usr/bin/codesign --force --options runtime "$timestamp_arg" \
+              --identifier "$core_identifier" \
+              --sign "$sign_identity" "$core_binary"
             /usr/bin/codesign --verify --strict --verbose=2 "$core_binary"
           done
+
     postBuildScripts:
       - name: Clean Bundle Extended Attributes
         basedOnDependencyAnalysis: false
@@ -162,8 +212,55 @@ targets:
         INFOPLIST_FILE: Config/ClashMaxHelper-Info.plist
         CREATE_INFOPLIST_SECTION_IN_BINARY: YES
         MACH_O_TYPE: mh_execute
+        SKIP_INSTALL: YES
+        PROVISIONING_PROFILE_SPECIFIER: ""
     entitlements:
       path: Config/ClashMaxHelper.entitlements
+  ClashMaxNetworkExtension:
+    type: system-extension
+    platform: macOS
+    sources:
+      - path: Shared/Socks5ConnectRequest.swift
+      - path: Shared/NetworkExtensionRuntimeConstants.swift
+      - path: ClashMaxNetworkExtension
+    info:
+      path: Config/ClashMaxNetworkExtension-Info.plist
+      properties:
+        CFBundleDisplayName: ClashMax Network Extension
+        CFBundlePackageType: SYSX
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSSystemExtensionUsageDescription: ClashMax uses an experimental transparent proxy Network Extension to route TCP traffic through its local Mihomo proxy without enabling System Proxy or the privileged TUN helper.
+        NetworkExtension:
+          NEMachServiceName: group.678WA95W4U.io.github.clashmax.ClashMax.network-extension
+          NEProviderClasses:
+            com.apple.networkextension.app-proxy: "$(PRODUCT_MODULE_NAME).TransparentProxyProvider"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.clashmax.ClashMax.NetworkExtension
+        PRODUCT_NAME: io.github.clashmax.ClashMax.NetworkExtension
+        PRODUCT_MODULE_NAME: ClashMaxNetworkExtension
+        INFOPLIST_FILE: Config/ClashMaxNetworkExtension-Info.plist
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        MARKETING_VERSION: 1.0.5
+        CURRENT_PROJECT_VERSION: 11
+        PROVISIONING_PROFILE_SPECIFIER: ClashMax NetworkExtension Developer ID
+    entitlements:
+      path: Config/ClashMaxNetworkExtension.entitlements
+      properties:
+        com.apple.developer.networking.networkextension:
+          - app-proxy-provider-systemextension
+        com.apple.security.application-groups:
+          - group.678WA95W4U.io.github.clashmax.ClashMax.network-extension
+    postCompileScripts:
+      - name: Clean Network Extension Extended Attributes
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          product="$TARGET_BUILD_DIR/$WRAPPER_NAME"
+          if [ -d "$product" ]; then
+            xattr -cr "$product" || true
+          fi
   ClashMaxTests:
     type: bundle.unit-test
     platform: macOS
@@ -176,6 +273,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.clashmax.ClashMaxTests
         GENERATE_INFOPLIST_FILE: YES
+        PROVISIONING_PROFILE_SPECIFIER: ""
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/ClashMax.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ClashMax"
         BUNDLE_LOADER: "$(TEST_HOST)"
 schemes:
@@ -183,6 +281,7 @@ schemes:
     build:
       targets:
         ClashMax: all
+        ClashMaxNetworkExtension: all
         ClashMaxTests: [test]
     run:
       config: Debug

@@ -37,12 +37,12 @@ struct AdaptivePage<Actions: View, Content: View>: View {
 
   private var titleBlock: some View {
     VStack(alignment: .leading, spacing: 3) {
-      Text(title)
+      Text(localizedPageText(title))
         .font(.title2.weight(.semibold))
         .lineLimit(1)
         .minimumScaleFactor(0.78)
       if let subtitle {
-        Text(subtitle)
+        Text(localizedPageText(subtitle))
           .font(.callout)
           .foregroundStyle(.secondary)
           .lineLimit(2)
@@ -63,12 +63,12 @@ struct CenteredUnavailableState: View {
         .font(.system(size: 30, weight: .semibold))
         .foregroundStyle(.tertiary)
 
-      Text(title)
+      Text(localizedPageText(title))
         .font(.title3.weight(.semibold))
         .foregroundStyle(.secondary)
 
       if let message {
-        Text(message)
+        Text(localizedPageText(message))
           .font(.callout)
           .foregroundStyle(.tertiary)
           .multilineTextAlignment(.center)
@@ -80,4 +80,8 @@ struct CenteredUnavailableState: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     .accessibilityElement(children: .combine)
   }
+}
+
+private func localizedPageText(_ value: String) -> String {
+  NSLocalizedString(value, comment: "")
 }

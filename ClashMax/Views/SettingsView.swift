@@ -23,7 +23,10 @@ struct SettingsView: View {
           SettingsToggleRow(
             "Developer Mode",
             description: "Show helper diagnostics and advanced recovery details.",
-            isOn: $settings.developerMode
+            isOn: Binding(
+              get: { appModel.developerMode },
+              set: { appModel.setDeveloperMode($0) }
+            )
           )
           SettingsControlRow("Appearance", description: "Choose the app color scheme.") {
             Picker("Appearance", selection: $settings.appTheme) {
@@ -157,7 +160,7 @@ struct SettingsView: View {
               get: { settings.proxyRoutingMode },
               set: { appModel.requestProxyRoutingMode($0) }
             )) {
-              ForEach(ProxyRoutingMode.allCases) { mode in
+              ForEach(ProxyRoutingMode.visibleCases(developerMode: settings.developerMode)) { mode in
                 Label(mode.displayName, systemImage: mode.symbolName).tag(mode)
               }
             }
@@ -193,6 +196,14 @@ struct SettingsView: View {
                 }
               }
             }
+          } else if settings.proxyRoutingMode == .networkExtensionExperimental {
+            SettingsControlRow(
+              "TUN Helper",
+              description: "NE Transparent Proxy mode does not touch the privileged TUN helper."
+            ) {
+              Image(systemName: "checkmark.shield")
+                .foregroundStyle(.secondary)
+            }
           } else {
             SettingsControlRow(
               "TUN Helper",
@@ -200,6 +211,38 @@ struct SettingsView: View {
             ) {
               Image(systemName: "checkmark.shield")
                 .foregroundStyle(.secondary)
+            }
+          }
+        }
+
+        if settings.developerMode {
+          Section("NE Transparent Proxy Experimental") {
+            SettingsControlRow("System Extension", description: appModel.networkExtensionController.statusMessage) {
+              ViewThatFits(in: .horizontal) {
+                networkExtensionActionButtons
+                networkExtensionActionButtonRows
+              }
+            }
+            .onAppear {
+              appModel.refreshNetworkExtensionStatus()
+            }
+
+            SettingsControlRow(
+              "Transparent Proxy Status",
+              description: appModel.networkExtensionController.tunnelStatusMessage
+            ) {
+              Label(
+                appModel.networkExtensionController.vpnStatus.displayName,
+                systemImage: networkExtensionStatusSymbol
+              )
+              .foregroundStyle(appModel.networkExtensionController.vpnStatus.isActive ? .green : .secondary)
+            }
+
+            if let error = appModel.networkExtensionController.recentError {
+              Text(error)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
             }
           }
         }
@@ -298,6 +341,64 @@ struct SettingsView: View {
       appModel.refreshHelperLogs()
     } label: {
       Label("Logs", systemImage: "text.alignleft")
+    }
+  }
+
+  private var networkExtensionActionButtons: some View {
+    HStack(spacing: 8) {
+      Button {
+        appModel.installNetworkExtension()
+      } label: {
+        Label("Install", systemImage: "puzzlepiece")
+      }
+
+      Button {
+        appModel.openNetworkExtensionSettings()
+      } label: {
+        Label("Approve", systemImage: "gearshape")
+      }
+      .help("Open System Settings > General > Login Items & Extensions > Network Extensions.")
+
+      Button {
+        appModel.refreshNetworkExtensionStatus()
+      } label: {
+        Label("Refresh", systemImage: "arrow.clockwise")
+      }
+    }
+  }
+
+  private var networkExtensionStatusSymbol: String {
+    switch appModel.networkExtensionController.vpnStatus {
+    case .notConfigured:
+      "checkmark.circle"
+    case .connecting, .connected, .reasserting, .disconnecting:
+      "network"
+    case .invalid, .disconnected:
+      "xmark.circle"
+    }
+  }
+
+  private var networkExtensionActionButtonRows: some View {
+    VStack(alignment: .trailing, spacing: 8) {
+      HStack(spacing: 8) {
+        Button {
+          appModel.installNetworkExtension()
+        } label: {
+          Label("Install", systemImage: "puzzlepiece")
+        }
+
+        Button {
+          appModel.openNetworkExtensionSettings()
+        } label: {
+          Label("Approve", systemImage: "gearshape")
+        }
+        .help("Open System Settings > General > Login Items & Extensions > Network Extensions.")
+      }
+      Button {
+        appModel.refreshNetworkExtensionStatus()
+      } label: {
+        Label("Refresh", systemImage: "arrow.clockwise")
+      }
     }
   }
 }

@@ -50,8 +50,8 @@ enum ProfileSource: Codable, Equatable, Sendable {
 extension ProfileSource {
   var displayName: String {
     switch self {
-    case .localFile: "Local YAML"
-    case .subscription: "Subscription"
+    case .localFile: String(localized: "Local YAML")
+    case .subscription: String(localized: "Subscription")
     }
   }
 }
@@ -158,13 +158,23 @@ enum AppTheme: String, Codable, CaseIterable, Identifiable, Sendable {
 enum ProxyRoutingMode: String, Codable, CaseIterable, Identifiable, Sendable {
   case systemProxy
   case tun
+  case networkExtensionExperimental
 
   var id: String { rawValue }
+
+  static func visibleCases(developerMode: Bool) -> [ProxyRoutingMode] {
+    allCases.filter { !$0.requiresDeveloperMode || developerMode }
+  }
+
+  var requiresDeveloperMode: Bool {
+    self == .networkExtensionExperimental
+  }
 
   var displayName: String {
     switch self {
     case .systemProxy: String(localized: "System Proxy")
     case .tun: String(localized: "TUN")
+    case .networkExtensionExperimental: String(localized: "NE Transparent Proxy Experimental")
     }
   }
 
@@ -172,6 +182,7 @@ enum ProxyRoutingMode: String, Codable, CaseIterable, Identifiable, Sendable {
     switch self {
     case .systemProxy: "network.badge.shield.half.filled"
     case .tun: "point.topleft.down.curvedto.point.bottomright.up"
+    case .networkExtensionExperimental: "network"
     }
   }
 }
@@ -1123,6 +1134,7 @@ enum RuntimeOwner: String, Codable, Equatable, Sendable {
   case stopped
   case user
   case tunnel
+  case networkExtension
   case preview
 }
 

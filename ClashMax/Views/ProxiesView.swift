@@ -38,14 +38,17 @@ struct ProxiesView: View {
         Button {
           appModel.start()
         } label: {
-          Label(isStarting ? "Starting" : "Start", systemImage: isStarting ? "clock.arrow.circlepath" : "play.fill")
+          Label(
+            localizedProxiesText(isStarting ? "Starting" : "Start"),
+            systemImage: isStarting ? "clock.arrow.circlepath" : "play.fill"
+          )
         }
         .disabled(!canStart)
       }
       Button {
         appModel.reloadRuntimeData()
       } label: {
-        Label("Refresh", systemImage: "arrow.clockwise")
+        Label(localizedProxiesText("Refresh"), systemImage: "arrow.clockwise")
       }
       .disabled(!ProxiesPageActionState.canRefresh(isStarting: isStarting))
     } content: {
@@ -117,15 +120,25 @@ struct ProxiesView: View {
 
   private func subtitle(for groups: [ProxyGroup]) -> String {
     if groups.isEmpty {
-      return "Proxy groups load from the active profile and runtime."
+      return String(localized: "Proxy groups load from the active profile and runtime.")
     }
+    let count = groups.count
     if appModel.previewRuntimeActive {
-      return "\(groups.count) groups · preview core"
+      if count == 1 {
+        return String(localized: "1 group · preview core")
+      }
+      return localizedProxiesCount("%lld groups · preview core", count)
     }
     if appModel.isShowingProxyPreview {
-      return "\(groups.count) preview groups"
+      if count == 1 {
+        return String(localized: "1 preview group")
+      }
+      return localizedProxiesCount("%lld preview groups", count)
     }
-    return "\(groups.count) groups"
+    if count == 1 {
+      return String(localized: "1 group")
+    }
+    return localizedProxiesCount("%lld groups", count)
   }
 
   private var proxyControls: some View {
@@ -221,11 +234,19 @@ private enum ProxyNodeSort: String, CaseIterable, Equatable, Identifiable {
 
   var displayName: String {
     switch self {
-    case .name: "Name"
-    case .delay: "Delay"
-    case .type: "Type"
+    case .name: String(localized: "Name")
+    case .delay: String(localized: "Delay")
+    case .type: String(localized: "Type")
     }
   }
+}
+
+private func localizedProxiesText(_ value: String) -> String {
+  NSLocalizedString(value, comment: "")
+}
+
+private func localizedProxiesCount(_ formatKey: String, _ count: Int) -> String {
+  String.localizedStringWithFormat(NSLocalizedString(formatKey, comment: ""), Int64(count))
 }
 
 private struct ProxyGroupListAnimationState: Equatable {

@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>ClashMax</string>
+	<string>ClashMax Network Extension</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -15,26 +15,22 @@
 	<key>CFBundleName</key>
 	<string>$(PRODUCT_NAME)</string>
 	<key>CFBundlePackageType</key>
-	<string>APPL</string>
+	<string>SYSX</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
-	<key>LSApplicationCategoryType</key>
-	<string>public.app-category.utilities</string>
-	<key>NSHumanReadableCopyright</key>
-	<string>GPL-3.0</string>
-	<key>NSPrincipalClass</key>
-	<string>NSApplication</string>
 	<key>NSSystemExtensionUsageDescription</key>
 	<string>ClashMax uses an experimental transparent proxy Network Extension to route TCP traffic through its local Mihomo proxy without enabling System Proxy or the privileged TUN helper.</string>
-	<key>SUAutomaticallyUpdate</key>
-	<false/>
-	<key>SUEnableAutomaticChecks</key>
-	<true/>
-	<key>SUFeedURL</key>
-	<string>https://marvinli001.github.io/ClashMax/appcast.xml</string>
-	<key>SUPublicEDKey</key>
-	<string>Gh5U2F2/392N+X0I2t1ojmM3uHPYKR2Ceww618dTaLc=</string>
+	<key>NetworkExtension</key>
+	<dict>
+		<key>NEMachServiceName</key>
+		<string>group.678WA95W4U.io.github.clashmax.ClashMax.network-extension</string>
+		<key>NEProviderClasses</key>
+		<dict>
+			<key>com.apple.networkextension.app-proxy</key>
+			<string>$(PRODUCT_MODULE_NAME).TransparentProxyProvider</string>
+		</dict>
+	</dict>
 </dict>
 </plist>

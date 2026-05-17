@@ -101,6 +101,7 @@ extension AppError: LocalizedError {
 enum UserFacingError {
   private static let helperCodeSigningRecovery = "TUN helper could not be registered because ClashMax or its helper is not correctly signed, notarized, or approved by macOS. Verify signing, approve the helper in System Settings, then retry."
   private static let helperOperationNotPermittedRecovery = "macOS did not permit TUN helper registration yet. Approve ClashMax in System Settings > General > Login Items & Extensions, then click Status. If this exported/notarized app is already approved and the helper still will not start, restart macOS or reset the Background Items approval state before retrying."
+  private static let networkExtensionAppRegistrationRecovery = "macOS has not registered /Applications/ClashMax.app for this Network Extension configuration yet. ClashMax refreshes LaunchServices before starting NE mode; retry once, and restart macOS if the stale system extension state still reports the VPN app is not installed."
 
   static func message(for error: Error) -> String {
     if let appError = error as? AppError {
@@ -128,6 +129,9 @@ enum UserFacingError {
     if let helperMessage = helperRegistrationMessage(domain: nil, code: nil, message: rawMessage) {
       return helperMessage
     }
+    if networkExtensionAppRegistrationMessage(rawMessage) {
+      return networkExtensionAppRegistrationRecovery
+    }
 
     if rawMessage.contains("NSURLErrorDomain") || rawMessage.contains("Could not connect to the server") {
       return "Could not connect to the Mihomo controller at 127.0.0.1:9097. The core may still be starting or failed to open its controller port."
@@ -149,6 +153,11 @@ enum UserFacingError {
       return helperCodeSigningRecovery
     }
     return nil
+  }
+
+  private static func networkExtensionAppRegistrationMessage(_ message: String) -> Bool {
+    message.localizedCaseInsensitiveContains("The VPN app used by the VPN configuration is not installed")
+      || message.contains("VPN配置所使用的VPN App尚未安装")
   }
 
   private static func networkMessage(for error: NSError) -> String? {

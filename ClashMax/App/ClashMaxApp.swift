@@ -168,9 +168,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     terminationCleanupInFlight = true
     Task { @MainActor [weak self] in
-      await appModel.prepareForTermination()
+      let shouldTerminate = await appModel.prepareForTermination()
       self?.terminationCleanupInFlight = false
-      sender.reply(toApplicationShouldTerminate: true)
+      sender.reply(toApplicationShouldTerminate: shouldTerminate)
     }
     return .terminateLater
   }

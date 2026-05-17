@@ -13,7 +13,7 @@ struct ProfilesView: View {
   var body: some View {
     AdaptivePage(
       title: "Profiles",
-      subtitle: profileStore.profiles.isEmpty ? "Import a local YAML file or add a subscription." : "\(profileStore.profiles.count) profiles"
+      subtitle: profilesSubtitle
     ) {
       Button {
         appModel.importLocalProfile()
@@ -94,6 +94,17 @@ struct ProfilesView: View {
     } message: {
       Text("Remove \(profilePendingDeletion?.name ?? "this profile") from ClashMax. Stored subscription metadata and the app-managed profile copy will be deleted.")
     }
+  }
+
+  private var profilesSubtitle: String {
+    let count = profileStore.profiles.count
+    if count == 0 {
+      return String(localized: "Import a local YAML file or add a subscription.")
+    }
+    if count == 1 {
+      return String(localized: "1 profile")
+    }
+    return String.localizedStringWithFormat(NSLocalizedString("%lld profiles", comment: ""), Int64(count))
   }
 
   private var subscriptionControls: some View {
@@ -323,7 +334,7 @@ private struct ProfileCard: View {
           } else {
             Image(systemName: "arrow.triangle.2.circlepath")
           }
-          Text(isUpdating ? "Updating" : "Update")
+          Text(localizedProfilesText(isUpdating ? "Updating" : "Update"))
         }
       }
       .disabled(!profile.isSubscription || isUpdating)
@@ -347,9 +358,9 @@ private struct ProfileCard: View {
     }
     switch profile.source {
     case let .localFile(originalPath):
-      return originalPath ?? "Local YAML"
+      return originalPath ?? localizedProfilesText("Local YAML")
     case .subscription:
-      return "Subscription URL unavailable"
+      return localizedProfilesText("Subscription URL unavailable")
     }
   }
 }
@@ -380,7 +391,7 @@ private struct ProfileMetricsRow: View {
         .foregroundStyle(.secondary)
         .frame(width: 14)
       VStack(alignment: .leading, spacing: 1) {
-        Text(title)
+        Text(localizedProfilesText(title))
           .font(.caption2)
           .foregroundStyle(.tertiary)
         Text(value)
@@ -408,6 +419,10 @@ private struct ProfileMetricsRow: View {
     }
     return "\(minutes)m"
   }
+}
+
+private func localizedProfilesText(_ value: String) -> String {
+  NSLocalizedString(value, comment: "")
 }
 
 private struct ProfileEditSheet: View {
