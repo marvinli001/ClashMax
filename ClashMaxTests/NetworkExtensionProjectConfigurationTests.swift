@@ -13,11 +13,11 @@ final class NetworkExtensionProjectConfigurationTests: XCTestCase {
     XCTAssertTrue(projectYAML.contains("PRODUCT_BUNDLE_IDENTIFIER: io.github.clashmax.ClashMax.NetworkExtension"))
     XCTAssertTrue(projectYAML.contains("Library/SystemExtensions/io.github.clashmax.ClashMax.NetworkExtension.systemextension"))
     XCTAssertTrue(projectYAML.contains("Config/ClashMaxNetworkExtension.entitlements"))
-    XCTAssertTrue(projectYAML.contains("CURRENT_PROJECT_VERSION: 11"))
+    XCTAssertTrue(projectYAML.contains("CURRENT_PROJECT_VERSION: 12"))
 
     let networkExtensionTarget = try targetBlock(named: "ClashMaxNetworkExtension", in: projectYAML)
-    XCTAssertTrue(networkExtensionTarget.contains("MARKETING_VERSION: 1.0.5"))
-    XCTAssertTrue(networkExtensionTarget.contains("CURRENT_PROJECT_VERSION: 11"))
+    XCTAssertTrue(networkExtensionTarget.contains("MARKETING_VERSION: 1.0.6"))
+    XCTAssertTrue(networkExtensionTarget.contains("CURRENT_PROJECT_VERSION: 12"))
     XCTAssertTrue(networkExtensionTarget.contains("Shared/Socks5ConnectRequest.swift"))
     XCTAssertTrue(networkExtensionTarget.contains("Shared/NetworkExtensionRuntimeConstants.swift"))
   }
