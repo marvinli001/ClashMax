@@ -3451,7 +3451,44 @@ final class DashboardRuntimeStateTests: XCTestCase {
       model.tunHelperPreparationState,
       .notBootstrapped(TunnelHelperClient.notBootstrappedMessage)
     )
-    XCTAssertNil(model.lastError)
+    XCTAssertEqual(model.lastError, TunnelHelperClient.notBootstrappedMessage)
+  }
+
+  func testSelectingTunStopsCheckingWhenHelperBootstrapFails() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let service = StaticHelperService(status: .enabled)
+    let helper = TunnelHelperClient(
+      transport: FailingStatusTunnelHelperTransport(),
+      service: service,
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      helperClient: helper,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    model.requestProxyRoutingMode(.tun)
+
+    for _ in 0..<40 where model.tunHelperPreparationState == .idle || model.tunHelperPreparationState == .checking {
+      await Task.yield()
+    }
+
+    XCTAssertEqual(model.proxyRoutingMode, .tun)
+    XCTAssertEqual(
+      model.tunHelperPreparationState,
+      .notBootstrapped(TunnelHelperClient.notBootstrappedMessage)
+    )
+    XCTAssertEqual(model.readinessIssue, TunnelHelperClient.notBootstrappedMessage)
+    XCTAssertEqual(model.lastError, TunnelHelperClient.notBootstrappedMessage)
+    XCTAssertEqual(service.unregisterCount, 1)
+    XCTAssertEqual(service.registerCount, 1)
   }
 
   func testSelectingTunRegistersAndMarksReadyHelper() async throws {

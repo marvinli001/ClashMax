@@ -143,17 +143,21 @@ final class TunnelHelperClient: ObservableObject {
   private let service: any HelperServiceManaging
   private let fingerprintProvider: any HelperFingerprintProviding
   private let registrationRecordStore: any HelperRegistrationRecordStoring
+  private let bootstrapStatusTimeoutSeconds: TimeInterval
+  private var automaticBootstrapRepairFingerprint: String?
 
   init(
     transport: any HelperXPCTransport = PrivilegedHelperXPCTransport(),
     service: any HelperServiceManaging = SMAppServiceHelperService(),
     fingerprintProvider: any HelperFingerprintProviding = AppBundleHelperFingerprintProvider(),
-    registrationRecordStore: any HelperRegistrationRecordStoring = UserDefaultsHelperRegistrationRecordStore()
+    registrationRecordStore: any HelperRegistrationRecordStoring = UserDefaultsHelperRegistrationRecordStore(),
+    bootstrapStatusTimeoutSeconds: TimeInterval = 2.5
   ) {
     self.transport = transport
     self.service = service
     self.fingerprintProvider = fingerprintProvider
     self.registrationRecordStore = registrationRecordStore
+    self.bootstrapStatusTimeoutSeconds = bootstrapStatusTimeoutSeconds
   }
 
   func register() async throws {
@@ -255,7 +259,7 @@ final class TunnelHelperClient: ObservableObject {
   }
 
   static let bootstrappedMessage = String(localized: "Helper registered and bootstrapped.")
-  static let notBootstrappedMessage = String(localized: "Helper registered but not bootstrapped. Approve ClashMax in System Settings > General > Login Items & Extensions, then click Status. If Repair keeps failing after approval, restart macOS or reset Background Items approval state before retrying.")
+  static let notBootstrappedMessage = String(localized: "TUN helper is registered, but launchd cannot start it. Click Repair after installing the latest build.")
 
   private func repairRegistration(fingerprint: String) async throws {
     switch service.status {
@@ -307,15 +311,16 @@ final class TunnelHelperClient: ObservableObject {
     switch service.status {
     case .enabled:
       if registrationRecordStore.helperFingerprint().map({ $0 != fingerprint }) == true {
-        try await service.unregister()
-        try service.register()
-        registrationRecordStore.setHelperFingerprint(fingerprint)
-        return await preparationStateAfterRegistration(
+        return try await reregisterEnabledHelper(
+          fingerprint: fingerprint,
           openSystemSettingsWhenApprovalRequired: openSystemSettingsWhenApprovalRequired
         )
       }
       registrationRecordStore.setHelperFingerprint(fingerprint)
-      return await bootstrappedPreparationState()
+      return try await enabledPreparationState(
+        fingerprint: fingerprint,
+        openSystemSettingsWhenApprovalRequired: openSystemSettingsWhenApprovalRequired
+      )
     case .requiresApproval:
       registrationRecordStore.setHelperFingerprint(fingerprint)
       return approvalRequiredState(openSystemSettings: openSystemSettingsWhenApprovalRequired)
@@ -368,15 +373,50 @@ final class TunnelHelperClient: ObservableObject {
     return .requiresApproval(message)
   }
 
+  private func enabledPreparationState(
+    fingerprint: String,
+    openSystemSettingsWhenApprovalRequired: Bool
+  ) async throws -> TunHelperPreparationState {
+    let state = await bootstrappedPreparationState()
+    if state.isReady {
+      return state
+    }
+
+    guard case .notBootstrapped = state,
+          automaticBootstrapRepairFingerprint != fingerprint
+    else {
+      return state
+    }
+
+    automaticBootstrapRepairFingerprint = fingerprint
+    let repairedState = try await reregisterEnabledHelper(
+      fingerprint: fingerprint,
+      openSystemSettingsWhenApprovalRequired: openSystemSettingsWhenApprovalRequired
+    )
+    return repairedState
+  }
+
+  private func reregisterEnabledHelper(
+    fingerprint: String,
+    openSystemSettingsWhenApprovalRequired: Bool
+  ) async throws -> TunHelperPreparationState {
+    try await service.unregister()
+    try service.register()
+    registrationRecordStore.setHelperFingerprint(fingerprint)
+    return await preparationStateAfterRegistration(
+      openSystemSettingsWhenApprovalRequired: openSystemSettingsWhenApprovalRequired
+    )
+  }
+
   private func bootstrappedPreparationState() async -> TunHelperPreparationState {
     do {
-      let response = try await status()
+      let response = try await statusWithTimeout()
       guard response.ok else {
         let message = response.message.isEmpty ? Self.notBootstrappedMessage : response.message
         statusMessage = message
         return .notBootstrapped(message)
       }
-      statusMessage = Self.bootstrappedMessage
+      markHelperBootstrapped()
       return .ready
     } catch {
       statusMessage = Self.notBootstrappedMessage
@@ -386,14 +426,25 @@ final class TunnelHelperClient: ObservableObject {
 
   private func verifyBootstrapped() async throws {
     do {
-      let response = try await status()
+      let response = try await statusWithTimeout()
       guard response.ok else {
         throw AppError.helperResponse(response.message.isEmpty ? Self.notBootstrappedMessage : response.message)
       }
-      statusMessage = Self.bootstrappedMessage
+      markHelperBootstrapped()
     } catch {
       statusMessage = Self.notBootstrappedMessage
       throw AppError.helperResponse(Self.notBootstrappedMessage)
+    }
+  }
+
+  private func markHelperBootstrapped() {
+    statusMessage = Self.bootstrappedMessage
+    automaticBootstrapRepairFingerprint = nil
+  }
+
+  private func statusWithTimeout() async throws -> HelperClientResponse {
+    try await withTimeout(seconds: bootstrapStatusTimeoutSeconds) { @Sendable [transport] in
+      try await transport.status()
     }
   }
 

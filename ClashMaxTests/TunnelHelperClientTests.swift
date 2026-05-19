@@ -176,6 +176,152 @@ final class TunnelHelperClientTests: XCTestCase {
     XCTAssertEqual(client.statusMessage, TunnelHelperClient.bootstrappedMessage)
   }
 
+  func testPreparingTunnelReregistersEnabledHelperOnceWhenXPCStatusFails() async throws {
+    let service = FakeHelperService(status: .enabled)
+    let transport = ToggleableHelperTransport(
+      initialStatus: .failure("xpc unavailable"),
+      subsequentStatus: HelperClientResponse(payload: HelperXPCPayload.response(ok: true))
+    )
+    let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: "current")
+    let client = TunnelHelperClient(
+      transport: transport,
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "current"),
+      registrationRecordStore: recordStore
+    )
+
+    let state = await client.prepareForTunnelStart()
+
+    XCTAssertEqual(state, .ready)
+    XCTAssertEqual(service.unregisterCount, 1)
+    XCTAssertEqual(service.registerCount, 1)
+    XCTAssertEqual(recordStore.storedFingerprint, "current")
+    XCTAssertEqual(client.statusMessage, TunnelHelperClient.bootstrappedMessage)
+  }
+
+  func testPreparingTunnelDoesNotRepeatAutomaticReregistrationForSameFingerprint() async throws {
+    let service = FakeHelperService(status: .enabled)
+    let transport = FakeHelperTransport(statusResponse: .failure("xpc unavailable"))
+    let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: "current")
+    let client = TunnelHelperClient(
+      transport: transport,
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "current"),
+      registrationRecordStore: recordStore
+    )
+
+    let firstState = await client.prepareForTunnelStart()
+    let secondState = await client.prepareForTunnelStart()
+
+    XCTAssertEqual(firstState, .notBootstrapped("xpc unavailable"))
+    XCTAssertEqual(secondState, .notBootstrapped("xpc unavailable"))
+    XCTAssertEqual(service.unregisterCount, 1)
+    XCTAssertEqual(service.registerCount, 1)
+  }
+
+  func testManualRepairSuccessAllowsSameFingerprintAutomaticReregistrationAgain() async throws {
+    let service = FakeHelperService(status: .enabled)
+    let transport = SequencedHelperTransport(statuses: [
+      .failure("xpc unavailable"),
+      .failure("xpc unavailable"),
+      HelperClientResponse(payload: HelperXPCPayload.response(ok: true)),
+      .failure("xpc unavailable"),
+      HelperClientResponse(payload: HelperXPCPayload.response(ok: true))
+    ])
+    let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: "current")
+    let client = TunnelHelperClient(
+      transport: transport,
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "current"),
+      registrationRecordStore: recordStore
+    )
+
+    let firstState = await client.prepareForTunnelStart()
+    try await client.repairRegistration()
+    let secondState = await client.prepareForTunnelStart()
+
+    XCTAssertEqual(firstState, .notBootstrapped("xpc unavailable"))
+    XCTAssertEqual(secondState, .ready)
+    XCTAssertEqual(service.unregisterCount, 2)
+    XCTAssertEqual(service.registerCount, 2)
+    XCTAssertEqual(client.statusMessage, TunnelHelperClient.bootstrappedMessage)
+  }
+
+  func testHealthyCurrentPreparationStateAllowsSameFingerprintAutomaticReregistrationAgain() async throws {
+    let service = FakeHelperService(status: .enabled)
+    let transport = SequencedHelperTransport(statuses: [
+      .failure("xpc unavailable"),
+      .failure("xpc unavailable"),
+      HelperClientResponse(payload: HelperXPCPayload.response(ok: true)),
+      .failure("xpc unavailable"),
+      HelperClientResponse(payload: HelperXPCPayload.response(ok: true))
+    ])
+    let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: "current")
+    let client = TunnelHelperClient(
+      transport: transport,
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "current"),
+      registrationRecordStore: recordStore
+    )
+
+    let firstState = await client.prepareForTunnelStart()
+    let healthyState = await client.currentPreparationState()
+    let secondState = await client.prepareForTunnelStart()
+
+    XCTAssertEqual(firstState, .notBootstrapped("xpc unavailable"))
+    XCTAssertEqual(healthyState, .ready)
+    XCTAssertEqual(secondState, .ready)
+    XCTAssertEqual(service.unregisterCount, 2)
+    XCTAssertEqual(service.registerCount, 2)
+    XCTAssertEqual(client.statusMessage, TunnelHelperClient.bootstrappedMessage)
+  }
+
+  func testPreparingTunnelTimesOutStuckEnabledHelperStatus() async throws {
+    let service = FakeHelperService(status: .enabled)
+    let client = TunnelHelperClient(
+      transport: HangingStatusHelperTransport(),
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "current"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "current"),
+      bootstrapStatusTimeoutSeconds: 0.01
+    )
+    let startedAt = Date()
+
+    let state = await client.prepareForTunnelStart()
+
+    XCTAssertEqual(state, .notBootstrapped(TunnelHelperClient.notBootstrappedMessage))
+    XCTAssertLessThan(Date().timeIntervalSince(startedAt), 1)
+    XCTAssertEqual(service.unregisterCount, 1)
+    XCTAssertEqual(service.registerCount, 1)
+  }
+
+  func testNotBootstrappedStateDoesNotPollForApproval() {
+    XCTAssertTrue(TunHelperPreparationState.requiresApproval("approve").shouldPollForApproval)
+    XCTAssertFalse(TunHelperPreparationState.notBootstrapped("launchd failed").shouldPollForApproval)
+  }
+
+  func testAppBundleHelperFingerprintUsesLaunchServicesExecutablePath() throws {
+    let bundleURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxFingerprint-\(UUID().uuidString).app", isDirectory: true)
+    let helperURL = bundleURL.appendingPathComponent("Contents/Library/LaunchServices/ClashMaxHelper")
+    let plistURL = bundleURL.appendingPathComponent("Contents/Library/LaunchDaemons/io.github.clashmax.ClashMax.Helper.plist")
+    try FileManager.default.createDirectory(
+      at: helperURL.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(
+      at: plistURL.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+    try "helper".write(to: helperURL, atomically: true, encoding: .utf8)
+    try "plist".write(to: plistURL, atomically: true, encoding: .utf8)
+    defer { try? FileManager.default.removeItem(at: bundleURL) }
+
+    let fingerprint = try AppBundleHelperFingerprintProvider(bundleURL: bundleURL).currentFingerprint()
+
+    XCTAssertFalse(fingerprint.isEmpty)
+  }
+
   func testRepairHelperReregistersWhenFingerprintMismatchOnEnabledHelper() async throws {
     let service = FakeHelperService(status: .enabled)
     let transport = FakeHelperTransport(statusResponse: HelperClientResponse(payload: HelperXPCPayload.response(ok: true)))
@@ -467,6 +613,72 @@ private final class ToggleableHelperTransport: HelperXPCTransport, Sendable {
 
   func status() async throws -> HelperClientResponse {
     await state.consume()
+  }
+
+  func startTunnel(coreURL: URL, configURL: URL, workDirectory: URL, secret: String) async throws -> HelperClientResponse {
+    .failure("unused")
+  }
+
+  func stopTunnel() async throws -> HelperClientResponse {
+    .failure("unused")
+  }
+
+  func restartTunnel(coreURL: URL, configURL: URL, workDirectory: URL, secret: String) async throws -> HelperClientResponse {
+    .failure("unused")
+  }
+
+  func recentLogs() async throws -> [String] {
+    []
+  }
+}
+
+private actor SequencedHelperState {
+  var statuses: [HelperClientResponse]
+
+  init(statuses: [HelperClientResponse]) {
+    self.statuses = statuses
+  }
+
+  func consume() -> HelperClientResponse {
+    if statuses.isEmpty {
+      return .failure("unused")
+    }
+    return statuses.removeFirst()
+  }
+}
+
+private final class SequencedHelperTransport: HelperXPCTransport, Sendable {
+  private let state: SequencedHelperState
+
+  init(statuses: [HelperClientResponse]) {
+    self.state = SequencedHelperState(statuses: statuses)
+  }
+
+  func status() async throws -> HelperClientResponse {
+    await state.consume()
+  }
+
+  func startTunnel(coreURL: URL, configURL: URL, workDirectory: URL, secret: String) async throws -> HelperClientResponse {
+    .failure("unused")
+  }
+
+  func stopTunnel() async throws -> HelperClientResponse {
+    .failure("unused")
+  }
+
+  func restartTunnel(coreURL: URL, configURL: URL, workDirectory: URL, secret: String) async throws -> HelperClientResponse {
+    .failure("unused")
+  }
+
+  func recentLogs() async throws -> [String] {
+    []
+  }
+}
+
+private actor HangingStatusHelperTransport: HelperXPCTransport {
+  func status() async throws -> HelperClientResponse {
+    try await Task.sleep(nanoseconds: 5_000_000_000)
+    return HelperClientResponse(payload: HelperXPCPayload.response(ok: true))
   }
 
   func startTunnel(coreURL: URL, configURL: URL, workDirectory: URL, secret: String) async throws -> HelperClientResponse {

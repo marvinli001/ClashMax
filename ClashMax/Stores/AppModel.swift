@@ -1244,15 +1244,21 @@ final class AppModel: ObservableObject {
         }
         self.applyTunHelperPreparationState(state)
       } catch is OperationTimedOutError {
-        let message = "Helper not responding. Approve ClashMax in System Settings > General > Login Items & Extensions, then click Status. If it remains stuck, restart macOS or reset Background Items approval state before retrying."
+        let message = TunnelHelperClient.notBootstrappedMessage
         self.helperClient.statusMessage = message
         self.tunHelperPreparationState = .notBootstrapped(message)
         self.lastError = message
+        if self.developerMode {
+          self.helperLogs = await self.helperLaunchdDiagnostics()
+        }
       } catch {
         let message = UserFacingError.message(for: error)
         self.helperClient.statusMessage = message
         self.tunHelperPreparationState = .notBootstrapped(message)
         self.lastError = message
+        if self.developerMode {
+          self.helperLogs = await self.helperLaunchdDiagnostics()
+        }
       }
     }
   }
@@ -1266,14 +1272,44 @@ final class AppModel: ObservableObject {
         }
         self.helperLogs = lines
       } catch is OperationTimedOutError {
-        let message = "Helper not responding. Approve ClashMax in System Settings > General > Login Items & Extensions, then click Status. If it remains stuck, restart macOS or reset Background Items approval state before retrying."
+        let message = TunnelHelperClient.notBootstrappedMessage
         self.helperClient.statusMessage = message
+        self.helperLogs = await self.helperLaunchdDiagnostics()
         self.lastError = message
       } catch {
         let message = UserFacingError.message(for: error)
         self.helperClient.statusMessage = message
+        if self.developerMode {
+          self.helperLogs = await self.helperLaunchdDiagnostics()
+        }
         self.lastError = message
       }
+    }
+  }
+
+  private func helperLaunchdDiagnostics() async -> [String] {
+    do {
+      let output = try await ProcessCommandRunner(timeout: 2).run(
+        "/bin/launchctl",
+        ["print", "system/\(clashMaxHelperMachServiceName)"]
+      )
+      let diagnosticPrefixes = [
+        "state =",
+        "job state =",
+        "last exit code =",
+        "program identifier =",
+        "parent bundle version =",
+        "path ="
+      ]
+      let lines = output
+        .split(whereSeparator: \.isNewline)
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { line in diagnosticPrefixes.contains { line.hasPrefix($0) } }
+      return lines.isEmpty
+        ? ["launchctl did not return helper diagnostics."]
+        : lines
+    } catch {
+      return ["launchctl helper diagnostics unavailable: \(UserFacingError.message(for: error))"]
     }
   }
 

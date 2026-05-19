@@ -2451,6 +2451,23 @@
         }
       }
     },
+    "TUN helper is registered, but launchd cannot start it. Click Repair after installing the latest build." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "TUN helper is registered, but launchd cannot start it. Click Repair after installing the latest build."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TUN helper 已注册，但 launchd 无法启动它。安装最新构建后请点击“修复”。"
+          }
+        }
+      }
+    },
     "TUN helper is ready." : {
       "extractionState" : "stale",
       "localizations" : {

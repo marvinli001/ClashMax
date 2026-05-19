@@ -841,13 +841,17 @@ enum TunHelperPreparationState: Equatable, Sendable {
   }
 
   var isFailure: Bool {
-    if case .failed = self { return true }
-    return false
+    switch self {
+    case .notBootstrapped, .failed:
+      return true
+    default:
+      return false
+    }
   }
 
   var shouldPollForApproval: Bool {
     switch self {
-    case .requiresApproval, .notBootstrapped:
+    case .requiresApproval:
       return true
     default:
       return false

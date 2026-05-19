@@ -52,6 +52,7 @@ final class SystemProxyControllerTests: XCTestCase {
 
     XCTAssertTrue(plist.contains("<key>BundleProgram</key>"))
     XCTAssertTrue(plist.contains("Contents/Library/LaunchServices/ClashMaxHelper"))
+    XCTAssertFalse(plist.contains("Contents/MacOS/ClashMaxHelper"))
     XCTAssertTrue(plist.contains("<key>AssociatedBundleIdentifiers</key>"))
     XCTAssertTrue(plist.contains("<string>io.github.clashmax.ClashMax</string>"))
   }

@@ -104,9 +104,11 @@ targets:
         script: |
           set -euo pipefail
           launch_services="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Library/LaunchServices"
+          legacy_macos_helper="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/MacOS/ClashMaxHelper"
           launch_daemons="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Library/LaunchDaemons"
           core_resources="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Core"
           mkdir -p "$launch_services" "$launch_daemons" "$core_resources"
+          rm -f "$legacy_macos_helper"
           cp "$BUILT_PRODUCTS_DIR/ClashMaxHelper" "$launch_services/ClashMaxHelper"
           cp "$SRCROOT/Config/io.github.clashmax.ClashMax.Helper.plist" "$launch_daemons/io.github.clashmax.ClashMax.Helper.plist"
           cp -R "$SRCROOT/Resources/Core/." "$core_resources/"
