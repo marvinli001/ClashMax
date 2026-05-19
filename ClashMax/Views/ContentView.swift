@@ -21,12 +21,12 @@ struct ContentView: View {
             ))
 
             Button {
-              appModel.isRunning ? appModel.stop() : appModel.start()
+              appModel.canStopRuntime ? appModel.stop() : appModel.start()
             } label: {
               Label(toolbarRunTitle, systemImage: toolbarRunSymbol)
             }
             .keyboardShortcut("r", modifiers: [.command])
-            .disabled(appModel.dashboardRuntimeState.isStarting || (!appModel.isRunning && appModel.readinessIssue != nil))
+            .disabled(!appModel.canStopRuntime && appModel.readinessIssue != nil)
           }
         }
     }
@@ -36,14 +36,14 @@ struct ContentView: View {
     if appModel.dashboardRuntimeState.isStarting {
       return "Starting"
     }
-    return appModel.isRunning ? "Stop" : "Start"
+    return appModel.canStopRuntime ? "Stop" : "Start"
   }
 
   private var toolbarRunSymbol: String {
     if appModel.dashboardRuntimeState.isStarting {
       return "clock.arrow.circlepath"
     }
-    return appModel.isRunning ? "stop.fill" : "play.fill"
+    return appModel.canStopRuntime ? "stop.fill" : "play.fill"
   }
 
   @ViewBuilder

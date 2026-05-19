@@ -157,27 +157,23 @@ final class TunnelHelperClient: ObservableObject {
   }
 
   func register() async throws {
-    let fingerprint = try fingerprintProvider.currentFingerprint()
-    switch service.status {
-    case .enabled:
-      if registrationRecordStore.helperFingerprint().map({ $0 != fingerprint }) == true {
-        try await repairRegistration(fingerprint: fingerprint)
-        return
-      }
-      registrationRecordStore.setHelperFingerprint(fingerprint)
-      try await verifyBootstrapped()
-    case .requiresApproval:
-      statusMessage = Self.statusMessage(for: service.status)
-      registrationRecordStore.setHelperFingerprint(fingerprint)
-      openApprovalSettings()
-    case .notRegistered, .notFound:
-      try service.register()
-      registrationRecordStore.setHelperFingerprint(fingerprint)
-      try await updateStatusAfterRegistration()
-    @unknown default:
-      try service.register()
-      registrationRecordStore.setHelperFingerprint(fingerprint)
-      try await updateStatusAfterRegistration()
+    let state = await warmRegistration(openSystemSettingsWhenApprovalRequired: true)
+    if state.isFailure {
+      throw AppError.helperResponse(state.message)
+    }
+  }
+
+  func warmRegistration(openSystemSettingsWhenApprovalRequired: Bool = false) async -> TunHelperPreparationState {
+    do {
+      let fingerprint = try fingerprintProvider.currentFingerprint()
+      return try await warmRegistration(
+        fingerprint: fingerprint,
+        openSystemSettingsWhenApprovalRequired: openSystemSettingsWhenApprovalRequired
+      )
+    } catch {
+      let message = UserFacingError.message(for: error)
+      statusMessage = message
+      return .failed(message)
     }
   }
 
@@ -206,17 +202,37 @@ final class TunnelHelperClient: ObservableObject {
   func refreshRegistrationStatus() async {
     switch service.status {
     case .enabled:
-      do {
-        try await verifyBootstrapped()
-      } catch {
-        statusMessage = Self.notBootstrappedMessage
-      }
+      statusMessage = Self.registeredMessage
     default:
       statusMessage = Self.statusMessage(for: service.status)
     }
   }
 
   func currentPreparationState() async -> TunHelperPreparationState {
+    switch service.status {
+    case .enabled:
+      statusMessage = Self.registeredMessage
+      return .registered(Self.registeredMessage)
+    case .requiresApproval:
+      let message = Self.statusMessage(for: service.status)
+      statusMessage = message
+      return .requiresApproval(message)
+    case .notRegistered:
+      let message = Self.statusMessage(for: service.status)
+      statusMessage = message
+      return .idle
+    case .notFound:
+      let message = Self.statusMessage(for: service.status)
+      statusMessage = message
+      return .failed(message)
+    @unknown default:
+      let message = Self.statusMessage(for: service.status)
+      statusMessage = message
+      return .failed(message)
+    }
+  }
+
+  func checkedPreparationState() async -> TunHelperPreparationState {
     switch service.status {
     case .enabled:
       return await bootstrappedPreparationState()
@@ -244,7 +260,7 @@ final class TunnelHelperClient: ObservableObject {
     case .notRegistered:
       return String(localized: "Helper not registered. Click Register or Start in TUN mode.")
     case .enabled:
-      return String(localized: "Helper registered. Verifying helper connection.")
+      return Self.registeredMessage
     case .requiresApproval:
       return String(localized: "Helper registered. Approve ClashMax in System Settings > General > Login Items & Extensions, then click Status.")
     case .notFound:
@@ -254,6 +270,7 @@ final class TunnelHelperClient: ObservableObject {
     }
   }
 
+  static let registeredMessage = String(localized: "Helper registered; ClashMax will verify it when TUN starts.")
   static let bootstrappedMessage = String(localized: "Helper registered and bootstrapped.")
   static let notBootstrappedMessage = String(localized: "Helper registered but not bootstrapped. Approve ClashMax in System Settings > General > Login Items & Extensions, then click Status. If Repair keeps failing after approval, restart macOS or reset Background Items approval state before retrying.")
 
@@ -284,6 +301,69 @@ final class TunnelHelperClient: ObservableObject {
     try service.register()
     registrationRecordStore.setHelperFingerprint(fingerprint)
     try await updateStatusAfterRegistration()
+  }
+
+  private func warmRegistration(
+    fingerprint: String,
+    openSystemSettingsWhenApprovalRequired: Bool
+  ) async throws -> TunHelperPreparationState {
+    switch service.status {
+    case .enabled:
+      if registrationRecordStore.helperFingerprint().map({ $0 != fingerprint }) == true {
+        try await service.unregister()
+        try service.register()
+        registrationRecordStore.setHelperFingerprint(fingerprint)
+        return registrationStateAfterWarmRegistration(
+          openSystemSettingsWhenApprovalRequired: openSystemSettingsWhenApprovalRequired
+        )
+      }
+      registrationRecordStore.setHelperFingerprint(fingerprint)
+      statusMessage = Self.registeredMessage
+      return .registered(Self.registeredMessage)
+    case .requiresApproval:
+      registrationRecordStore.setHelperFingerprint(fingerprint)
+      return approvalRequiredState(openSystemSettings: openSystemSettingsWhenApprovalRequired)
+    case .notRegistered:
+      try service.register()
+      registrationRecordStore.setHelperFingerprint(fingerprint)
+      return registrationStateAfterWarmRegistration(
+        openSystemSettingsWhenApprovalRequired: openSystemSettingsWhenApprovalRequired
+      )
+    case .notFound:
+      let message = Self.statusMessage(for: service.status)
+      statusMessage = message
+      return .failed(message)
+    @unknown default:
+      try service.register()
+      registrationRecordStore.setHelperFingerprint(fingerprint)
+      return registrationStateAfterWarmRegistration(
+        openSystemSettingsWhenApprovalRequired: openSystemSettingsWhenApprovalRequired
+      )
+    }
+  }
+
+  private func registrationStateAfterWarmRegistration(
+    openSystemSettingsWhenApprovalRequired: Bool
+  ) -> TunHelperPreparationState {
+    switch service.status {
+    case .enabled:
+      statusMessage = Self.registeredMessage
+      return .registered(Self.registeredMessage)
+    case .requiresApproval:
+      return approvalRequiredState(openSystemSettings: openSystemSettingsWhenApprovalRequired)
+    case .notRegistered:
+      let message = Self.statusMessage(for: service.status)
+      statusMessage = message
+      return .idle
+    case .notFound:
+      let message = Self.statusMessage(for: service.status)
+      statusMessage = message
+      return .failed(message)
+    @unknown default:
+      let message = Self.statusMessage(for: service.status)
+      statusMessage = message
+      return .failed(message)
+    }
   }
 
   private func updateStatusAfterRegistration() async throws {

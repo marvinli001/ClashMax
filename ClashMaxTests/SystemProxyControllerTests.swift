@@ -2,7 +2,7 @@ import XCTest
 @testable import ClashMax
 
 final class SystemProxyControllerTests: XCTestCase {
-  func testRunScriptAllowsCodesigningForHelperRegistration() throws {
+  func testRunScriptUsesXcodeManagedSigningAndVerifyChecksSystemExtensionSignature() throws {
     let testFile = URL(fileURLWithPath: #filePath)
     let projectRoot = testFile.deletingLastPathComponent().deletingLastPathComponent()
     let scriptURL = projectRoot.appendingPathComponent("script/build_and_run.sh")
@@ -11,11 +11,13 @@ final class SystemProxyControllerTests: XCTestCase {
     XCTAssertFalse(script.contains("CODE_SIGNING_ALLOWED=NO"))
     XCTAssertTrue(script.contains("CLASHMAX_DERIVED_DATA"))
     XCTAssertTrue(script.contains("Library/Developer/Xcode/DerivedData/ClashMaxLocal"))
-    XCTAssertTrue(script.contains("security find-identity -v -p codesigning"))
-    XCTAssertTrue(script.contains("CLASHMAX_CODESIGN_IDENTITY"))
-    XCTAssertTrue(script.contains("Config/ClashMaxHelper.entitlements"))
-    XCTAssertTrue(script.contains("Config/ClashMax.entitlements"))
-    XCTAssertTrue(script.contains("TUN helper registration will not work with ad-hoc signing"))
+    XCTAssertFalse(script.contains("security find-identity -v -p codesigning"))
+    XCTAssertFalse(script.contains("CLASHMAX_CODESIGN_IDENTITY"))
+    XCTAssertFalse(script.contains("codesign --force"))
+    XCTAssertTrue(script.contains("codesign --verify --strict --verbose=2"))
+    XCTAssertTrue(script.contains("Contents/Library/SystemExtensions"))
+    XCTAssertTrue(script.contains("com.apple.developer.system-extension.install"))
+    XCTAssertTrue(script.contains("app-proxy-provider-systemextension"))
   }
 
   func testAppBundleExtendedAttributesAreClearedBeforeSigning() throws {
@@ -43,12 +45,22 @@ final class SystemProxyControllerTests: XCTestCase {
     let projectRoot = testFile.deletingLastPathComponent().deletingLastPathComponent()
     let launchDaemonPlist = projectRoot
       .appendingPathComponent("Config/io.github.clashmax.ClashMax.Helper.plist")
-    let plist = try String(contentsOf: launchDaemonPlist, encoding: .utf8)
+    let plistData = try Data(contentsOf: launchDaemonPlist)
+    let plist = try XCTUnwrap(
+      PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any]
+    )
 
-    XCTAssertTrue(plist.contains("<key>BundleProgram</key>"))
-    XCTAssertTrue(plist.contains("Contents/Library/LaunchServices/ClashMaxHelper"))
-    XCTAssertTrue(plist.contains("<key>AssociatedBundleIdentifiers</key>"))
-    XCTAssertTrue(plist.contains("<string>io.github.clashmax.ClashMax</string>"))
+    XCTAssertEqual(
+      plist["BundleProgram"] as? String,
+      "Contents/Library/LaunchServices/ClashMaxHelper"
+    )
+    XCTAssertEqual(plist["AssociatedBundleIdentifiers"] as? [String], ["io.github.clashmax.ClashMax"])
+    XCTAssertEqual(
+      (plist["MachServices"] as? [String: Bool])?["io.github.clashmax.ClashMax.Helper"],
+      true
+    )
+    XCTAssertEqual(plist["RunAtLoad"] as? Bool, true)
+    XCTAssertNil(plist["KeepAlive"])
   }
 
   func testHelperInfoPlistUsesSMAppServiceDaemonIdentityWithoutLegacyBlessClientRules() throws {
@@ -92,6 +104,118 @@ final class SystemProxyControllerTests: XCTestCase {
       XCTAssertTrue(content.contains("--timestamp"))
       XCTAssertTrue(content.contains("codesign --verify --strict"))
     }
+  }
+
+  func testNetworkExtensionTargetUsesTransparentProxySystemExtensionWiring() throws {
+    let testFile = URL(fileURLWithPath: #filePath)
+    let projectRoot = testFile.deletingLastPathComponent().deletingLastPathComponent()
+    let projectSpec = try String(contentsOf: projectRoot.appendingPathComponent("project.yml"), encoding: .utf8)
+    let appEntitlements = try String(
+      contentsOf: projectRoot.appendingPathComponent("Config/ClashMax.entitlements"),
+      encoding: .utf8
+    )
+    let extensionEntitlements = try String(
+      contentsOf: projectRoot.appendingPathComponent("Config/ClashMaxNetworkExtension.entitlements"),
+      encoding: .utf8
+    )
+    let extensionInfo = try String(
+      contentsOf: projectRoot.appendingPathComponent("Config/ClashMaxNetworkExtension-Info.plist"),
+      encoding: .utf8
+    )
+
+    XCTAssertTrue(projectSpec.contains("ClashMaxNetworkExtension:"))
+    XCTAssertTrue(projectSpec.contains("type: system-extension"))
+    XCTAssertTrue(projectSpec.contains("PRODUCT_BUNDLE_IDENTIFIER: io.github.clashmax.ClashMax.NetworkExtension"))
+    XCTAssertTrue(projectSpec.contains("com.apple.developer.system-extension.install: true"))
+    XCTAssertTrue(projectSpec.contains("Shared/Socks5ConnectRequest.swift"))
+    XCTAssertTrue(projectSpec.contains("embed: true"))
+    XCTAssertTrue(extensionInfo.contains("com.apple.networkextension.app-proxy"))
+    XCTAssertTrue(extensionInfo.contains("$(PRODUCT_MODULE_NAME).TransparentProxyProvider"))
+    XCTAssertTrue(extensionInfo.contains("NSSystemExtensionUsageDescription"))
+    XCTAssertTrue(extensionInfo.contains("transparent proxy system extension"))
+    XCTAssertTrue(appEntitlements.contains("com.apple.developer.system-extension.install"))
+    for entitlements in [appEntitlements, extensionEntitlements] {
+      XCTAssertTrue(entitlements.contains("com.apple.developer.networking.networkextension"))
+      XCTAssertTrue(entitlements.contains("app-proxy-provider-systemextension"))
+    }
+  }
+
+  @MainActor
+  func testNetworkExtensionStartWaiterTreatsInitialDisconnectedAsTransient() async throws {
+    let clock = TestClock()
+    var statusIndex = 0
+    let statuses: [NetworkExtensionRuntimeStatus] = [
+      .disconnected,
+      .disconnected,
+      .connecting,
+      .connected
+    ]
+    let waiter = NetworkExtensionStartStatusWaiter(
+      timeout: 5,
+      initialDisconnectedGrace: 1,
+      pollIntervalNanoseconds: 100_000_000,
+      now: { clock.now },
+      sleep: { nanoseconds in clock.advance(nanoseconds: nanoseconds) }
+    )
+
+    let result = try await waiter.wait {
+      defer { statusIndex = min(statusIndex + 1, statuses.count - 1) }
+      return statuses[statusIndex]
+    }
+
+    XCTAssertEqual(result, .connected)
+  }
+
+  @MainActor
+  func testNetworkExtensionStartWaiterFailsWhenDisconnectedAfterStartupProgress() async throws {
+    let clock = TestClock()
+    var statusIndex = 0
+    let statuses: [NetworkExtensionRuntimeStatus] = [
+      .disconnected,
+      .connecting,
+      .disconnected
+    ]
+    let waiter = NetworkExtensionStartStatusWaiter(
+      timeout: 5,
+      initialDisconnectedGrace: 5,
+      pollIntervalNanoseconds: 100_000_000,
+      now: { clock.now },
+      sleep: { nanoseconds in clock.advance(nanoseconds: nanoseconds) }
+    )
+
+    do {
+      _ = try await waiter.wait {
+        defer { statusIndex = min(statusIndex + 1, statuses.count - 1) }
+        return statuses[statusIndex]
+      }
+      XCTFail("Expected disconnected startup failure")
+    } catch {
+      XCTAssertTrue(error.localizedDescription.contains("disconnected before it became usable"))
+    }
+  }
+
+  func testProjectPinsManualDeveloperIDSigningAndHelperSkipInstall() throws {
+    let testFile = URL(fileURLWithPath: #filePath)
+    let projectRoot = testFile.deletingLastPathComponent().deletingLastPathComponent()
+    let projectSpec = try String(contentsOf: projectRoot.appendingPathComponent("project.yml"), encoding: .utf8)
+    let generatedProject = try String(
+      contentsOf: projectRoot.appendingPathComponent("ClashMax.xcodeproj/project.pbxproj"),
+      encoding: .utf8
+    )
+
+    XCTAssertTrue(projectSpec.contains("CODE_SIGN_STYLE: Manual"))
+    XCTAssertTrue(projectSpec.contains("DEVELOPMENT_TEAM: 678WA95W4U"))
+    XCTAssertTrue(projectSpec.contains("CODE_SIGN_IDENTITY: Developer ID Application"))
+    XCTAssertTrue(projectSpec.contains("PROVISIONING_PROFILE_SPECIFIER: ClashMax Developer ID"))
+    XCTAssertTrue(projectSpec.contains("PROVISIONING_PROFILE_SPECIFIER: ClashMax NetworkExtension Developer ID"))
+    XCTAssertTrue(projectSpec.contains("SKIP_INSTALL: YES"))
+
+    XCTAssertFalse(generatedProject.contains("CODE_SIGN_STYLE = Automatic;"))
+    XCTAssertTrue(generatedProject.contains("CODE_SIGN_STYLE = Manual;"))
+    XCTAssertTrue(generatedProject.contains("DEVELOPMENT_TEAM = 678WA95W4U;"))
+    XCTAssertTrue(generatedProject.contains("PROVISIONING_PROFILE_SPECIFIER = \"ClashMax Developer ID\";"))
+    XCTAssertTrue(generatedProject.contains("PROVISIONING_PROFILE_SPECIFIER = \"ClashMax NetworkExtension Developer ID\";"))
+    XCTAssertTrue(generatedProject.contains("SKIP_INSTALL = YES;"))
   }
 
   func testProcessCommandRunnerTimesOutHangingCommands() async throws {
@@ -747,6 +871,14 @@ private func terminateTestProcessIfNeeded(_ pid: pid_t) {
 private func isProcessAlive(_ pid: pid_t) -> Bool {
   guard pid > 1 else { return false }
   return kill(pid, 0) == 0 || errno == EPERM
+}
+
+private final class TestClock {
+  private(set) var now = Date(timeIntervalSince1970: 0)
+
+  func advance(nanoseconds: UInt64) {
+    now = now.addingTimeInterval(TimeInterval(nanoseconds) / 1_000_000_000)
+  }
 }
 
 private final class DelayedRecordingCommandRunner: CommandRunning, @unchecked Sendable {

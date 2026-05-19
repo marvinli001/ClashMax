@@ -9,8 +9,10 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     MACOSX_DEPLOYMENT_TARGET: "26.0"
-    DEVELOPMENT_TEAM: ""
-    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: 678WA95W4U
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: Developer ID Application
+    PROVISIONING_PROFILE_SPECIFIER: ""
     ENABLE_HARDENED_RUNTIME: YES
     ARCHS: "$(ARCHS_STANDARD)"
     ONLY_ACTIVE_ARCH: NO
@@ -58,6 +60,8 @@ targets:
       - package: Yams
       - package: Pow
       - package: Sparkle
+      - target: ClashMaxNetworkExtension
+        embed: true
       - target: ClashMaxHelper
         embed: false
         link: false
@@ -68,9 +72,16 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_USER_SCRIPT_SANDBOXING: NO
         MARKETING_VERSION: 1.0.5
-        CURRENT_PROJECT_VERSION: 7
+        CURRENT_PROJECT_VERSION: 12
+        PROVISIONING_PROFILE_SPECIFIER: ClashMax Developer ID
     entitlements:
       path: Config/ClashMax.entitlements
+      properties:
+        com.apple.developer.system-extension.install: true
+        com.apple.developer.networking.networkextension:
+          - app-proxy-provider-systemextension
+        com.apple.security.application-groups:
+          - group.678WA95W4U.io.github.clashmax.ClashMax.network-extension
     postCompileScripts:
       - name: Embed Helper
         inputFiles:
@@ -162,8 +173,26 @@ targets:
         INFOPLIST_FILE: Config/ClashMaxHelper-Info.plist
         CREATE_INFOPLIST_SECTION_IN_BINARY: YES
         MACH_O_TYPE: mh_execute
+        PROVISIONING_PROFILE_SPECIFIER: ""
+        SKIP_INSTALL: YES
     entitlements:
       path: Config/ClashMaxHelper.entitlements
+  ClashMaxNetworkExtension:
+    type: system-extension
+    platform: macOS
+    sources:
+      - path: ClashMaxNetworkExtension
+      - path: Shared/Socks5ConnectRequest.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.clashmax.ClashMax.NetworkExtension
+        PRODUCT_NAME: ClashMaxNetworkExtension
+        PRODUCT_MODULE_NAME: ClashMaxNetworkExtension
+        INFOPLIST_FILE: Config/ClashMaxNetworkExtension-Info.plist
+        CODE_SIGN_ENTITLEMENTS: Config/ClashMaxNetworkExtension.entitlements
+        MARKETING_VERSION: 1.0.5
+        CURRENT_PROJECT_VERSION: 12
+        PROVISIONING_PROFILE_SPECIFIER: ClashMax NetworkExtension Developer ID
   ClashMaxTests:
     type: bundle.unit-test
     platform: macOS

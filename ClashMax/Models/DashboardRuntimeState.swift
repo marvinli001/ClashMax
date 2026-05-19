@@ -24,17 +24,17 @@ enum DashboardRuntimeState: Equatable {
       break
     }
 
-    if tunnelCoreRunning {
-      return .running
-    }
-
     switch coreStatus {
-    case .running:
-      return .running
     case let .crashed(message):
       return .crashed(message: message)
+    case .running:
+      return .running
     default:
       break
+    }
+
+    if tunnelCoreRunning {
+      return .running
     }
 
     if let readinessIssue {

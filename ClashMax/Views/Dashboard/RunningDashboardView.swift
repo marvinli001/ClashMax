@@ -229,7 +229,7 @@ private struct RunningHeaderCard: View {
           title: "Proxy",
           value: appModel.proxyRoutingMode.displayName,
           symbolName: appModel.proxyRoutingMode.symbolName,
-          tint: appModel.systemProxyEnabled || appModel.tunEnabled ? .green : .secondary
+          tint: appModel.systemProxyEnabled || appModel.tunEnabled || appModel.networkExtensionStatus.isConnected ? .green : .secondary
         )
       }
     }
@@ -540,6 +540,10 @@ private struct NetworkStatusCard: View {
       appModel.systemProxyEnabled ? "System Proxy 127.0.0.1:\(appModel.overrides.mixedPort)" : "System Proxy ready"
     case .tun:
       appModel.tunEnabled ? "TUN helper controlled" : "TUN ready"
+    case .networkExtension:
+      appModel.networkExtensionStatus.isConnected
+        ? "NE transparent proxy connected"
+        : "NE \(appModel.networkExtensionStatus.displayName)"
     }
   }
 }

@@ -423,6 +423,31 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(secondModel.developerMode)
   }
 
+  func testDisablingDeveloperModeClearsNetworkExtensionRoutingMode() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    model.proxyRoutingMode = .networkExtension
+    XCTAssertEqual(model.proxyRoutingMode, .systemProxy)
+
+    model.developerMode = true
+    model.requestProxyRoutingMode(.networkExtension)
+    for _ in 0..<40 where model.proxyRoutingMode != .networkExtension {
+      await Task.yield()
+    }
+
+    XCTAssertEqual(model.proxyRoutingMode, .networkExtension)
+
+    model.developerMode = false
+
+    XCTAssertFalse(model.developerMode)
+    XCTAssertEqual(model.proxyRoutingMode, .systemProxy)
+  }
+
   func testAppThemeDefaultsToSystemAndPersists() throws {
     let paths = try Self.makeRuntimePaths()
     let defaults = try Self.makeIsolatedDefaults()
@@ -2392,10 +2417,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
       tunnelReadinessProbe: FailingCoreReadinessProbe(message: "controller refused connection")
     )
     model.requestProxyRoutingMode(.tun)
-    for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
+    for _ in 0..<40 where !model.tunHelperPreparationState.allowsTunnelStart {
       await Task.yield()
     }
-    XCTAssertTrue(model.tunHelperPreparationState.isReady)
+    XCTAssertTrue(model.tunHelperPreparationState.allowsTunnelStart)
 
     model.start()
 
@@ -2412,6 +2437,218 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertFalse(model.tunEnabled)
     XCTAssertFalse(model.isRunning)
     XCTAssertTrue(model.lastError?.contains("controller refused connection") == true)
+  }
+
+  func testNetworkExtensionStartUsesUserCoreWithoutSystemProxyOrTunHelper() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let launcher = CountingProcessLauncher()
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let helperTransport = ReadyTunnelHelperTransport()
+    let helper = TunnelHelperClient(
+      transport: helperTransport,
+      service: StaticHelperService(status: .enabled),
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
+    )
+    let networkExtension = RecordingNetworkExtensionController(startStatus: .connected)
+    let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: SystemProxyController(commandRunner: commandRunner),
+      helperClient: helper,
+      networkExtensionController: networkExtension,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.developerMode = true
+    model.requestProxyRoutingMode(.networkExtension)
+    for _ in 0..<40 where model.proxyRoutingMode != .networkExtension {
+      await Task.yield()
+    }
+
+    model.start()
+
+    for _ in 0..<160 where model.runtimeOwner != .networkExtension || model.startInFlight {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(model.runtimeOwner, .networkExtension)
+    XCTAssertEqual(model.networkExtensionStatus, .connected)
+    XCTAssertTrue(model.canControlRuntimeProxies)
+    XCTAssertFalse(model.systemProxyEnabled)
+    XCTAssertFalse(model.tunEnabled)
+    XCTAssertEqual(launcher.launchCount, 1)
+    let helperStartCount = await helperTransport.startCount()
+    XCTAssertEqual(helperStartCount, 0)
+    XCTAssertEqual(networkExtension.startCount, 1)
+    XCTAssertEqual(networkExtension.requestedMixedPorts, [7890])
+    XCTAssertFalse(commandRunner.commands.contains { $0.contains("-setwebproxy") })
+  }
+
+  func testNetworkExtensionStartFailureStopsUserCoreAndDoesNotPublishRunningOwner() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let launcher = CountingProcessLauncher()
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let networkExtension = RecordingNetworkExtensionController(startError: AppError.networkExtensionResponse("approval required"))
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      networkExtensionController: networkExtension,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.developerMode = true
+    model.proxyRoutingMode = .networkExtension
+
+    model.start()
+
+    for _ in 0..<160 where model.startInFlight || model.lastError == nil {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(launcher.launchCount, 1)
+    XCTAssertEqual(networkExtension.startCount, 1)
+    XCTAssertEqual(model.runtimeOwner, .stopped)
+    XCTAssertFalse(model.isRunning)
+    XCTAssertEqual(model.coreController.status, .stopped)
+    XCTAssertTrue(model.lastError?.contains("approval required") == true)
+  }
+
+  func testNetworkExtensionStopFailurePreservesCoreAndOwner() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let controller = CoreProcessController(
+      launcher: FakeProcessLauncher(),
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let networkExtension = RecordingNetworkExtensionController(
+      startStatus: .connected,
+      stopError: AppError.networkExtensionResponse("stop timed out")
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      networkExtensionController: networkExtension,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.developerMode = true
+    model.proxyRoutingMode = .networkExtension
+    model.start()
+    for _ in 0..<160 where model.runtimeOwner != .networkExtension {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    model.stop()
+
+    for _ in 0..<80 where model.lastError == nil {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(model.runtimeOwner, .networkExtension)
+    XCTAssertTrue(model.isRunning)
+    XCTAssertEqual(model.networkExtensionStatus, .connected)
+    XCTAssertGreaterThanOrEqual(networkExtension.stopCount, 1)
+    XCTAssertTrue(model.lastError?.contains("stop timed out") == true)
+  }
+
+  func testNetworkExtensionNativePingModeUsesMihomoDelayAPI() async throws {
+    let group = ProxyGroup(
+      name: "Proxy",
+      type: "select",
+      selected: "Japan",
+      nodes: [ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true, serverHost: "example.com")]
+    )
+    let client = RecordingMihomoController(proxyGroupsResponse: [group], testDelayResult: 88)
+    let pingTester = RecordingPingTester(results: [12])
+    let model = try await makeRunningRuntimeModel(
+      client: client,
+      pingTester: pingTester,
+      initialProxyGroups: [group]
+    )
+    model.developerMode = true
+    model.proxyRoutingMode = .networkExtension
+    model.delayTestSettings = DelayTestSettings(mode: .nativePing)
+
+    model.testDelay(for: group.nodes[0])
+
+    for _ in 0..<40 where await client.delayRequestCount() == 0 {
+      await Task.yield()
+    }
+    for _ in 0..<40 where model.proxyGroups.first?.nodes.first?.delay != 88 {
+      await Task.yield()
+    }
+
+    let delayRequestCount = await client.delayRequestCount()
+    let pingRequestCount = await pingTester.requestCount()
+    XCTAssertEqual(delayRequestCount, 1)
+    XCTAssertEqual(pingRequestCount, 0)
+    XCTAssertEqual(model.proxyGroups.first?.nodes.first?.delay, 88)
+  }
+
+  func testNetworkExtensionProxySelectionStillUsesMihomoController() async throws {
+    let group = ProxyGroup(
+      name: "Proxy",
+      type: "select",
+      selected: "Japan",
+      nodes: [
+        ProxyNode(name: "Japan", type: "direct", delay: nil, isSelectable: true),
+        ProxyNode(name: "Singapore", type: "direct", delay: nil, isSelectable: true)
+      ]
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [
+        ProxyGroup(name: "Proxy", type: "select", selected: "Singapore", nodes: group.nodes)
+      ],
+      testDelayResult: 73
+    )
+    let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [group])
+    model.developerMode = true
+    model.proxyRoutingMode = .networkExtension
+
+    model.selectProxy(group: group, node: group.nodes[1])
+
+    for _ in 0..<40 where await client.selectedProxyRequestCount() == 0 {
+      await Task.yield()
+    }
+    for _ in 0..<40 where model.proxyGroups.first?.selected != "Singapore" {
+      await Task.yield()
+    }
+
+    let selectedProxyRequests = await client.selectedProxyRequests()
+    XCTAssertEqual(selectedProxyRequests, ["Proxy:Singapore"])
+    XCTAssertEqual(model.proxyGroups.first?.selected, "Singapore")
   }
 
   func testSelectingProfileWhileRunningRestartsRuntimeWithNewProfile() async throws {
@@ -2517,6 +2754,101 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     XCTAssertEqual(model.proxyRoutingMode, .tun)
     XCTAssertGreaterThan(changeCount, 0)
+  }
+
+  func testLaunchWarmupRegistersTunHelperOutsideTunModeWithoutOpeningSettings() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let service = StaticHelperService(status: .notRegistered, statusAfterRegister: .enabled)
+    let helper = TunnelHelperClient(
+      transport: FailingStatusTunnelHelperTransport(),
+      service: service,
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      helperClient: helper,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    model.warmTunHelperRegistrationOnLaunch()
+
+    for _ in 0..<40 where model.tunHelperPreparationState == .idle || model.tunHelperPreparationState == .checking {
+      await Task.yield()
+    }
+
+    XCTAssertEqual(model.proxyRoutingMode, .systemProxy)
+    XCTAssertEqual(model.tunHelperPreparationState, .registered(TunnelHelperClient.registeredMessage))
+    XCTAssertEqual(service.registerCount, 1)
+    XCTAssertEqual(service.openSettingsCount, 0)
+    XCTAssertNil(model.lastError)
+  }
+
+  func testLaunchWarmupDoesNotOpenSettingsWhenTunHelperRequiresApproval() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let service = StaticHelperService(status: .requiresApproval)
+    let helper = TunnelHelperClient(
+      transport: ReadyTunnelHelperTransport(),
+      service: service,
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      helperClient: helper,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    model.warmTunHelperRegistrationOnLaunch()
+
+    for _ in 0..<40 where model.tunHelperPreparationState == .idle || model.tunHelperPreparationState == .checking {
+      await Task.yield()
+    }
+
+    XCTAssertEqual(
+      model.tunHelperPreparationState,
+      .requiresApproval(TunnelHelperClient.statusMessage(for: .requiresApproval))
+    )
+    XCTAssertEqual(service.registerCount, 0)
+    XCTAssertEqual(service.openSettingsCount, 0)
+    XCTAssertNil(model.lastError)
+  }
+
+  func testSwitchingAwayFromTunPreservesRegisteredHelperState() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let service = StaticHelperService(status: .enabled)
+    let helper = TunnelHelperClient(
+      transport: FailingStatusTunnelHelperTransport(),
+      service: service,
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      helperClient: helper,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    model.requestProxyRoutingMode(.tun)
+
+    for _ in 0..<40 where model.proxyRoutingMode != .tun || model.tunHelperPreparationState == .idle || model.tunHelperPreparationState == .checking {
+      await Task.yield()
+    }
+
+    XCTAssertEqual(model.tunHelperPreparationState, .registered(TunnelHelperClient.registeredMessage))
+
+    model.requestProxyRoutingMode(.systemProxy)
+
+    for _ in 0..<40 where model.proxyRoutingMode != .systemProxy {
+      await Task.yield()
+    }
+
+    XCTAssertEqual(model.tunHelperPreparationState, .registered(TunnelHelperClient.registeredMessage))
+    XCTAssertEqual(service.registerCount, 0)
+    XCTAssertEqual(service.unregisterCount, 0)
   }
 
   func testCoreControllerStatusChangesPublishAppModelChanges() async throws {
@@ -2691,10 +3023,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
       model.tunHelperPreparationState,
       .notBootstrapped(TunnelHelperClient.notBootstrappedMessage)
     )
+    XCTAssertTrue(model.tunHelperPreparationState.allowsTunnelStart)
     XCTAssertNil(model.lastError)
   }
 
-  func testSelectingTunRegistersAndMarksReadyHelper() async throws {
+  func testSelectingTunRegistersAndMarksHelperAvailableForStart() async throws {
     let paths = try Self.makeRuntimePaths()
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
     try Self.writeProxyConfig(named: "Japan", to: configURL)
@@ -2716,13 +3049,13 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.requestProxyRoutingMode(.tun)
 
-    for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
+    for _ in 0..<40 where !model.tunHelperPreparationState.allowsTunnelStart {
       await Task.yield()
     }
 
     XCTAssertEqual(model.proxyRoutingMode, .tun)
     XCTAssertEqual(service.registerCount, 1)
-    XCTAssertTrue(model.tunHelperPreparationState.isReady)
+    XCTAssertEqual(model.tunHelperPreparationState, .registered(TunnelHelperClient.registeredMessage))
     XCTAssertNil(model.readinessIssue)
     XCTAssertNil(model.lastError)
   }
@@ -2922,6 +3255,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
   private func makeRunningRuntimeModel(
     client: any MihomoAPIControlling,
+    pingTester: any PingTesting = SystemPingTester(),
     initialProxyGroups: [ProxyGroup] = []
   ) async throws -> AppModel {
     let paths = try Self.makeRuntimePaths()
@@ -2941,6 +3275,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       profileStore: store,
       coreController: controller,
       apiClient: client,
+      pingTester: pingTester,
       defaults: try Self.makeIsolatedDefaults()
     )
     model.proxyGroups = initialProxyGroups
@@ -3368,6 +3703,60 @@ private actor RecordingPingTester: PingTesting {
 
   func hosts() -> [String] {
     requestedHosts
+  }
+}
+
+@MainActor
+private final class RecordingNetworkExtensionController: NetworkExtensionControlling {
+  private(set) var status: NetworkExtensionRuntimeStatus
+  private(set) var statusMessage: String
+  private(set) var recentError: String?
+  private let startStatus: NetworkExtensionRuntimeStatus
+  private let startError: Error?
+  private let stopError: Error?
+  private(set) var startCount = 0
+  private(set) var stopCount = 0
+  private(set) var refreshCount = 0
+  private(set) var requestedMixedPorts: [Int] = []
+
+  init(
+    startStatus: NetworkExtensionRuntimeStatus = .connected,
+    startError: Error? = nil,
+    stopError: Error? = nil,
+    initialStatus: NetworkExtensionRuntimeStatus = .disconnected
+  ) {
+    self.startStatus = startStatus
+    self.startError = startError
+    self.stopError = stopError
+    self.status = initialStatus
+    self.statusMessage = initialStatus.displayName
+  }
+
+  func refreshStatus() async {
+    refreshCount += 1
+  }
+
+  func startTransparentProxy(mixedPort: Int) async throws -> NetworkExtensionRuntimeStatus {
+    startCount += 1
+    requestedMixedPorts.append(mixedPort)
+    if let startError {
+      recentError = UserFacingError.message(for: startError)
+      throw startError
+    }
+    status = startStatus
+    statusMessage = startStatus.displayName
+    return status
+  }
+
+  func stopTransparentProxy() async throws -> NetworkExtensionRuntimeStatus {
+    stopCount += 1
+    if let stopError {
+      recentError = UserFacingError.message(for: stopError)
+      throw stopError
+    }
+    status = .disconnected
+    statusMessage = status.displayName
+    return status
   }
 }
 

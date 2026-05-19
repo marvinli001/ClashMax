@@ -158,13 +158,26 @@ enum AppTheme: String, Codable, CaseIterable, Identifiable, Sendable {
 enum ProxyRoutingMode: String, Codable, CaseIterable, Identifiable, Sendable {
   case systemProxy
   case tun
+  case networkExtension
 
   var id: String { rawValue }
+
+  static func selectableCases(developerMode: Bool) -> [ProxyRoutingMode] {
+    developerMode ? allCases : [.systemProxy, .tun]
+  }
 
   var displayName: String {
     switch self {
     case .systemProxy: String(localized: "System Proxy")
     case .tun: String(localized: "TUN")
+    case .networkExtension: String(localized: "NE Transparent Proxy Experimental")
+    }
+  }
+
+  var compactDisplayName: String {
+    switch self {
+    case .networkExtension: String(localized: "NE Experimental")
+    default: displayName
     }
   }
 
@@ -172,6 +185,7 @@ enum ProxyRoutingMode: String, Codable, CaseIterable, Identifiable, Sendable {
     switch self {
     case .systemProxy: "network.badge.shield.half.filled"
     case .tun: "point.topleft.down.curvedto.point.bottomright.up"
+    case .networkExtension: "network.badge.shield.half.filled"
     }
   }
 }
@@ -194,7 +208,7 @@ enum DelayTestMode: String, Codable, CaseIterable, Identifiable, Sendable {
     case .mihomoURL:
       return String(localized: "Measure through Mihomo's proxy delay API.")
     case .nativePing:
-      return String(localized: "Ping the node server host directly from macOS.")
+      return String(localized: "Ping the node server host directly from macOS. This does not measure Mihomo or NE routing.")
     }
   }
 }
@@ -819,6 +833,7 @@ struct TunSettings: Codable, Equatable, Sendable {
 enum TunHelperPreparationState: Equatable, Sendable {
   case idle
   case checking
+  case registered(String)
   case ready
   case requiresApproval(String)
   case notBootstrapped(String)
@@ -827,6 +842,15 @@ enum TunHelperPreparationState: Equatable, Sendable {
   var isReady: Bool {
     if case .ready = self { return true }
     return false
+  }
+
+  var allowsTunnelStart: Bool {
+    switch self {
+    case .registered, .ready, .notBootstrapped:
+      return true
+    default:
+      return false
+    }
   }
 
   var isFailure: Bool {
@@ -849,6 +873,8 @@ enum TunHelperPreparationState: Equatable, Sendable {
       return String(localized: "TUN helper needs preparation before Start is available.")
     case .checking:
       return String(localized: "Preparing the TUN helper with macOS.")
+    case let .registered(message):
+      return message
     case .ready:
       return String(localized: "TUN helper is ready.")
     case let .requiresApproval(message),
@@ -1123,7 +1149,51 @@ enum RuntimeOwner: String, Codable, Equatable, Sendable {
   case stopped
   case user
   case tunnel
+  case networkExtension
   case preview
+}
+
+enum NetworkExtensionRuntimeStatus: Equatable, Sendable {
+  case unavailable(String)
+  case invalid
+  case disconnected
+  case connecting
+  case connected
+  case reasserting
+  case disconnecting
+
+  var isActive: Bool {
+    switch self {
+    case .connecting, .connected, .reasserting, .disconnecting:
+      return true
+    default:
+      return false
+    }
+  }
+
+  var isConnected: Bool {
+    if case .connected = self { return true }
+    return false
+  }
+
+  var displayName: String {
+    switch self {
+    case let .unavailable(message):
+      return message
+    case .invalid:
+      return String(localized: "Not configured")
+    case .disconnected:
+      return String(localized: "Disconnected")
+    case .connecting:
+      return String(localized: "Connecting")
+    case .connected:
+      return String(localized: "Connected")
+    case .reasserting:
+      return String(localized: "Reconnecting")
+    case .disconnecting:
+      return String(localized: "Disconnecting")
+    }
+  }
 }
 
 enum SystemProxyMode: String, Codable, Equatable {

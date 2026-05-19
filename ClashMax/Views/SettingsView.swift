@@ -23,7 +23,10 @@ struct SettingsView: View {
           SettingsToggleRow(
             "Developer Mode",
             description: "Show helper diagnostics and advanced recovery details.",
-            isOn: $settings.developerMode
+            isOn: Binding(
+              get: { appModel.developerMode },
+              set: { appModel.setDeveloperMode($0) }
+            )
           )
           SettingsControlRow("Appearance", description: "Choose the app color scheme.") {
             Picker("Appearance", selection: $settings.appTheme) {
@@ -132,6 +135,12 @@ struct SettingsView: View {
             .pickerStyle(.menu)
             .frame(width: 180, alignment: .trailing)
           }
+          if settings.proxyRoutingMode == .networkExtension && settings.delayTestSettings.mode == .nativePing {
+            Text("NE mode uses Mihomo URL Delay for node cards; Native Ping remains a direct host probe outside the NE/Mihomo path.")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .lineLimit(2)
+          }
           SettingsToggleRow(
             "Unified Delay",
             description: "Run manual delay tests twice and use the second result to reduce handshake bias.",
@@ -157,7 +166,7 @@ struct SettingsView: View {
               get: { settings.proxyRoutingMode },
               set: { appModel.requestProxyRoutingMode($0) }
             )) {
-              ForEach(ProxyRoutingMode.allCases) { mode in
+              ForEach(ProxyRoutingMode.selectableCases(developerMode: settings.developerMode)) { mode in
                 Label(mode.displayName, systemImage: mode.symbolName).tag(mode)
               }
             }
@@ -179,7 +188,7 @@ struct SettingsView: View {
             }
 
             if settings.developerMode {
-              Text("LaunchDaemon approval is managed by macOS. Registering may open System Settings instead of showing an app permission sheet.")
+              Text("ClashMax checks TUN helper registration on launch. macOS still controls LaunchDaemon approval in System Settings.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
@@ -193,10 +202,28 @@ struct SettingsView: View {
                 }
               }
             }
+          } else if settings.proxyRoutingMode == .networkExtension {
+            SettingsControlRow(
+              "Network Extension",
+              description: "Transparent Proxy: \(appModel.networkExtensionStatus.displayName)"
+            ) {
+              Label(appModel.networkExtensionStatus.displayName, systemImage: appModel.proxyRoutingMode.symbolName)
+                .foregroundStyle(appModel.networkExtensionStatus.isConnected ? Color.green : Color.secondary)
+            }
+            .onAppear {
+              appModel.refreshNetworkExtensionStatus()
+            }
+
+            if settings.developerMode {
+              Text("Proxies, node selection, and node delay tests use Mihomo's local controller. Network Extension only captures system TCP traffic into the mixed port.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            }
           } else {
             SettingsControlRow(
               "TUN Helper",
-              description: "System Proxy mode does not need a privileged helper. Switch to TUN if you want VPN-style routing for non-HTTP traffic."
+              description: "System Proxy mode does not need a privileged helper. Switch to TUN or NE if you want broader traffic routing."
             ) {
               Image(systemName: "checkmark.shield")
                 .foregroundStyle(.secondary)

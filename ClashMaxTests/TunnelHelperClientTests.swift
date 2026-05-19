@@ -31,7 +31,7 @@ final class TunnelHelperClientTests: XCTestCase {
     XCTAssertEqual(HelperXPCPayload.logLines(from: HelperXPCPayload.logs(["one", "two"])), ["one", "two"])
   }
 
-  func testEnabledRegistrationIsReportedAsNotBootstrappedWhenXPCStatusFails() async throws {
+  func testEnabledRegistrationIsReportedAsRegisteredWhenXPCStatusFails() async throws {
     let service = FakeHelperService(status: .enabled)
     let transport = FakeHelperTransport(statusError: AppError.helperResponse("lookup failed"))
     let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: "v1")
@@ -46,10 +46,10 @@ final class TunnelHelperClientTests: XCTestCase {
 
     XCTAssertEqual(service.registerCount, 0)
     XCTAssertEqual(service.unregisterCount, 0)
-    XCTAssertEqual(client.statusMessage, TunnelHelperClient.notBootstrappedMessage)
+    XCTAssertEqual(client.statusMessage, TunnelHelperClient.registeredMessage)
   }
 
-  func testEnabledRegistrationIsReportedAsNotBootstrappedWhenXPCStatusPayloadFails() async throws {
+  func testEnabledRegistrationIsReportedAsRegisteredWhenXPCStatusPayloadFails() async throws {
     let service = FakeHelperService(status: .enabled)
     let transport = FakeHelperTransport(statusResponse: .failure("status failed"))
     let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: "v1")
@@ -62,10 +62,63 @@ final class TunnelHelperClientTests: XCTestCase {
 
     await client.refreshRegistrationStatus()
 
-    XCTAssertEqual(client.statusMessage, TunnelHelperClient.notBootstrappedMessage)
+    XCTAssertEqual(client.statusMessage, TunnelHelperClient.registeredMessage)
   }
 
-  func testRegisterRepairsChangedHelperFingerprintBeforeVerifyingXPCStatus() async throws {
+  func testWarmRegistrationRegistersWithoutOpeningSystemSettings() async throws {
+    let service = FakeHelperService(status: .notRegistered, statusAfterRegister: .enabled)
+    let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
+    let client = TunnelHelperClient(
+      transport: FakeHelperTransport(statusError: AppError.helperResponse("lookup failed")),
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "current"),
+      registrationRecordStore: recordStore
+    )
+
+    let state = await client.warmRegistration(openSystemSettingsWhenApprovalRequired: false)
+
+    XCTAssertEqual(state, .registered(TunnelHelperClient.registeredMessage))
+    XCTAssertEqual(service.registerCount, 1)
+    XCTAssertEqual(service.openSettingsCount, 0)
+    XCTAssertEqual(recordStore.storedFingerprint, "current")
+    XCTAssertEqual(client.statusMessage, TunnelHelperClient.registeredMessage)
+  }
+
+  func testWarmRegistrationDoesNotOpenSystemSettingsWhenApprovalIsPending() async throws {
+    let service = FakeHelperService(status: .requiresApproval)
+    let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
+    let client = TunnelHelperClient(
+      transport: FakeHelperTransport(),
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "current"),
+      registrationRecordStore: recordStore
+    )
+
+    let state = await client.warmRegistration(openSystemSettingsWhenApprovalRequired: false)
+
+    XCTAssertEqual(state, .requiresApproval(TunnelHelperClient.statusMessage(for: .requiresApproval)))
+    XCTAssertEqual(service.registerCount, 0)
+    XCTAssertEqual(service.openSettingsCount, 0)
+    XCTAssertEqual(recordStore.storedFingerprint, "current")
+  }
+
+  func testCurrentPreparationStateReportsRegisteredWithoutXPCReadinessProbe() async throws {
+    let service = FakeHelperService(status: .enabled)
+    let client = TunnelHelperClient(
+      transport: FakeHelperTransport(statusError: AppError.helperResponse("lookup failed")),
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "current"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "current")
+    )
+
+    let state = await client.currentPreparationState()
+
+    XCTAssertEqual(state, .registered(TunnelHelperClient.registeredMessage))
+    XCTAssertEqual(service.registerCount, 0)
+    XCTAssertEqual(service.unregisterCount, 0)
+  }
+
+  func testRegisterRepairsChangedHelperFingerprintWithoutRequiringXPCStatus() async throws {
     let service = FakeHelperService(status: .enabled)
     let transport = FakeHelperTransport(statusResponse: HelperClientResponse(payload: HelperXPCPayload.response(ok: true)))
     let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: "old")
@@ -81,7 +134,7 @@ final class TunnelHelperClientTests: XCTestCase {
     XCTAssertEqual(service.unregisterCount, 1)
     XCTAssertEqual(service.registerCount, 1)
     XCTAssertEqual(recordStore.storedFingerprint, "new")
-    XCTAssertEqual(client.statusMessage, TunnelHelperClient.bootstrappedMessage)
+    XCTAssertEqual(client.statusMessage, TunnelHelperClient.registeredMessage)
   }
 
   func testRegisterDoesNotReregisterUnchangedEnabledHelper() async throws {
@@ -99,7 +152,7 @@ final class TunnelHelperClientTests: XCTestCase {
 
     XCTAssertEqual(service.unregisterCount, 0)
     XCTAssertEqual(service.registerCount, 0)
-    XCTAssertEqual(client.statusMessage, TunnelHelperClient.bootstrappedMessage)
+    XCTAssertEqual(client.statusMessage, TunnelHelperClient.registeredMessage)
   }
 
   func testRegisterOpensSystemSettingsWhenHelperRequiresApproval() async throws {
@@ -281,7 +334,7 @@ final class TunnelHelperClientTests: XCTestCase {
     )
     XCTAssertEqual(
       TunnelHelperClient.statusMessage(for: .enabled),
-      String(localized: "Helper registered. Verifying helper connection.")
+      TunnelHelperClient.registeredMessage
     )
     XCTAssertEqual(
       TunnelHelperClient.statusMessage(for: .requiresApproval),

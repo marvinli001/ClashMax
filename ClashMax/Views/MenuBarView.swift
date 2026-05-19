@@ -37,7 +37,7 @@ struct MenuBarView: View {
       get: { appModel.proxyRoutingMode },
       set: { appModel.requestProxyRoutingMode($0) }
     )) {
-      ForEach(ProxyRoutingMode.allCases) { mode in
+      ForEach(ProxyRoutingMode.selectableCases(developerMode: appModel.developerMode)) { mode in
         Text(mode.displayName).tag(mode)
       }
     }
@@ -52,7 +52,7 @@ struct MenuBarView: View {
     Button(appModel.systemProxyEnabled ? "Disable System Proxy" : "Enable System Proxy") {
       appModel.setSystemProxyEnabled(!appModel.systemProxyEnabled)
     }
-    .disabled(appModel.proxyRoutingMode == .tun)
+    .disabled(appModel.proxyRoutingMode != .systemProxy)
 
     Button("Update Subscription") {
       appModel.updateActiveSubscription()
@@ -73,6 +73,6 @@ struct MenuBarView: View {
   }
 
   private var canStopRuntime: Bool {
-    appModel.isRunning || appModel.dashboardRuntimeState.isStarting
+    appModel.canStopRuntime
   }
 }

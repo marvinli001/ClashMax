@@ -3,7 +3,7 @@ import SwiftUI
 
 enum DashboardLayoutMetrics {
   static let runModePickerWidth: CGFloat = 214
-  static let proxyRoutingModePickerWidth: CGFloat = 272
+  static let proxyRoutingModePickerWidth: CGFloat = 330
   static let launchProfileControlWidth: CGFloat = 178
   static let launchMixedPortControlWidth: CGFloat = 104
   static let launchStartButtonWidth: CGFloat = 156
@@ -56,12 +56,13 @@ struct RunModePicker: View {
 }
 
 struct ProxyRoutingModePicker: View {
+  @EnvironmentObject private var appModel: AppModel
   let selection: Binding<ProxyRoutingMode>
 
   var body: some View {
     Picker("Proxy Routing", selection: selection) {
-      ForEach(ProxyRoutingMode.allCases) { mode in
-        Label(mode.displayName, systemImage: mode.symbolName).tag(mode)
+      ForEach(ProxyRoutingMode.selectableCases(developerMode: appModel.developerMode)) { mode in
+        Label(mode.compactDisplayName, systemImage: mode.symbolName).tag(mode)
       }
     }
     .labelsHidden()
@@ -114,6 +115,14 @@ struct ProxyRoutingSettingsButton: View {
         onCancel: { isPresented = false },
         onReset: { tunDraft = .default },
         onSave: saveTunSettings
+      )
+    case .networkExtension:
+      NetworkExtensionSettingsPopover(
+        status: appModel.networkExtensionStatus,
+        controllerAddress: "\(appModel.overrides.endpoint.host):\(appModel.overrides.endpoint.port)",
+        mixedPort: appModel.overrides.mixedPort,
+        recentError: appModel.networkExtensionController.recentError,
+        onClose: { isPresented = false }
       )
     }
   }
@@ -259,6 +268,58 @@ private struct TunSettingsPopover: View {
       }
 
       popoverActions(onCancel: onCancel, onSave: onSave, saveDisabled: false)
+    }
+  }
+}
+
+private struct NetworkExtensionSettingsPopover: View {
+  let status: NetworkExtensionRuntimeStatus
+  let controllerAddress: String
+  let mixedPort: Int
+  let recentError: String?
+  let onClose: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      popoverHeader("NE Transparent Proxy", systemImage: "network.badge.shield.half.filled")
+
+      GroupBox("Runtime") {
+        VStack(alignment: .leading, spacing: 6) {
+          LabeledContent("Transparent Proxy") {
+            Text(status.displayName)
+              .foregroundStyle(status.isConnected ? Color.green : Color.secondary)
+          }
+          LabeledContent("Mihomo Controller") {
+            Text(controllerAddress)
+              .monospacedDigit()
+              .foregroundStyle(.secondary)
+          }
+          LabeledContent("Mihomo Mixed Port") {
+            Text(String(mixedPort))
+              .monospacedDigit()
+              .foregroundStyle(.secondary)
+          }
+        }
+        .padding(.vertical, 2)
+      }
+
+      Text("Proxies, node selection, and node delay tests use Mihomo's local controller. Network Extension only captures system TCP traffic into the mixed port.")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+
+      if let recentError {
+        Label(recentError, systemImage: "exclamationmark.triangle.fill")
+          .font(.callout)
+          .foregroundStyle(.red)
+          .lineLimit(3)
+      }
+
+      HStack {
+        Spacer()
+        Button("Done", action: onClose)
+          .keyboardShortcut(.defaultAction)
+      }
     }
   }
 }
