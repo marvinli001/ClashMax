@@ -180,14 +180,159 @@ final class NetworkExtensionControllerTests: XCTestCase {
 
   func testRuntimeConfigurationProviderConfigurationExcludesControllerSecret() {
     let configuration = NetworkExtensionRuntimeConfiguration.clashMax(
-      overrides: RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+      overrides: RuntimeOverrides.defaultForLaunch(secret: "secret-token"),
+      routingSettings: NetworkExtensionRoutingSettings(excludeLAN: false, customRouteExcludeCIDRs: ["100.64.0.0/10"])
     )
 
     XCTAssertEqual(configuration.providerConfiguration["socksHost"] as? String, "127.0.0.1")
     XCTAssertEqual(configuration.providerConfiguration["socksPort"] as? Int, 7890)
+    XCTAssertEqual(configuration.providerConfiguration["routeExcludeCIDRs"] as? [String], ["100.64.0.0/10"])
+    XCTAssertEqual(configuration.providerConfiguration["dnsCaptureEnabled"] as? Bool, true)
+    XCTAssertEqual(configuration.providerConfiguration["dnsListenHost"] as? String, "127.0.0.1")
+    XCTAssertEqual(configuration.providerConfiguration["dnsListenPort"] as? Int, 1053)
+    XCTAssertEqual(configuration.providerConfiguration["dnsFakeIPEnabled"] as? Bool, true)
+    XCTAssertEqual(configuration.providerConfiguration["systemDNSOverrideEnabled"] as? Bool, true)
+    XCTAssertEqual(configuration.providerConfiguration["systemDNSServers"] as? [String], ["114.114.114.114"])
+    XCTAssertEqual(configuration.providerConfiguration["systemDNSOverrideApplied"] as? Bool, false)
     XCTAssertNil(configuration.providerConfiguration["controllerHost"])
     XCTAssertNil(configuration.providerConfiguration["controllerPort"])
     XCTAssertNil(configuration.providerConfiguration["secret"])
+  }
+
+  func testNetworkExtensionRouteCIDRParserAcceptsIPv4AndIPv6CIDRs() throws {
+    let ipv4 = try NetworkExtensionRouteCIDR(" 192.168.0.0/16 ")
+    let ipv6 = try NetworkExtensionRouteCIDR("FE80::/10")
+
+    XCTAssertEqual(ipv4.address, "192.168.0.0")
+    XCTAssertEqual(ipv4.prefix, 16)
+    XCTAssertEqual(ipv4.family, .ipv4)
+    XCTAssertEqual(ipv4.rawValue, "192.168.0.0/16")
+    XCTAssertEqual(ipv6.address, "fe80::")
+    XCTAssertEqual(ipv6.prefix, 10)
+    XCTAssertEqual(ipv6.family, .ipv6)
+    XCTAssertEqual(ipv6.rawValue, "fe80::/10")
+  }
+
+  func testNetworkExtensionRouteCIDRParserRejectsNonCIDRAndInvalidPrefixes() {
+    let invalidValues = [
+      "",
+      "192.168.0.0",
+      "192.168.0.0/33",
+      "fe80::/129",
+      "example.com/24",
+      "192.168.0.0/not-a-prefix"
+    ]
+
+    for value in invalidValues {
+      XCTAssertThrowsError(try NetworkExtensionRouteCIDR(value), "Expected \(value) to be rejected.")
+    }
+  }
+
+  func testNetworkExtensionDiagnosticsRefreshReadsAppGroupSnapshot() throws {
+    let url = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxDiagnostics-\(UUID().uuidString)")
+      .appendingPathComponent(NetworkExtensionRuntimeConstants.diagnosticsFilename)
+    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    let snapshot = NetworkExtensionDiagnosticsSnapshot(
+      activeBridgeCount: 2,
+      activeTCPBridgeCount: 1,
+      activeUDPBridgeCount: 1,
+      bypassCount: 3,
+      udpBypassCount: 2,
+      errorCount: 1,
+      socksHandshakeFailureCount: 1,
+      udpBridgeFailureCount: 1,
+      udpDatagramCount: 4,
+      dnsDatagramCount: 2,
+      dnsCaptureCount: 2,
+      dnsRetargetFailureCount: 1,
+      routeExcludeCIDRCount: 8,
+      dnsCaptureEnabled: true,
+      dnsFakeIPEnabled: true,
+      systemDNSOverrideApplied: false,
+      systemDNSOverrideStatus: "applied",
+      lastDNSEndpoint: "8.8.8.8:53 -> 127.0.0.1:1053",
+      lastDNSSourceAppSigningIdentifier: "com.apple.mDNSResponder",
+      recentBypasses: [
+        NetworkExtensionDiagnosticEvent(
+          id: "bypass-1",
+          message: "Bypassed self/core flow.",
+          sourceAppSigningIdentifier: "io.github.clashmax.ClashMax",
+          flowProtocol: .udp,
+          remoteEndpoint: "127.0.0.1:53"
+        )
+      ],
+      recentErrors: [
+        NetworkExtensionDiagnosticEvent(
+          id: "error-1",
+          message: "SOCKS5 failed.",
+          flowProtocol: .tcp,
+          remoteEndpoint: "example.com:443"
+        )
+      ],
+      updatedAt: Date()
+    )
+    try JSONEncoder().encode(snapshot).write(to: url)
+    let controller = NetworkExtensionController(
+      systemExtensionRequester: StaticSystemExtensionRequester(),
+      transparentProxyManager: RecordingTransparentProxyManager(),
+      diagnosticsURL: url
+    )
+
+    controller.refreshDiagnostics()
+
+    XCTAssertEqual(controller.diagnostics, snapshot)
+  }
+
+  func testSystemDNSOverrideDiagnosticsUpdatePersistsAppGroupSnapshot() throws {
+    let url = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxDiagnostics-\(UUID().uuidString)")
+      .appendingPathComponent(NetworkExtensionRuntimeConstants.diagnosticsFilename)
+    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    var snapshot = NetworkExtensionDiagnosticsSnapshot.empty
+    snapshot.dnsCaptureCount = 2
+    snapshot.systemDNSOverrideApplied = false
+    snapshot.systemDNSOverrideStatus = "enabled"
+    try JSONEncoder().encode(snapshot).write(to: url)
+    let controller = NetworkExtensionController(
+      systemExtensionRequester: StaticSystemExtensionRequester(),
+      transparentProxyManager: RecordingTransparentProxyManager(),
+      diagnosticsURL: url
+    )
+
+    controller.updateSystemDNSOverrideDiagnostics(applied: true, status: "applied")
+
+    let persisted = try decodedDiagnosticsSnapshot(at: url)
+    XCTAssertEqual(persisted.dnsCaptureCount, 2)
+    XCTAssertTrue(persisted.systemDNSOverrideApplied)
+    XCTAssertEqual(persisted.systemDNSOverrideStatus, "applied")
+    XCTAssertEqual(controller.diagnostics, persisted)
+  }
+
+  func testDiagnosticsRefreshReappliesLastKnownSystemDNSOverrideState() throws {
+    let url = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxDiagnostics-\(UUID().uuidString)")
+      .appendingPathComponent(NetworkExtensionRuntimeConstants.diagnosticsFilename)
+    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    let controller = NetworkExtensionController(
+      systemExtensionRequester: StaticSystemExtensionRequester(),
+      transparentProxyManager: RecordingTransparentProxyManager(),
+      diagnosticsURL: url
+    )
+    controller.updateSystemDNSOverrideDiagnostics(applied: true, status: "applied")
+    var providerSnapshot = NetworkExtensionDiagnosticsSnapshot.empty
+    providerSnapshot.dnsCaptureCount = 4
+    providerSnapshot.systemDNSOverrideApplied = false
+    providerSnapshot.systemDNSOverrideStatus = "enabled"
+    try JSONEncoder().encode(providerSnapshot).write(to: url)
+
+    controller.refreshDiagnostics()
+
+    let persisted = try decodedDiagnosticsSnapshot(at: url)
+    XCTAssertEqual(persisted.dnsCaptureCount, 4)
+    XCTAssertTrue(persisted.systemDNSOverrideApplied)
+    XCTAssertEqual(persisted.systemDNSOverrideStatus, "applied")
+    XCTAssertEqual(controller.diagnostics, persisted)
   }
 
   func testNetworkExtensionsSettingsURLTargetsSystemExtensionCategory() {
@@ -415,5 +560,10 @@ final class NetworkExtensionControllerTests: XCTestCase {
       controller.recentError,
       "NE transparent proxy did not become connected before timeout. Last status: Reasserting."
     )
+  }
+
+  private func decodedDiagnosticsSnapshot(at url: URL) throws -> NetworkExtensionDiagnosticsSnapshot {
+    let data = try Data(contentsOf: url)
+    return try JSONDecoder().decode(NetworkExtensionDiagnosticsSnapshot.self, from: data)
   }
 }

@@ -21,7 +21,7 @@
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>NSSystemExtensionUsageDescription</key>
-	<string>ClashMax uses an experimental transparent proxy Network Extension to route TCP traffic through its local Mihomo proxy without enabling System Proxy or the privileged TUN helper.</string>
+	<string>ClashMax uses an experimental transparent proxy Network Extension to route TCP and UDP traffic through its local Mihomo proxy without enabling System Proxy or the privileged TUN helper.</string>
 	<key>NetworkExtension</key>
 	<dict>
 		<key>NEMachServiceName</key>

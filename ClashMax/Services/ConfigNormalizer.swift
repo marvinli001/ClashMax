@@ -1,6 +1,12 @@
 import Foundation
 import Yams
 
+struct RuntimeConfigOptions: Equatable, Sendable {
+  var networkExtensionRoutingSettings: NetworkExtensionRoutingSettings?
+
+  static let `default` = RuntimeConfigOptions()
+}
+
 struct ConfigNormalizer {
   enum NormalizerError: Error, CustomStringConvertible, Sendable {
     case yaml(String)
@@ -24,6 +30,7 @@ struct ConfigNormalizer {
     providerContentPath: String? = nil,
     profileName: String = "Subscription",
     overrides: RuntimeOverrides,
+    options: RuntimeConfigOptions = .default,
     selectionOverrides: [String: String] = [:]
   ) throws -> String {
     var root: [String: Any]
@@ -62,13 +69,36 @@ struct ConfigNormalizer {
       dns["enable"] = dnsEnabled
       root["dns"] = dns
     }
+    if let networkExtensionRoutingSettings = options.networkExtensionRoutingSettings {
+      var dns = root["dns"] as? [String: Any] ?? [:]
+      if networkExtensionRoutingSettings.dnsCaptureEnabled || networkExtensionRoutingSettings.dnsFakeIPEnabled {
+        dns["enable"] = true
+        dns["listen"] = networkExtensionRoutingSettings.normalizedDNSListenAddress
+      }
+      if networkExtensionRoutingSettings.dnsFakeIPEnabled {
+        dns["enhanced-mode"] = "fake-ip"
+        dns["fake-ip-range"] = NetworkExtensionRoutingSettings.defaultFakeIPRange
+      }
+      if !dns.isEmpty {
+        root["dns"] = dns
+      }
+    }
 
     var tun = root["tun"] as? [String: Any] ?? [:]
-    let profileRouteExcludeAddresses = normalizedStringList(from: tun["route-exclude-address"])
     tun["enable"] = overrides.tunEnabled
     tun.removeValue(forKey: "auto-redirect")
     if overrides.tunEnabled {
       let settings = overrides.tunSettings
+      if let validationError = settings.validationError {
+        throw NormalizerError.invalidProfile(validationError)
+      }
+      if settings.dnsFakeIPEnabled {
+        var dns = root["dns"] as? [String: Any] ?? [:]
+        dns["enable"] = true
+        dns["enhanced-mode"] = "fake-ip"
+        dns["fake-ip-range"] = settings.normalizedFakeIPRange
+        root["dns"] = dns
+      }
       tun["stack"] = settings.stack.rawValue
       tun["device"] = settings.normalizedDevice
       tun["auto-route"] = settings.autoRoute
@@ -76,7 +106,8 @@ struct ConfigNormalizer {
       tun["auto-detect-interface"] = settings.autoDetectInterface
       tun["dns-hijack"] = settings.normalizedDNSHijack
       tun["mtu"] = settings.normalizedMTU
-      let routeExcludeAddresses = SystemProxySettings.normalizedBypassDomains(
+      let profileRouteExcludeAddresses = try normalizedRouteExcludeCIDRs(from: tun["route-exclude-address"])
+      let routeExcludeAddresses = TunSettings.normalizedRouteExcludeCIDRs(
         profileRouteExcludeAddresses + settings.normalizedRouteExcludeAddresses
       )
       if !routeExcludeAddresses.isEmpty {
@@ -159,6 +190,14 @@ struct ConfigNormalizer {
     default:
       return []
     }
+  }
+
+  private func normalizedRouteExcludeCIDRs(from value: Any?) throws -> [String] {
+    let values = normalizedStringList(from: value)
+    if let invalid = values.first(where: { !TunSettings.isValidRouteExcludeCIDR($0) }) {
+      throw NormalizerError.invalidProfile("Invalid TUN route exclude CIDR: \(invalid)")
+    }
+    return TunSettings.normalizedRouteExcludeCIDRs(values)
   }
 
   private func loadMapping(from source: String) throws -> [String: Any] {

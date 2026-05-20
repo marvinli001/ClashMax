@@ -40,12 +40,16 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual((yaml["custom-field"] as? [String: Any])?["nested"] as? String, "kept")
 
     let tun = try XCTUnwrap(yaml["tun"] as? [String: Any])
+    let dns = try XCTUnwrap(yaml["dns"] as? [String: Any])
     XCTAssertEqual(tun["enable"] as? Bool, true)
     XCTAssertEqual(tun["stack"] as? String, "mixed")
     XCTAssertEqual(tun["auto-route"] as? Bool, true)
     XCTAssertEqual(tun["auto-detect-interface"] as? Bool, true)
     XCTAssertNil(tun["route-exclude-address"])
     XCTAssertNil(tun["auto-redirect"])
+    XCTAssertEqual(dns["enable"] as? Bool, true)
+    XCTAssertEqual(dns["enhanced-mode"] as? String, "fake-ip")
+    XCTAssertEqual(dns["fake-ip-range"] as? String, "198.18.0.1/16")
   }
 
   func testInvalidYamlProducesReadableError() {
@@ -81,6 +85,7 @@ final class ConfigNormalizerTests: XCTestCase {
     let enabledOutput = try ConfigNormalizer().runtimeConfig(from: source, overrides: overrides)
     let enabledYAML = try XCTUnwrap(Yams.load(yaml: enabledOutput) as? [String: Any])
     let enabledTun = try XCTUnwrap(enabledYAML["tun"] as? [String: Any])
+    let enabledDNS = try XCTUnwrap(enabledYAML["dns"] as? [String: Any])
 
     XCTAssertEqual(enabledTun["enable"] as? Bool, true)
     XCTAssertEqual(enabledTun["stack"] as? String, "gvisor")
@@ -92,6 +97,9 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(enabledTun["mtu"] as? Int, 1400)
     XCTAssertEqual(enabledTun["route-exclude-address"] as? [String], ["10.0.0.0/8", "192.168.0.0/16"])
     XCTAssertNil(enabledTun["auto-redirect"])
+    XCTAssertEqual(enabledDNS["enable"] as? Bool, true)
+    XCTAssertEqual(enabledDNS["enhanced-mode"] as? String, "fake-ip")
+    XCTAssertEqual(enabledDNS["fake-ip-range"] as? String, "198.18.0.1/16")
 
     overrides.tunEnabled = false
     let disabledOutput = try ConfigNormalizer().runtimeConfig(from: source, overrides: overrides)
@@ -101,6 +109,7 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(disabledTun["enable"] as? Bool, false)
     XCTAssertEqual(disabledTun["stack"] as? String, "system")
     XCTAssertNil(disabledTun["auto-redirect"])
+    XCTAssertNil(disabledYAML["dns"])
   }
 
   func testRuntimeConfigPreservesProfileRouteExcludeAddressWhenTunSettingsAreDefault() throws {
@@ -125,6 +134,103 @@ final class ConfigNormalizerTests: XCTestCase {
 
     XCTAssertEqual(tun["route-exclude-address"] as? [String], ["10.0.0.0/8", "172.16.0.0/12"])
     XCTAssertNil(tun["auto-redirect"])
+  }
+
+  func testRuntimeConfigRejectsInvalidTunRouteExcludeCIDRs() throws {
+    let source = """
+    proxies:
+      - name: DIRECT
+        type: direct
+    tun:
+      enable: true
+      route-exclude-address: [foo/24]
+    """
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.tunEnabled = true
+
+    XCTAssertThrowsError(try ConfigNormalizer().runtimeConfig(from: source, overrides: overrides)) { error in
+      XCTAssertTrue(String(describing: error).contains("Invalid TUN route exclude CIDR: foo/24"))
+    }
+
+    overrides.tunSettings = TunSettings(
+      stack: .mixed,
+      device: "utun1024",
+      autoRoute: true,
+      strictRoute: false,
+      autoDetectInterface: true,
+      dnsHijack: ["any:53"],
+      mtu: 1500,
+      routeExcludeAddresses: ["192.168.0.0/33"]
+    )
+
+    XCTAssertThrowsError(try ConfigNormalizer().runtimeConfig(from: "proxies:\n  - name: DIRECT\n    type: direct", overrides: overrides)) { error in
+      XCTAssertTrue(String(describing: error).contains("Invalid TUN route exclude CIDR: 192.168.0.0/33"))
+    }
+  }
+
+  func testRuntimeConfigInjectsNetworkExtensionFakeIPDNS() throws {
+    let source = """
+    proxies:
+      - name: DIRECT
+        type: direct
+    dns:
+      enable: false
+      fake-ip-filter:
+        - "*.corp"
+    tun:
+      enable: true
+      auto-redirect: true
+    """
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.tunEnabled = false
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: source,
+      overrides: overrides,
+      options: RuntimeConfigOptions(networkExtensionRoutingSettings: .default)
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let dns = try XCTUnwrap(yaml["dns"] as? [String: Any])
+    let tun = try XCTUnwrap(yaml["tun"] as? [String: Any])
+
+    XCTAssertEqual(dns["enable"] as? Bool, true)
+    XCTAssertEqual(dns["listen"] as? String, "127.0.0.1:1053")
+    XCTAssertEqual(dns["enhanced-mode"] as? String, "fake-ip")
+    XCTAssertEqual(dns["fake-ip-range"] as? String, "198.18.0.1/16")
+    XCTAssertNil(dns["use-hosts"])
+    XCTAssertNil(dns["use-system-hosts"])
+    XCTAssertEqual(dns["fake-ip-filter"] as? [String], ["*.corp"])
+    XCTAssertEqual(tun["enable"] as? Bool, false)
+    XCTAssertNil(tun["auto-redirect"])
+  }
+
+  func testRuntimeConfigCanLeaveNetworkExtensionDNSOnProfileDefaults() throws {
+    let source = """
+    proxies:
+      - name: DIRECT
+        type: direct
+    dns:
+      enable: false
+      enhanced-mode: redir-host
+    """
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.dnsEnabled = nil
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: source,
+      overrides: overrides,
+      options: RuntimeConfigOptions(
+        networkExtensionRoutingSettings: NetworkExtensionRoutingSettings(
+          dnsCaptureEnabled: false,
+          dnsFakeIPEnabled: false
+        )
+      )
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let dns = try XCTUnwrap(yaml["dns"] as? [String: Any])
+
+    XCTAssertEqual(dns["enable"] as? Bool, false)
+    XCTAssertEqual(dns["enhanced-mode"] as? String, "redir-host")
   }
 
   func testRuntimeConfigAppliesUnifiedDelayAndExternalControllerCORS() throws {

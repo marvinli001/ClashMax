@@ -16,6 +16,6 @@
   <key>BundleProgram</key>
   <string>Contents/Library/LaunchServices/ClashMaxHelper</string>
   <key>RunAtLoad</key>
-  <false/>
+  <true/>
 </dict>
 </plist>

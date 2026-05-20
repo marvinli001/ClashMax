@@ -176,6 +176,44 @@ final class TunnelHelperClientTests: XCTestCase {
     XCTAssertEqual(client.statusMessage, TunnelHelperClient.bootstrappedMessage)
   }
 
+  func testWarmRegistrationKeepsEnabledHelperRegisteredWithoutPingingXPC() async throws {
+    let service = FakeHelperService(status: .enabled)
+    let transport = FakeHelperTransport(statusError: AppError.helperResponse("lookup failed"))
+    let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
+    let client = TunnelHelperClient(
+      transport: transport,
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "current"),
+      registrationRecordStore: recordStore
+    )
+
+    let state = await client.warmRegistration()
+
+    XCTAssertEqual(state, .registered(TunnelHelperClient.registeredMessage))
+    XCTAssertEqual(recordStore.storedFingerprint, "current")
+    XCTAssertEqual(service.registerCount, 0)
+    XCTAssertEqual(service.openSettingsCount, 0)
+    XCTAssertEqual(client.statusMessage, TunnelHelperClient.registeredMessage)
+  }
+
+  func testWarmRegistrationRegistersWithoutOpeningApprovalSettings() async throws {
+    let service = FakeHelperService(status: .notRegistered, statusAfterRegister: .requiresApproval)
+    let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
+    let client = TunnelHelperClient(
+      transport: FakeHelperTransport(),
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "current"),
+      registrationRecordStore: recordStore
+    )
+
+    let state = await client.warmRegistration()
+
+    XCTAssertEqual(state, .requiresApproval(TunnelHelperClient.statusMessage(for: .requiresApproval)))
+    XCTAssertEqual(service.registerCount, 1)
+    XCTAssertEqual(service.openSettingsCount, 0)
+    XCTAssertEqual(recordStore.storedFingerprint, "current")
+  }
+
   func testPreparingTunnelReregistersEnabledHelperOnceWhenXPCStatusFails() async throws {
     let service = FakeHelperService(status: .enabled)
     let transport = ToggleableHelperTransport(

@@ -10,21 +10,48 @@ struct NetworkExtensionRuntimeConfiguration: Equatable, Sendable {
   var serverAddress: String
   var socksHost: String
   var socksPort: Int
+  var routeExcludeCIDRs: [String]
+  var dnsCaptureEnabled: Bool
+  var dnsListenHost: String
+  var dnsListenPort: Int
+  var dnsFakeIPEnabled: Bool
+  var systemDNSOverrideEnabled: Bool
+  var systemDNSServers: [String]
+  var systemDNSOverrideApplied: Bool
 
-  static func clashMax(overrides: RuntimeOverrides) -> NetworkExtensionRuntimeConfiguration {
+  static func clashMax(
+    overrides: RuntimeOverrides,
+    routingSettings: NetworkExtensionRoutingSettings = .default
+  ) -> NetworkExtensionRuntimeConfiguration {
     NetworkExtensionRuntimeConfiguration(
       providerBundleIdentifier: NetworkExtensionRuntimeConstants.providerBundleIdentifier,
       localizedDescription: "ClashMax NE Transparent Proxy Experimental",
       serverAddress: "ClashMax Local Mihomo",
       socksHost: "127.0.0.1",
-      socksPort: overrides.mixedPort
+      socksPort: overrides.mixedPort,
+      routeExcludeCIDRs: routingSettings.effectiveRouteExcludeCIDRs,
+      dnsCaptureEnabled: routingSettings.dnsCaptureEnabled,
+      dnsListenHost: NetworkExtensionRoutingSettings.defaultDNSListenHost,
+      dnsListenPort: routingSettings.normalizedDNSListenPort,
+      dnsFakeIPEnabled: routingSettings.dnsFakeIPEnabled,
+      systemDNSOverrideEnabled: routingSettings.systemDNSOverrideEnabled,
+      systemDNSServers: routingSettings.effectiveSystemDNSServers,
+      systemDNSOverrideApplied: false
     )
   }
 
   var providerConfiguration: [String: Any] {
     [
       "socksHost": socksHost,
-      "socksPort": socksPort
+      "socksPort": socksPort,
+      "routeExcludeCIDRs": routeExcludeCIDRs,
+      "dnsCaptureEnabled": dnsCaptureEnabled,
+      "dnsListenHost": dnsListenHost,
+      "dnsListenPort": dnsListenPort,
+      "dnsFakeIPEnabled": dnsFakeIPEnabled,
+      "systemDNSOverrideEnabled": systemDNSOverrideEnabled,
+      "systemDNSServers": systemDNSServers,
+      "systemDNSOverrideApplied": systemDNSOverrideApplied
     ]
   }
 }
@@ -237,6 +264,49 @@ protocol LaunchServicesRegistering: AnyObject {
   func registerCurrentApplicationIfNeeded() async throws
 }
 
+struct NetworkExtensionDiagnosticsFileStore: Sendable {
+  var fileURL: URL?
+
+  static func live() -> NetworkExtensionDiagnosticsFileStore {
+    let url = FileManager.default
+      .containerURL(forSecurityApplicationGroupIdentifier: NetworkExtensionRuntimeConstants.appGroupIdentifier)?
+      .appendingPathComponent(NetworkExtensionRuntimeConstants.diagnosticsFilename)
+    return NetworkExtensionDiagnosticsFileStore(fileURL: url)
+  }
+
+  func loadSnapshot() -> NetworkExtensionDiagnosticsSnapshot {
+    guard let fileURL,
+          (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.type] as? FileAttributeType) == .typeRegular,
+          let data = try? Data(contentsOf: fileURL),
+          let snapshot = try? JSONDecoder().decode(NetworkExtensionDiagnosticsSnapshot.self, from: data)
+    else {
+      return .empty
+    }
+    return snapshot
+  }
+
+  func updateSnapshot(
+    _ body: (inout NetworkExtensionDiagnosticsSnapshot) -> Void
+  ) -> NetworkExtensionDiagnosticsSnapshot {
+    var snapshot = loadSnapshot()
+    body(&snapshot)
+    snapshot.updatedAt = Date()
+    saveSnapshot(snapshot)
+    return snapshot
+  }
+
+  func saveSnapshot(_ snapshot: NetworkExtensionDiagnosticsSnapshot) {
+    guard let fileURL else { return }
+    do {
+      try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+      let data = try JSONEncoder().encode(snapshot)
+      try data.write(to: fileURL, options: .atomic)
+    } catch {
+      // Diagnostics should never block proxy lifecycle. The next provider write or poll can retry.
+    }
+  }
+}
+
 enum NetworkExtensionControllerError: LocalizedError, Equatable {
   case systemExtensionNotActivated(String)
   case applicationRegistrationFailed(String)
@@ -268,19 +338,31 @@ final class NetworkExtensionController: ObservableObject {
   @Published private(set) var systemExtensionState: NetworkExtensionInstallState = .notInstalled
   @Published private(set) var vpnStatus: NetworkExtensionTunnelStatus = .disconnected
   @Published private(set) var recentError: String?
+  @Published private(set) var diagnostics: NetworkExtensionDiagnosticsSnapshot = .empty
 
   private let systemExtensionRequester: any SystemExtensionRequesting
   private let transparentProxyManager: any TransparentProxyManaging
   private let launchServicesRegistrar: any LaunchServicesRegistering
+  private let diagnosticsStore: NetworkExtensionDiagnosticsFileStore
+  private var systemDNSOverrideDiagnosticsState: (applied: Bool, status: String)?
 
   init(
     systemExtensionRequester: any SystemExtensionRequesting = OSSystemExtensionRequestBridge(),
     transparentProxyManager: any TransparentProxyManaging = NETransparentProxyManagerAdapter(),
-    launchServicesRegistrar: any LaunchServicesRegistering = LaunchServicesAppRegistrar()
+    launchServicesRegistrar: any LaunchServicesRegistering = LaunchServicesAppRegistrar(),
+    diagnosticsURL: URL? = nil
   ) {
     self.systemExtensionRequester = systemExtensionRequester
     self.transparentProxyManager = transparentProxyManager
     self.launchServicesRegistrar = launchServicesRegistrar
+    self.diagnosticsStore = diagnosticsURL.map { NetworkExtensionDiagnosticsFileStore(fileURL: $0) } ?? Self.defaultDiagnosticsStore()
+  }
+
+  private static func defaultDiagnosticsStore() -> NetworkExtensionDiagnosticsFileStore {
+    if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+      return NetworkExtensionDiagnosticsFileStore(fileURL: nil)
+    }
+    return .live()
   }
 
   var statusMessage: String {
@@ -343,6 +425,7 @@ final class NetworkExtensionController: ObservableObject {
       vpnStatus = .invalid
       recentError = UserFacingError.message(for: error)
     }
+    refreshDiagnostics()
   }
 
   func startTransparentProxy(configuration: NetworkExtensionRuntimeConfiguration) async throws {
@@ -403,10 +486,34 @@ final class NetworkExtensionController: ObservableObject {
         recentError = error.localizedDescription
         throw error
       }
+      refreshDiagnostics()
       return vpnStatus
     } catch {
       recentError = UserFacingError.message(for: error)
       throw error
+    }
+  }
+
+  func refreshDiagnostics() {
+    var snapshot = diagnosticsStore.loadSnapshot()
+    if let systemDNSOverrideDiagnosticsState {
+      snapshot.systemDNSOverrideApplied = systemDNSOverrideDiagnosticsState.applied
+      snapshot.systemDNSOverrideStatus = systemDNSOverrideDiagnosticsState.status
+      diagnosticsStore.saveSnapshot(snapshot)
+    }
+    diagnostics = snapshot
+  }
+
+  func updateSystemDNSOverrideDiagnostics(applied: Bool, status: String) {
+    let normalizedStatus = status.trimmingCharacters(in: .whitespacesAndNewlines)
+    let nextState = (
+      applied: applied,
+      status: normalizedStatus.isEmpty ? "inactive" : normalizedStatus
+    )
+    systemDNSOverrideDiagnosticsState = nextState
+    diagnostics = diagnosticsStore.updateSnapshot { snapshot in
+      snapshot.systemDNSOverrideApplied = nextState.applied
+      snapshot.systemDNSOverrideStatus = nextState.status
     }
   }
 
@@ -670,7 +777,15 @@ final class NETransparentProxyManagerAdapter: TransparentProxyManaging {
     let manager = try await configuredManager(configuration)
     try manager.connection.startVPNTunnel(options: [
       "socksHost": configuration.socksHost as NSString,
-      "socksPort": String(configuration.socksPort) as NSString
+      "socksPort": String(configuration.socksPort) as NSString,
+      "routeExcludeCIDRs": configuration.routeExcludeCIDRs as NSArray,
+      "dnsCaptureEnabled": NSNumber(value: configuration.dnsCaptureEnabled),
+      "dnsListenHost": configuration.dnsListenHost as NSString,
+      "dnsListenPort": String(configuration.dnsListenPort) as NSString,
+      "dnsFakeIPEnabled": NSNumber(value: configuration.dnsFakeIPEnabled),
+      "systemDNSOverrideEnabled": NSNumber(value: configuration.systemDNSOverrideEnabled),
+      "systemDNSServers": configuration.systemDNSServers as NSArray,
+      "systemDNSOverrideApplied": NSNumber(value: configuration.systemDNSOverrideApplied)
     ])
     return try await waitForStartResult(manager)
   }

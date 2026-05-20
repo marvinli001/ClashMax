@@ -729,6 +729,8 @@ struct TunSettings: Codable, Equatable, Sendable {
   static let defaultDevice = "utun1024"
   static let defaultDNSHijack = ["any:53"]
   static let defaultMTU = 1500
+  static let defaultFakeIPRange = NetworkExtensionRoutingSettings.defaultFakeIPRange
+  static let defaultSystemDNSServers = NetworkExtensionRoutingSettings.defaultSystemDNSServers
 
   var stack: TunStack
   var device: String
@@ -738,6 +740,10 @@ struct TunSettings: Codable, Equatable, Sendable {
   var dnsHijack: [String]
   var mtu: Int
   var routeExcludeAddresses: [String]
+  var dnsFakeIPEnabled: Bool
+  var fakeIPRange: String
+  var systemDNSOverrideEnabled: Bool
+  var systemDNSServers: [String]
 
   private enum CodingKeys: String, CodingKey {
     case stack
@@ -748,6 +754,10 @@ struct TunSettings: Codable, Equatable, Sendable {
     case dnsHijack
     case mtu
     case routeExcludeAddresses
+    case dnsFakeIPEnabled
+    case fakeIPRange
+    case systemDNSOverrideEnabled
+    case systemDNSServers
   }
 
   init(
@@ -758,7 +768,11 @@ struct TunSettings: Codable, Equatable, Sendable {
     autoDetectInterface: Bool,
     dnsHijack: [String],
     mtu: Int,
-    routeExcludeAddresses: [String]
+    routeExcludeAddresses: [String],
+    dnsFakeIPEnabled: Bool = true,
+    fakeIPRange: String = Self.defaultFakeIPRange,
+    systemDNSOverrideEnabled: Bool = true,
+    systemDNSServers: [String] = Self.defaultSystemDNSServers
   ) {
     self.stack = stack
     self.device = device
@@ -767,7 +781,11 @@ struct TunSettings: Codable, Equatable, Sendable {
     self.autoDetectInterface = autoDetectInterface
     self.dnsHijack = dnsHijack
     self.mtu = mtu
-    self.routeExcludeAddresses = routeExcludeAddresses
+    self.routeExcludeAddresses = NetworkExtensionRoutingSettings.normalizedRouteExcludeCIDRs(routeExcludeAddresses)
+    self.dnsFakeIPEnabled = dnsFakeIPEnabled
+    self.fakeIPRange = fakeIPRange.trimmingCharacters(in: .whitespacesAndNewlines)
+    self.systemDNSOverrideEnabled = systemDNSOverrideEnabled
+    self.systemDNSServers = NetworkExtensionRoutingSettings.normalizedDNSServerInputs(systemDNSServers)
   }
 
   static let `default` = TunSettings(
@@ -778,7 +796,11 @@ struct TunSettings: Codable, Equatable, Sendable {
     autoDetectInterface: true,
     dnsHijack: defaultDNSHijack,
     mtu: defaultMTU,
-    routeExcludeAddresses: []
+    routeExcludeAddresses: [],
+    dnsFakeIPEnabled: true,
+    fakeIPRange: defaultFakeIPRange,
+    systemDNSOverrideEnabled: true,
+    systemDNSServers: defaultSystemDNSServers
   )
 
   init(from decoder: Decoder) throws {
@@ -800,6 +822,22 @@ struct TunSettings: Codable, Equatable, Sendable {
         [String].self,
         forKey: .routeExcludeAddresses,
         default: defaults.routeExcludeAddresses
+      ),
+      dnsFakeIPEnabled: container.decodeDefault(
+        Bool.self,
+        forKey: .dnsFakeIPEnabled,
+        default: defaults.dnsFakeIPEnabled
+      ),
+      fakeIPRange: container.decodeDefault(String.self, forKey: .fakeIPRange, default: defaults.fakeIPRange),
+      systemDNSOverrideEnabled: container.decodeDefault(
+        Bool.self,
+        forKey: .systemDNSOverrideEnabled,
+        default: defaults.systemDNSOverrideEnabled
+      ),
+      systemDNSServers: container.decodeDefault(
+        [String].self,
+        forKey: .systemDNSServers,
+        default: defaults.systemDNSServers
       )
     )
   }
@@ -814,11 +852,43 @@ struct TunSettings: Codable, Equatable, Sendable {
   }
 
   var normalizedRouteExcludeAddresses: [String] {
-    normalizedList(routeExcludeAddresses, fallback: [])
+    Self.normalizedRouteExcludeCIDRs(routeExcludeAddresses)
   }
 
   var normalizedMTU: Int {
     min(max(mtu, 576), 9_000)
+  }
+
+  var normalizedFakeIPRange: String {
+    Self.isValidRouteExcludeCIDR(fakeIPRange)
+      ? fakeIPRange.trimmingCharacters(in: .whitespacesAndNewlines)
+      : Self.defaultFakeIPRange
+  }
+
+  var effectiveSystemDNSServers: [String] {
+    let normalized = NetworkExtensionRoutingSettings.normalizedDNSServers(systemDNSServers)
+    return normalized.isEmpty ? Self.defaultSystemDNSServers : normalized
+  }
+
+  var validationError: String? {
+    if dnsFakeIPEnabled, !Self.isValidRouteExcludeCIDR(fakeIPRange) {
+      return "Invalid TUN fake-ip range: \(fakeIPRange)"
+    }
+    if systemDNSOverrideEnabled, let invalid = systemDNSServers.first(where: { !NetworkExtensionRoutingSettings.isValidDNSServer($0) }) {
+      return "Invalid TUN system DNS server: \(invalid)"
+    }
+    if let invalid = routeExcludeAddresses.first(where: { !Self.isValidRouteExcludeCIDR($0) }) {
+      return "Invalid TUN route exclude CIDR: \(invalid)"
+    }
+    return nil
+  }
+
+  static func isValidRouteExcludeCIDR(_ value: String) -> Bool {
+    (try? NetworkExtensionRouteCIDR(value)) != nil
+  }
+
+  static func normalizedRouteExcludeCIDRs(_ values: [String]) -> [String] {
+    NetworkExtensionRoutingSettings.normalizedRouteExcludeCIDRs(values).filter(Self.isValidRouteExcludeCIDR)
   }
 
   private func normalizedList(_ values: [String], fallback: [String]) -> [String] {
@@ -830,6 +900,7 @@ struct TunSettings: Codable, Equatable, Sendable {
 enum TunHelperPreparationState: Equatable, Sendable {
   case idle
   case checking
+  case registered(String)
   case ready
   case requiresApproval(String)
   case notBootstrapped(String)
@@ -838,6 +909,15 @@ enum TunHelperPreparationState: Equatable, Sendable {
   var isReady: Bool {
     if case .ready = self { return true }
     return false
+  }
+
+  var allowsStartAttempt: Bool {
+    switch self {
+    case .registered, .ready:
+      return true
+    case .idle, .checking, .requiresApproval, .notBootstrapped, .failed:
+      return false
+    }
   }
 
   var isFailure: Bool {
@@ -864,6 +944,8 @@ enum TunHelperPreparationState: Equatable, Sendable {
       return String(localized: "TUN helper needs preparation before Start is available.")
     case .checking:
       return String(localized: "Preparing the TUN helper with macOS.")
+    case let .registered(message):
+      return message
     case .ready:
       return String(localized: "TUN helper is ready.")
     case let .requiresApproval(message),

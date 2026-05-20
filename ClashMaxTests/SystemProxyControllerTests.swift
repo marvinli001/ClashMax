@@ -55,6 +55,11 @@ final class SystemProxyControllerTests: XCTestCase {
     XCTAssertFalse(plist.contains("Contents/MacOS/ClashMaxHelper"))
     XCTAssertTrue(plist.contains("<key>AssociatedBundleIdentifiers</key>"))
     XCTAssertTrue(plist.contains("<string>io.github.clashmax.ClashMax</string>"))
+
+    let data = try Data(contentsOf: launchDaemonPlist)
+    let object = try PropertyListSerialization.propertyList(from: data, format: nil)
+    let dictionary = try XCTUnwrap(object as? [String: Any])
+    XCTAssertEqual(dictionary["RunAtLoad"] as? Bool, true)
   }
 
   func testHelperInfoPlistUsesSMAppServiceDaemonIdentityWithoutLegacyBlessClientRules() throws {
@@ -320,6 +325,74 @@ final class SystemProxyControllerTests: XCTestCase {
     try await controller.apply(host: "127.0.0.1", port: 7890, bypassDomains: ["localhost", "*.corp"])
 
     XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setproxybypassdomains Wi-Fi localhost *.corp"))
+  }
+
+  func testApplySystemDNSCapturesAndRestoresEmptyDNS() async throws {
+    let runner = RecordingCommandRunner(outputs: [
+      "/usr/sbin/networksetup -listallnetworkservices": "Wi-Fi\n",
+      "/usr/sbin/networksetup -getdnsservers Wi-Fi": "There aren't any DNS Servers set on Wi-Fi.\n"
+    ])
+    let controller = SystemProxyController(commandRunner: runner)
+
+    let applyResult = try await controller.applyDNS(servers: [" 114.114.114.114 ", "114.114.114.114"])
+    let restoreResult = try await controller.restoreDNS()
+
+    XCTAssertEqual(applyResult.capturedSnapshotCount, 1)
+    XCTAssertEqual(applyResult.appliedServiceCount, 1)
+    XCTAssertEqual(restoreResult.restoredSnapshotCount, 1)
+    XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setdnsservers Wi-Fi 114.114.114.114"))
+    XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setdnsservers Wi-Fi Empty"))
+    XCTAssertFalse(controller.hasManagedSystemDNSState)
+  }
+
+  func testApplySystemDNSRestoresMultipleOriginalServers() async throws {
+    let runner = RecordingCommandRunner(outputs: [
+      "/usr/sbin/networksetup -listallnetworkservices": "Wi-Fi\n",
+      "/usr/sbin/networksetup -getdnsservers Wi-Fi": "1.1.1.1\n2606:4700:4700::1111\n"
+    ])
+    let controller = SystemProxyController(commandRunner: runner)
+
+    try await controller.applyDNS(servers: ["114.114.114.114"])
+    _ = try await controller.restoreDNS()
+
+    XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setdnsservers Wi-Fi 114.114.114.114"))
+    XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setdnsservers Wi-Fi 1.1.1.1 2606:4700:4700::1111"))
+  }
+
+  func testApplySystemDNSRejectsInvalidServersBeforeRunningNetworkSetup() async throws {
+    let runner = RecordingCommandRunner(outputs: [:])
+    let controller = SystemProxyController(commandRunner: runner)
+
+    do {
+      _ = try await controller.applyDNS(servers: ["not-a-dns-server"])
+      XCTFail("Expected invalid DNS server error")
+    } catch {
+      XCTAssertTrue(error.localizedDescription.contains("DNS"))
+    }
+
+    XCTAssertEqual(runner.commands, [])
+  }
+
+  func testCapturedDNSSnapshotsPersistAcrossControllerInstancesUntilRestore() async throws {
+    let defaults = try Self.makeIsolatedDefaults()
+    let firstRunner = RecordingCommandRunner(outputs: [
+      "/usr/sbin/networksetup -listallnetworkservices": "Wi-Fi\n",
+      "/usr/sbin/networksetup -getdnsservers Wi-Fi": "8.8.8.8\n"
+    ])
+    let firstController = SystemProxyController(commandRunner: firstRunner, snapshotDefaults: defaults)
+
+    try await firstController.applyDNS(servers: ["114.114.114.114"])
+
+    let secondRunner = RecordingCommandRunner(outputs: [:])
+    let secondController = SystemProxyController(commandRunner: secondRunner, snapshotDefaults: defaults)
+
+    XCTAssertTrue(secondController.hasManagedSystemDNSState)
+
+    let restoreResult = try await secondController.restoreDNS()
+
+    XCTAssertEqual(restoreResult.restoredSnapshotCount, 1)
+    XCTAssertTrue(secondRunner.commands.contains("/usr/sbin/networksetup -setdnsservers Wi-Fi 8.8.8.8"))
+    XCTAssertFalse(secondController.hasManagedSystemDNSState)
   }
 
   func testApplyRestoresCapturedServicesWhenLaterSnapshotFails() async throws {

@@ -238,8 +238,26 @@ struct SettingsView: View {
               .foregroundStyle(appModel.networkExtensionController.vpnStatus.isActive ? .green : .secondary)
             }
 
+            SettingsControlRow(
+              "NE Diagnostics",
+              description: networkExtensionDiagnosticsSummary
+            ) {
+              Button {
+                appModel.refreshNetworkExtensionStatus()
+              } label: {
+                Label("Refresh", systemImage: "arrow.clockwise")
+              }
+            }
+
             if let error = appModel.networkExtensionController.recentError {
               Text(error)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
+            }
+
+            if let error = appModel.networkExtensionSystemDNSState.errorMessage {
+              Text(String(format: String(localized: "DNS: %@"), error))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(3)
@@ -364,6 +382,13 @@ struct SettingsView: View {
       } label: {
         Label("Refresh", systemImage: "arrow.clockwise")
       }
+
+      Button {
+        appModel.repairNetworkExtensionDNS()
+      } label: {
+        Label("Repair DNS", systemImage: "wrench.and.screwdriver")
+      }
+      .disabled(!appModel.canRepairNetworkExtensionDNS)
     }
   }
 
@@ -376,6 +401,23 @@ struct SettingsView: View {
     case .invalid, .disconnected:
       "xmark.circle"
     }
+  }
+
+  private var networkExtensionDiagnosticsSummary: String {
+    let diagnostics = appModel.networkExtensionController.diagnostics
+    let dnsRuntime = appModel.networkExtensionRoutingSettings.dnsFakeIPEnabled
+      ? String(localized: "fake-ip")
+      : String(localized: "profile")
+    return String(
+      format: String(localized: "TCP %lld, UDP %lld, DNS captures %lld, DNS datagrams %lld, SOCKS failures %lld, DNS %@, system DNS %@."),
+      diagnostics.activeTCPBridgeCount,
+      diagnostics.activeUDPBridgeCount,
+      diagnostics.dnsCaptureCount,
+      diagnostics.dnsDatagramCount,
+      diagnostics.socksHandshakeFailureCount,
+      dnsRuntime,
+      appModel.networkExtensionSystemDNSState.displayName
+    )
   }
 
   private var networkExtensionActionButtonRows: some View {
@@ -399,6 +441,12 @@ struct SettingsView: View {
       } label: {
         Label("Refresh", systemImage: "arrow.clockwise")
       }
+      Button {
+        appModel.repairNetworkExtensionDNS()
+      } label: {
+        Label("Repair DNS", systemImage: "wrench.and.screwdriver")
+      }
+      .disabled(!appModel.canRepairNetworkExtensionDNS)
     }
   }
 }

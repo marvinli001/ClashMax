@@ -199,6 +199,41 @@ final class TunnelHelperClient: ObservableObject {
     }
   }
 
+  func warmRegistration() async -> TunHelperPreparationState {
+    do {
+      let fingerprint = try fingerprintProvider.currentFingerprint()
+      switch service.status {
+      case .enabled:
+        if registrationRecordStore.helperFingerprint() == nil {
+          registrationRecordStore.setHelperFingerprint(fingerprint)
+        }
+        statusMessage = Self.registeredMessage
+        return .registered(Self.registeredMessage)
+      case .requiresApproval:
+        registrationRecordStore.setHelperFingerprint(fingerprint)
+        let message = Self.statusMessage(for: .requiresApproval)
+        statusMessage = message
+        return .requiresApproval(message)
+      case .notRegistered:
+        try service.register()
+        registrationRecordStore.setHelperFingerprint(fingerprint)
+        return warmPreparationStateAfterRegistration()
+      case .notFound:
+        let message = Self.statusMessage(for: service.status)
+        statusMessage = message
+        return .failed(message)
+      @unknown default:
+        let message = Self.statusMessage(for: service.status)
+        statusMessage = message
+        return .failed(message)
+      }
+    } catch {
+      let message = UserFacingError.message(for: error)
+      statusMessage = message
+      return .failed(message)
+    }
+  }
+
   func openApprovalSettings() {
     service.openSystemSettingsLoginItems()
   }
@@ -259,6 +294,7 @@ final class TunnelHelperClient: ObservableObject {
   }
 
   static let bootstrappedMessage = String(localized: "Helper registered and bootstrapped.")
+  static let registeredMessage = String(localized: "TUN helper is registered.")
   static let notBootstrappedMessage = String(localized: "TUN helper is registered, but launchd cannot start it. Click Repair after installing the latest build.")
 
   private func repairRegistration(fingerprint: String) async throws {
@@ -353,6 +389,30 @@ final class TunnelHelperClient: ObservableObject {
       let message = Self.statusMessage(for: service.status)
       statusMessage = message
       return .notBootstrapped(message)
+    case .notFound:
+      let message = Self.statusMessage(for: service.status)
+      statusMessage = message
+      return .failed(message)
+    @unknown default:
+      let message = Self.statusMessage(for: service.status)
+      statusMessage = message
+      return .failed(message)
+    }
+  }
+
+  private func warmPreparationStateAfterRegistration() -> TunHelperPreparationState {
+    switch service.status {
+    case .enabled:
+      statusMessage = Self.registeredMessage
+      return .registered(Self.registeredMessage)
+    case .requiresApproval:
+      let message = Self.statusMessage(for: service.status)
+      statusMessage = message
+      return .requiresApproval(message)
+    case .notRegistered:
+      let message = Self.statusMessage(for: service.status)
+      statusMessage = message
+      return .idle
     case .notFound:
       let message = Self.statusMessage(for: service.status)
       statusMessage = message

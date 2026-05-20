@@ -85,6 +85,15 @@ struct SystemProxyRestoreResult: Equatable, Sendable {
   var verified: Bool
 }
 
+struct SystemDNSApplyResult: Equatable, Sendable {
+  var capturedSnapshotCount: Int
+  var appliedServiceCount: Int
+}
+
+struct SystemDNSRestoreResult: Equatable, Sendable {
+  var restoredSnapshotCount: Int
+}
+
 struct SystemProxyRestoreVerificationError: LocalizedError, Equatable, Sendable {
   var services: [String]
 
@@ -100,12 +109,14 @@ final class SystemProxyController: @unchecked Sendable {
   static let restoreVerificationBudgetSeconds: TimeInterval = 20
   static let commandTimeoutSeconds: TimeInterval = 12
   private static let persistedSnapshotsDefaultsKey = "io.github.clashmax.systemProxySnapshots"
+  private static let persistedDNSSnapshotsDefaultsKey = "io.github.clashmax.systemDNSSnapshots"
 
   private let commandRunner: CommandRunning
   private let snapshotDefaults: UserDefaults?
   private let snapshotDefaultsKey: String
   private let operationGate = AsyncOperationGate()
   private var snapshots: [String: ServiceProxySnapshot] = [:]
+  private var dnsSnapshots: [String: ServiceDNSSnapshot] = [:]
   private var expectedConfiguration: ExpectedSystemProxyConfiguration?
   private var storedGuardState: SystemProxyGuardState = .idle
   private let lock = NSLock()
@@ -125,6 +136,7 @@ final class SystemProxyController: @unchecked Sendable {
     self.snapshotDefaults = snapshotDefaults
     self.snapshotDefaultsKey = snapshotDefaultsKey
     self.snapshots = Self.loadPersistedSnapshots(defaults: snapshotDefaults, key: snapshotDefaultsKey)
+    self.dnsSnapshots = Self.loadPersistedDNSSnapshots(defaults: snapshotDefaults, key: Self.persistedDNSSnapshotsDefaultsKey)
   }
 
   func apply(host: String, port: Int, bypassDomains: [String] = SystemProxyController.defaultBypassDomains) async throws {
@@ -246,6 +258,40 @@ final class SystemProxyController: @unchecked Sendable {
     return !snapshots.isEmpty || expectedConfiguration != nil
   }
 
+  var hasManagedSystemDNSState: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return !dnsSnapshots.isEmpty
+  }
+
+  @discardableResult
+  func applyDNS(servers: [String], restoreOnFailure: Bool = true) async throws -> SystemDNSApplyResult {
+    let normalizedServers = NetworkExtensionRoutingSettings.normalizedDNSServers(servers)
+    guard !normalizedServers.isEmpty else {
+      throw AppError.invalidProfileConfig("System DNS override requires at least one valid DNS server.")
+    }
+    return try await operationGate.run { [self] in
+      do {
+        return try await withTimeout(seconds: Self.applyBudgetSeconds) { [self] in
+          try await applyDNSInner(servers: normalizedServers)
+        }
+      } catch {
+        if restoreOnFailure {
+          try? await restoreCapturedDNSSnapshots()
+        }
+        throw error
+      }
+    }
+  }
+
+  func restoreDNS() async throws -> SystemDNSRestoreResult {
+    try await operationGate.run { [self] in
+      try await withTimeout(seconds: Self.applyBudgetSeconds) { [self] in
+        try await restoreCapturedDNSSnapshots()
+      }
+    }
+  }
+
   @discardableResult
   func disableMatchingProxy(hosts: Set<String>, ports: Set<Int>) async throws -> Bool {
     let normalizedHosts = normalizedProxyMatchHosts(hosts)
@@ -271,6 +317,23 @@ final class SystemProxyController: @unchecked Sendable {
       try await applyProxyCommands(host: host, port: port, service: service)
       try await setBypassDomains(bypassDomains, service: service)
     }
+  }
+
+  private func applyDNSInner(servers: [String]) async throws -> SystemDNSApplyResult {
+    var appliedServiceCount = 0
+    for service in try await networkServices() {
+      try Task.checkCancellation()
+      if readDNSSnapshot(service) == nil {
+        let snapshot = try await dnsSnapshot(for: service)
+        writeDNSSnapshot(snapshot, for: service)
+      }
+      try await setDNSServers(servers, service: service)
+      appliedServiceCount += 1
+    }
+    return SystemDNSApplyResult(
+      capturedSnapshotCount: readAllDNSSnapshots().count,
+      appliedServiceCount: appliedServiceCount
+    )
   }
 
   private func restoreInner() async throws {
@@ -369,6 +432,30 @@ final class SystemProxyController: @unchecked Sendable {
     }
   }
 
+  private func restoreCapturedDNSSnapshots(removeAfterRestore: Bool = true) async throws -> SystemDNSRestoreResult {
+    let captured = readAllDNSSnapshots()
+    var firstError: Error?
+
+    for (service, snapshot) in captured {
+      try Task.checkCancellation()
+      do {
+        try await setDNSServers(snapshot.servers, service: service)
+        if removeAfterRestore {
+          removeDNSSnapshot(for: service)
+        }
+      } catch {
+        if firstError == nil {
+          firstError = error
+        }
+      }
+    }
+
+    if let firstError {
+      throw firstError
+    }
+    return SystemDNSRestoreResult(restoredSnapshotCount: captured.count)
+  }
+
   private func disableMatchingProxyInner(hosts: Set<String>, ports: Set<Int>) async throws -> Bool {
     var didChange = false
     for service in try await networkServices() {
@@ -430,6 +517,10 @@ final class SystemProxyController: @unchecked Sendable {
     )
   }
 
+  private func dnsSnapshot(for service: String) async throws -> ServiceDNSSnapshot {
+    ServiceDNSSnapshot(output: try await commandRunner.run("/usr/sbin/networksetup", ["-getdnsservers", service]))
+  }
+
   private func restore(_ state: ProxyState, service: String, kind: ProxyKind) async throws {
     if state.enabled {
       if !state.server.isEmpty, state.port > 0 {
@@ -476,6 +567,11 @@ final class SystemProxyController: @unchecked Sendable {
     _ = try await commandRunner.run("/usr/sbin/networksetup", arguments)
   }
 
+  private func setDNSServers(_ servers: [String], service: String) async throws {
+    let arguments = ["-setdnsservers", service] + (servers.isEmpty ? ["Empty"] : servers)
+    _ = try await commandRunner.run("/usr/sbin/networksetup", arguments)
+  }
+
   private func readSnapshot(_ service: String) -> ServiceProxySnapshot? {
     lock.lock()
     defer { lock.unlock() }
@@ -500,6 +596,32 @@ final class SystemProxyController: @unchecked Sendable {
     defer { lock.unlock() }
     snapshots.removeAll()
     persistSnapshotsLocked()
+  }
+
+  private func readDNSSnapshot(_ service: String) -> ServiceDNSSnapshot? {
+    lock.lock()
+    defer { lock.unlock() }
+    return dnsSnapshots[service]
+  }
+
+  private func writeDNSSnapshot(_ snapshot: ServiceDNSSnapshot, for service: String) {
+    lock.lock()
+    defer { lock.unlock() }
+    dnsSnapshots[service] = snapshot
+    persistDNSSnapshotsLocked()
+  }
+
+  private func readAllDNSSnapshots() -> [String: ServiceDNSSnapshot] {
+    lock.lock()
+    defer { lock.unlock() }
+    return dnsSnapshots
+  }
+
+  private func removeDNSSnapshot(for service: String) {
+    lock.lock()
+    defer { lock.unlock() }
+    dnsSnapshots.removeValue(forKey: service)
+    persistDNSSnapshotsLocked()
   }
 
   private func removeSnapshot(for service: String) {
@@ -535,6 +657,15 @@ final class SystemProxyController: @unchecked Sendable {
     return snapshots
   }
 
+  private static func loadPersistedDNSSnapshots(defaults: UserDefaults?, key: String) -> [String: ServiceDNSSnapshot] {
+    guard let data = defaults?.data(forKey: key),
+          let snapshots = try? JSONDecoder().decode([String: ServiceDNSSnapshot].self, from: data)
+    else {
+      return [:]
+    }
+    return snapshots
+  }
+
   private func persistSnapshotsLocked() {
     guard let snapshotDefaults else { return }
     if snapshots.isEmpty {
@@ -543,6 +674,16 @@ final class SystemProxyController: @unchecked Sendable {
     }
     guard let data = try? JSONEncoder().encode(snapshots) else { return }
     snapshotDefaults.set(data, forKey: snapshotDefaultsKey)
+  }
+
+  private func persistDNSSnapshotsLocked() {
+    guard let snapshotDefaults else { return }
+    if dnsSnapshots.isEmpty {
+      snapshotDefaults.removeObject(forKey: Self.persistedDNSSnapshotsDefaultsKey)
+      return
+    }
+    guard let data = try? JSONEncoder().encode(dnsSnapshots) else { return }
+    snapshotDefaults.set(data, forKey: Self.persistedDNSSnapshotsDefaultsKey)
   }
 }
 
@@ -641,6 +782,24 @@ private struct ServiceProxySnapshot: Codable {
 
   func containsProxyMatching(hosts: Set<String>, ports: Set<Int>) -> Bool {
     [web, secureWeb, socks].contains { $0.matches(hosts: hosts, ports: ports) }
+  }
+}
+
+private struct ServiceDNSSnapshot: Codable {
+  var servers: [String]
+
+  init(servers: [String]) {
+    self.servers = servers
+  }
+
+  init(output: String) {
+    let values = output
+      .split(separator: "\n")
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+      .filter { !$0.localizedCaseInsensitiveContains("there aren't any dns servers") }
+      .filter { !$0.localizedCaseInsensitiveContains("there are no dns servers") }
+    servers = NetworkExtensionRoutingSettings.normalizedDNSServers(values)
   }
 }
 

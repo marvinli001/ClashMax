@@ -20,6 +20,11 @@ final class PersistedSettingsStore: ObservableObject {
       saveCodable(tunSettings, forKey: Self.tunSettingsDefaultsKey)
     }
   }
+  @Published var networkExtensionRoutingSettings = NetworkExtensionRoutingSettings.default {
+    didSet {
+      saveCodable(networkExtensionRoutingSettings, forKey: Self.networkExtensionRoutingSettingsDefaultsKey)
+    }
+  }
   @Published var delayTestSettings = DelayTestSettings.default {
     didSet {
       overrides.unifiedDelay = delayTestSettings.unifiedDelay
@@ -57,6 +62,7 @@ final class PersistedSettingsStore: ObservableObject {
   private static let developerModeDefaultsKey = "io.github.clashmax.developerMode"
   private static let systemProxySettingsDefaultsKey = "io.github.clashmax.systemProxySettings"
   private static let tunSettingsDefaultsKey = "io.github.clashmax.tunSettings"
+  private static let networkExtensionRoutingSettingsDefaultsKey = "io.github.clashmax.networkExtensionRoutingSettings"
   private static let delayTestSettingsDefaultsKey = "io.github.clashmax.delayTestSettings"
   private static let appThemeDefaultsKey = "io.github.clashmax.appTheme"
   private static let externalControllerSettingsDefaultsKey = "io.github.clashmax.externalControllerSettings"
@@ -91,6 +97,11 @@ final class PersistedSettingsStore: ObservableObject {
     tunSettings = Self.loadCodable(
       TunSettings.self,
       forKey: Self.tunSettingsDefaultsKey,
+      defaults: defaults
+    ) ?? .default
+    networkExtensionRoutingSettings = Self.loadCodable(
+      NetworkExtensionRoutingSettings.self,
+      forKey: Self.networkExtensionRoutingSettingsDefaultsKey,
       defaults: defaults
     ) ?? .default
     delayTestSettings = Self.loadCodable(

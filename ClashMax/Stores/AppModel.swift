@@ -25,20 +25,38 @@ private struct RuntimeStopResult {
   var coreStopError: Error?
   var helperStopError: Error?
   var networkExtensionStopError: Error?
+  var networkExtensionDNSRestoreError: Error?
+  var tunDNSRestoreError: Error?
   var systemProxyRestoreError: Error?
   var didRunLocalCleanup = false
 
   static let success = RuntimeStopResult(didRunLocalCleanup: true)
 
   var succeeded: Bool {
-    coreStopError == nil && helperStopError == nil && networkExtensionStopError == nil && systemProxyRestoreError == nil
+    coreStopError == nil
+      && helperStopError == nil
+      && networkExtensionStopError == nil
+      && networkExtensionDNSRestoreError == nil
+      && tunDNSRestoreError == nil
+      && systemProxyRestoreError == nil
   }
 
   var localCleanupSucceeded: Bool {
-    didRunLocalCleanup && coreStopError == nil && helperStopError == nil && systemProxyRestoreError == nil
+    didRunLocalCleanup
+      && coreStopError == nil
+      && helperStopError == nil
+      && networkExtensionDNSRestoreError == nil
+      && tunDNSRestoreError == nil
+      && systemProxyRestoreError == nil
   }
 
   var userFacingMessage: String? {
+    if let networkExtensionDNSRestoreError {
+      return "Could not restore Network Extension DNS settings: \(UserFacingError.message(for: networkExtensionDNSRestoreError))"
+    }
+    if let tunDNSRestoreError {
+      return "Could not restore TUN DNS settings: \(UserFacingError.message(for: tunDNSRestoreError))"
+    }
     if let systemProxyRestoreError {
       return "Could not restore System Proxy settings: \(UserFacingError.message(for: systemProxyRestoreError))"
     }
@@ -56,8 +74,83 @@ private struct RuntimeStopResult {
 
 }
 
+private struct NetworkExtensionStopCleanupResult {
+  var transparentProxyStopError: Error?
+  var dnsRestoreError: Error?
+}
+
 private enum LastErrorOrigin {
   case networkExtension
+}
+
+enum SystemDNSOverrideState: Equatable {
+  case inactive
+  case applying
+  case applied(serviceCount: Int)
+  case restoring
+  case restored
+  case applyFailed(String)
+  case restoreFailed(String)
+
+  var displayName: String {
+    switch self {
+    case .inactive:
+      return String(localized: "Inactive")
+    case .applying:
+      return String(localized: "Applying")
+    case let .applied(serviceCount):
+      return serviceCount > 0
+        ? String(format: String(localized: "Applied (%lld)"), serviceCount)
+        : String(localized: "Applied")
+    case .restoring:
+      return String(localized: "Restoring")
+    case .restored:
+      return String(localized: "Restored")
+    case .applyFailed:
+      return String(localized: "Apply Failed")
+    case .restoreFailed:
+      return String(localized: "Restore Failed")
+    }
+  }
+
+  var errorMessage: String? {
+    switch self {
+    case let .applyFailed(message), let .restoreFailed(message):
+      return message
+    case .inactive, .applying, .applied, .restoring, .restored:
+      return nil
+    }
+  }
+}
+
+typealias NetworkExtensionSystemDNSState = SystemDNSOverrideState
+
+private extension SystemDNSOverrideState {
+  var diagnosticsApplied: Bool {
+    if case .applied = self {
+      return true
+    }
+    return false
+  }
+
+  var diagnosticsStatus: String {
+    switch self {
+    case .inactive:
+      return "inactive"
+    case .applying:
+      return "applying"
+    case .applied:
+      return "applied"
+    case .restoring:
+      return "restoring"
+    case .restored:
+      return "restored"
+    case .applyFailed:
+      return "apply_failed"
+    case .restoreFailed:
+      return "restore_failed"
+    }
+  }
 }
 
 struct AppNotice: Equatable {
@@ -100,6 +193,10 @@ final class AppModel: ObservableObject {
     get { settings.tunSettings }
     set { settings.tunSettings = newValue }
   }
+  var networkExtensionRoutingSettings: NetworkExtensionRoutingSettings {
+    get { settings.networkExtensionRoutingSettings }
+    set { settings.networkExtensionRoutingSettings = newValue }
+  }
   var delayTestSettings: DelayTestSettings {
     get { settings.delayTestSettings }
     set { settings.delayTestSettings = newValue }
@@ -123,14 +220,23 @@ final class AppModel: ObservableObject {
     set { systemProxy.enabled = newValue }
   }
   @Published var tunEnabled = false
+  @Published private(set) var tunHelperPID: Int?
   var networkExtensionEnabled: Bool {
     runtimeOwner == .networkExtension && networkExtensionController.vpnStatus.isActive
   }
+  var canRepairNetworkExtensionDNS: Bool {
+    runtimeOwner == .networkExtension
+      || networkExtensionController.vpnStatus.isActive
+      || systemProxyController.hasManagedSystemDNSState
+  }
   @Published var tunnelCoreRunning = false
+  @Published private(set) var networkExtensionSystemDNSState: SystemDNSOverrideState = .inactive
+  @Published private(set) var tunSystemDNSState: SystemDNSOverrideState = .inactive
   @Published private(set) var tunHelperPreparationState: TunHelperPreparationState = .idle
   var isAddingSubscription: Bool { profileOperations.isAddingSubscription }
   @Published private(set) var startInFlight = false
   @Published private(set) var sessionStartedAt: Date?
+  @Published private var networkExtensionCoreCrashMessage: String?
   var proxyGroups: [ProxyGroup] {
     get { runtimeData.proxyGroups }
     set { runtimeData.proxyGroups = newValue }
@@ -217,6 +323,7 @@ final class AppModel: ObservableObject {
   private var pendingModeTask: Task<Void, Never>?
   private var pendingRoutingModeTask: Task<Void, Never>?
   private var tunHelperPreparationTask: Task<Void, Never>?
+  private var didWarmTunHelperRegistrationOnLaunch = false
   private var modeUpdateTask: Task<Void, Never>?
   private var modeUpdateToken: UUID?
   private var proxySelectionTasks: [ProxyGroup.ID: Task<Void, Never>] = [:]
@@ -233,6 +340,8 @@ final class AppModel: ObservableObject {
   private var runtimeReloadToken: UUID?
   private var runtimeReloadPending = false
   private var streamTasks: [Task<Void, Never>] = []
+  private var networkExtensionDiagnosticsTask: Task<Void, Never>?
+  private var publishedNetworkExtensionDiagnosticEventIDs: Set<String> = []
   private var storeCancellables: Set<AnyCancellable> = []
   static let publicIPRefreshInterval: TimeInterval = 300
   static let silentStartDefaultsKey = PersistedSettingsStore.silentStartDefaultsKey
@@ -318,6 +427,11 @@ final class AppModel: ObservableObject {
     coreController.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
       .store(in: &storeCancellables)
+    coreController.$status
+      .sink { [weak self] status in
+        self?.handleCoreStatusChange(status)
+      }
+      .store(in: &storeCancellables)
     networkExtensionController.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
       .store(in: &storeCancellables)
@@ -325,6 +439,7 @@ final class AppModel: ObservableObject {
       publishDeveloperModeFallbackNotice()
     }
     recoverDanglingSystemProxyIfNeeded()
+    recoverDanglingManagedDNSIfNeeded()
     let needsManifestRefresh = self.profileStore.activeProfileID == nil
     refreshProfilePreview()
     loadPreviewSelectionsForActiveProfile()
@@ -350,11 +465,15 @@ final class AppModel: ObservableObject {
   var canStopRuntime: Bool {
     isRunning
       || dashboardRuntimeState.isStarting
+      || activeNetworkExtensionCoreCrashMessage != nil
       || runtimeOwner == .networkExtension
       || networkExtensionController.vpnStatus.isActive
   }
 
   var dashboardRuntimeState: DashboardRuntimeState {
+    if let message = activeNetworkExtensionCoreCrashMessage {
+      return .crashed(message: message)
+    }
     let effectiveCoreStatus: CoreStatus = previewRuntimeActive ? .stopped : coreController.status
     return DashboardRuntimeState.resolve(
       startInFlight: startInFlight,
@@ -367,6 +486,9 @@ final class AppModel: ObservableObject {
   var statusSummary: String {
     if previewRuntimeActive {
       return "Preview"
+    }
+    if let message = activeNetworkExtensionCoreCrashMessage {
+      return "Crashed: \(message)"
     }
     if tunnelCoreRunning {
       return "Running TUN"
@@ -398,13 +520,27 @@ final class AppModel: ObservableObject {
     if (try? bundledCoreURL()) == nil {
       return AppError.missingBundledCore.description
     }
-    if proxyRoutingMode == .tun, !tunHelperPreparationState.isReady {
+    if proxyRoutingMode == .tun, !tunHelperPreparationState.allowsStartAttempt {
       return tunHelperPreparationState.message
     }
     if proxyRoutingMode.requiresDeveloperMode, !developerMode {
       return "NE Transparent Proxy Experimental requires Developer Mode."
     }
     return nil
+  }
+
+  private var activeNetworkExtensionCoreCrashMessage: String? {
+    if case let .crashed(message) = coreController.status,
+       runtimeOwner == .networkExtension || networkExtensionController.vpnStatus.isActive || networkExtensionCoreCrashMessage != nil {
+      return message
+    }
+    return networkExtensionCoreCrashMessage
+  }
+
+  private func handleCoreStatusChange(_ status: CoreStatus) {
+    guard case let .crashed(message) = status else { return }
+    guard runtimeOwner == .networkExtension || networkExtensionController.vpnStatus.isActive else { return }
+    networkExtensionCoreCrashMessage = message
   }
 
   var proxyGroupsUnavailableMessage: String {
@@ -681,7 +817,7 @@ final class AppModel: ObservableObject {
       lastError = AppError.missingBundledCore.description
       return
     }
-    if proxyRoutingMode == .tun, !tunHelperPreparationState.isReady {
+    if proxyRoutingMode == .tun, !tunHelperPreparationState.allowsStartAttempt {
       if tunHelperPreparationState.isFailure {
         lastError = tunHelperPreparationState.message
       } else {
@@ -699,6 +835,7 @@ final class AppModel: ObservableObject {
 
   private func performStart() async {
     startInFlight = true
+    networkExtensionCoreCrashMessage = nil
     lastError = nil
     appNotice = nil
     defer {
@@ -739,12 +876,20 @@ final class AppModel: ObservableObject {
     let routingMode = proxyRoutingMode
     let shouldUseTun = routingMode == .tun
     let shouldUseNetworkExtension = routingMode == .networkExtensionExperimental
+    let networkExtensionSettings = networkExtensionRoutingSettings
     settings.syncExternalControllerSettings()
     overrides.tunEnabled = shouldUseTun
     overrides.tunSettings = tunSettings
+    let runtimeConfigOptions = RuntimeConfigOptions(
+      networkExtensionRoutingSettings: shouldUseNetworkExtension ? networkExtensionSettings : nil
+    )
     systemProxyEnabled = false
     tunEnabled = false
-    let runtimeConfig = try await generateRuntimeConfig(for: profile, selections: previewSelections)
+    let runtimeConfig = try await generateRuntimeConfig(
+      for: profile,
+      selections: previewSelections,
+      options: runtimeConfigOptions
+    )
     let coreURL = try bundledCoreURL()
     appendAppLog(level: "info", message: "Runtime config path: \(runtimeConfig.path)")
     appendAppLog(level: "info", message: "Mihomo core path: \(coreURL.path)")
@@ -773,11 +918,19 @@ final class AppModel: ObservableObject {
       guard response.running else {
         throw AppError.helperResponse("Helper reported success but TUN is not running.")
       }
+      tunHelperPID = response.pid > 0 ? response.pid : nil
       do {
         let version = try await tunnelReadinessProbe.waitUntilReady(api: overrides.endpoint)
         appendAppLog(level: "info", message: "TUN Mihomo controller ready: \(overrides.endpoint.host):\(overrides.endpoint.port), version \(version)")
+        if tunSettings.systemDNSOverrideEnabled {
+          try await applyTunSystemDNS(tunSettings)
+        } else {
+          setTunSystemDNSState(.inactive)
+        }
       } catch {
+        _ = try? await restoreTunSystemDNS()
         _ = try? await helperClient.stopTunnel()
+        tunHelperPID = nil
         tunnelCoreRunning = false
         tunEnabled = false
         runtimeOwner = .stopped
@@ -806,9 +959,24 @@ final class AppModel: ObservableObject {
 
     if shouldUseNetworkExtension {
       try await proxyPortReadinessProbe.waitUntilReady(host: "127.0.0.1", port: overrides.mixedPort)
+      if networkExtensionSettings.dnsCaptureEnabled {
+        try await proxyPortReadinessProbe.waitUntilOpen(
+          host: NetworkExtensionRoutingSettings.defaultDNSListenHost,
+          port: networkExtensionSettings.normalizedDNSListenPort,
+          serviceName: "Mihomo DNS"
+        )
+      }
       appendAppLog(level: "info", message: "Starting NE transparent proxy; System Proxy off, TUN helper untouched.")
-      try await networkExtensionController.startTransparentProxy(configuration: .clashMax(overrides: overrides))
+      try await networkExtensionController.startTransparentProxy(
+        configuration: .clashMax(overrides: overrides, routingSettings: networkExtensionSettings)
+      )
+      if networkExtensionSettings.systemDNSOverrideEnabled {
+        try await applyNetworkExtensionSystemDNS(networkExtensionSettings)
+      } else {
+        setNetworkExtensionSystemDNSState(.inactive)
+      }
       runtimeOwner = .networkExtension
+      startNetworkExtensionDiagnosticsPolling()
       appendAppLog(level: "info", message: "NE transparent proxy requested: \(networkExtensionController.vpnStatus.displayName)")
     } else if routingMode == .systemProxy {
       try await applySystemProxySettings()
@@ -871,7 +1039,11 @@ final class AppModel: ObservableObject {
     }
     proxyRoutingMode = mode
     if mode == .tun {
-      prepareTunHelperIfNeeded(force: true, restartWhenReady: shouldRestart)
+      if tunHelperPreparationState.allowsStartAttempt, !shouldRestart {
+        lastError = nil
+      } else {
+        prepareTunHelperIfNeeded(force: true, restartWhenReady: shouldRestart)
+      }
     } else {
       cancelTunHelperPreparation(resetState: true)
     }
@@ -952,6 +1124,29 @@ final class AppModel: ObservableObject {
 
   func registerHelper() {
     prepareTunHelperIfNeeded(force: true)
+  }
+
+  func warmTunHelperRegistrationOnLaunch() {
+    guard !didWarmTunHelperRegistrationOnLaunch else { return }
+    didWarmTunHelperRegistrationOnLaunch = true
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      let state = await helperClient.warmRegistration()
+      switch state {
+      case .registered, .ready:
+        if tunHelperPreparationState == .idle || tunHelperPreparationState == .checking {
+          applyTunHelperPreparationState(state)
+        }
+      case .requiresApproval:
+        if proxyRoutingMode == .tun {
+          applyTunHelperPreparationState(state)
+        }
+      case .idle, .checking, .notBootstrapped, .failed:
+        if proxyRoutingMode == .tun {
+          applyTunHelperPreparationState(state)
+        }
+      }
+    }
   }
 
   func refreshHelperRegistrationStatus() {
@@ -1037,7 +1232,7 @@ final class AppModel: ObservableObject {
     if !force, tunHelperPreparationState == .checking {
       return
     }
-    if !force, tunHelperPreparationState.isReady {
+    if !force, tunHelperPreparationState.allowsStartAttempt {
       if restartWhenReady {
         restart()
       }
@@ -1106,7 +1301,12 @@ final class AppModel: ObservableObject {
     tunHelperPreparationTask?.cancel()
     tunHelperPreparationTask = nil
     if resetState {
-      tunHelperPreparationState = .idle
+      switch tunHelperPreparationState {
+      case .ready, .registered:
+        tunHelperPreparationState = .registered(TunnelHelperClient.registeredMessage)
+      case .idle, .checking, .requiresApproval, .notBootstrapped, .failed:
+        tunHelperPreparationState = .idle
+      }
     }
   }
 
@@ -1582,10 +1782,136 @@ final class AppModel: ObservableObject {
     return true
   }
 
-  func updateTunSettings(_ settings: TunSettings) {
+  @discardableResult
+  func updateTunSettings(_ settings: TunSettings) -> Bool {
+    if let validationError = settings.validationError {
+      lastError = validationError
+      return false
+    }
     tunSettings = settings
     if proxyRoutingMode == .tun, isRunning {
       restart()
+    }
+    return true
+  }
+
+  func updateNetworkExtensionRoutingSettings(_ settings: NetworkExtensionRoutingSettings) -> Bool {
+    if let validationError = settings.validationError {
+      lastError = validationError
+      return false
+    }
+    networkExtensionRoutingSettings = settings
+    if runtimeOwner == .networkExtension || networkExtensionController.vpnStatus.isActive {
+      restart()
+    }
+    return true
+  }
+
+  private func applyNetworkExtensionSystemDNS(
+    _ settings: NetworkExtensionRoutingSettings,
+    restoreOnFailure: Bool = true
+  ) async throws {
+    setNetworkExtensionSystemDNSState(.applying)
+    do {
+      let result = try await systemProxyController.applyDNS(
+        servers: settings.effectiveSystemDNSServers,
+        restoreOnFailure: restoreOnFailure
+      )
+      setNetworkExtensionSystemDNSState(.applied(serviceCount: result.appliedServiceCount))
+      appendAppLog(
+        level: "info",
+        message: "NE system DNS override applied to \(result.appliedServiceCount) service(s): \(settings.effectiveSystemDNSServers.joined(separator: ", "))"
+      )
+    } catch {
+      let message = UserFacingError.message(for: error)
+      setNetworkExtensionSystemDNSState(.applyFailed(message))
+      throw error
+    }
+  }
+
+  private func applyTunSystemDNS(_ settings: TunSettings) async throws {
+    setTunSystemDNSState(.applying)
+    do {
+      let result = try await systemProxyController.applyDNS(servers: settings.effectiveSystemDNSServers)
+      setTunSystemDNSState(.applied(serviceCount: result.appliedServiceCount))
+      appendAppLog(
+        level: "info",
+        message: "TUN system DNS override applied to \(result.appliedServiceCount) service(s): \(settings.effectiveSystemDNSServers.joined(separator: ", "))"
+      )
+    } catch {
+      let message = UserFacingError.message(for: error)
+      setTunSystemDNSState(.applyFailed(message))
+      throw error
+    }
+  }
+
+  @discardableResult
+  private func restoreNetworkExtensionSystemDNS() async throws -> SystemDNSRestoreResult {
+    setNetworkExtensionSystemDNSState(.restoring)
+    do {
+      let result = try await systemProxyController.restoreDNS()
+      setNetworkExtensionSystemDNSState(result.restoredSnapshotCount > 0 ? .restored : .inactive)
+      if result.restoredSnapshotCount > 0 {
+        appendAppLog(level: "info", message: "NE system DNS restored for \(result.restoredSnapshotCount) service(s).")
+      }
+      return result
+    } catch {
+      let message = UserFacingError.message(for: error)
+      setNetworkExtensionSystemDNSState(.restoreFailed(message))
+      throw error
+    }
+  }
+
+  @discardableResult
+  private func restoreTunSystemDNS() async throws -> SystemDNSRestoreResult {
+    setTunSystemDNSState(.restoring)
+    do {
+      let result = try await systemProxyController.restoreDNS()
+      setTunSystemDNSState(result.restoredSnapshotCount > 0 ? .restored : .inactive)
+      if result.restoredSnapshotCount > 0 {
+        appendAppLog(level: "info", message: "TUN system DNS restored for \(result.restoredSnapshotCount) service(s).")
+      }
+      return result
+    } catch {
+      let message = UserFacingError.message(for: error)
+      setTunSystemDNSState(.restoreFailed(message))
+      throw error
+    }
+  }
+
+  private func setNetworkExtensionSystemDNSState(_ state: SystemDNSOverrideState) {
+    networkExtensionSystemDNSState = state
+    networkExtensionController.updateSystemDNSOverrideDiagnostics(
+      applied: state.diagnosticsApplied,
+      status: state.diagnosticsStatus
+    )
+  }
+
+  private func setTunSystemDNSState(_ state: SystemDNSOverrideState) {
+    tunSystemDNSState = state
+  }
+
+  func repairNetworkExtensionDNS() {
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      do {
+        if runtimeOwner == .networkExtension || networkExtensionController.vpnStatus.isActive {
+          if networkExtensionRoutingSettings.systemDNSOverrideEnabled {
+            try await applyNetworkExtensionSystemDNS(networkExtensionRoutingSettings, restoreOnFailure: false)
+          } else if systemProxyController.hasManagedSystemDNSState {
+            _ = try await restoreNetworkExtensionSystemDNS()
+          } else {
+            setNetworkExtensionSystemDNSState(.inactive)
+          }
+        } else if systemProxyController.hasManagedSystemDNSState {
+          _ = try await restoreNetworkExtensionSystemDNS()
+        } else {
+          setNetworkExtensionSystemDNSState(.inactive)
+        }
+        lastError = nil
+      } catch {
+        lastError = "Could not repair Network Extension DNS settings: \(UserFacingError.message(for: error))"
+      }
     }
   }
 
@@ -1610,20 +1936,130 @@ final class AppModel: ObservableObject {
     systemProxy.stopGuard()
   }
 
+  private func recoverDanglingManagedDNSIfNeeded() {
+    guard systemProxyController.hasManagedSystemDNSState else { return }
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      setNetworkExtensionSystemDNSState(.restoring)
+      setTunSystemDNSState(.restoring)
+      do {
+        let result = try await systemProxyController.restoreDNS()
+        let restoredState: SystemDNSOverrideState = result.restoredSnapshotCount > 0 ? .restored : .inactive
+        setNetworkExtensionSystemDNSState(restoredState)
+        setTunSystemDNSState(restoredState)
+        if result.restoredSnapshotCount > 0 {
+          appendAppLog(level: "info", message: "Managed system DNS restored from a previous run for \(result.restoredSnapshotCount) service(s).")
+        }
+      } catch {
+        let message = UserFacingError.message(for: error)
+        setNetworkExtensionSystemDNSState(.restoreFailed(message))
+        setTunSystemDNSState(.restoreFailed(message))
+        lastError = "Could not restore managed DNS settings from a previous run: \(message)"
+      }
+    }
+  }
+
   private var shouldStopNetworkExtensionRuntime: Bool {
     runtimeOwner == .networkExtension
       || networkExtensionController.vpnStatus.isActive
+      || networkExtensionCoreCrashMessage != nil
   }
 
-  private func stopNetworkExtensionIfNeeded() async -> Error? {
-    guard shouldStopNetworkExtensionRuntime else { return nil }
+  private var shouldRestoreNetworkExtensionDNS: Bool {
+    shouldStopNetworkExtensionRuntime && systemProxyController.hasManagedSystemDNSState
+  }
+
+  private var shouldRestoreTunDNS: Bool {
+    (runtimeOwner == .tunnel || tunEnabled || tunnelCoreRunning)
+      && systemProxyController.hasManagedSystemDNSState
+  }
+
+  private func stopNetworkExtensionIfNeeded() async -> NetworkExtensionStopCleanupResult {
+    var result = NetworkExtensionStopCleanupResult()
+    let shouldRestoreDNS = shouldRestoreNetworkExtensionDNS
+    guard shouldStopNetworkExtensionRuntime else {
+      if shouldRestoreDNS {
+        do {
+          _ = try await restoreNetworkExtensionSystemDNS()
+        } catch {
+          result.dnsRestoreError = error
+        }
+      }
+      return result
+    }
     do {
       _ = try await networkExtensionController.stopTransparentProxy()
+      stopNetworkExtensionDiagnosticsPolling()
       publishNetworkExtensionControllerError()
-      return nil
     } catch {
-      return error
+      result.transparentProxyStopError = error
+      return result
     }
+    if shouldRestoreDNS {
+      do {
+        _ = try await restoreNetworkExtensionSystemDNS()
+      } catch {
+        result.dnsRestoreError = error
+      }
+    }
+    return result
+  }
+
+  private func startNetworkExtensionDiagnosticsPolling() {
+    networkExtensionDiagnosticsTask?.cancel()
+    publishedNetworkExtensionDiagnosticEventIDs = []
+    networkExtensionController.refreshDiagnostics()
+    publishNetworkExtensionDiagnostics()
+
+    networkExtensionDiagnosticsTask = Task { @MainActor [weak self] in
+      while !Task.isCancelled {
+        guard let self else { return }
+        guard self.runtimeOwner == .networkExtension || self.networkExtensionController.vpnStatus.isActive else {
+          return
+        }
+        self.networkExtensionController.refreshDiagnostics()
+        self.publishNetworkExtensionDiagnostics()
+        do {
+          try await Task.sleep(nanoseconds: 1_000_000_000)
+        } catch {
+          return
+        }
+      }
+    }
+  }
+
+  private func stopNetworkExtensionDiagnosticsPolling() {
+    networkExtensionDiagnosticsTask?.cancel()
+    networkExtensionDiagnosticsTask = nil
+  }
+
+  private func publishNetworkExtensionDiagnostics() {
+    let diagnostics = networkExtensionController.diagnostics
+    for event in diagnostics.recentBypasses where publishedNetworkExtensionDiagnosticEventIDs.insert(event.id).inserted {
+      appendAppLog(level: "debug", message: networkExtensionDiagnosticLogMessage(prefix: "NE bypass", event: event))
+    }
+    for event in diagnostics.recentErrors where publishedNetworkExtensionDiagnosticEventIDs.insert(event.id).inserted {
+      appendAppLog(level: "error", message: networkExtensionDiagnosticLogMessage(prefix: "NE error", event: event))
+    }
+    if publishedNetworkExtensionDiagnosticEventIDs.count > 80 {
+      let retainedIDs = Set((diagnostics.recentBypasses + diagnostics.recentErrors).map(\.id))
+      publishedNetworkExtensionDiagnosticEventIDs = publishedNetworkExtensionDiagnosticEventIDs.intersection(retainedIDs)
+    }
+  }
+
+  private func networkExtensionDiagnosticLogMessage(prefix: String, event: NetworkExtensionDiagnosticEvent) -> String {
+    let context = [
+      event.flowProtocol?.displayName,
+      event.remoteEndpoint,
+      event.sourceAppSigningIdentifier.map { "source=\($0)" }
+    ]
+      .compactMap { $0 }
+      .filter { !$0.isEmpty }
+      .joined(separator: " ")
+    if !context.isEmpty {
+      return "\(prefix): \(event.message) \(context)"
+    }
+    return "\(prefix): \(event.message)"
   }
 
   @discardableResult
@@ -1642,6 +2078,7 @@ final class AppModel: ObservableObject {
       || tunnelCoreRunning
       || runtimeOwner == .networkExtension
       || networkExtensionController.vpnStatus.isActive
+      || systemProxyController.hasManagedSystemDNSState
       || systemProxy.needsTerminationCleanup
   }
 
@@ -1708,11 +2145,13 @@ final class AppModel: ObservableObject {
     guard previewRuntimeActive else { return result }
     cancelRuntimeActionTasks()
     runtimeData.flushPendingLogs()
-    if let error = await stopNetworkExtensionIfNeeded() {
+    let networkExtensionStopResult = await stopNetworkExtensionIfNeeded()
+    if let error = networkExtensionStopResult.transparentProxyStopError {
       result.networkExtensionStopError = error
       handleStopResult(result)
       return result
     }
+    result.networkExtensionDNSRestoreError = networkExtensionStopResult.dnsRestoreError
     apiClient = nil
     streamTasks.forEach { $0.cancel() }
     streamTasks.removeAll()
@@ -1880,10 +2319,32 @@ final class AppModel: ObservableObject {
     var result = RuntimeStopResult()
     cancelRuntimeActionTasks()
     runtimeData.flushPendingLogs()
-    if let error = await stopNetworkExtensionIfNeeded() {
+    let networkExtensionStopResult = await stopNetworkExtensionIfNeeded()
+    result.networkExtensionDNSRestoreError = networkExtensionStopResult.dnsRestoreError
+    if let error = networkExtensionStopResult.transparentProxyStopError {
       result.networkExtensionStopError = error
       guard purpose.continuesAfterNetworkExtensionStopFailure else {
         return result
+      }
+    }
+    if shouldRestoreTunDNS {
+      do {
+        _ = try await restoreTunSystemDNS()
+      } catch {
+        result.tunDNSRestoreError = error
+      }
+    }
+    if result.networkExtensionStopError == nil,
+       result.networkExtensionDNSRestoreError == nil,
+       result.tunDNSRestoreError == nil,
+       systemProxyController.hasManagedSystemDNSState {
+      do {
+        let dnsResult = try await systemProxyController.restoreDNS()
+        let restoredState: SystemDNSOverrideState = dnsResult.restoredSnapshotCount > 0 ? .restored : .inactive
+        setNetworkExtensionSystemDNSState(restoredState)
+        setTunSystemDNSState(restoredState)
+      } catch {
+        result.tunDNSRestoreError = error
       }
     }
     result.didRunLocalCleanup = true
@@ -1891,6 +2352,7 @@ final class AppModel: ObservableObject {
     cancelPublicIPInfoRefresh(clearState: true)
     streamTasks.forEach { $0.cancel() }
     streamTasks.removeAll()
+    stopNetworkExtensionDiagnosticsPolling()
     let coreStopResult = await coreController.stop()
     if let error = coreStopResult.error {
       result.coreStopError = error
@@ -1903,10 +2365,12 @@ final class AppModel: ObservableObject {
         result.helperStopError = error
       }
     }
+    tunHelperPID = nil
     tunnelCoreRunning = false
     sessionStartedAt = nil
     previewRuntimeActive = false
     runtimeOwner = .stopped
+    networkExtensionCoreCrashMessage = nil
     await refreshProfilePreviewAndWait()
     if systemProxy.needsTerminationCleanup {
       do {
@@ -2081,7 +2545,8 @@ final class AppModel: ObservableObject {
   private func generateRuntimeConfig(
     for profile: Profile,
     overrides: RuntimeOverrides? = nil,
-    selections: [String: String] = [:]
+    selections: [String: String] = [:],
+    options: RuntimeConfigOptions = .default
   ) async throws -> URL {
     let effectiveOverrides = overrides ?? self.overrides
     return try await runtimeConfigMaterializer.materialize(
@@ -2091,7 +2556,8 @@ final class AppModel: ObservableObject {
         runtimeConfigURL: paths.runtimeConfigURL(for: profile),
         providerContentURL: paths.runtimeProviderContentURL(for: profile),
         overrides: effectiveOverrides,
-        selectionOverrides: selections
+        selectionOverrides: selections,
+        options: options
       )
     )
   }

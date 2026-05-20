@@ -46,11 +46,12 @@ discipline is recorded.
   It uses a macOS System Extension containing a transparent app-proxy provider and requires
   Developer ID signing with Network Extension, System Extension, and App Group
   capabilities before it can run on a real machine.
-- The current Network Extension stage targets TCP transparent proxying only:
-  system TCP flows enter the transparent proxy provider, which bridges them to
-  the local Mihomo SOCKS5/mixed port. UDP, DNS hijack, and full domain-rule
-  fidelity are intentionally out of scope until separately implemented and
-  tested.
+- The current Network Extension stage targets TCP and UDP transparent proxying:
+  system TCP flows use SOCKS5 CONNECT and UDP flows, including UDP DNS flows,
+  use SOCKS5 UDP ASSOCIATE through the local Mihomo SOCKS5/mixed port. NE mode
+  also generates app-managed Mihomo DNS on `127.0.0.1:1053`, captures TCP/UDP
+  port 53 flows to that listener, and can temporarily apply `114.114.114.114`
+  as the active macOS service DNS with snapshot/restore protection.
 
 ## Build And Verification
 
@@ -98,6 +99,21 @@ before installing or starting the NE transparent proxy, using:
 ```bash
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f -R /Applications/ClashMax.app
 ```
+
+Manual installed-bundle NE smoke test:
+
+1. Build a signed app, copy it to `/Applications/ClashMax.app`, then approve the
+   System Extension in System Settings.
+2. Enable Developer Mode and select `Network Extension Experimental`.
+3. Start ClashMax and confirm the dashboard shows NE connected, DNS capture
+   enabled, DNS runtime as fake-ip, and System DNS as applied.
+4. Verify TCP traffic through a browser or `curl`, then verify UDP traffic with a
+   UDP-capable endpoint such as QUIC/HTTP3 or a DNS UDP probe.
+5. Verify DNS capture by checking that DNS requests reach Mihomo DNS and fake-ip
+   answers are returned for matching domains.
+6. Stop ClashMax and confirm Transparent Proxy becomes inactive, Mihomo stops
+   only after NE shutdown, and System DNS returns to the pre-start snapshot. Use
+   the `Repair DNS` action if restore reports a failure.
 
 Before claiming progress, run the narrowest command that proves the claim and
 report the actual result. If new Swift files are added or project membership is

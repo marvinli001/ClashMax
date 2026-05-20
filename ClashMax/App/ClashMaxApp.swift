@@ -23,6 +23,7 @@ struct ClashMaxApp: App {
         .frame(minWidth: 980, minHeight: 660)
         .onAppear {
           appDelegate.appModel = appModel
+          appModel.warmTunHelperRegistrationOnLaunch()
         }
     }
     .defaultSize(width: 1180, height: 760)
@@ -51,6 +52,7 @@ struct ClashMaxApp: App {
         .appThemeAppearance(appModel.settings.appTheme)
         .onAppear {
           appDelegate.appModel = appModel
+          appModel.warmTunHelperRegistrationOnLaunch()
         }
     } label: {
       MenuBarStatusLabel(appModel: appModel, runtimeData: appModel.runtimeData)
@@ -69,6 +71,7 @@ struct ClashMaxApp: App {
         .appThemeAppearance(appModel.settings.appTheme)
         .onAppear {
           appDelegate.appModel = appModel
+          appModel.warmTunHelperRegistrationOnLaunch()
         }
     }
   }

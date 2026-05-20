@@ -92,6 +92,7 @@ struct ProxyRoutingSettingsButton: View {
   @State private var isPresented = false
   @State private var systemDraft = SystemProxySettings.default
   @State private var tunDraft = TunSettings.default
+  @State private var networkExtensionDraft = NetworkExtensionRoutingSettings.default
   @State private var settingsError: String?
 
   var body: some View {
@@ -133,13 +134,19 @@ struct ProxyRoutingSettingsButton: View {
         onSave: saveTunSettings
       )
     case .networkExtensionExperimental:
-      NetworkExtensionSettingsPopover()
+      NetworkExtensionSettingsPopover(
+        settings: $networkExtensionDraft,
+        error: settingsError,
+        onCancel: { isPresented = false },
+        onSave: saveNetworkExtensionRoutingSettings
+      )
     }
   }
 
   private func syncDrafts() {
     systemDraft = appModel.systemProxySettings
     tunDraft = appModel.tunSettings
+    networkExtensionDraft = appModel.networkExtensionRoutingSettings
     settingsError = nil
   }
 
@@ -156,13 +163,38 @@ struct ProxyRoutingSettingsButton: View {
   }
 
   private func saveTunSettings() {
-    appModel.updateTunSettings(tunDraft)
+    if let validationError = tunDraft.validationError {
+      settingsError = validationError
+      return
+    }
+    guard appModel.updateTunSettings(tunDraft) else {
+      settingsError = appModel.lastError
+      return
+    }
+    isPresented = false
+  }
+
+  private func saveNetworkExtensionRoutingSettings() {
+    if let validationError = networkExtensionDraft.validationError {
+      settingsError = validationError
+      return
+    }
+    guard appModel.updateNetworkExtensionRoutingSettings(networkExtensionDraft) else {
+      settingsError = appModel.lastError
+      return
+    }
     isPresented = false
   }
 }
 
 private struct NetworkExtensionSettingsPopover: View {
   @EnvironmentObject private var appModel: AppModel
+  @Binding var settings: NetworkExtensionRoutingSettings
+  let error: String?
+  let onCancel: () -> Void
+  let onSave: () -> Void
+  @State private var cidrDraft = ""
+  @State private var dnsServerDraft = ""
 
   var body: some View {
     VStack(alignment: .leading, spacing: 14) {
@@ -171,17 +203,72 @@ private struct NetworkExtensionSettingsPopover: View {
         SettingsRuntimeLine(title: "Transparent Proxy", value: appModel.networkExtensionController.vpnStatus.displayName)
         SettingsRuntimeLine(title: "System Proxy", value: "Off")
         SettingsRuntimeLine(title: "TUN Helper", value: "Untouched")
+        SettingsRuntimeLine(title: "TCP Bridges", value: "\(diagnostics.activeTCPBridgeCount)")
+        SettingsRuntimeLine(title: "UDP Bridges", value: "\(diagnostics.activeUDPBridgeCount)")
+        SettingsRuntimeLine(title: "DNS Runtime", value: settings.dnsFakeIPEnabled ? "Fake IP" : "Profile")
+        SettingsRuntimeLine(title: "DNS Capture", value: settings.dnsCaptureEnabled ? "127.0.0.1:\(settings.normalizedDNSListenPort)" : "Off")
+        SettingsRuntimeLine(title: "System DNS", value: appModel.networkExtensionSystemDNSState.displayName)
+        SettingsRuntimeLine(title: "SOCKS Failures", value: "\(diagnostics.socksHandshakeFailureCount)")
         Text(appModel.networkExtensionController.tunnelStatusMessage)
           .font(.caption)
           .foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)
       }
 
+      Divider()
+        .opacity(0.24)
+
+      Toggle("Exclude LAN", isOn: $settings.excludeLAN)
+        .toggleStyle(.switch)
+
+      Toggle("Capture DNS", isOn: $settings.dnsCaptureEnabled)
+        .toggleStyle(.switch)
+
+      Toggle("Fake IP DNS", isOn: $settings.dnsFakeIPEnabled)
+        .toggleStyle(.switch)
+        .disabled(!settings.dnsCaptureEnabled)
+
+      Stepper("DNS Listen \(settings.normalizedDNSListenPort)", value: $settings.dnsListenPort, in: 1...65_535)
+        .disabled(!settings.dnsCaptureEnabled)
+
+      Toggle("System DNS Override", isOn: $settings.systemDNSOverrideEnabled)
+        .toggleStyle(.switch)
+
+      EditableStringList(
+        title: "System DNS Servers",
+        placeholder: "114.114.114.114",
+        values: $settings.systemDNSServers,
+        draft: $dnsServerDraft,
+        validator: NetworkExtensionRoutingSettings.isValidDNSServer,
+        normalizer: NetworkExtensionRoutingSettings.normalizedDNSServers
+      )
+      .disabled(!settings.systemDNSOverrideEnabled)
+
+      EditableStringList(
+        title: "Custom CIDR Exclude",
+        placeholder: "192.168.0.0/16",
+        values: $settings.customRouteExcludeCIDRs,
+        draft: $cidrDraft,
+        validator: NetworkExtensionRoutingSettings.isValidCIDR,
+        normalizer: NetworkExtensionRoutingSettings.normalizedCIDRs
+      )
+
+      WrappingTokenList(title: "Effective Exclude", values: settings.effectiveRouteExcludeCIDRs)
+
+      DiagnosticEventList(title: "Recent Bypass", events: diagnostics.recentBypasses)
+      DiagnosticEventList(title: "Recent Errors", events: diagnostics.recentErrors)
+
       if let error = appModel.networkExtensionController.recentError {
         Text(error)
           .font(.caption)
           .foregroundStyle(.secondary)
           .lineLimit(3)
+      }
+      if let error {
+        Label(error, systemImage: "exclamationmark.triangle.fill")
+          .font(.callout)
+          .foregroundStyle(.red)
+          .lineLimit(2)
       }
 
       HStack(spacing: 8) {
@@ -201,11 +288,26 @@ private struct NetworkExtensionSettingsPopover: View {
         } label: {
           Label("Refresh", systemImage: "arrow.clockwise")
         }
+        Button {
+          appModel.repairNetworkExtensionDNS()
+        } label: {
+          Label("Repair DNS", systemImage: "wrench.and.screwdriver")
+        }
+        .disabled(!appModel.canRepairNetworkExtensionDNS)
+        Spacer()
+        Button("Cancel", action: onCancel)
+        Button("Save", action: onSave)
+          .keyboardShortcut(.defaultAction)
+          .disabled(settings.validationError != nil)
       }
     }
     .onAppear {
       appModel.refreshNetworkExtensionStatus()
     }
+  }
+
+  private var diagnostics: NetworkExtensionDiagnosticsSnapshot {
+    appModel.networkExtensionController.diagnostics
   }
 }
 
@@ -215,13 +317,53 @@ private struct SettingsRuntimeLine: View {
 
   var body: some View {
     HStack(spacing: 12) {
-      Text(title)
+      Text(LocalizedStringKey(title))
         .foregroundStyle(.secondary)
       Spacer()
-      Text(value)
+      Text(localizedDashboardText(value))
         .multilineTextAlignment(.trailing)
     }
     .font(.callout)
+  }
+}
+
+private struct DiagnosticEventList: View {
+  let title: String
+  let events: [NetworkExtensionDiagnosticEvent]
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text(LocalizedStringKey(title))
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      if events.isEmpty {
+        Text("Empty")
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+      } else {
+        ForEach(events.suffix(3)) { event in
+          Text(displayText(for: event))
+            .font(.system(.caption, design: .monospaced))
+            .lineLimit(2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+      }
+    }
+  }
+
+  private func displayText(for event: NetworkExtensionDiagnosticEvent) -> String {
+    let context = [
+      event.flowProtocol?.displayName,
+      event.remoteEndpoint,
+      event.sourceAppSigningIdentifier.map { "source=\($0)" }
+    ]
+      .compactMap { $0 }
+      .filter { !$0.isEmpty }
+      .joined(separator: " ")
+    if !context.isEmpty {
+      return "\(event.message) \(context)"
+    }
+    return event.message
   }
 }
 
@@ -294,6 +436,7 @@ private struct TunSettingsPopover: View {
   let onSave: () -> Void
   @State private var dnsDraft = ""
   @State private var routeDraft = ""
+  @State private var systemDNSDraft = ""
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
@@ -316,6 +459,10 @@ private struct TunSettingsPopover: View {
         Toggle("Strict Route", isOn: $settings.strictRoute)
         Toggle("Auto Detect Interface", isOn: $settings.autoDetectInterface)
         Stepper("MTU \(settings.normalizedMTU)", value: $settings.mtu, in: 576...9_000, step: 10)
+        Toggle("Fake IP DNS", isOn: $settings.dnsFakeIPEnabled)
+        TextField("Fake IP Range", text: $settings.fakeIPRange)
+          .disabled(!settings.dnsFakeIPEnabled)
+        Toggle("System DNS Override", isOn: $settings.systemDNSOverrideEnabled)
       }
 
       EditableStringList(
@@ -331,17 +478,28 @@ private struct TunSettingsPopover: View {
         placeholder: "192.168.0.0/16",
         values: $settings.routeExcludeAddresses,
         draft: $routeDraft,
-        validator: SystemProxySettings.isValidBypassDomain
+        validator: TunSettings.isValidRouteExcludeCIDR,
+        normalizer: TunSettings.normalizedRouteExcludeCIDRs
       )
 
-      if let error {
+      EditableStringList(
+        title: "System DNS Servers",
+        placeholder: "114.114.114.114",
+        values: $settings.systemDNSServers,
+        draft: $systemDNSDraft,
+        validator: NetworkExtensionRoutingSettings.isValidDNSServer,
+        normalizer: NetworkExtensionRoutingSettings.normalizedDNSServers
+      )
+      .disabled(!settings.systemDNSOverrideEnabled)
+
+      if let error = error ?? settings.validationError {
         Label(error, systemImage: "exclamationmark.triangle.fill")
           .font(.callout)
           .foregroundStyle(.red)
           .lineLimit(2)
       }
 
-      popoverActions(onCancel: onCancel, onSave: onSave, saveDisabled: false)
+      popoverActions(onCancel: onCancel, onSave: onSave, saveDisabled: settings.validationError != nil)
     }
   }
 }
@@ -352,6 +510,7 @@ private struct EditableStringList: View {
   @Binding var values: [String]
   @Binding var draft: String
   let validator: (String) -> Bool
+  var normalizer: ([String]) -> [String] = SystemProxySettings.normalizedBypassDomains
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -374,7 +533,7 @@ private struct EditableStringList: View {
   private func add() {
     let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
     guard validator(trimmed) else { return }
-    values = SystemProxySettings.normalizedBypassDomains(values + [trimmed])
+    values = normalizer(values + [trimmed])
     draft = ""
   }
 
@@ -391,7 +550,7 @@ private struct WrappingTokenList: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
       if let title {
-        Text(title)
+        Text(LocalizedStringKey(title))
           .font(.caption)
           .foregroundStyle(.secondary)
       }
@@ -428,8 +587,12 @@ private struct WrappingTokenList: View {
 }
 
 private func popoverHeader(_ title: String, systemImage: String) -> some View {
-  Label(title, systemImage: systemImage)
+  Label(LocalizedStringKey(title), systemImage: systemImage)
     .font(.title3.weight(.semibold))
+}
+
+private func localizedDashboardText(_ value: String) -> String {
+  NSLocalizedString(value, comment: "")
 }
 
 private func popoverActions(onCancel: @escaping () -> Void, onSave: @escaping () -> Void, saveDisabled: Bool) -> some View {
@@ -529,7 +692,7 @@ struct DashboardSectionHeader: View {
 
   var body: some View {
     HStack(spacing: 8) {
-      Label(title, systemImage: symbolName)
+      Label(LocalizedStringKey(title), systemImage: symbolName)
         .font(.headline)
       Spacer()
       if let trailing {

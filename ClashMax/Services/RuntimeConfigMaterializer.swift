@@ -7,6 +7,7 @@ struct RuntimeConfigMaterializationRequest: Sendable {
   var providerContentURL: URL
   var overrides: RuntimeOverrides
   var selectionOverrides: [String: String]
+  var options: RuntimeConfigOptions = .default
 }
 
 struct RuntimeConfigMaterializer: Sendable {
@@ -46,6 +47,7 @@ struct RuntimeConfigMaterializer: Sendable {
         providerContentPath: providerContentPath,
         profileName: request.profileName,
         overrides: request.overrides,
+        options: request.options,
         selectionOverrides: request.selectionOverrides
       )
       try Task.checkCancellation()

@@ -69,19 +69,28 @@ struct RunningDashboardView: View {
       }
       .staggeredArrival(index: 3, reduceMotion: reduceMotion, trigger: state)
 
+      if appModel.proxyRoutingMode == .networkExtensionExperimental {
+        NetworkExtensionDiagnosticsRuntimeCard()
+          .staggeredArrival(index: 4, reduceMotion: reduceMotion, trigger: state)
+      }
+      if appModel.proxyRoutingMode == .tun {
+        TunDiagnosticsRuntimeCard()
+          .staggeredArrival(index: 4, reduceMotion: reduceMotion, trigger: state)
+      }
+
       DashboardResponsivePair(availableWidth: availableWidth) {
         TrafficRuntimeCard(samples: chartSamples)
       } trailing: {
         ProxyGroupsRuntimeCard()
       }
-      .staggeredArrival(index: 4, reduceMotion: reduceMotion, trigger: state)
+      .staggeredArrival(index: 5, reduceMotion: reduceMotion, trigger: state)
 
       DashboardResponsivePair(availableWidth: availableWidth) {
         ConnectionsRulesRuntimeCard()
       } trailing: {
         RecentLogsRuntimeCard()
       }
-      .staggeredArrival(index: 5, reduceMotion: reduceMotion, trigger: state)
+      .staggeredArrival(index: 6, reduceMotion: reduceMotion, trigger: state)
     }
   }
 
@@ -548,6 +557,106 @@ private struct NetworkStatusCard: View {
   }
 }
 
+private struct TunDiagnosticsRuntimeCard: View {
+  @EnvironmentObject private var appModel: AppModel
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      DashboardSectionHeader(title: "TUN Diagnostics", symbolName: "point.topleft.down.curvedto.point.bottomright.up")
+
+      HStack(spacing: 10) {
+        RuntimeStat(title: "Helper", value: helperPIDText, tint: appModel.tunEnabled ? .green : .secondary)
+        RuntimeStat(title: "Stack", value: appModel.tunSettings.stack.displayName, tint: .cyan)
+        RuntimeStat(title: "DNS", value: appModel.tunSettings.dnsFakeIPEnabled ? "Fake IP" : "Profile", tint: .orange)
+        RuntimeStat(title: "Exclude", value: "\(appModel.tunSettings.normalizedRouteExcludeAddresses.count)", tint: .indigo)
+      }
+
+      Divider()
+        .opacity(0.24)
+
+      RuntimeLine(title: "Controller", value: "\(appModel.overrides.externalControllerHost):\(appModel.overrides.externalControllerPort)")
+      RuntimeLine(title: "Device", value: appModel.tunSettings.normalizedDevice)
+      RuntimeLine(title: "DNS Hijack", value: appModel.tunSettings.normalizedDNSHijack.joined(separator: ", "))
+      RuntimeLine(title: "Fake IP Range", value: appModel.tunSettings.dnsFakeIPEnabled ? appModel.tunSettings.normalizedFakeIPRange : "Off")
+      RuntimeLine(title: "System DNS", value: appModel.tunSettings.systemDNSOverrideEnabled ? appModel.tunSystemDNSState.displayName : "Off")
+      if let dnsError = appModel.tunSystemDNSState.errorMessage {
+        RuntimeLine(title: "DNS Repair", value: dnsError)
+      }
+      if appModel.developerMode, let helperLog = appModel.helperLogs.last {
+        RuntimeLine(title: "Helper Log", value: helperLog)
+      }
+    }
+    .padding(14)
+    .frame(maxWidth: .infinity, minHeight: 156, alignment: .topLeading)
+    .dashboardCard()
+  }
+
+  private var helperPIDText: String {
+    guard let pid = appModel.tunHelperPID else {
+      return appModel.tunEnabled ? "Running" : "Ready"
+    }
+    return "#\(pid)"
+  }
+}
+
+private struct NetworkExtensionDiagnosticsRuntimeCard: View {
+  @EnvironmentObject private var appModel: AppModel
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      DashboardSectionHeader(title: "NE Diagnostics", symbolName: "network")
+
+      HStack(spacing: 10) {
+        RuntimeStat(title: "TCP", value: "\(diagnostics.activeTCPBridgeCount)", tint: .cyan)
+        RuntimeStat(title: "UDP", value: "\(diagnostics.activeUDPBridgeCount)", tint: .indigo)
+        RuntimeStat(title: "DNS", value: "\(diagnostics.dnsCaptureCount)", tint: .orange)
+        RuntimeStat(title: "SOCKS Fail", value: "\(diagnostics.socksHandshakeFailureCount)", tint: diagnostics.socksHandshakeFailureCount > 0 ? .red : .green)
+      }
+
+      Divider()
+        .opacity(0.24)
+
+      RuntimeLine(title: "Excluded CIDR", value: "\(appModel.networkExtensionRoutingSettings.effectiveRouteExcludeCIDRs.count)")
+      RuntimeLine(title: "DNS Runtime", value: appModel.networkExtensionRoutingSettings.dnsFakeIPEnabled ? "Fake IP" : "Profile default")
+      RuntimeLine(title: "DNS Capture", value: appModel.networkExtensionRoutingSettings.dnsCaptureEnabled ? "127.0.0.1:\(appModel.networkExtensionRoutingSettings.normalizedDNSListenPort)" : "Off")
+      RuntimeLine(title: "System DNS", value: appModel.networkExtensionSystemDNSState.displayName)
+      if let dnsError = appModel.networkExtensionSystemDNSState.errorMessage {
+        RuntimeLine(title: "DNS Repair", value: dnsError)
+      }
+      RuntimeLine(title: "Last Update", value: lastUpdateText)
+      if let event = diagnostics.recentBypasses.last {
+        RuntimeLine(title: "Last Bypass", value: eventSummary(event))
+      }
+      if let event = diagnostics.recentErrors.last {
+        RuntimeLine(title: "Last Error", value: eventSummary(event))
+      }
+    }
+    .padding(14)
+    .frame(maxWidth: .infinity, minHeight: 156, alignment: .topLeading)
+    .dashboardCard()
+  }
+
+  private var diagnostics: NetworkExtensionDiagnosticsSnapshot {
+    appModel.networkExtensionController.diagnostics
+  }
+
+  private var lastUpdateText: String {
+    diagnostics.updatedAt == Date.distantPast ? "Waiting" : diagnostics.updatedAt.formatted(date: .omitted, time: .standard)
+  }
+
+  private func eventSummary(_ event: NetworkExtensionDiagnosticEvent) -> String {
+    let context = [
+      event.flowProtocol?.displayName,
+      event.remoteEndpoint,
+      event.sourceAppSigningIdentifier
+    ]
+      .compactMap { $0 }
+      .filter { !$0.isEmpty }
+      .joined(separator: " ")
+    return context.isEmpty ? event.message : context
+  }
+}
+
 private struct TrafficRuntimeCard: View {
   let samples: [TrafficSample]
 
@@ -712,10 +821,10 @@ private struct RuntimeStat: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
-      Text(title)
+      Text(LocalizedStringKey(title))
         .font(.caption)
         .foregroundStyle(.secondary)
-      Text(value)
+      Text(localizedRuntimeText(value))
         .font(.system(.title3, design: .rounded).weight(.semibold))
         .foregroundStyle(tint)
         .lineLimit(1)
@@ -731,15 +840,19 @@ private struct RuntimeLine: View {
 
   var body: some View {
     HStack {
-      Text(title)
+      Text(LocalizedStringKey(title))
         .foregroundStyle(.secondary)
       Spacer()
-      Text(value)
+      Text(localizedRuntimeText(value))
         .lineLimit(1)
         .minimumScaleFactor(0.72)
     }
     .font(.callout)
   }
+}
+
+private func localizedRuntimeText(_ value: String) -> String {
+  NSLocalizedString(value, comment: "")
 }
 
 private struct LegendDot: View {

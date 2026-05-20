@@ -4,11 +4,13 @@ import Foundation
 struct ProxyPortReadinessRequest: Equatable, Sendable {
   var host: String
   var port: Int
+  var serviceName: String = "SOCKS5 mixed-port"
 }
 
 @MainActor
 protocol ProxyPortReadinessProbing {
   func waitUntilReady(host: String, port: Int) async throws
+  func waitUntilOpen(host: String, port: Int, serviceName: String) async throws
 }
 
 struct SocksProxyReadinessProbe: ProxyPortReadinessProbing {
@@ -42,10 +44,33 @@ struct SocksProxyReadinessProbe: ProxyPortReadinessProbing {
     throw AppError.coreNotReady("Mihomo mixed-port \(host):\(port) did not accept SOCKS5 traffic. \(message)")
   }
 
+  func waitUntilOpen(host: String, port: Int, serviceName: String) async throws {
+    var lastError: Error?
+    for _ in 0..<attempts {
+      do {
+        try await attemptOpen(host: host, port: port)
+        return
+      } catch {
+        lastError = error
+        try await Task.sleep(nanoseconds: delayNanoseconds)
+      }
+    }
+
+    let message = lastError.map(UserFacingError.message) ?? "Timed out waiting for TCP listener."
+    throw AppError.coreNotReady("\(serviceName) \(host):\(port) did not accept TCP connections. \(message)")
+  }
+
   private func attemptGreeting(host: String, port: Int) async throws {
     let timeout = timeout
     try await Task.detached(priority: .utility) {
       try Self.performGreeting(host: host, port: port, timeout: timeout)
+    }.value
+  }
+
+  private func attemptOpen(host: String, port: Int) async throws {
+    let timeout = timeout
+    try await Task.detached(priority: .utility) {
+      try Self.performConnect(host: host, port: port, timeout: timeout)
     }.value
   }
 
@@ -66,7 +91,7 @@ struct SocksProxyReadinessProbe: ProxyPortReadinessProbing {
     var current: UnsafeMutablePointer<addrinfo>? = result
     while let candidate = current {
       do {
-        try connectAndVerify(candidate: candidate, timeout: timeout)
+        try connectAndVerifySOCKS(candidate: candidate, timeout: timeout)
         return
       } catch {
         lastError = error
@@ -77,23 +102,38 @@ struct SocksProxyReadinessProbe: ProxyPortReadinessProbing {
     throw lastError ?? AppError.coreNotReady("Could not connect to mixed-port.")
   }
 
-  nonisolated private static func connectAndVerify(candidate: UnsafeMutablePointer<addrinfo>, timeout: TimeInterval) throws {
-    let address = candidate.pointee
-    let descriptor = socket(address.ai_family, address.ai_socktype, address.ai_protocol)
-    guard descriptor >= 0 else {
-      throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+  nonisolated private static func performConnect(host: String, port: Int, timeout: TimeInterval) throws {
+    var hints = addrinfo()
+    hints.ai_family = AF_UNSPEC
+    hints.ai_socktype = SOCK_STREAM
+    hints.ai_protocol = IPPROTO_TCP
+
+    var result: UnsafeMutablePointer<addrinfo>?
+    let lookup = getaddrinfo(host, String(port), &hints, &result)
+    guard lookup == 0, let result else {
+      throw AppError.coreNotReady(String(cString: gai_strerror(lookup)))
     }
+    defer { freeaddrinfo(result) }
+
+    var lastError: Error?
+    var current: UnsafeMutablePointer<addrinfo>? = result
+    while let candidate = current {
+      do {
+        let descriptor = try connect(candidate: candidate, timeout: timeout)
+        close(descriptor)
+        return
+      } catch {
+        lastError = error
+      }
+      current = candidate.pointee.ai_next
+    }
+
+    throw lastError ?? AppError.coreNotReady("Could not connect to TCP listener.")
+  }
+
+  nonisolated private static func connectAndVerifySOCKS(candidate: UnsafeMutablePointer<addrinfo>, timeout: TimeInterval) throws {
+    let descriptor = try connect(candidate: candidate, timeout: timeout)
     defer { close(descriptor) }
-
-    setTimeout(timeout, descriptor: descriptor, option: SO_RCVTIMEO)
-    setTimeout(timeout, descriptor: descriptor, option: SO_SNDTIMEO)
-
-    var noSigPipe: Int32 = 1
-    setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
-
-    guard connect(descriptor, address.ai_addr, address.ai_addrlen) == 0 else {
-      throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .ECONNREFUSED)
-    }
 
     let greeting: [UInt8] = [0x05, 0x01, 0x00]
     let sent = greeting.withUnsafeBytes {
@@ -125,6 +165,27 @@ struct SocksProxyReadinessProbe: ProxyPortReadinessProbing {
     guard response == [0x05, 0x00] else {
       throw AppError.coreNotReady("SOCKS5 server rejected no-authentication greeting.")
     }
+  }
+
+  nonisolated private static func connect(candidate: UnsafeMutablePointer<addrinfo>, timeout: TimeInterval) throws -> Int32 {
+    let address = candidate.pointee
+    let descriptor = socket(address.ai_family, address.ai_socktype, address.ai_protocol)
+    guard descriptor >= 0 else {
+      throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+    }
+
+    setTimeout(timeout, descriptor: descriptor, option: SO_RCVTIMEO)
+    setTimeout(timeout, descriptor: descriptor, option: SO_SNDTIMEO)
+
+    var noSigPipe: Int32 = 1
+    setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
+
+    guard Darwin.connect(descriptor, address.ai_addr, address.ai_addrlen) == 0 else {
+      let error = POSIXError(POSIXErrorCode(rawValue: errno) ?? .ECONNREFUSED)
+      close(descriptor)
+      throw error
+    }
+    return descriptor
   }
 
   nonisolated private static func setTimeout(_ timeout: TimeInterval, descriptor: Int32, option: Int32) {

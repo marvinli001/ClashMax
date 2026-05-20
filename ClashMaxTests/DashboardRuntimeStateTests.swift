@@ -11,6 +11,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
   private static let proxyRoutingModeDefaultsKey = "io.github.clashmax.proxyRoutingMode"
   private static let systemProxySettingsDefaultsKey = "io.github.clashmax.systemProxySettings"
   private static let tunSettingsDefaultsKey = "io.github.clashmax.tunSettings"
+  private static let networkExtensionRoutingSettingsDefaultsKey = "io.github.clashmax.networkExtensionRoutingSettings"
   private static let delayTestSettingsDefaultsKey = "io.github.clashmax.delayTestSettings"
   private static let externalControllerSettingsDefaultsKey = "io.github.clashmax.externalControllerSettings"
   private static let developerModeDefaultsKey = "io.github.clashmax.developerMode"
@@ -545,7 +546,80 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(model.tunSettings.dnsHijack, ["any:53"])
     XCTAssertEqual(model.tunSettings.mtu, 1400)
     XCTAssertEqual(model.tunSettings.routeExcludeAddresses, [])
+    XCTAssertTrue(model.tunSettings.dnsFakeIPEnabled)
+    XCTAssertEqual(model.tunSettings.fakeIPRange, "198.18.0.1/16")
+    XCTAssertTrue(model.tunSettings.systemDNSOverrideEnabled)
+    XCTAssertEqual(model.tunSettings.effectiveSystemDNSServers, ["114.114.114.114"])
     XCTAssertEqual(model.overrides.tunSettings, model.tunSettings)
+  }
+
+  func testNetworkExtensionRoutingSettingsMigratesMissingFieldsFromUserDefaults() throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    try Self.storeJSON(
+      [:],
+      forKey: Self.networkExtensionRoutingSettingsDefaultsKey,
+      defaults: defaults
+    )
+
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: defaults
+    )
+
+    XCTAssertTrue(model.networkExtensionRoutingSettings.excludeLAN)
+    XCTAssertTrue(model.networkExtensionRoutingSettings.dnsCaptureEnabled)
+    XCTAssertTrue(model.networkExtensionRoutingSettings.dnsFakeIPEnabled)
+    XCTAssertEqual(model.networkExtensionRoutingSettings.dnsListenPort, 1053)
+    XCTAssertTrue(model.networkExtensionRoutingSettings.systemDNSOverrideEnabled)
+    XCTAssertEqual(model.networkExtensionRoutingSettings.effectiveSystemDNSServers, ["114.114.114.114"])
+    XCTAssertEqual(model.networkExtensionRoutingSettings.customRouteExcludeCIDRs, [])
+    XCTAssertEqual(
+      model.networkExtensionRoutingSettings.effectiveRouteExcludeCIDRs,
+      NetworkExtensionRoutingSettings.defaultLANRouteExcludeCIDRs
+    )
+  }
+
+  func testNetworkExtensionRoutingSettingsMigratesPersistedLegacyFakeIPDNS() throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    try Self.storeJSON(
+      ["excludeLAN": false, "dnsFakeIP": true, "customRouteExcludeCIDRs": ["100.64.0.0/10"]],
+      forKey: Self.networkExtensionRoutingSettingsDefaultsKey,
+      defaults: defaults
+    )
+
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: defaults
+    )
+
+    XCTAssertFalse(model.networkExtensionRoutingSettings.excludeLAN)
+    XCTAssertTrue(model.networkExtensionRoutingSettings.dnsFakeIPEnabled)
+    XCTAssertEqual(model.networkExtensionRoutingSettings.customRouteExcludeCIDRs, ["100.64.0.0/10"])
+  }
+
+  func testUpdatingTunSettingsRejectsInvalidCIDRAndSystemDNS() throws {
+    let paths = try Self.makeRuntimePaths()
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    var settings = TunSettings.default
+    settings.routeExcludeAddresses = ["foo/24"]
+
+    XCTAssertFalse(model.updateTunSettings(settings))
+    XCTAssertEqual(model.lastError, "Invalid TUN route exclude CIDR: foo/24")
+
+    settings = .default
+    settings.systemDNSServers = ["not-a-dns-server"]
+
+    XCTAssertFalse(model.updateTunSettings(settings))
+    XCTAssertEqual(model.lastError, "Invalid TUN system DNS server: not-a-dns-server")
   }
 
   func testExternalControllerSettingsMigratesMissingCORSFromUserDefaults() throws {
@@ -809,6 +883,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
         dnsHijack: ["any:53"],
         mtu: 1400,
         routeExcludeAddresses: ["10.0.0.0/8"]
+      )
+    )
+    try assertRoundTrip(
+      NetworkExtensionRoutingSettings(
+        excludeLAN: false,
+        customRouteExcludeCIDRs: ["100.64.0.0/10", "2001:db8::/32"]
       )
     )
     try assertRoundTrip(
@@ -2424,6 +2504,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
       defaults: try Self.makeIsolatedDefaults()
     )
     model.developerMode = true
+    XCTAssertTrue(
+      model.updateNetworkExtensionRoutingSettings(
+        NetworkExtensionRoutingSettings(excludeLAN: true, customRouteExcludeCIDRs: ["100.64.0.0/10"])
+      )
+    )
     model.requestProxyRoutingMode(.networkExtensionExperimental)
     for _ in 0..<40 where model.proxyRoutingMode != .networkExtensionExperimental {
       await Task.yield()
@@ -2431,7 +2516,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.start()
 
-    for _ in 0..<160 where model.runtimeOwner != .networkExtension || model.startInFlight {
+    for _ in 0..<400 where model.runtimeOwner != .networkExtension || model.startInFlight {
       await Task.yield()
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
@@ -2449,7 +2534,26 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(proxyManager.startConfigurations.count, 1)
     XCTAssertEqual(proxyManager.startConfigurations.first?.socksHost, "127.0.0.1")
     XCTAssertEqual(proxyManager.startConfigurations.first?.socksPort, 7890)
-    XCTAssertEqual(proxyPortReadiness.requests, [ProxyPortReadinessRequest(host: "127.0.0.1", port: 7890)])
+    XCTAssertEqual(proxyManager.startConfigurations.first?.dnsCaptureEnabled, true)
+    XCTAssertEqual(proxyManager.startConfigurations.first?.dnsListenHost, "127.0.0.1")
+    XCTAssertEqual(proxyManager.startConfigurations.first?.dnsListenPort, 1053)
+    XCTAssertEqual(proxyManager.startConfigurations.first?.dnsFakeIPEnabled, true)
+    XCTAssertEqual(proxyManager.startConfigurations.first?.systemDNSOverrideEnabled, true)
+    XCTAssertEqual(proxyManager.startConfigurations.first?.systemDNSServers, ["114.114.114.114"])
+    XCTAssertEqual(proxyManager.startConfigurations.first?.systemDNSOverrideApplied, false)
+    XCTAssertEqual(
+      proxyManager.startConfigurations.first?.routeExcludeCIDRs,
+      NetworkExtensionRoutingSettings.defaultLANRouteExcludeCIDRs + ["100.64.0.0/10"]
+    )
+    XCTAssertEqual(
+      proxyPortReadiness.requests,
+      [
+        ProxyPortReadinessRequest(host: "127.0.0.1", port: 7890),
+        ProxyPortReadinessRequest(host: "127.0.0.1", port: 1053, serviceName: "Mihomo DNS")
+      ]
+    )
+    XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setdnsservers Wi-Fi 114.114.114.114"))
+    XCTAssertEqual(model.networkExtensionSystemDNSState, .applied(serviceCount: 1))
 
     let runtimeConfigPath = try XCTUnwrap(launcher.launchedConfigPaths.last)
     let runtimeConfig = try String(contentsOfFile: runtimeConfigPath, encoding: .utf8)
@@ -2457,8 +2561,378 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let tun = try XCTUnwrap(yaml["tun"] as? [String: Any])
     XCTAssertEqual(tun["enable"] as? Bool, false)
     XCTAssertNil(tun["auto-redirect"])
+    let dns = try XCTUnwrap(yaml["dns"] as? [String: Any])
+    XCTAssertEqual(dns["enable"] as? Bool, true)
+    XCTAssertEqual(dns["listen"] as? String, "127.0.0.1:1053")
+    XCTAssertEqual(dns["enhanced-mode"] as? String, "fake-ip")
+    XCTAssertEqual(dns["fake-ip-range"] as? String, "198.18.0.1/16")
     XCTAssertEqual(yaml["mixed-port"] as? Int, 7890)
     XCTAssertEqual(yaml["external-controller"] as? String, "127.0.0.1:9097")
+  }
+
+  func testRepairNetworkExtensionDNSWhileRunningReappliesOverrideWithoutRestore() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let launcher = CountingProcessLauncher()
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+    let systemProxyController = SystemProxyController(commandRunner: commandRunner)
+    let proxyManager = RecordingTransparentProxyManager(startStatus: .connected)
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: systemProxyController,
+      networkExtensionController: NetworkExtensionController(
+        systemExtensionRequester: StaticSystemExtensionRequester(activationState: .activated),
+        transparentProxyManager: proxyManager
+      ),
+      proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.developerMode = true
+    model.setProxyRoutingMode(.networkExtensionExperimental)
+    model.start()
+
+    for _ in 0..<400 where model.runtimeOwner != .networkExtension || model.startInFlight {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(model.runtimeOwner, .networkExtension)
+    XCTAssertEqual(model.networkExtensionSystemDNSState, .applied(serviceCount: 1))
+    XCTAssertTrue(systemProxyController.hasManagedSystemDNSState)
+    XCTAssertTrue(model.canRepairNetworkExtensionDNS)
+
+    let commandsBeforeRepair = commandRunner.commands
+    model.repairNetworkExtensionDNS()
+
+    for _ in 0..<80 {
+      let commands = commandRunner.commands
+      let newCommands = commands.dropFirst(commandsBeforeRepair.count)
+      if commands.filter({ $0 == "/usr/sbin/networksetup -setdnsservers Wi-Fi 114.114.114.114" }).count >= 2
+          || newCommands.contains("/usr/sbin/networksetup -setdnsservers Wi-Fi Empty") {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    for _ in 0..<20 where model.networkExtensionSystemDNSState == .applying {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let commandsAfterRepair = commandRunner.commands
+    XCTAssertEqual(
+      commandsAfterRepair.filter { $0 == "/usr/sbin/networksetup -setdnsservers Wi-Fi 114.114.114.114" }.count,
+      2
+    )
+    XCTAssertFalse(
+      commandsAfterRepair.dropFirst(commandsBeforeRepair.count).contains("/usr/sbin/networksetup -setdnsservers Wi-Fi Empty")
+    )
+    XCTAssertEqual(model.networkExtensionSystemDNSState, .applied(serviceCount: 1))
+    XCTAssertTrue(systemProxyController.hasManagedSystemDNSState)
+  }
+
+  func testUpdatingNetworkExtensionRoutingSettingsRestartsRunningNetworkExtension() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let launcher = CountingProcessLauncher()
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let proxyManager = RecordingTransparentProxyManager(startStatus: .connected)
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      networkExtensionController: NetworkExtensionController(
+        systemExtensionRequester: StaticSystemExtensionRequester(activationState: .activated),
+        transparentProxyManager: proxyManager
+      ),
+      proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.developerMode = true
+    model.setProxyRoutingMode(.networkExtensionExperimental)
+    model.start()
+    for _ in 0..<160 where proxyManager.startConfigurations.count < 1 || model.startInFlight {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(proxyManager.startConfigurations.count, 1)
+
+    XCTAssertTrue(
+      model.updateNetworkExtensionRoutingSettings(
+        NetworkExtensionRoutingSettings(excludeLAN: false, customRouteExcludeCIDRs: ["100.64.0.0/10"])
+      )
+    )
+
+    for _ in 0..<240 where proxyManager.startConfigurations.count < 2 || model.startInFlight {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(proxyManager.stopIdentifiers, [NetworkExtensionController.providerBundleIdentifier])
+    XCTAssertEqual(launcher.launchCount, 2)
+    XCTAssertEqual(proxyManager.startConfigurations.last?.routeExcludeCIDRs, ["100.64.0.0/10"])
+  }
+
+  func testUpdatingNetworkExtensionRoutingSettingsOutsideNetworkExtensionModeOnlyPersists() throws {
+    let paths = try Self.makeRuntimePaths()
+    let launcher = CountingProcessLauncher()
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      coreController: CoreProcessController(
+        launcher: launcher,
+        validator: RecordingRuntimeConfigValidator(result: .success(())),
+        readinessProbe: RecordingCoreReadinessProbe(),
+        reaper: RecordingCoreProcessReaper(),
+        portChecker: EmptyRuntimePortChecker()
+      ),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    XCTAssertTrue(
+      model.updateNetworkExtensionRoutingSettings(
+        NetworkExtensionRoutingSettings(excludeLAN: false, customRouteExcludeCIDRs: ["100.64.0.0/10"])
+      )
+    )
+
+    XCTAssertEqual(model.networkExtensionRoutingSettings.effectiveRouteExcludeCIDRs, ["100.64.0.0/10"])
+    XCTAssertEqual(launcher.launchCount, 0)
+    XCTAssertEqual(model.runtimeOwner, .stopped)
+  }
+
+  func testUpdatingNetworkExtensionRoutingSettingsRejectsInvalidCIDR() throws {
+    let paths = try Self.makeRuntimePaths()
+    let launcher = CountingProcessLauncher()
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      coreController: CoreProcessController(
+        launcher: launcher,
+        validator: RecordingRuntimeConfigValidator(result: .success(())),
+        readinessProbe: RecordingCoreReadinessProbe(),
+        reaper: RecordingCoreProcessReaper(),
+        portChecker: EmptyRuntimePortChecker()
+      ),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    XCTAssertFalse(
+      model.updateNetworkExtensionRoutingSettings(
+        NetworkExtensionRoutingSettings(excludeLAN: false, customRouteExcludeCIDRs: ["192.168.0.0/33"])
+      )
+    )
+
+    XCTAssertEqual(model.networkExtensionRoutingSettings, .default)
+    XCTAssertEqual(model.lastError, "Invalid NE route exclude CIDR: 192.168.0.0/33")
+    XCTAssertEqual(launcher.launchCount, 0)
+  }
+
+  func testUpdatingNetworkExtensionRoutingSettingsRejectsInvalidDNSSettings() throws {
+    let paths = try Self.makeRuntimePaths()
+    let launcher = CountingProcessLauncher()
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      coreController: CoreProcessController(
+        launcher: launcher,
+        validator: RecordingRuntimeConfigValidator(result: .success(())),
+        readinessProbe: RecordingCoreReadinessProbe(),
+        reaper: RecordingCoreProcessReaper(),
+        portChecker: EmptyRuntimePortChecker()
+      ),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    XCTAssertFalse(
+      model.updateNetworkExtensionRoutingSettings(
+        NetworkExtensionRoutingSettings(dnsListenPort: 0)
+      )
+    )
+    XCTAssertEqual(model.lastError, "Invalid NE DNS listen port: 0")
+
+    XCTAssertFalse(
+      model.updateNetworkExtensionRoutingSettings(
+        NetworkExtensionRoutingSettings(systemDNSServers: ["not-a-dns-server"])
+      )
+    )
+    XCTAssertEqual(model.lastError, "Invalid NE system DNS server: not-a-dns-server")
+    XCTAssertEqual(model.networkExtensionRoutingSettings, .default)
+    XCTAssertEqual(launcher.launchCount, 0)
+  }
+
+  func testNetworkExtensionDiagnosticsPollingPublishesEventsAndStopsAfterStop() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let diagnosticsURL = paths.appSupport
+      .appendingPathComponent("Diagnostics", isDirectory: true)
+      .appendingPathComponent(NetworkExtensionRuntimeConstants.diagnosticsFilename)
+    let controller = CoreProcessController(
+      launcher: CountingProcessLauncher(),
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let proxyManager = RecordingTransparentProxyManager(startStatus: .connected)
+    let networkExtensionController = NetworkExtensionController(
+      systemExtensionRequester: StaticSystemExtensionRequester(activationState: .activated),
+      transparentProxyManager: proxyManager,
+      diagnosticsURL: diagnosticsURL
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      networkExtensionController: networkExtensionController,
+      proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.developerMode = true
+    model.setProxyRoutingMode(.networkExtensionExperimental)
+    model.start()
+    for _ in 0..<400 where model.runtimeOwner != .networkExtension || model.startInFlight {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    XCTAssertEqual(model.runtimeOwner, .networkExtension)
+
+    try Self.writeNetworkExtensionDiagnostics(
+      NetworkExtensionDiagnosticsSnapshot(
+        activeBridgeCount: 1,
+        bypassCount: 1,
+        errorCount: 0,
+        recentBypasses: [
+          NetworkExtensionDiagnosticEvent(
+            id: "bypass-before-stop",
+            message: "Bypassed self/core flow.",
+            sourceAppSigningIdentifier: "io.github.clashmax.ClashMax"
+          )
+        ],
+        recentErrors: [],
+        updatedAt: Date()
+      ),
+      to: diagnosticsURL
+    )
+
+    for _ in 0..<300 {
+      model.runtimeData.flushPendingLogs()
+      if model.logs.contains(where: { $0.message.contains("bypass-before-stop") || $0.message.contains("NE bypass") }) {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+    model.runtimeData.flushPendingLogs()
+    XCTAssertTrue(model.logs.contains { $0.message.contains("NE bypass") && $0.message.contains("io.github.clashmax.ClashMax") })
+
+    model.stop()
+    for _ in 0..<160 where model.runtimeOwner != .stopped {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    model.runtimeData.flushPendingLogs()
+    let logCountAfterStop = model.logs.count
+    try Self.writeNetworkExtensionDiagnostics(
+      NetworkExtensionDiagnosticsSnapshot(
+        activeBridgeCount: 0,
+        bypassCount: 2,
+        errorCount: 0,
+        recentBypasses: [
+          NetworkExtensionDiagnosticEvent(id: "bypass-after-stop", message: "After stop bypass.")
+        ],
+        recentErrors: [],
+        updatedAt: Date()
+      ),
+      to: diagnosticsURL
+    )
+    try? await Task.sleep(nanoseconds: 1_200_000_000)
+    model.runtimeData.flushPendingLogs()
+
+    XCTAssertEqual(model.logs.count, logCountAfterStop)
+    XCTAssertFalse(model.logs.contains { $0.message.contains("After stop bypass") })
+  }
+
+  func testNetworkExtensionManualRefreshUpdatesDiagnosticsSnapshotWithoutPublishingRuntimeLogs() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let diagnosticsURL = paths.appSupport
+      .appendingPathComponent("Diagnostics", isDirectory: true)
+      .appendingPathComponent(NetworkExtensionRuntimeConstants.diagnosticsFilename)
+    let proxyManager = RecordingTransparentProxyManager(currentStatus: .notConfigured)
+    let networkExtensionController = NetworkExtensionController(
+      systemExtensionRequester: StaticSystemExtensionRequester(
+        snapshots: [
+          SystemExtensionSnapshot(
+            isEnabled: true,
+            isAwaitingUserApproval: false,
+            isUninstalling: false
+          )
+        ]
+      ),
+      transparentProxyManager: proxyManager,
+      diagnosticsURL: diagnosticsURL
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      networkExtensionController: networkExtensionController,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    try Self.writeNetworkExtensionDiagnostics(
+      NetworkExtensionDiagnosticsSnapshot(
+        activeBridgeCount: 0,
+        bypassCount: 1,
+        errorCount: 1,
+        recentBypasses: [
+          NetworkExtensionDiagnosticEvent(id: "manual-refresh-bypass", message: "Manual refresh bypass.")
+        ],
+        recentErrors: [
+          NetworkExtensionDiagnosticEvent(id: "manual-refresh-error", message: "Manual refresh error.")
+        ],
+        updatedAt: Date()
+      ),
+      to: diagnosticsURL
+    )
+
+    model.refreshNetworkExtensionStatus()
+    for _ in 0..<60 where model.networkExtensionController.diagnostics.recentBypasses.isEmpty {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    model.runtimeData.flushPendingLogs()
+
+    XCTAssertEqual(model.runtimeOwner, .stopped)
+    XCTAssertEqual(model.networkExtensionController.vpnStatus, .notConfigured)
+    XCTAssertTrue(model.networkExtensionController.diagnostics.recentBypasses.contains { $0.id == "manual-refresh-bypass" })
+    XCTAssertTrue(model.networkExtensionController.diagnostics.recentErrors.contains { $0.id == "manual-refresh-error" })
+    XCTAssertFalse(model.logs.contains { $0.message.contains("NE bypass") || $0.message.contains("NE error") })
+    XCTAssertFalse(model.logs.contains { $0.message.contains("Manual refresh") })
   }
 
   func testNetworkExtensionModeChecksMixedPortBeforeStartingTransparentProxy() async throws {
@@ -2497,13 +2971,19 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.start()
 
-    for _ in 0..<160 where model.runtimeOwner != .networkExtension || model.startInFlight {
+    for _ in 0..<400 where model.runtimeOwner != .networkExtension || model.startInFlight {
       await Task.yield()
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
 
-    XCTAssertEqual(Array(events.values.prefix(2)), ["proxyPortReady", "networkExtensionStart"])
-    XCTAssertEqual(proxyPortReadiness.requests, [ProxyPortReadinessRequest(host: "127.0.0.1", port: 7890)])
+    XCTAssertEqual(Array(events.values.prefix(3)), ["proxyPortReady", "proxyPortReady", "networkExtensionStart"])
+    XCTAssertEqual(
+      proxyPortReadiness.requests,
+      [
+        ProxyPortReadinessRequest(host: "127.0.0.1", port: 7890),
+        ProxyPortReadinessRequest(host: "127.0.0.1", port: 1053, serviceName: "Mihomo DNS")
+      ]
+    )
   }
 
   func testNetworkExtensionMixedPortReadinessFailureStopsCoreAndSkipsTransparentProxy() async throws {
@@ -2571,6 +3051,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
     let proxyManager = RecordingTransparentProxyManager(startStatus: .connected)
     proxyManager.onStop = { events.append("networkExtensionStop") }
+    let commandRunner = DNSRestoreEventCommandRunner(outputs: Self.defaultNetworkSetupOutputs(), events: events)
     let networkExtensionController = NetworkExtensionController(
       systemExtensionRequester: StaticSystemExtensionRequester(activationState: .activated),
       transparentProxyManager: proxyManager
@@ -2579,7 +3060,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       paths: paths,
       profileStore: store,
       coreController: controller,
-      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      systemProxyController: SystemProxyController(commandRunner: commandRunner),
       networkExtensionController: networkExtensionController,
       proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
       defaults: try Self.makeIsolatedDefaults()
@@ -2587,10 +3068,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
     model.developerMode = true
     model.setProxyRoutingMode(.networkExtensionExperimental)
     model.start()
-    for _ in 0..<160 where model.runtimeOwner != .networkExtension || model.startInFlight {
+    for _ in 0..<400 where model.runtimeOwner != .networkExtension || model.startInFlight {
       await Task.yield()
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
+    XCTAssertEqual(model.runtimeOwner, .networkExtension)
     XCTAssertFalse(model.startInFlight)
 
     model.stop()
@@ -2600,7 +3082,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
 
-    XCTAssertEqual(Array(events.values.prefix(2)), ["networkExtensionStop", "coreStop"])
+    XCTAssertEqual(Array(events.values.prefix(3)), ["networkExtensionStop", "dnsRestore", "coreStop"])
     XCTAssertEqual(proxyManager.stopIdentifiers, [NetworkExtensionController.providerBundleIdentifier])
   }
 
@@ -2653,6 +3135,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertFalse(model.isRunning)
     XCTAssertTrue(model.canStopRuntime)
 
+    let redundantCoreStop = await controller.stop()
+    XCTAssertTrue(redundantCoreStop.succeeded)
+    XCTAssertEqual(model.dashboardRuntimeState, .crashed(message: "mihomo exited with code 2"))
+    XCTAssertEqual(model.statusSummary, "Crashed: mihomo exited with code 2")
+    XCTAssertTrue(model.canStopRuntime)
+
     model.stop()
 
     for _ in 0..<160 where model.runtimeOwner != .stopped {
@@ -2682,11 +3170,13 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let proxyManager = RecordingTransparentProxyManager(startStatus: .connected)
     proxyManager.stopError = AppError.coreNotReady("transparent proxy stop refused")
     proxyManager.onStop = { events.append("networkExtensionStop") }
+    let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+    let systemProxyController = SystemProxyController(commandRunner: commandRunner)
     let model = AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
-      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      systemProxyController: systemProxyController,
       networkExtensionController: NetworkExtensionController(
         systemExtensionRequester: StaticSystemExtensionRequester(activationState: .activated),
         transparentProxyManager: proxyManager
@@ -2697,14 +3187,20 @@ final class DashboardRuntimeStateTests: XCTestCase {
     model.developerMode = true
     model.setProxyRoutingMode(.networkExtensionExperimental)
     model.start()
-    for _ in 0..<160 where model.runtimeOwner != .networkExtension || model.startInFlight {
+    for _ in 0..<400 where model.runtimeOwner != .networkExtension || model.startInFlight {
       await Task.yield()
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
+    XCTAssertEqual(model.runtimeOwner, .networkExtension)
+    XCTAssertFalse(model.startInFlight)
 
     model.stop()
 
-    for _ in 0..<160 where model.lastError == nil {
+    for _ in 0..<160 where proxyManager.stopIdentifiers.isEmpty {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    for _ in 0..<160 where model.lastError?.contains("Could not stop Network Extension cleanly") != true {
       await Task.yield()
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
@@ -2713,6 +3209,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(events.values, ["networkExtensionStop"])
     XCTAssertEqual(model.runtimeOwner, .networkExtension)
     XCTAssertTrue(model.isRunning)
+    XCTAssertTrue(systemProxyController.hasManagedSystemDNSState)
+    XCTAssertFalse(commandRunner.commands.contains("/usr/sbin/networksetup -setdnsservers Wi-Fi Empty"))
     XCTAssertTrue(model.lastError?.contains("Could not stop Network Extension cleanly") == true)
     XCTAssertTrue(model.lastError?.contains("transparent proxy stop refused") == true)
   }
@@ -2734,11 +3232,13 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
     let proxyManager = RecordingTransparentProxyManager(startStatus: .connected, stopStatus: .disconnecting)
     proxyManager.onStop = { events.append("networkExtensionStop") }
+    let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+    let systemProxyController = SystemProxyController(commandRunner: commandRunner)
     let model = AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
-      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      systemProxyController: systemProxyController,
       networkExtensionController: NetworkExtensionController(
         systemExtensionRequester: StaticSystemExtensionRequester(activationState: .activated),
         transparentProxyManager: proxyManager
@@ -2749,14 +3249,20 @@ final class DashboardRuntimeStateTests: XCTestCase {
     model.developerMode = true
     model.setProxyRoutingMode(.networkExtensionExperimental)
     model.start()
-    for _ in 0..<160 where model.runtimeOwner != .networkExtension || model.startInFlight {
+    for _ in 0..<400 where model.runtimeOwner != .networkExtension || model.startInFlight {
       await Task.yield()
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
+    XCTAssertEqual(model.runtimeOwner, .networkExtension)
+    XCTAssertFalse(model.startInFlight)
 
     model.stop()
 
-    for _ in 0..<160 where model.lastError == nil {
+    for _ in 0..<160 where proxyManager.stopIdentifiers.isEmpty {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    for _ in 0..<160 where model.lastError?.contains("Could not stop Network Extension cleanly") != true {
       await Task.yield()
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
@@ -2766,6 +3272,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(model.runtimeOwner, .networkExtension)
     XCTAssertTrue(model.isRunning)
     XCTAssertEqual(model.networkExtensionController.vpnStatus, .disconnecting)
+    XCTAssertTrue(systemProxyController.hasManagedSystemDNSState)
+    XCTAssertFalse(commandRunner.commands.contains("/usr/sbin/networksetup -setdnsservers Wi-Fi Empty"))
     XCTAssertTrue(model.lastError?.contains("Could not stop Network Extension cleanly") == true)
     XCTAssertTrue(model.lastError?.contains("Disconnecting") == true)
   }
@@ -3174,6 +3682,101 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(model.lastError?.contains("controller refused connection") == true)
   }
 
+  func testTunStartAppliesSystemDNSAndStopRestoresIt() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let helperTransport = ReadyTunnelHelperTransport()
+    let helper = TunnelHelperClient(
+      transport: helperTransport,
+      service: StaticHelperService(status: .enabled),
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
+    )
+    let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      systemProxyController: SystemProxyController(commandRunner: commandRunner),
+      helperClient: helper,
+      tunnelReadinessProbe: RecordingCoreReadinessProbe(),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.requestProxyRoutingMode(.tun)
+    for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
+      await Task.yield()
+    }
+
+    model.start()
+
+    for _ in 0..<160 where !model.isRunning && model.lastError == nil {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertTrue(model.isRunning)
+    XCTAssertTrue(model.tunEnabled)
+    XCTAssertEqual(model.tunHelperPID, 99)
+    XCTAssertEqual(model.tunSystemDNSState, .applied(serviceCount: 1))
+    XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setdnsservers Wi-Fi 114.114.114.114"))
+
+    model.stop()
+    for _ in 0..<160 where model.isRunning || model.tunnelCoreRunning || model.tunEnabled {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertFalse(model.isRunning)
+    XCTAssertNil(model.tunHelperPID)
+    XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setdnsservers Wi-Fi Empty"))
+    XCTAssertEqual(model.tunSystemDNSState, .restored)
+  }
+
+  func testTunSystemDNSApplyFailureStopsHelperAndDoesNotPublishRunningState() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let helperTransport = ReadyTunnelHelperTransport()
+    let helper = TunnelHelperClient(
+      transport: helperTransport,
+      service: StaticHelperService(status: .enabled),
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
+    )
+    let commandRunner = FailingDNSApplyCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      systemProxyController: SystemProxyController(commandRunner: commandRunner),
+      helperClient: helper,
+      tunnelReadinessProbe: RecordingCoreReadinessProbe(),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.requestProxyRoutingMode(.tun)
+    for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
+      await Task.yield()
+    }
+
+    model.start()
+
+    for _ in 0..<160 where model.startInFlight || model.lastError == nil {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let stopCount = await helperTransport.stopCount()
+    XCTAssertEqual(stopCount, 1)
+    XCTAssertFalse(model.isRunning)
+    XCTAssertFalse(model.tunEnabled)
+    XCTAssertNil(model.tunHelperPID)
+    XCTAssertTrue(model.lastError?.contains("Injected DNS failure") == true)
+    XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setdnsservers Wi-Fi Empty"))
+  }
+
   func testSelectingProfileWhileRunningRestartsRuntimeWithNewProfile() async throws {
     let paths = try Self.makeRuntimePaths()
     let firstConfigURL = paths.appSupport.appendingPathComponent("first.yaml")
@@ -3357,6 +3960,52 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let startCount = await helperTransport.startCount()
     XCTAssertEqual(startCount, 0)
     XCTAssertNil(model.lastError)
+  }
+
+  func testLaunchWarmupPreservesRegisteredTunHelperAcrossModeSwitches() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let service = StaticHelperService(status: .enabled)
+    let helper = TunnelHelperClient(
+      transport: FailingStatusTunnelHelperTransport(),
+      service: service,
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      helperClient: helper,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    model.warmTunHelperRegistrationOnLaunch()
+
+    for _ in 0..<40 where !model.tunHelperPreparationState.allowsStartAttempt {
+      await Task.yield()
+    }
+
+    XCTAssertEqual(model.tunHelperPreparationState, .registered(TunnelHelperClient.registeredMessage))
+    XCTAssertEqual(service.registerCount, 0)
+    XCTAssertEqual(service.openSettingsCount, 0)
+
+    model.requestProxyRoutingMode(.tun)
+    for _ in 0..<20 where model.proxyRoutingMode != .tun {
+      await Task.yield()
+    }
+
+    XCTAssertEqual(model.proxyRoutingMode, .tun)
+    XCTAssertEqual(model.tunHelperPreparationState, .registered(TunnelHelperClient.registeredMessage))
+
+    model.requestProxyRoutingMode(.systemProxy)
+    for _ in 0..<20 where model.proxyRoutingMode != .systemProxy {
+      await Task.yield()
+    }
+    model.requestProxyRoutingMode(.tun)
+    for _ in 0..<20 where model.proxyRoutingMode != .tun {
+      await Task.yield()
+    }
+
+    XCTAssertEqual(model.tunHelperPreparationState, .registered(TunnelHelperClient.registeredMessage))
   }
 
   func testRepairHelperRefreshesVisibleApprovalStateWithoutReregistering() async throws {
@@ -3676,7 +4325,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
       "/usr/sbin/networksetup -getwebproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
       "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
       "/usr/sbin/networksetup -getsocksfirewallproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
-      "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": "There aren't any bypass domains set.\n"
+      "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": "There aren't any bypass domains set.\n",
+      "/usr/sbin/networksetup -getdnsservers Wi-Fi": "There aren't any DNS Servers set on Wi-Fi.\n"
     ]
   }
 
@@ -3699,6 +4349,14 @@ final class DashboardRuntimeStateTests: XCTestCase {
   ) throws {
     let data = try JSONSerialization.data(withJSONObject: object)
     defaults.set(data, forKey: key)
+  }
+
+  private static func writeNetworkExtensionDiagnostics(
+    _ snapshot: NetworkExtensionDiagnosticsSnapshot,
+    to url: URL
+  ) throws {
+    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try JSONEncoder().encode(snapshot).write(to: url)
   }
 
   private static func makeRuntimePaths() throws -> RuntimePaths {
@@ -4201,6 +4859,12 @@ private final class RecordingProxyPortReadinessProbe: ProxyPortReadinessProbing 
     onProbe?()
     try result.get()
   }
+
+  func waitUntilOpen(host: String, port: Int, serviceName: String) async throws {
+    requests.append(ProxyPortReadinessRequest(host: host, port: port, serviceName: serviceName))
+    onProbe?()
+    try result.get()
+  }
 }
 
 private actor ReadyTunnelHelperTransport: HelperXPCTransport {
@@ -4340,6 +5004,64 @@ private final class InMemoryHelperRegistrationRecordStore: HelperRegistrationRec
 
   func setHelperFingerprint(_ fingerprint: String?) {
     storedFingerprint = fingerprint
+  }
+}
+
+private final class FailingDNSApplyCommandRunner: CommandRunning, @unchecked Sendable {
+  let outputs: [String: String]
+  private let queue = DispatchQueue(label: "io.github.clashmax.tests.FailingDNSApplyCommandRunner")
+  private var _commands: [String] = []
+
+  init(outputs: [String: String]) {
+    self.outputs = outputs
+  }
+
+  var commands: [String] {
+    queue.sync { _commands }
+  }
+
+  func run(_ executable: String, _ arguments: [String]) async throws -> String {
+    let command = ([executable] + arguments).joined(separator: " ")
+    queue.sync {
+      _commands.append(command)
+    }
+    if command == "/usr/sbin/networksetup -setdnsservers Wi-Fi 114.114.114.114" {
+      throw NSError(
+        domain: "ClashMaxTests.FailingDNSApplyCommandRunner",
+        code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "Injected DNS failure for \(command)"]
+      )
+    }
+    return outputs[command] ?? ""
+  }
+}
+
+private final class DNSRestoreEventCommandRunner: CommandRunning, @unchecked Sendable {
+  let outputs: [String: String]
+  private let events: StopEventRecorder
+  private let queue = DispatchQueue(label: "io.github.clashmax.tests.DNSRestoreEventCommandRunner")
+  private var _commands: [String] = []
+
+  init(outputs: [String: String], events: StopEventRecorder) {
+    self.outputs = outputs
+    self.events = events
+  }
+
+  var commands: [String] {
+    queue.sync { _commands }
+  }
+
+  func run(_ executable: String, _ arguments: [String]) async throws -> String {
+    let command = ([executable] + arguments).joined(separator: " ")
+    queue.sync {
+      _commands.append(command)
+    }
+    if command == "/usr/sbin/networksetup -setdnsservers Wi-Fi Empty" {
+      await MainActor.run {
+        events.append("dnsRestore")
+      }
+    }
+    return outputs[command] ?? ""
   }
 }
 
