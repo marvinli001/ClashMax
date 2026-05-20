@@ -7,7 +7,8 @@ AGENTS.md
 
 .build/
 .swiftpm/
-DerivedData/
+# Repo-local Xcode DerivedData folders, including custom -derivedDataPath names.
+DerivedData*/
 build/
 dist/
 notarization apppack/
