@@ -430,6 +430,15 @@ private struct TunSettingsPopover: View {
   @State private var dnsDraft = ""
   @State private var routeDraft = ""
   @State private var systemDNSDraft = ""
+  @State private var fakeIPFilterDraft = ""
+  @State private var nameserverDraft = ""
+  @State private var fallbackDraft = ""
+  @State private var proxyServerNameserverDraft = ""
+  @State private var directNameserverDraft = ""
+  @State private var policyKeyDraft = ""
+  @State private var policyValueDraft = ""
+  @State private var hostKeyDraft = ""
+  @State private var hostValueDraft = ""
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
@@ -465,7 +474,8 @@ private struct TunSettingsPopover: View {
         placeholder: "any:53",
         values: $settings.dnsHijack,
         draft: $dnsDraft,
-        validator: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !$0.contains(" ") }
+        validator: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !$0.contains(" ") },
+        normalizer: TunDNSSettings.normalizedList
       )
 
       EditableStringList(
@@ -486,6 +496,80 @@ private struct TunSettingsPopover: View {
         normalizer: NetworkExtensionRoutingSettings.normalizedDNSServers
       )
       .disabled(!settings.systemDNSOverrideEnabled)
+
+      DisclosureGroup("Runtime DNS Overlay") {
+        VStack(alignment: .leading, spacing: 12) {
+          EditableStringList(
+            title: "Fake IP Filter",
+            placeholder: "*.lan",
+            values: $settings.dns.fakeIPFilter,
+            draft: $fakeIPFilterDraft,
+            validator: TunDNSSettings.isValidPattern,
+            normalizer: TunDNSSettings.normalizedList
+          )
+
+          EditableStringList(
+            title: "Nameserver",
+            placeholder: "https://dns.alidns.com/dns-query",
+            values: $settings.dns.nameserver,
+            draft: $nameserverDraft,
+            validator: TunDNSSettings.isValidResolver,
+            normalizer: TunDNSSettings.normalizedList
+          )
+
+          EditableStringList(
+            title: "Fallback",
+            placeholder: "https://dns.google/dns-query",
+            values: $settings.dns.fallback,
+            draft: $fallbackDraft,
+            validator: TunDNSSettings.isValidResolver,
+            normalizer: TunDNSSettings.normalizedList
+          )
+
+          EditableStringList(
+            title: "Proxy Server Nameserver",
+            placeholder: "119.29.29.29",
+            values: $settings.dns.proxyServerNameserver,
+            draft: $proxyServerNameserverDraft,
+            validator: TunDNSSettings.isValidResolver,
+            normalizer: TunDNSSettings.normalizedList
+          )
+
+          EditableStringList(
+            title: "Direct Nameserver",
+            placeholder: "223.5.5.5",
+            values: $settings.dns.directNameserver,
+            draft: $directNameserverDraft,
+            validator: TunDNSSettings.isValidResolver,
+            normalizer: TunDNSSettings.normalizedList
+          )
+
+          EditableKeyValueList(
+            title: "Nameserver Policy",
+            keyPlaceholder: "geosite:cn",
+            valuePlaceholder: "223.5.5.5",
+            values: $settings.dns.nameserverPolicy,
+            keyDraft: $policyKeyDraft,
+            valueDraft: $policyValueDraft,
+            keyValidator: TunDNSSettings.isValidPattern,
+            valueValidator: TunDNSSettings.isValidResolver,
+            normalizer: TunDNSSettings.normalizedMap
+          )
+
+          EditableKeyValueList(
+            title: "Hosts",
+            keyPlaceholder: "router.lan",
+            valuePlaceholder: "192.168.1.1",
+            values: $settings.dns.hosts,
+            keyDraft: $hostKeyDraft,
+            valueDraft: $hostValueDraft,
+            keyValidator: TunDNSSettings.isValidPattern,
+            valueValidator: TunDNSSettings.isValidHostValue,
+            normalizer: TunDNSSettings.normalizedMap
+          )
+        }
+        .padding(.top, 8)
+      }
 
       if let error = error ?? settings.validationError {
         Label(error, systemImage: "exclamationmark.triangle.fill")
@@ -638,6 +722,88 @@ private struct EditableStringList: View {
 
   private func remove(_ value: String) {
     values.removeAll { $0 == value }
+  }
+}
+
+private struct EditableKeyValueList: View {
+  let title: String
+  let keyPlaceholder: String
+  let valuePlaceholder: String
+  @Binding var values: [String: String]
+  @Binding var keyDraft: String
+  @Binding var valueDraft: String
+  let keyValidator: (String) -> Bool
+  let valueValidator: (String) -> Bool
+  var normalizer: ([String: String]) -> [String: String] = TunDNSSettings.normalizedMap
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text(title)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+
+      if values.isEmpty {
+        Text("Empty")
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+      } else {
+        VStack(spacing: 6) {
+          ForEach(values.keys.sorted(), id: \.self) { key in
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+              Text(key)
+                .font(.caption)
+                .lineLimit(1)
+              Spacer(minLength: 8)
+              Text(values[key] ?? "")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+              Button {
+                remove(key)
+              } label: {
+                Image(systemName: "xmark")
+                  .font(.system(size: 9, weight: .bold))
+              }
+              .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+          }
+        }
+      }
+
+      HStack(spacing: 8) {
+        TextField(keyPlaceholder, text: $keyDraft)
+          .textFieldStyle(.roundedBorder)
+          .onSubmit(add)
+        TextField(valuePlaceholder, text: $valueDraft)
+          .textFieldStyle(.roundedBorder)
+          .onSubmit(add)
+        Button("Add", action: add)
+          .disabled(!canAdd)
+      }
+    }
+  }
+
+  private var canAdd: Bool {
+    keyValidator(keyDraft.trimmingCharacters(in: .whitespacesAndNewlines))
+      && valueValidator(valueDraft.trimmingCharacters(in: .whitespacesAndNewlines))
+  }
+
+  private func add() {
+    let key = keyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    let value = valueDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard keyValidator(key), valueValidator(value) else { return }
+    var next = values
+    next[key] = value
+    values = normalizer(next)
+    keyDraft = ""
+    valueDraft = ""
+  }
+
+  private func remove(_ key: String) {
+    values.removeValue(forKey: key)
   }
 }
 

@@ -13,11 +13,17 @@ final class NetworkExtensionProjectConfigurationTests: XCTestCase {
     XCTAssertTrue(projectYAML.contains("PRODUCT_BUNDLE_IDENTIFIER: io.github.clashmax.ClashMax.NetworkExtension"))
     XCTAssertTrue(projectYAML.contains("Library/SystemExtensions/io.github.clashmax.ClashMax.NetworkExtension.systemextension"))
     XCTAssertTrue(projectYAML.contains("Config/ClashMaxNetworkExtension.entitlements"))
-    XCTAssertTrue(projectYAML.contains("CURRENT_PROJECT_VERSION: 12"))
 
+    let appTarget = try targetBlock(named: "ClashMax", in: projectYAML)
     let networkExtensionTarget = try targetBlock(named: "ClashMaxNetworkExtension", in: projectYAML)
-    XCTAssertTrue(networkExtensionTarget.contains("MARKETING_VERSION: 1.0.6"))
-    XCTAssertTrue(networkExtensionTarget.contains("CURRENT_PROJECT_VERSION: 12"))
+    XCTAssertEqual(
+      try buildSetting(named: "MARKETING_VERSION", in: networkExtensionTarget),
+      try buildSetting(named: "MARKETING_VERSION", in: appTarget)
+    )
+    XCTAssertEqual(
+      try buildSetting(named: "CURRENT_PROJECT_VERSION", in: networkExtensionTarget),
+      try buildSetting(named: "CURRENT_PROJECT_VERSION", in: appTarget)
+    )
     XCTAssertTrue(networkExtensionTarget.contains("Shared/Socks5ConnectRequest.swift"))
     XCTAssertTrue(networkExtensionTarget.contains("Shared/NetworkExtensionRuntimeConstants.swift"))
   }
@@ -177,9 +183,28 @@ final class NetworkExtensionProjectConfigurationTests: XCTestCase {
     }
 
     let remainder = projectYAML[start.upperBound...]
-    guard let end = remainder.range(of: "\n  ClashMaxTests:") else {
+    guard let end = remainder.range(
+      of: #"\n  [A-Za-z0-9_]+:\n"#,
+      options: .regularExpression
+    ) else {
       return String(remainder)
     }
     return String(remainder[..<end.lowerBound])
+  }
+
+  private func buildSetting(named settingName: String, in targetBlock: String) throws -> String {
+    for line in targetBlock.split(separator: "\n", omittingEmptySubsequences: false) {
+      let trimmed = line.trimmingCharacters(in: .whitespaces)
+      guard trimmed.hasPrefix("\(settingName):") else {
+        continue
+      }
+
+      return String(trimmed.dropFirst(settingName.count + 1))
+        .trimmingCharacters(in: .whitespaces)
+        .trimmingCharacters(in: CharacterSet(charactersIn: #"""#))
+    }
+
+    XCTFail("Missing build setting \(settingName)")
+    return ""
   }
 }

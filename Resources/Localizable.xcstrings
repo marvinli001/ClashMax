@@ -133,1062 +133,6 @@
         }
       }
     },
-    "Applied" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Applied"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已应用"
-          }
-        }
-      }
-    },
-    "Applied (%lld)" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Applied (%lld)"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已应用（%lld）"
-          }
-        }
-      }
-    },
-    "Applying" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Applying"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "正在应用"
-          }
-        }
-      }
-    },
-    "Apply Failed" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Apply Failed"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "应用失败"
-          }
-        }
-      }
-    },
-    "Auto Detect Interface" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Auto Detect Interface"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "自动检测接口"
-          }
-        }
-      }
-    },
-    "Auto Route" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Auto Route"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "自动路由"
-          }
-        }
-      }
-    },
-    "Cancel" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Cancel"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "取消"
-          }
-        }
-      }
-    },
-    "Capture DNS" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Capture DNS"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "捕获 DNS"
-          }
-        }
-      }
-    },
-    "Custom CIDR Exclude" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Custom CIDR Exclude"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "自定义 CIDR 排除"
-          }
-        }
-      }
-    },
-    "Device" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Device"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "设备"
-          }
-        }
-      }
-    },
-    "DNS Capture" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "DNS Capture"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "DNS 捕获"
-          }
-        }
-      }
-    },
-    "DNS Hijack" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "DNS Hijack"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "DNS 劫持"
-          }
-        }
-      }
-    },
-    "DNS Listen %lld" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "DNS Listen %lld"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "DNS 监听 %lld"
-          }
-        }
-      }
-    },
-    "DNS Repair" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "DNS Repair"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "DNS 修复"
-          }
-        }
-      }
-    },
-    "DNS Runtime" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "DNS Runtime"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "DNS 运行时"
-          }
-        }
-      }
-    },
-    "DNS: %@" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "DNS: %@"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "DNS：%@"
-          }
-        }
-      }
-    },
-    "Effective Exclude" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Effective Exclude"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "生效排除"
-          }
-        }
-      }
-    },
-    "Exclude" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Exclude"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "排除"
-          }
-        }
-      }
-    },
-    "Exclude LAN" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Exclude LAN"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "排除局域网"
-          }
-        }
-      }
-    },
-    "Excluded CIDR" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Excluded CIDR"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已排除 CIDR"
-          }
-        }
-      }
-    },
-    "Fake IP" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Fake IP"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Fake IP"
-          }
-        }
-      }
-    },
-    "Fake IP DNS" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Fake IP DNS"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Fake IP DNS"
-          }
-        }
-      }
-    },
-    "Fake IP Range" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Fake IP Range"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Fake IP 范围"
-          }
-        }
-      }
-    },
-    "Helper" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Helper"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Helper"
-          }
-        }
-      }
-    },
-    "Helper Log" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Helper Log"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Helper 日志"
-          }
-        }
-      }
-    },
-    "Inactive" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Inactive"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "未启用"
-          }
-        }
-      }
-    },
-    "Last Bypass" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Last Bypass"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "最近绕过"
-          }
-        }
-      }
-    },
-    "Last Error" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Last Error"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "最近错误"
-          }
-        }
-      }
-    },
-    "Last Update" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Last Update"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "最近更新"
-          }
-        }
-      }
-    },
-    "NE Diagnostics" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "NE Diagnostics"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "NE 诊断"
-          }
-        }
-      }
-    },
-    "NE Proxy" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "NE Proxy"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "NE 代理"
-          }
-        }
-      }
-    },
-    "Off" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Off"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "关闭"
-          }
-        }
-      }
-    },
-    "Profile default" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Profile default"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "配置默认"
-          }
-        }
-      }
-    },
-    "Ready" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Ready"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "就绪"
-          }
-        }
-      }
-    },
-    "Recent Bypass" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Recent Bypass"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "最近绕过"
-          }
-        }
-      }
-    },
-    "Recent Errors" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Recent Errors"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "最近错误"
-          }
-        }
-      }
-    },
-    "Repair DNS" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Repair DNS"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "修复 DNS"
-          }
-        }
-      }
-    },
-    "Reset Defaults" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Reset Defaults"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "重置默认值"
-          }
-        }
-      }
-    },
-    "Restore Failed" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Restore Failed"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "恢复失败"
-          }
-        }
-      }
-    },
-    "Restored" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Restored"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已恢复"
-          }
-        }
-      }
-    },
-    "Restoring" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Restoring"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "正在恢复"
-          }
-        }
-      }
-    },
-    "Route Exclude Address" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Route Exclude Address"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "路由排除地址"
-          }
-        }
-      }
-    },
-    "Running" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Running"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "运行中"
-          }
-        }
-      }
-    },
-    "Save" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Save"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "保存"
-          }
-        }
-      }
-    },
-    "SOCKS Fail" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "SOCKS Fail"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "SOCKS 失败"
-          }
-        }
-      }
-    },
-    "SOCKS Failures" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "SOCKS Failures"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "SOCKS 失败"
-          }
-        }
-      }
-    },
-    "Stack" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Stack"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "栈"
-          }
-        }
-      }
-    },
-    "Strict Route" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Strict Route"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "严格路由"
-          }
-        }
-      }
-    },
-    "System DNS" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "System DNS"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "系统 DNS"
-          }
-        }
-      }
-    },
-    "System DNS Override" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "System DNS Override"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "覆盖系统 DNS"
-          }
-        }
-      }
-    },
-    "System DNS Servers" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "System DNS Servers"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "系统 DNS 服务器"
-          }
-        }
-      }
-    },
-    "System Extension" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "System Extension"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "系统扩展"
-          }
-        }
-      }
-    },
-    "TCP" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "TCP"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "TCP"
-          }
-        }
-      }
-    },
-    "TCP %lld, UDP %lld, DNS captures %lld, DNS datagrams %lld, SOCKS failures %lld, DNS %@, system DNS %@." : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "TCP %lld, UDP %lld, DNS captures %lld, DNS datagrams %lld, SOCKS failures %lld, DNS %@, system DNS %@."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "TCP %lld，UDP %lld，DNS 捕获 %lld，DNS 数据报 %lld，SOCKS 失败 %lld，DNS %@，系统 DNS %@。"
-          }
-        }
-      }
-    },
-    "TCP Bridges" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "TCP Bridges"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "TCP 桥接"
-          }
-        }
-      }
-    },
-    "Transparent Proxy" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Transparent Proxy"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "透明代理"
-          }
-        }
-      }
-    },
-    "Transparent Proxy Status" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Transparent Proxy Status"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "透明代理状态"
-          }
-        }
-      }
-    },
-    "TUN Diagnostics" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "TUN Diagnostics"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "TUN 诊断"
-          }
-        }
-      }
-    },
-    "TUN Settings" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "TUN Settings"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "TUN 设置"
-          }
-        }
-      }
-    },
-    "TUN Stack" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "TUN Stack"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "TUN 栈"
-          }
-        }
-      }
-    },
-    "UDP" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "UDP"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "UDP"
-          }
-        }
-      }
-    },
-    "UDP Bridges" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "UDP Bridges"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "UDP 桥接"
-          }
-        }
-      }
-    },
-    "Untouched" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Untouched"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "未改动"
-          }
-        }
-      }
-    },
-    "Waiting" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Waiting"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "等待中"
-          }
-        }
-      }
-    },
-    "fake-ip" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "fake-ip"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "fake-ip"
-          }
-        }
-      }
-    },
-    "profile" : {
-      "localizations" : {
-        "base" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "profile"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "配置"
-          }
-        }
-      }
-    },
     "1 group" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1418,6 +362,74 @@
         }
       }
     },
+    "Applied" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Applied"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已应用"
+          }
+        }
+      }
+    },
+    "Applied (%lld)" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Applied (%lld)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已应用（%lld）"
+          }
+        }
+      }
+    },
+    "Apply Failed" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Apply Failed"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "应用失败"
+          }
+        }
+      }
+    },
+    "Applying" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Applying"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在应用"
+          }
+        }
+      }
+    },
     "Approve ClashMax in System Settings > General > Login Items & Extensions." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1431,6 +443,40 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "请在“系统设置 > 通用 > 登录项与扩展”中批准 ClashMax。"
+          }
+        }
+      }
+    },
+    "Auto Detect Interface" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Auto Detect Interface"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动检测接口"
+          }
+        }
+      }
+    },
+    "Auto Route" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Auto Route"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动路由"
           }
         }
       }
@@ -1482,6 +528,40 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "随 ClashMax 内置。更新 ClashMax 时会更新内置 Mihomo 核心。"
+          }
+        }
+      }
+    },
+    "Cancel" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Cancel"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消"
+          }
+        }
+      }
+    },
+    "Capture DNS" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Capture DNS"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "捕获 DNS"
           }
         }
       }
@@ -1709,6 +789,27 @@
         }
       }
     },
+    "Current System Proxy" : {
+      "comment" : "A label displayed above the current system proxy settings.",
+      "isCommentAutoGenerated" : true
+    },
+    "Custom CIDR Exclude" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Custom CIDR Exclude"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自定义 CIDR 排除"
+          }
+        }
+      }
+    },
     "Dark" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1793,6 +894,23 @@
         }
       }
     },
+    "Device" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Device"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "设备"
+          }
+        }
+      }
+    },
     "Direct" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1823,6 +941,108 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已停用"
+          }
+        }
+      }
+    },
+    "DNS Capture" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "DNS Capture"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DNS 捕获"
+          }
+        }
+      }
+    },
+    "DNS Hijack" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "DNS Hijack"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DNS 劫持"
+          }
+        }
+      }
+    },
+    "DNS Listen %lld" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "DNS Listen %lld"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DNS 监听 %lld"
+          }
+        }
+      }
+    },
+    "DNS Repair" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "DNS Repair"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DNS 修复"
+          }
+        }
+      }
+    },
+    "DNS Runtime" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "DNS Runtime"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DNS 运行时"
+          }
+        }
+      }
+    },
+    "DNS: %@" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "DNS: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DNS：%@"
           }
         }
       }
@@ -1858,6 +1078,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "编辑配置"
+          }
+        }
+      }
+    },
+    "Effective Exclude" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Effective Exclude"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "生效排除"
           }
         }
       }
@@ -1936,6 +1173,57 @@
         }
       }
     },
+    "Exclude" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Exclude"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "排除"
+          }
+        }
+      }
+    },
+    "Exclude LAN" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Exclude LAN"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "排除局域网"
+          }
+        }
+      }
+    },
+    "Excluded CIDR" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Excluded CIDR"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已排除 CIDR"
+          }
+        }
+      }
+    },
     "Expires" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1965,6 +1253,74 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "外部控制"
+          }
+        }
+      }
+    },
+    "Fake IP" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Fake IP"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fake IP"
+          }
+        }
+      }
+    },
+    "Fake IP DNS" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Fake IP DNS"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fake IP DNS"
+          }
+        }
+      }
+    },
+    "Fake IP Range" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Fake IP Range"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fake IP 范围"
+          }
+        }
+      }
+    },
+    "fake-ip" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "fake-ip"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "fake-ip"
           }
         }
       }
@@ -2034,6 +1390,40 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "全局"
+          }
+        }
+      }
+    },
+    "Helper" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Helper"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Helper"
+          }
+        }
+      }
+    },
+    "Helper Log" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Helper Log"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Helper 日志"
           }
         }
       }
@@ -2242,6 +1632,23 @@
         }
       }
     },
+    "Inactive" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Inactive"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未启用"
+          }
+        }
+      }
+    },
     "Info" : {
       "localizations" : {
         "base" : {
@@ -2288,6 +1695,57 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "语言"
+          }
+        }
+      }
+    },
+    "Last Bypass" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Last Bypass"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近绕过"
+          }
+        }
+      }
+    },
+    "Last Error" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Last Error"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近错误"
+          }
+        }
+      }
+    },
+    "Last Update" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Last Update"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近更新"
           }
         }
       }
@@ -2568,6 +2026,40 @@
         }
       }
     },
+    "NE Diagnostics" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "NE Diagnostics"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NE 诊断"
+          }
+        }
+      }
+    },
+    "NE Proxy" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "NE Proxy"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NE 代理"
+          }
+        }
+      }
+    },
     "No active connections" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2711,6 +2203,23 @@
         }
       }
     },
+    "Off" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Off"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭"
+          }
+        }
+      }
+    },
     "Open Language & Region" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2842,6 +2351,23 @@
         }
       }
     },
+    "profile" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "profile"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "配置"
+          }
+        }
+      }
+    },
     "Profile" : {
       "comment" : "A label displayed above the user's profile selection.",
       "isCommentAutoGenerated" : true,
@@ -2850,6 +2376,23 @@
           "stringUnit" : {
             "state" : "needs_review",
             "value" : "Profile"
+          }
+        }
+      }
+    },
+    "Profile default" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Profile default"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "配置默认"
           }
         }
       }
@@ -2968,6 +2511,57 @@
         }
       }
     },
+    "Ready" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ready"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "就绪"
+          }
+        }
+      }
+    },
+    "Recent Bypass" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Recent Bypass"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近绕过"
+          }
+        }
+      }
+    },
+    "Recent Errors" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Recent Errors"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近错误"
+          }
+        }
+      }
+    },
     "Refresh" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -3044,6 +2638,108 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "修复"
+          }
+        }
+      }
+    },
+    "Repair DNS" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Repair DNS"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "修复 DNS"
+          }
+        }
+      }
+    },
+    "Reset Defaults" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Reset Defaults"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重置默认值"
+          }
+        }
+      }
+    },
+    "Restore Failed" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Restore Failed"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "恢复失败"
+          }
+        }
+      }
+    },
+    "Restored" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Restored"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已恢复"
+          }
+        }
+      }
+    },
+    "Restoring" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Restoring"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在恢复"
+          }
+        }
+      }
+    },
+    "Route Exclude Address" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Route Exclude Address"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "路由排除地址"
           }
         }
       }
@@ -3133,6 +2829,23 @@
         }
       }
     },
+    "Running" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Running"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "运行中"
+          }
+        }
+      }
+    },
     "Runtime" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -3197,6 +2910,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "运行时覆盖项与系统集成控制。"
+          }
+        }
+      }
+    },
+    "Save" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Save"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存"
           }
         }
       }
@@ -3269,6 +2999,40 @@
         }
       }
     },
+    "SOCKS Fail" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "SOCKS Fail"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SOCKS 失败"
+          }
+        }
+      }
+    },
+    "SOCKS Failures" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "SOCKS Failures"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SOCKS 失败"
+          }
+        }
+      }
+    },
     "Sort" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -3320,6 +3084,23 @@
         }
       }
     },
+    "Stack" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Stack"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "栈"
+          }
+        }
+      }
+    },
     "Start" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -3367,6 +3148,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "状态"
+          }
+        }
+      }
+    },
+    "Strict Route" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Strict Route"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "严格路由"
           }
         }
       }
@@ -3439,6 +3237,74 @@
         }
       }
     },
+    "System DNS" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "System DNS"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "系统 DNS"
+          }
+        }
+      }
+    },
+    "System DNS Override" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "System DNS Override"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "覆盖系统 DNS"
+          }
+        }
+      }
+    },
+    "System DNS Servers" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "System DNS Servers"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "系统 DNS 服务器"
+          }
+        }
+      }
+    },
+    "System Extension" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "System Extension"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "系统扩展"
+          }
+        }
+      }
+    },
     "System Proxy" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -3473,6 +3339,91 @@
         }
       }
     },
+    "TCP" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "TCP"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TCP"
+          }
+        }
+      }
+    },
+    "TCP %lld, UDP %lld, DNS captures %lld, DNS datagrams %lld, SOCKS failures %lld, DNS %@, system DNS %@." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "TCP %lld, UDP %lld, DNS captures %lld, DNS datagrams %lld, SOCKS failures %lld, DNS %@, system DNS %@."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TCP %lld，UDP %lld，DNS 捕获 %lld，DNS 数据报 %lld，SOCKS 失败 %lld，DNS %@，系统 DNS %@。"
+          }
+        }
+      }
+    },
+    "TCP Bridges" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "TCP Bridges"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TCP 桥接"
+          }
+        }
+      }
+    },
+    "Transparent Proxy" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Transparent Proxy"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "透明代理"
+          }
+        }
+      }
+    },
+    "Transparent Proxy Status" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Transparent Proxy Status"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "透明代理状态"
+          }
+        }
+      }
+    },
     "TUN" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -3486,6 +3437,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "TUN"
+          }
+        }
+      }
+    },
+    "TUN Diagnostics" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "TUN Diagnostics"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TUN 诊断"
           }
         }
       }
@@ -3507,18 +3475,19 @@
         }
       }
     },
-    "TUN helper is registered." : {
+    "TUN helper is ready." : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "TUN helper is registered."
+            "value" : "TUN helper is ready."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "TUN helper 已注册。"
+            "value" : "TUN helper 已就绪。"
           }
         }
       }
@@ -3540,19 +3509,19 @@
         }
       }
     },
-    "TUN helper is ready." : {
+    "TUN helper is registered." : {
       "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "TUN helper is ready."
+            "value" : "TUN helper is registered."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "TUN helper 已就绪。"
+            "value" : "TUN helper 已注册。"
           }
         }
       }
@@ -3591,6 +3560,40 @@
         }
       }
     },
+    "TUN Settings" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "TUN Settings"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TUN 设置"
+          }
+        }
+      }
+    },
+    "TUN Stack" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "TUN Stack"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TUN 栈"
+          }
+        }
+      }
+    },
     "Type" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -3608,6 +3611,40 @@
         }
       }
     },
+    "UDP" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "UDP"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "UDP"
+          }
+        }
+      }
+    },
+    "UDP Bridges" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "UDP Bridges"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "UDP 桥接"
+          }
+        }
+      }
+    },
     "Unified Delay" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -3621,6 +3658,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "统一延迟"
+          }
+        }
+      }
+    },
+    "Untouched" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Untouched"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未改动"
           }
         }
       }
@@ -3706,6 +3760,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "用量"
+          }
+        }
+      }
+    },
+    "Waiting" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Waiting"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待中"
           }
         }
       }

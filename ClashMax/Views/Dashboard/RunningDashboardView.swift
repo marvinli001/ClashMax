@@ -562,13 +562,32 @@ private struct TunDiagnosticsRuntimeCard: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 14) {
-      DashboardSectionHeader(title: "TUN Diagnostics", symbolName: "point.topleft.down.curvedto.point.bottomright.up")
+      HStack(spacing: 10) {
+        DashboardSectionHeader(title: "TUN Diagnostics", symbolName: "point.topleft.down.curvedto.point.bottomright.up")
+        Spacer()
+        Button {
+          appModel.refreshTunDiagnostics()
+        } label: {
+          Image(systemName: "arrow.clockwise")
+        }
+        .buttonStyle(.borderless)
+        .help("Refresh TUN diagnostics")
+
+        Button {
+          appModel.repairTunDNS()
+        } label: {
+          Image(systemName: "wrench.and.screwdriver")
+        }
+        .buttonStyle(.borderless)
+        .disabled(!appModel.canRepairTunDNS)
+        .help("Repair TUN system DNS")
+      }
 
       HStack(spacing: 10) {
         RuntimeStat(title: "Helper", value: helperPIDText, tint: appModel.tunEnabled ? .green : .secondary)
         RuntimeStat(title: "Stack", value: appModel.tunSettings.stack.displayName, tint: .cyan)
+        RuntimeStat(title: "Checks", value: diagnosticCounterText, tint: diagnosticTint)
         RuntimeStat(title: "DNS", value: appModel.tunSettings.dnsFakeIPEnabled ? "Fake IP" : "Profile", tint: .orange)
-        RuntimeStat(title: "Exclude", value: "\(appModel.tunSettings.normalizedRouteExcludeAddresses.count)", tint: .indigo)
       }
 
       Divider()
@@ -581,6 +600,13 @@ private struct TunDiagnosticsRuntimeCard: View {
       RuntimeLine(title: "System DNS", value: appModel.tunSettings.systemDNSOverrideEnabled ? appModel.tunSystemDNSState.displayName : "Off")
       if let dnsError = appModel.tunSystemDNSState.errorMessage {
         RuntimeLine(title: "DNS Repair", value: dnsError)
+      }
+      RuntimeLine(title: "Last Check", value: lastUpdateText)
+      if let issue = appModel.tunDiagnostics.primaryIssue {
+        RuntimeLine(title: "Primary Issue", value: issue.message)
+      }
+      ForEach(Array(appModel.tunDiagnostics.checks.prefix(appModel.developerMode ? 8 : 4))) { check in
+        TunDiagnosticCheckRow(check: check)
       }
       if appModel.developerMode, let helperLog = appModel.helperLogs.last {
         RuntimeLine(title: "Helper Log", value: helperLog)
@@ -596,6 +622,83 @@ private struct TunDiagnosticsRuntimeCard: View {
       return appModel.tunEnabled ? "Running" : "Ready"
     }
     return "#\(pid)"
+  }
+
+  private var diagnosticCounterText: String {
+    let diagnostics = appModel.tunDiagnostics
+    guard !diagnostics.checks.isEmpty else { return "Waiting" }
+    return "\(diagnostics.passCount)/\(diagnostics.warnCount)/\(diagnostics.failCount)"
+  }
+
+  private var lastUpdateText: String {
+    let updatedAt = appModel.tunDiagnostics.updatedAt
+    return updatedAt == Date.distantPast ? "Waiting" : updatedAt.formatted(date: .omitted, time: .standard)
+  }
+
+  private var diagnosticTint: Color {
+    switch appModel.tunDiagnostics.overallStatus {
+    case .pass:
+      return .green
+    case .warn:
+      return .orange
+    case .fail:
+      return .red
+    case .skipped:
+      return .secondary
+    }
+  }
+}
+
+private struct TunDiagnosticCheckRow: View {
+  let check: TunDiagnosticCheck
+
+  var body: some View {
+    HStack(alignment: .firstTextBaseline, spacing: 10) {
+      Image(systemName: symbolName)
+        .font(.system(size: 11, weight: .semibold))
+        .foregroundStyle(tint)
+        .frame(width: 14)
+      VStack(alignment: .leading, spacing: 2) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+          Text(check.title)
+            .foregroundStyle(.primary)
+          Spacer(minLength: 8)
+          Text(check.status.displayName)
+            .foregroundStyle(tint)
+        }
+        Text(check.detail ?? check.message)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(2)
+      }
+    }
+    .font(.callout)
+  }
+
+  private var symbolName: String {
+    switch check.status {
+    case .pass:
+      return "checkmark.circle.fill"
+    case .warn:
+      return "exclamationmark.triangle.fill"
+    case .fail:
+      return "xmark.octagon.fill"
+    case .skipped:
+      return "minus.circle"
+    }
+  }
+
+  private var tint: Color {
+    switch check.status {
+    case .pass:
+      return .green
+    case .warn:
+      return .orange
+    case .fail:
+      return .red
+    case .skipped:
+      return .secondary
+    }
   }
 }
 

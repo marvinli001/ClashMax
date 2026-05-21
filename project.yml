@@ -3,6 +3,10 @@ options:
   bundleIdPrefix: io.github.clashmax
   developmentLanguage: en
   useBaseInternationalization: false
+  fileTypes:
+    icon:
+      file: true
+      buildPhase: resources
   deploymentTarget:
     macOS: "26.0"
 settings:
@@ -38,6 +42,12 @@ targets:
     sources:
       - path: Shared
       - path: ClashMax
+        excludes:
+          - AppIcon.icon
+          - AppIcon.icon/**
+      - path: ClashMax/AppIcon.icon
+        buildPhase: resources
+        type: file
       - path: Resources
         buildPhase: resources
         excludes:

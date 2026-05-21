@@ -725,6 +725,236 @@ enum TunStack: String, Codable, CaseIterable, Identifiable, Sendable {
   }
 }
 
+struct TunDNSSettings: Codable, Equatable, Sendable {
+  var fakeIPFilter: [String]
+  var nameserver: [String]
+  var fallback: [String]
+  var proxyServerNameserver: [String]
+  var directNameserver: [String]
+  var nameserverPolicy: [String: String]
+  var hosts: [String: String]
+
+  private enum CodingKeys: String, CodingKey {
+    case fakeIPFilter
+    case nameserver
+    case fallback
+    case proxyServerNameserver
+    case directNameserver
+    case nameserverPolicy
+    case hosts
+  }
+
+  init(
+    fakeIPFilter: [String] = [],
+    nameserver: [String] = [],
+    fallback: [String] = [],
+    proxyServerNameserver: [String] = [],
+    directNameserver: [String] = [],
+    nameserverPolicy: [String: String] = [:],
+    hosts: [String: String] = [:]
+  ) {
+    self.fakeIPFilter = Self.normalizedList(fakeIPFilter)
+    self.nameserver = Self.normalizedList(nameserver)
+    self.fallback = Self.normalizedList(fallback)
+    self.proxyServerNameserver = Self.normalizedList(proxyServerNameserver)
+    self.directNameserver = Self.normalizedList(directNameserver)
+    self.nameserverPolicy = Self.normalizedMap(nameserverPolicy)
+    self.hosts = Self.normalizedMap(hosts)
+  }
+
+  static let `default` = TunDNSSettings()
+
+  var hasRuntimeOverlay: Bool {
+    !fakeIPFilter.isEmpty
+      || !nameserver.isEmpty
+      || !fallback.isEmpty
+      || !proxyServerNameserver.isEmpty
+      || !directNameserver.isEmpty
+      || !nameserverPolicy.isEmpty
+      || !hosts.isEmpty
+  }
+
+  var validationError: String? {
+    if let invalid = fakeIPFilter.first(where: { !Self.isValidPattern($0) }) {
+      return "Invalid TUN fake-ip filter: \(invalid)"
+    }
+    for (title, values) in [
+      ("nameserver", nameserver),
+      ("fallback", fallback),
+      ("proxy-server-nameserver", proxyServerNameserver),
+      ("direct-nameserver", directNameserver)
+    ] {
+      if let invalid = values.first(where: { !Self.isValidResolver($0) }) {
+        return "Invalid TUN DNS \(title): \(invalid)"
+      }
+    }
+    if let invalid = nameserverPolicy.first(where: { !Self.isValidPattern($0.key) || !Self.isValidResolver($0.value) }) {
+      return "Invalid TUN nameserver policy: \(invalid.key)=\(invalid.value)"
+    }
+    if let invalid = hosts.first(where: { !Self.isValidPattern($0.key) || !Self.isValidHostValue($0.value) }) {
+      return "Invalid TUN host entry: \(invalid.key)=\(invalid.value)"
+    }
+    return nil
+  }
+
+  static func normalizedList(_ values: [String]) -> [String] {
+    var seen = Set<String>()
+    return values.compactMap { value in
+      let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty else { return nil }
+      let key = trimmed.lowercased()
+      guard !seen.contains(key) else { return nil }
+      seen.insert(key)
+      return trimmed
+    }
+  }
+
+  static func normalizedMap(_ values: [String: String]) -> [String: String] {
+    values.reduce(into: [:]) { result, entry in
+      let key = entry.key.trimmingCharacters(in: .whitespacesAndNewlines)
+      let value = entry.value.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !key.isEmpty, !value.isEmpty else { return }
+      result[key] = value
+    }
+  }
+
+  static func isValidResolver(_ value: String) -> Bool {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty, trimmed.count <= 512, !trimmed.contains(where: \.isWhitespace) else {
+      return false
+    }
+    let normalized = trimmed.lowercased()
+    if normalized == "system" || normalized == "system://" {
+      return true
+    }
+    if NetworkExtensionRoutingSettings.isValidDNSServer(trimmed) {
+      return true
+    }
+    if normalized.hasPrefix("rcode://") {
+      return isValidRCodeResolver(trimmed)
+    }
+
+    guard let schemeSeparator = normalized.range(of: "://") else {
+      return false
+    }
+    let scheme = String(normalized[..<schemeSeparator.lowerBound])
+    guard ["udp", "tcp", "tls", "https", "quic", "dhcp"].contains(scheme),
+          hasValidResolverAuthorityPort(trimmed),
+          let components = URLComponents(string: trimmed),
+          components.scheme?.lowercased() == scheme
+    else {
+      return false
+    }
+
+    switch scheme {
+    case "udp", "tcp", "tls", "quic":
+      return isValidResolverHost(components.host)
+        && components.path.isEmpty
+        && components.query == nil
+    case "https":
+      return isValidResolverHost(components.host)
+        && !components.path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    case "dhcp":
+      return isValidResolverToken(components.host)
+        && components.path.isEmpty
+        && components.query == nil
+    default:
+      return false
+    }
+  }
+
+  static func isValidPattern(_ value: String) -> Bool {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty, trimmed.count <= 253, !trimmed.contains(where: \.isWhitespace) else {
+      return false
+    }
+    return true
+  }
+
+  static func isValidHostValue(_ value: String) -> Bool {
+    isValidResolver(value)
+  }
+
+  private static func isValidResolverHost(_ value: String?) -> Bool {
+    guard let value else { return false }
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty, trimmed.count <= 253 else { return false }
+    if NetworkExtensionRoutingSettings.isValidDNSServer(trimmed) {
+      return true
+    }
+    if isInvalidIPv4Literal(trimmed) {
+      return false
+    }
+    if trimmed.range(of: #"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$"#, options: .regularExpression) != nil {
+      return true
+    }
+    return false
+  }
+
+  private static func isInvalidIPv4Literal(_ value: String) -> Bool {
+    let parts = value.split(separator: ".", omittingEmptySubsequences: false)
+    guard parts.count == 4 else { return false }
+    return parts.allSatisfy { part in
+      !part.isEmpty && part.allSatisfy(\.isNumber)
+    }
+  }
+
+  private static func isValidResolverToken(_ value: String?) -> Bool {
+    guard let value else { return false }
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return !trimmed.isEmpty
+      && trimmed.count <= 64
+      && trimmed.range(of: #"^[A-Za-z0-9_.-]+$"#, options: .regularExpression) != nil
+  }
+
+  private static func isValidRCodeResolver(_ value: String) -> Bool {
+    let code = value.dropFirst("rcode://".count).lowercased()
+    return [
+      "success",
+      "format_error",
+      "server_failure",
+      "name_error",
+      "not_implemented",
+      "refused"
+    ].contains(String(code))
+  }
+
+  private static func hasValidResolverAuthorityPort(_ value: String) -> Bool {
+    guard let separator = value.range(of: "://") else { return false }
+    let remainder = value[separator.upperBound...]
+    let authorityEnd = remainder.firstIndex { character in
+      character == "/" || character == "?" || character == "#"
+    } ?? remainder.endIndex
+    let authority = remainder[..<authorityEnd]
+    guard !authority.isEmpty, !authority.contains("@") else { return false }
+
+    if authority.first == "[" {
+      guard let closingBracket = authority.firstIndex(of: "]") else { return false }
+      let afterHost = authority[authority.index(after: closingBracket)...]
+      guard afterHost.isEmpty || afterHost.first == ":" else { return false }
+      if afterHost.isEmpty { return true }
+      return isValidResolverPort(String(afterHost.dropFirst()))
+    }
+
+    let colonCount = authority.reduce(into: 0) { count, character in
+      if character == ":" { count += 1 }
+    }
+    guard colonCount <= 1 else { return false }
+    if colonCount == 1 {
+      guard let colon = authority.lastIndex(of: ":") else { return false }
+      return isValidResolverPort(String(authority[authority.index(after: colon)...]))
+    }
+    return true
+  }
+
+  private static func isValidResolverPort(_ value: String) -> Bool {
+    guard let port = Int(value), (1...65_535).contains(port) else {
+      return false
+    }
+    return true
+  }
+}
+
 struct TunSettings: Codable, Equatable, Sendable {
   static let defaultDevice = "utun1024"
   static let defaultDNSHijack = ["any:53"]
@@ -744,6 +974,7 @@ struct TunSettings: Codable, Equatable, Sendable {
   var fakeIPRange: String
   var systemDNSOverrideEnabled: Bool
   var systemDNSServers: [String]
+  var dns: TunDNSSettings
 
   private enum CodingKeys: String, CodingKey {
     case stack
@@ -758,6 +989,7 @@ struct TunSettings: Codable, Equatable, Sendable {
     case fakeIPRange
     case systemDNSOverrideEnabled
     case systemDNSServers
+    case dns
   }
 
   init(
@@ -772,7 +1004,8 @@ struct TunSettings: Codable, Equatable, Sendable {
     dnsFakeIPEnabled: Bool = true,
     fakeIPRange: String = Self.defaultFakeIPRange,
     systemDNSOverrideEnabled: Bool = true,
-    systemDNSServers: [String] = Self.defaultSystemDNSServers
+    systemDNSServers: [String] = Self.defaultSystemDNSServers,
+    dns: TunDNSSettings = .default
   ) {
     self.stack = stack
     self.device = device
@@ -786,6 +1019,7 @@ struct TunSettings: Codable, Equatable, Sendable {
     self.fakeIPRange = fakeIPRange.trimmingCharacters(in: .whitespacesAndNewlines)
     self.systemDNSOverrideEnabled = systemDNSOverrideEnabled
     self.systemDNSServers = NetworkExtensionRoutingSettings.normalizedDNSServerInputs(systemDNSServers)
+    self.dns = dns
   }
 
   static let `default` = TunSettings(
@@ -800,7 +1034,8 @@ struct TunSettings: Codable, Equatable, Sendable {
     dnsFakeIPEnabled: true,
     fakeIPRange: defaultFakeIPRange,
     systemDNSOverrideEnabled: true,
-    systemDNSServers: defaultSystemDNSServers
+    systemDNSServers: defaultSystemDNSServers,
+    dns: .default
   )
 
   init(from decoder: Decoder) throws {
@@ -838,6 +1073,11 @@ struct TunSettings: Codable, Equatable, Sendable {
         [String].self,
         forKey: .systemDNSServers,
         default: defaults.systemDNSServers
+      ),
+      dns: container.decodeDefault(
+        TunDNSSettings.self,
+        forKey: .dns,
+        default: defaults.dns
       )
     )
   }
@@ -876,6 +1116,9 @@ struct TunSettings: Codable, Equatable, Sendable {
     }
     if systemDNSOverrideEnabled, let invalid = systemDNSServers.first(where: { !NetworkExtensionRoutingSettings.isValidDNSServer($0) }) {
       return "Invalid TUN system DNS server: \(invalid)"
+    }
+    if let dnsValidationError = dns.validationError {
+      return dnsValidationError
     }
     if let invalid = routeExcludeAddresses.first(where: { !Self.isValidRouteExcludeCIDR($0) }) {
       return "Invalid TUN route exclude CIDR: \(invalid)"

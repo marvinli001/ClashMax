@@ -31,6 +31,111 @@ final class TunnelHelperClientTests: XCTestCase {
     XCTAssertEqual(HelperXPCPayload.logLines(from: HelperXPCPayload.logs(["one", "two"])), ["one", "two"])
   }
 
+  func testHelperResponseClassifiesUserFacingFailureCodes() {
+    let invalidPath = HelperClientResponse(payload: HelperXPCPayload.response(
+      ok: false,
+      code: HelperResponseCode.invalidPath,
+      message: "bad path"
+    ))
+    let untrustedSignature = HelperClientResponse(payload: HelperXPCPayload.response(
+      ok: false,
+      code: HelperResponseCode.untrustedSignature,
+      message: "bad signature"
+    ))
+    let launchFailed = HelperClientResponse(payload: HelperXPCPayload.response(
+      ok: false,
+      code: HelperResponseCode.launchFailed,
+      message: "spawn failed"
+    ))
+
+    XCTAssertTrue(invalidPath.userFacingMessage.contains("unsafe core, config, or workdir path"))
+    XCTAssertTrue(untrustedSignature.userFacingMessage.contains("rejected the app or core signature"))
+    XCTAssertTrue(launchFailed.userFacingMessage.contains("spawn failed"))
+  }
+
+  func testStructuredStatusReportsBootstrappedEnabledHelper() async throws {
+    let service = FakeHelperService(status: .enabled)
+    let transport = FakeHelperTransport(statusResponse: HelperClientResponse(payload: HelperXPCPayload.response(
+      ok: true,
+      running: true,
+      pid: 456
+    )))
+    let client = TunnelHelperClient(
+      transport: transport,
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "current"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "current")
+    )
+
+    let detail = await client.statusDetail()
+
+    XCTAssertEqual(detail.serviceStatus, .enabled)
+    XCTAssertTrue(detail.registered)
+    XCTAssertTrue(detail.enabled)
+    XCTAssertFalse(detail.requiresApproval)
+    XCTAssertTrue(detail.bootstrapped)
+    XCTAssertTrue(detail.fingerprintRecorded)
+    XCTAssertEqual(detail.fingerprintMatches, true)
+    XCTAssertTrue(detail.xpcReachable)
+    XCTAssertTrue(detail.running)
+    XCTAssertEqual(detail.pid, 456)
+  }
+
+  func testStructuredStatusReportsFingerprintMismatchAndXPCFailure() async throws {
+    let service = FakeHelperService(status: .enabled)
+    let transport = FakeHelperTransport(statusError: AppError.helperResponse("xpc unavailable"))
+    let client = TunnelHelperClient(
+      transport: transport,
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "current"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "stale")
+    )
+
+    let detail = await client.statusDetail()
+
+    XCTAssertEqual(detail.serviceStatus, .enabled)
+    XCTAssertTrue(detail.registered)
+    XCTAssertTrue(detail.enabled)
+    XCTAssertFalse(detail.bootstrapped)
+    XCTAssertEqual(detail.fingerprintMatches, false)
+    XCTAssertFalse(detail.xpcReachable)
+    XCTAssertTrue(detail.message.contains("XPC is unreachable"))
+  }
+
+  func testUnregisterClearsStoredFingerprintAndServiceRegistration() async throws {
+    let service = FakeHelperService(status: .enabled)
+    let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: "current")
+    let client = TunnelHelperClient(
+      transport: FakeHelperTransport(),
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "current"),
+      registrationRecordStore: recordStore
+    )
+
+    try await client.unregister()
+
+    XCTAssertEqual(service.unregisterCount, 1)
+    XCTAssertEqual(service.status, .notRegistered)
+    XCTAssertNil(recordStore.storedFingerprint)
+  }
+
+  func testResetRegistrationStateClearsFingerprintWithoutUnregisteringService() {
+    let service = FakeHelperService(status: .enabled)
+    let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: "current")
+    let client = TunnelHelperClient(
+      transport: FakeHelperTransport(),
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "current"),
+      registrationRecordStore: recordStore
+    )
+
+    client.resetRegistrationState()
+
+    XCTAssertEqual(service.unregisterCount, 0)
+    XCTAssertEqual(service.status, .enabled)
+    XCTAssertNil(recordStore.storedFingerprint)
+  }
+
   func testEnabledRegistrationIsReportedAsNotBootstrappedWhenXPCStatusFails() async throws {
     let service = FakeHelperService(status: .enabled)
     let transport = FakeHelperTransport(statusError: AppError.helperResponse("lookup failed"))

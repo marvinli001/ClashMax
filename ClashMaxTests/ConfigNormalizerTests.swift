@@ -136,6 +136,98 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertNil(tun["auto-redirect"])
   }
 
+  func testRuntimeConfigMergesTunDNSOverlayWithoutMutatingSourceProfileFields() throws {
+    let source = """
+    proxies:
+      - name: DIRECT
+        type: direct
+    dns:
+      enable: false
+      fake-ip-filter:
+        - "*.corp"
+      nameserver:
+        - 8.8.8.8
+      hosts:
+        router.lan: 192.168.1.1
+    tun:
+      enable: false
+      auto-redirect: true
+    """
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.tunEnabled = true
+    overrides.tunSettings = TunSettings(
+      stack: .mixed,
+      device: "utun1024",
+      autoRoute: true,
+      strictRoute: false,
+      autoDetectInterface: true,
+      dnsHijack: ["any:53"],
+      mtu: 1500,
+      routeExcludeAddresses: [],
+      dns: TunDNSSettings(
+        fakeIPFilter: ["*.corp", "*.lan"],
+        nameserver: ["8.8.8.8", "https://dns.example/dns-query"],
+        fallback: ["1.1.1.1"],
+        proxyServerNameserver: ["9.9.9.9"],
+        directNameserver: ["223.5.5.5"],
+        nameserverPolicy: ["+.corp": "system"],
+        hosts: ["internal.test": "10.0.0.2"]
+      )
+    )
+
+    let output = try ConfigNormalizer().runtimeConfig(from: source, overrides: overrides)
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let dns = try XCTUnwrap(yaml["dns"] as? [String: Any])
+    let tun = try XCTUnwrap(yaml["tun"] as? [String: Any])
+
+    XCTAssertEqual(dns["enable"] as? Bool, true)
+    XCTAssertEqual(dns["enhanced-mode"] as? String, "fake-ip")
+    XCTAssertEqual(dns["fake-ip-range"] as? String, "198.18.0.1/16")
+    XCTAssertEqual(dns["fake-ip-filter"] as? [String], ["*.corp", "*.lan"])
+    XCTAssertEqual(dns["nameserver"] as? [String], ["8.8.8.8", "https://dns.example/dns-query"])
+    XCTAssertEqual(dns["fallback"] as? [String], ["1.1.1.1"])
+    XCTAssertEqual(dns["proxy-server-nameserver"] as? [String], ["9.9.9.9"])
+    XCTAssertEqual(dns["direct-nameserver"] as? [String], ["223.5.5.5"])
+    XCTAssertEqual((dns["nameserver-policy"] as? [String: String])?["+.corp"], "system")
+    XCTAssertEqual((dns["hosts"] as? [String: String])?["router.lan"], "192.168.1.1")
+    XCTAssertEqual((dns["hosts"] as? [String: String])?["internal.test"], "10.0.0.2")
+    XCTAssertNil(tun["auto-redirect"])
+  }
+
+  func testRuntimeConfigCanApplyTunDNSOverlayWithoutFakeIP() throws {
+    let source = """
+    proxies:
+      - name: DIRECT
+        type: direct
+    dns:
+      enable: false
+      enhanced-mode: redir-host
+    """
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.tunEnabled = true
+    overrides.tunSettings = TunSettings(
+      stack: .mixed,
+      device: "utun1024",
+      autoRoute: true,
+      strictRoute: false,
+      autoDetectInterface: true,
+      dnsHijack: ["any:53"],
+      mtu: 1500,
+      routeExcludeAddresses: [],
+      dnsFakeIPEnabled: false,
+      dns: TunDNSSettings(nameserver: ["1.1.1.1"])
+    )
+
+    let output = try ConfigNormalizer().runtimeConfig(from: source, overrides: overrides)
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let dns = try XCTUnwrap(yaml["dns"] as? [String: Any])
+
+    XCTAssertEqual(dns["enable"] as? Bool, true)
+    XCTAssertEqual(dns["enhanced-mode"] as? String, "redir-host")
+    XCTAssertNil(dns["fake-ip-range"])
+    XCTAssertEqual(dns["nameserver"] as? [String], ["1.1.1.1"])
+  }
+
   func testRuntimeConfigRejectsInvalidTunRouteExcludeCIDRs() throws {
     let source = """
     proxies:
@@ -165,6 +257,77 @@ final class ConfigNormalizerTests: XCTestCase {
 
     XCTAssertThrowsError(try ConfigNormalizer().runtimeConfig(from: "proxies:\n  - name: DIRECT\n    type: direct", overrides: overrides)) { error in
       XCTAssertTrue(String(describing: error).contains("Invalid TUN route exclude CIDR: 192.168.0.0/33"))
+    }
+  }
+
+  func testRuntimeConfigRejectsInvalidTunDNSOverlay() throws {
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.tunEnabled = true
+    overrides.tunSettings = TunSettings(
+      stack: .mixed,
+      device: "utun1024",
+      autoRoute: true,
+      strictRoute: false,
+      autoDetectInterface: true,
+      dnsHijack: ["any:53"],
+      mtu: 1500,
+      routeExcludeAddresses: [],
+      dns: TunDNSSettings(nameserver: ["bad resolver"])
+    )
+
+    XCTAssertThrowsError(try ConfigNormalizer().runtimeConfig(from: "proxies:\n  - name: DIRECT\n    type: direct", overrides: overrides)) { error in
+      XCTAssertTrue(String(describing: error).contains("Invalid TUN DNS nameserver: bad resolver"))
+    }
+
+    overrides.tunSettings = TunSettings(
+      stack: .mixed,
+      device: "utun1024",
+      autoRoute: true,
+      strictRoute: false,
+      autoDetectInterface: true,
+      dnsHijack: ["any:53"],
+      mtu: 1500,
+      routeExcludeAddresses: [],
+      dns: TunDNSSettings(
+        nameserver: ["999.1.1.1"],
+        fallback: ["ftp://dns.example/query"]
+      )
+    )
+
+    XCTAssertThrowsError(try ConfigNormalizer().runtimeConfig(from: "proxies:\n  - name: DIRECT\n    type: direct", overrides: overrides)) { error in
+      XCTAssertTrue(String(describing: error).contains("Invalid TUN DNS nameserver: 999.1.1.1"))
+    }
+
+    overrides.tunSettings = TunSettings(
+      stack: .mixed,
+      device: "utun1024",
+      autoRoute: true,
+      strictRoute: false,
+      autoDetectInterface: true,
+      dnsHijack: ["any:53"],
+      mtu: 1500,
+      routeExcludeAddresses: [],
+      dns: TunDNSSettings(nameserver: ["https://999.1.1.1/dns-query"])
+    )
+
+    XCTAssertThrowsError(try ConfigNormalizer().runtimeConfig(from: "proxies:\n  - name: DIRECT\n    type: direct", overrides: overrides)) { error in
+      XCTAssertTrue(String(describing: error).contains("Invalid TUN DNS nameserver: https://999.1.1.1/dns-query"))
+    }
+
+    overrides.tunSettings = TunSettings(
+      stack: .mixed,
+      device: "utun1024",
+      autoRoute: true,
+      strictRoute: false,
+      autoDetectInterface: true,
+      dnsHijack: ["any:53"],
+      mtu: 1500,
+      routeExcludeAddresses: [],
+      dns: TunDNSSettings(fallback: ["ftp://dns.example/query"])
+    )
+
+    XCTAssertThrowsError(try ConfigNormalizer().runtimeConfig(from: "proxies:\n  - name: DIRECT\n    type: direct", overrides: overrides)) { error in
+      XCTAssertTrue(String(describing: error).contains("Invalid TUN DNS fallback: ftp://dns.example/query"))
     }
   }
 

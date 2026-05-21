@@ -97,6 +97,12 @@ struct ConfigNormalizer {
         dns["enable"] = true
         dns["enhanced-mode"] = "fake-ip"
         dns["fake-ip-range"] = settings.normalizedFakeIPRange
+        applyTunDNSOverlay(settings.dns, to: &dns)
+        root["dns"] = dns
+      } else if settings.dns.hasRuntimeOverlay {
+        var dns = root["dns"] as? [String: Any] ?? [:]
+        dns["enable"] = true
+        applyTunDNSOverlay(settings.dns, to: &dns)
         root["dns"] = dns
       }
       tun["stack"] = settings.stack.rawValue
@@ -137,6 +143,52 @@ struct ConfigNormalizer {
     }
 
     return try Yams.dump(object: root, sortKeys: false)
+  }
+
+  private func applyTunDNSOverlay(_ overlay: TunDNSSettings, to dns: inout [String: Any]) {
+    if !overlay.fakeIPFilter.isEmpty {
+      dns["fake-ip-filter"] = mergedStringList(existing: dns["fake-ip-filter"], overlay: overlay.fakeIPFilter)
+    }
+    if !overlay.nameserver.isEmpty {
+      dns["nameserver"] = mergedStringList(existing: dns["nameserver"], overlay: overlay.nameserver)
+    }
+    if !overlay.fallback.isEmpty {
+      dns["fallback"] = mergedStringList(existing: dns["fallback"], overlay: overlay.fallback)
+    }
+    if !overlay.proxyServerNameserver.isEmpty {
+      dns["proxy-server-nameserver"] = mergedStringList(
+        existing: dns["proxy-server-nameserver"],
+        overlay: overlay.proxyServerNameserver
+      )
+    }
+    if !overlay.directNameserver.isEmpty {
+      dns["direct-nameserver"] = mergedStringList(existing: dns["direct-nameserver"], overlay: overlay.directNameserver)
+    }
+    if !overlay.nameserverPolicy.isEmpty {
+      dns["nameserver-policy"] = mergedStringMap(existing: dns["nameserver-policy"], overlay: overlay.nameserverPolicy)
+    }
+    if !overlay.hosts.isEmpty {
+      dns["hosts"] = mergedStringMap(existing: dns["hosts"], overlay: overlay.hosts)
+    }
+  }
+
+  private func mergedStringList(existing: Any?, overlay: [String]) -> [String] {
+    TunDNSSettings.normalizedList(normalizedStringList(from: existing) + overlay)
+  }
+
+  private func mergedStringMap(existing: Any?, overlay: [String: String]) -> [String: String] {
+    var merged: [String: String]
+    if let existingMap = existing as? [String: String] {
+      merged = TunDNSSettings.normalizedMap(existingMap)
+    } else if let existingMap = existing as? [String: Any] {
+      merged = TunDNSSettings.normalizedMap(existingMap.compactMapValues { $0 as? String })
+    } else {
+      merged = [:]
+    }
+    for entry in TunDNSSettings.normalizedMap(overlay) {
+      merged[entry.key] = entry.value
+    }
+    return merged
   }
 
   private func proxyNames(in group: [String: Any]) -> Set<String> {

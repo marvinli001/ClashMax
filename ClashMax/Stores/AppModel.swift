@@ -83,7 +83,7 @@ private enum LastErrorOrigin {
   case networkExtension
 }
 
-enum SystemDNSOverrideState: Equatable {
+enum SystemDNSOverrideState: Equatable, Sendable {
   case inactive
   case applying
   case applied(serviceCount: Int)
@@ -229,10 +229,18 @@ final class AppModel: ObservableObject {
       || networkExtensionController.vpnStatus.isActive
       || systemProxyController.hasManagedSystemDNSState
   }
+  var canRepairTunDNS: Bool {
+    runtimeOwner == .tunnel
+      || tunEnabled
+      || tunnelCoreRunning
+      || systemProxyController.hasManagedSystemDNSState
+  }
   @Published var tunnelCoreRunning = false
   @Published private(set) var networkExtensionSystemDNSState: SystemDNSOverrideState = .inactive
   @Published private(set) var tunSystemDNSState: SystemDNSOverrideState = .inactive
+  @Published private(set) var tunDiagnostics: TunDiagnosticsSnapshot = .empty
   @Published private(set) var tunHelperPreparationState: TunHelperPreparationState = .idle
+  @Published private(set) var tunHelperStatusDetail: TunnelHelperStatusDetail = .unknown
   var isAddingSubscription: Bool { profileOperations.isAddingSubscription }
   @Published private(set) var startInFlight = false
   @Published private(set) var sessionStartedAt: Date?
@@ -310,6 +318,7 @@ final class AppModel: ObservableObject {
   let networkExtensionController: NetworkExtensionController
   private let tunnelReadinessProbe: CoreReadinessProbing
   private let proxyPortReadinessProbe: any ProxyPortReadinessProbing
+  private let tunRuntimeInspector: any TunRuntimeInspecting
   private let pingTester: any PingTesting
   private let paths: RuntimePaths
   private let runtimeConfigMaterializer = RuntimeConfigMaterializer()
@@ -341,6 +350,7 @@ final class AppModel: ObservableObject {
   private var runtimeReloadPending = false
   private var streamTasks: [Task<Void, Never>] = []
   private var networkExtensionDiagnosticsTask: Task<Void, Never>?
+  private var tunDiagnosticsTask: Task<Void, Never>?
   private var publishedNetworkExtensionDiagnosticEventIDs: Set<String> = []
   private var storeCancellables: Set<AnyCancellable> = []
   static let publicIPRefreshInterval: TimeInterval = 300
@@ -379,6 +389,7 @@ final class AppModel: ObservableObject {
     loginItemService: any LoginItemManaging = MainAppLoginItemService(),
     tunnelReadinessProbe: CoreReadinessProbing = MihomoCoreReadinessProbe(),
     proxyPortReadinessProbe: any ProxyPortReadinessProbing = SocksProxyReadinessProbe(),
+    tunRuntimeInspector: any TunRuntimeInspecting = TunRuntimeInspector(),
     apiClient: (any MihomoAPIControlling)? = nil,
     pingTester: any PingTesting = SystemPingTester(),
     publicIPInfoClient: any PublicIPInfoFetching = PublicIPInfoClient(),
@@ -393,6 +404,7 @@ final class AppModel: ObservableObject {
     self.networkExtensionController = networkExtensionController
     self.tunnelReadinessProbe = tunnelReadinessProbe
     self.proxyPortReadinessProbe = proxyPortReadinessProbe
+    self.tunRuntimeInspector = tunRuntimeInspector
     self.pingTester = pingTester
     self.publicIP = PublicIPCoordinator(
       client: publicIPInfoClient,
@@ -885,6 +897,7 @@ final class AppModel: ObservableObject {
     )
     systemProxyEnabled = false
     tunEnabled = false
+    stopTunDiagnostics(clear: true)
     let runtimeConfig = try await generateRuntimeConfig(
       for: profile,
       selections: previewSelections,
@@ -913,7 +926,7 @@ final class AppModel: ObservableObject {
       )
       try Task.checkCancellation()
       if !response.ok {
-        throw AppError.helperResponse(response.message.isEmpty ? "Helper failed to start TUN." : response.message)
+        throw AppError.helperResponse(response.userFacingMessage)
       }
       guard response.running else {
         throw AppError.helperResponse("Helper reported success but TUN is not running.")
@@ -939,6 +952,7 @@ final class AppModel: ObservableObject {
       tunnelCoreRunning = true
       tunEnabled = true
       runtimeOwner = .tunnel
+      refreshTunDiagnostics(includeExternal: true)
       let coreStopResult = await coreController.stop()
       if let error = coreStopResult.error {
         throw error
@@ -1132,6 +1146,7 @@ final class AppModel: ObservableObject {
     Task { @MainActor [weak self] in
       guard let self else { return }
       let state = await helperClient.warmRegistration()
+      await updateTunHelperStatusDetail()
       switch state {
       case .registered, .ready:
         if tunHelperPreparationState == .idle || tunHelperPreparationState == .checking {
@@ -1154,6 +1169,7 @@ final class AppModel: ObservableObject {
       guard let self else { return }
       let state = await helperClient.currentPreparationState()
       applyTunHelperPreparationState(state)
+      await updateTunHelperStatusDetail()
     }
   }
 
@@ -1166,6 +1182,7 @@ final class AppModel: ObservableObject {
         tunHelperPreparationState = .checking
         lastError = nil
         try await helperClient.repairRegistration()
+        await updateTunHelperStatusDetail()
         guard proxyRoutingMode == .tun else {
           cancelTunHelperPreparation(resetState: true)
           return
@@ -1181,8 +1198,48 @@ final class AppModel: ObservableObject {
     }
   }
 
+  func unregisterHelper() {
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      do {
+        tunHelperPreparationTask?.cancel()
+        tunHelperPreparationTask = nil
+        tunHelperPreparationState = .checking
+        lastError = nil
+        try await helperClient.unregister()
+        tunHelperPID = nil
+        if !tunEnabled && !tunnelCoreRunning {
+          tunHelperPreparationState = .idle
+        }
+        await updateTunHelperStatusDetail()
+      } catch {
+        let message = UserFacingError.message(for: error)
+        helperClient.statusMessage = message
+        tunHelperPreparationState = .failed(message)
+        lastError = message
+        await updateTunHelperStatusDetail()
+      }
+    }
+  }
+
+  func resetHelperState() {
+    helperClient.resetRegistrationState()
+    if !tunEnabled && !tunnelCoreRunning {
+      tunHelperPreparationState = .idle
+    }
+    tunHelperStatusDetail = .unknown
+    refreshHelperRegistrationStatus()
+  }
+
   func openHelperApprovalSettings() {
     helperClient.openApprovalSettings()
+  }
+
+  @discardableResult
+  private func updateTunHelperStatusDetail() async -> TunnelHelperStatusDetail {
+    let detail = await helperClient.statusDetail()
+    tunHelperStatusDetail = detail
+    return detail
   }
 
   func installNetworkExtension() {
@@ -1247,6 +1304,7 @@ final class AppModel: ObservableObject {
         openSystemSettingsWhenApprovalRequired: openSystemSettings
       )
       let finalState = await applyAndPollTunHelperPreparation(firstState)
+      await updateTunHelperStatusDetail()
       tunHelperPreparationTask = nil
       if finalState.isReady, restartWhenReady, proxyRoutingMode == .tun {
         restart()
@@ -1261,6 +1319,7 @@ final class AppModel: ObservableObject {
     lastError = nil
     let state = await helperClient.prepareForTunnelStart(openSystemSettingsWhenApprovalRequired: true)
     applyTunHelperPreparationState(state)
+    await updateTunHelperStatusDetail()
     if state.shouldPollForApproval {
       prepareTunHelperIfNeeded(openSystemSettings: false, force: true)
     }
@@ -1431,6 +1490,74 @@ final class AppModel: ObservableObject {
     publicIP.refresh(isCoreRunning: isCoreRunning, force: force, now: now)
   }
 
+  func refreshTunDiagnostics(includeExternal: Bool = true) {
+    tunDiagnosticsTask?.cancel()
+    guard runtimeOwner == .tunnel || tunEnabled || tunnelCoreRunning else {
+      tunDiagnostics = .empty
+      tunDiagnosticsTask = nil
+      return
+    }
+
+    let api = overrides.endpoint
+    let settings = tunSettings
+    let dnsState = tunSystemDNSState
+    let helperClient = helperClient
+    let inspector = tunRuntimeInspector
+    tunDiagnosticsTask = Task { @MainActor [weak self] in
+      let helperStatus = await self?.liveTunHelperStatus(using: helperClient)
+        ?? (pid: Optional<Int>.none, message: Optional<String>.none)
+      guard !Task.isCancelled else { return }
+      self?.tunHelperPID = helperStatus.pid
+      let configuration = TunRuntimeInspectionConfiguration(
+        api: api,
+        tunSettings: settings,
+        helperPID: helperStatus.pid,
+        helperStatusMessage: helperStatus.message,
+        systemDNSState: dnsState,
+        includeExternal: includeExternal
+      )
+      let snapshot = await inspector.inspect(configuration)
+      guard !Task.isCancelled, let self else { return }
+      tunDiagnostics = snapshot
+      tunDiagnosticsTask = nil
+    }
+  }
+
+  private func liveTunHelperStatus(using helperClient: TunnelHelperClient) async -> (pid: Int?, message: String?) {
+    do {
+      let response = try await withTimeout(seconds: 2.5) { @Sendable [helperClient] in
+        try await helperClient.status()
+      }
+      let pid = response.running && response.pid > 0 ? response.pid : nil
+      if let pid {
+        return (pid, nil)
+      }
+      if response.ok {
+        return (nil, "Helper responded but did not report a running Mihomo process.")
+      }
+      let message = response.userFacingMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+      return (
+        nil,
+        message.isEmpty
+          ? "Helper responded but did not report a running Mihomo process."
+          : message
+      )
+    } catch {
+      return (
+        nil,
+        "Helper status probe failed: \(UserFacingError.message(for: error))"
+      )
+    }
+  }
+
+  private func stopTunDiagnostics(clear: Bool) {
+    tunDiagnosticsTask?.cancel()
+    tunDiagnosticsTask = nil
+    if clear {
+      tunDiagnostics = .empty
+    }
+  }
+
   func refreshHelperStatus() {
     Task { @MainActor [weak self] in
       guard let self else { return }
@@ -1443,11 +1570,13 @@ final class AppModel: ObservableObject {
           await helperClient.currentPreparationState()
         }
         self.applyTunHelperPreparationState(state)
+        await self.updateTunHelperStatusDetail()
       } catch is OperationTimedOutError {
         let message = TunnelHelperClient.notBootstrappedMessage
         self.helperClient.statusMessage = message
         self.tunHelperPreparationState = .notBootstrapped(message)
         self.lastError = message
+        await self.updateTunHelperStatusDetail()
         if self.developerMode {
           self.helperLogs = await self.helperLaunchdDiagnostics()
         }
@@ -1456,6 +1585,7 @@ final class AppModel: ObservableObject {
         self.helperClient.statusMessage = message
         self.tunHelperPreparationState = .notBootstrapped(message)
         self.lastError = message
+        await self.updateTunHelperStatusDetail()
         if self.developerMode {
           self.helperLogs = await self.helperLaunchdDiagnostics()
         }
@@ -1471,11 +1601,13 @@ final class AppModel: ObservableObject {
           try await helperClient.recentLogs()
         }
         self.helperLogs = lines
+        await self.updateTunHelperStatusDetail()
       } catch is OperationTimedOutError {
         let message = TunnelHelperClient.notBootstrappedMessage
         self.helperClient.statusMessage = message
         self.helperLogs = await self.helperLaunchdDiagnostics()
         self.lastError = message
+        await self.updateTunHelperStatusDetail()
       } catch {
         let message = UserFacingError.message(for: error)
         self.helperClient.statusMessage = message
@@ -1483,6 +1615,7 @@ final class AppModel: ObservableObject {
           self.helperLogs = await self.helperLaunchdDiagnostics()
         }
         self.lastError = message
+        await self.updateTunHelperStatusDetail()
       }
     }
   }
@@ -1829,10 +1962,13 @@ final class AppModel: ObservableObject {
     }
   }
 
-  private func applyTunSystemDNS(_ settings: TunSettings) async throws {
+  private func applyTunSystemDNS(_ settings: TunSettings, restoreOnFailure: Bool = true) async throws {
     setTunSystemDNSState(.applying)
     do {
-      let result = try await systemProxyController.applyDNS(servers: settings.effectiveSystemDNSServers)
+      let result = try await systemProxyController.applyDNS(
+        servers: settings.effectiveSystemDNSServers,
+        restoreOnFailure: restoreOnFailure
+      )
       setTunSystemDNSState(.applied(serviceCount: result.appliedServiceCount))
       appendAppLog(
         level: "info",
@@ -1911,6 +2047,31 @@ final class AppModel: ObservableObject {
         lastError = nil
       } catch {
         lastError = "Could not repair Network Extension DNS settings: \(UserFacingError.message(for: error))"
+      }
+    }
+  }
+
+  func repairTunDNS() {
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      do {
+        if runtimeOwner == .tunnel || tunEnabled || tunnelCoreRunning {
+          if tunSettings.systemDNSOverrideEnabled {
+            try await applyTunSystemDNS(tunSettings, restoreOnFailure: false)
+          } else if systemProxyController.hasManagedSystemDNSState {
+            _ = try await restoreTunSystemDNS()
+          } else {
+            setTunSystemDNSState(.inactive)
+          }
+        } else if systemProxyController.hasManagedSystemDNSState {
+          _ = try await restoreTunSystemDNS()
+        } else {
+          setTunSystemDNSState(.inactive)
+        }
+        refreshTunDiagnostics(includeExternal: false)
+        lastError = nil
+      } catch {
+        lastError = "Could not repair TUN DNS settings: \(UserFacingError.message(for: error))"
       }
     }
   }
@@ -2144,6 +2305,7 @@ final class AppModel: ObservableObject {
     cancelPendingPreviewRuntimeStart()
     guard previewRuntimeActive else { return result }
     cancelRuntimeActionTasks()
+    stopTunDiagnostics(clear: true)
     runtimeData.flushPendingLogs()
     let networkExtensionStopResult = await stopNetworkExtensionIfNeeded()
     if let error = networkExtensionStopResult.transparentProxyStopError {
@@ -2318,6 +2480,7 @@ final class AppModel: ObservableObject {
   private func stopRuntime(purpose: RuntimeStopPurpose) async -> RuntimeStopResult {
     var result = RuntimeStopResult()
     cancelRuntimeActionTasks()
+    stopTunDiagnostics(clear: true)
     runtimeData.flushPendingLogs()
     let networkExtensionStopResult = await stopNetworkExtensionIfNeeded()
     result.networkExtensionDNSRestoreError = networkExtensionStopResult.dnsRestoreError
@@ -2367,6 +2530,7 @@ final class AppModel: ObservableObject {
     }
     tunHelperPID = nil
     tunnelCoreRunning = false
+    await updateTunHelperStatusDetail()
     sessionStartedAt = nil
     previewRuntimeActive = false
     runtimeOwner = .stopped

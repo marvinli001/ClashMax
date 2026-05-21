@@ -134,6 +134,85 @@ struct HelperClientResponse: Sendable {
     self.code = code
     self.message = message
   }
+
+  var userFacingMessage: String {
+    let fallback = message.isEmpty ? "Helper returned an empty error response." : message
+    switch code {
+    case HelperResponseCode.alreadyRunning:
+      return pid > 0
+        ? "TUN helper reports Mihomo is already running as PID \(pid). Stop TUN and retry."
+        : "TUN helper reports Mihomo is already running. Stop TUN and retry."
+    case HelperResponseCode.invalidPath:
+      return "TUN helper rejected an unsafe core, config, or workdir path. Move ClashMax to a trusted app location and retry."
+    case HelperResponseCode.untrustedSignature:
+      return "TUN helper rejected the app or core signature. Reinstall a signed ClashMax build, then click Repair Helper."
+    case HelperResponseCode.launchFailed:
+      return "TUN helper could not launch Mihomo: \(fallback)"
+    default:
+      return fallback
+    }
+  }
+}
+
+enum TunnelHelperServiceStatus: String, Equatable, Sendable {
+  case notRegistered
+  case enabled
+  case requiresApproval
+  case notFound
+  case unknown
+
+  init(_ status: SMAppService.Status) {
+    switch status {
+    case .notRegistered:
+      self = .notRegistered
+    case .enabled:
+      self = .enabled
+    case .requiresApproval:
+      self = .requiresApproval
+    case .notFound:
+      self = .notFound
+    @unknown default:
+      self = .unknown
+    }
+  }
+
+  var displayName: String {
+    switch self {
+    case .notRegistered: "Not Registered"
+    case .enabled: "Enabled"
+    case .requiresApproval: "Requires Approval"
+    case .notFound: "Not Found"
+    case .unknown: "Unknown"
+    }
+  }
+}
+
+struct TunnelHelperStatusDetail: Equatable, Sendable {
+  var serviceStatus: TunnelHelperServiceStatus
+  var registered: Bool
+  var enabled: Bool
+  var requiresApproval: Bool
+  var bootstrapped: Bool
+  var fingerprintRecorded: Bool
+  var fingerprintMatches: Bool?
+  var xpcReachable: Bool
+  var running: Bool
+  var pid: Int?
+  var message: String
+
+  static let unknown = TunnelHelperStatusDetail(
+    serviceStatus: .unknown,
+    registered: false,
+    enabled: false,
+    requiresApproval: false,
+    bootstrapped: false,
+    fingerprintRecorded: false,
+    fingerprintMatches: nil,
+    xpcReachable: false,
+    running: false,
+    pid: nil,
+    message: String(localized: "Helper status has not been checked.")
+  )
 }
 
 @MainActor
@@ -240,6 +319,78 @@ final class TunnelHelperClient: ObservableObject {
 
   func repairRegistration() async throws {
     try await repairRegistration(fingerprint: fingerprintProvider.currentFingerprint())
+  }
+
+  func unregister() async throws {
+    try await service.unregister()
+    registrationRecordStore.setHelperFingerprint(nil)
+    automaticBootstrapRepairFingerprint = nil
+    statusMessage = Self.statusMessage(for: service.status)
+  }
+
+  func resetRegistrationState() {
+    registrationRecordStore.setHelperFingerprint(nil)
+    automaticBootstrapRepairFingerprint = nil
+    statusMessage = Self.statusMessage(for: service.status)
+  }
+
+  func statusDetail() async -> TunnelHelperStatusDetail {
+    let serviceStatus = TunnelHelperServiceStatus(service.status)
+    let storedFingerprint = registrationRecordStore.helperFingerprint()
+    let currentFingerprint = try? fingerprintProvider.currentFingerprint()
+    let fingerprintMatches = currentFingerprint.map { storedFingerprint == $0 }
+    let baseMessage = Self.statusMessage(for: service.status)
+
+    guard service.status == .enabled else {
+      return TunnelHelperStatusDetail(
+        serviceStatus: serviceStatus,
+        registered: serviceStatus == .requiresApproval,
+        enabled: false,
+        requiresApproval: serviceStatus == .requiresApproval,
+        bootstrapped: false,
+        fingerprintRecorded: storedFingerprint != nil,
+        fingerprintMatches: fingerprintMatches,
+        xpcReachable: false,
+        running: false,
+        pid: nil,
+        message: baseMessage
+      )
+    }
+
+    do {
+      let response = try await statusWithTimeout()
+      let isRunning = response.running || response.pid > 0
+      let message = response.ok
+        ? Self.bootstrappedMessage
+        : response.userFacingMessage
+      return TunnelHelperStatusDetail(
+        serviceStatus: serviceStatus,
+        registered: true,
+        enabled: true,
+        requiresApproval: false,
+        bootstrapped: response.ok,
+        fingerprintRecorded: storedFingerprint != nil,
+        fingerprintMatches: fingerprintMatches,
+        xpcReachable: true,
+        running: isRunning,
+        pid: response.pid > 0 ? response.pid : nil,
+        message: message
+      )
+    } catch {
+      return TunnelHelperStatusDetail(
+        serviceStatus: serviceStatus,
+        registered: true,
+        enabled: true,
+        requiresApproval: false,
+        bootstrapped: false,
+        fingerprintRecorded: storedFingerprint != nil,
+        fingerprintMatches: fingerprintMatches,
+        xpcReachable: false,
+        running: false,
+        pid: nil,
+        message: "TUN helper XPC is unreachable: \(UserFacingError.message(for: error))"
+      )
+    }
   }
 
   func refreshRegistrationStatus() async {

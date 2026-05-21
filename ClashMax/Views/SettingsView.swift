@@ -181,6 +181,11 @@ struct SettingsView: View {
               appModel.refreshHelperRegistrationStatus()
             }
 
+            HelperStatusDetailView(
+              detail: appModel.tunHelperStatusDetail,
+              logCount: appModel.helperLogs.count
+            )
+
             if settings.developerMode {
               Text("LaunchDaemon approval is managed by macOS. Registering may open System Settings instead of showing an app permission sheet.")
                 .font(.caption)
@@ -278,6 +283,10 @@ struct SettingsView: View {
     appModel.tunHelperPreparationState == .checking
   }
 
+  private var isTunnelActive: Bool {
+    appModel.tunEnabled || appModel.tunnelCoreRunning
+  }
+
   private var helperBusyIndicator: some View {
     Group {
       if isHelperBusy {
@@ -297,6 +306,8 @@ struct SettingsView: View {
       helperStatusButton
       if settings.developerMode {
         helperLogsButton
+        helperUnregisterButton
+        helperResetStateButton
       }
     }
   }
@@ -313,6 +324,12 @@ struct SettingsView: View {
         helperStatusButton
         if settings.developerMode {
           helperLogsButton
+        }
+      }
+      if settings.developerMode {
+        HStack(spacing: 8) {
+          helperUnregisterButton
+          helperResetStateButton
         }
       }
     }
@@ -360,6 +377,26 @@ struct SettingsView: View {
     } label: {
       Label("Logs", systemImage: "text.alignleft")
     }
+  }
+
+  private var helperUnregisterButton: some View {
+    Button {
+      appModel.unregisterHelper()
+    } label: {
+      Label("Unregister", systemImage: "xmark.shield")
+    }
+    .disabled(isHelperBusy || isTunnelActive)
+    .help("Unregister the privileged TUN helper.")
+  }
+
+  private var helperResetStateButton: some View {
+    Button {
+      appModel.resetHelperState()
+    } label: {
+      Label("Reset State", systemImage: "arrow.counterclockwise")
+    }
+    .disabled(isHelperBusy || isTunnelActive)
+    .help("Forget the recorded helper fingerprint without unregistering the LaunchDaemon.")
   }
 
   private var networkExtensionActionButtons: some View {
@@ -448,6 +485,65 @@ struct SettingsView: View {
       }
       .disabled(!appModel.canRepairNetworkExtensionDNS)
     }
+  }
+}
+
+private struct HelperStatusDetailView: View {
+  let detail: TunnelHelperStatusDetail
+  let logCount: Int
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      helperStatusRow("Registered", value: detail.registered ? "Yes" : "No", positive: detail.registered)
+      helperStatusRow("Enabled", value: detail.enabled ? "Yes" : "No", positive: detail.enabled)
+      helperStatusRow("Approval", value: detail.requiresApproval ? "Required" : "Clear", positive: !detail.requiresApproval)
+      helperStatusRow("Bootstrapped", value: detail.bootstrapped ? "Yes" : "No", positive: detail.bootstrapped)
+      helperStatusRow("Fingerprint", value: fingerprintText, positive: detail.fingerprintMatches == true)
+      helperStatusRow("XPC", value: detail.xpcReachable ? "Reachable" : "Unreachable", positive: detail.xpcReachable)
+      helperStatusRow("Running", value: runningText, positive: detail.running)
+      helperStatusRow("Recent Logs", value: logCount > 0 ? "\(logCount)" : "Empty", positive: logCount > 0)
+      Text(detail.message)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .lineLimit(3)
+    }
+    .padding(.horizontal, 10)
+    .padding(.vertical, 9)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+  }
+
+  private var fingerprintText: String {
+    guard detail.fingerprintRecorded else {
+      return "Not Recorded"
+    }
+    switch detail.fingerprintMatches {
+    case true:
+      return "Match"
+    case false:
+      return "Mismatch"
+    case nil:
+      return "Unknown"
+    }
+  }
+
+  private var runningText: String {
+    if let pid = detail.pid {
+      return "PID \(pid)"
+    }
+    return detail.running ? "Yes" : "No"
+  }
+
+  private func helperStatusRow(_ title: String, value: String, positive: Bool) -> some View {
+    HStack(alignment: .firstTextBaseline, spacing: 12) {
+      Text(LocalizedStringKey(title))
+        .foregroundStyle(.secondary)
+      Spacer()
+      Text(LocalizedStringKey(value))
+        .foregroundStyle(positive ? Color.green : Color.secondary)
+        .multilineTextAlignment(.trailing)
+    }
+    .font(.callout)
   }
 }
 

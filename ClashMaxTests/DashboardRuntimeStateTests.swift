@@ -550,6 +550,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(model.tunSettings.fakeIPRange, "198.18.0.1/16")
     XCTAssertTrue(model.tunSettings.systemDNSOverrideEnabled)
     XCTAssertEqual(model.tunSettings.effectiveSystemDNSServers, ["114.114.114.114"])
+    XCTAssertEqual(model.tunSettings.dns, .default)
     XCTAssertEqual(model.overrides.tunSettings, model.tunSettings)
   }
 
@@ -620,6 +621,24 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     XCTAssertFalse(model.updateTunSettings(settings))
     XCTAssertEqual(model.lastError, "Invalid TUN system DNS server: not-a-dns-server")
+
+    settings = .default
+    settings.dns = TunDNSSettings(nameserver: ["bad resolver"])
+
+    XCTAssertFalse(model.updateTunSettings(settings))
+    XCTAssertEqual(model.lastError, "Invalid TUN DNS nameserver: bad resolver")
+
+    settings = .default
+    settings.dns = TunDNSSettings(nameserver: ["999.1.1.1"])
+
+    XCTAssertFalse(model.updateTunSettings(settings))
+    XCTAssertEqual(model.lastError, "Invalid TUN DNS nameserver: 999.1.1.1")
+
+    settings = .default
+    settings.dns = TunDNSSettings(nameserver: ["https://999.1.1.1/dns-query"])
+
+    XCTAssertFalse(model.updateTunSettings(settings))
+    XCTAssertEqual(model.lastError, "Invalid TUN DNS nameserver: https://999.1.1.1/dns-query")
   }
 
   func testExternalControllerSettingsMigratesMissingCORSFromUserDefaults() throws {
@@ -882,7 +901,16 @@ final class DashboardRuntimeStateTests: XCTestCase {
         autoDetectInterface: false,
         dnsHijack: ["any:53"],
         mtu: 1400,
-        routeExcludeAddresses: ["10.0.0.0/8"]
+        routeExcludeAddresses: ["10.0.0.0/8"],
+        dns: TunDNSSettings(
+          fakeIPFilter: ["*.lan"],
+          nameserver: ["223.5.5.5"],
+          fallback: ["https://dns.google/dns-query"],
+          proxyServerNameserver: ["119.29.29.29"],
+          directNameserver: ["114.114.114.114"],
+          nameserverPolicy: ["geosite:cn": "223.5.5.5"],
+          hosts: ["router.lan": "192.168.1.1"]
+        )
       )
     )
     try assertRoundTrip(
@@ -3777,6 +3805,316 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setdnsservers Wi-Fi Empty"))
   }
 
+  func testTunStartPublishesDiagnosticsAfterSystemDNSApply() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let helper = TunnelHelperClient(
+      transport: ReadyTunnelHelperTransport(),
+      service: StaticHelperService(status: .enabled),
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
+    )
+    let snapshot = Self.tunDiagnosticsSnapshot(
+      checks: [
+        TunDiagnosticCheck(id: "controller", title: "Controller", status: .pass, message: "ready"),
+        TunDiagnosticCheck(id: "system-dns", title: "System DNS", status: .pass, message: "applied")
+      ],
+      includeExternal: true,
+      time: 1
+    )
+    let inspector = RecordingTunRuntimeInspector(snapshots: [snapshot])
+    let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      systemProxyController: SystemProxyController(commandRunner: commandRunner),
+      helperClient: helper,
+      tunnelReadinessProbe: RecordingCoreReadinessProbe(),
+      tunRuntimeInspector: inspector,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.requestProxyRoutingMode(.tun)
+    for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
+      await Task.yield()
+    }
+
+    model.start()
+
+    for _ in 0..<160 where model.tunDiagnostics.checks.isEmpty && model.lastError == nil {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertTrue(model.isRunning)
+    XCTAssertEqual(model.tunDiagnostics, snapshot)
+    let configurations = await inspector.configurations()
+    XCTAssertEqual(configurations.count, 1)
+    XCTAssertEqual(configurations.first?.helperPID, 99)
+    XCTAssertEqual(configurations.first?.systemDNSState, .applied(serviceCount: 1))
+    XCTAssertEqual(configurations.first?.includeExternal, true)
+  }
+
+  func testTunDiagnosticFailureDoesNotUndoRunningTunnel() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let helper = TunnelHelperClient(
+      transport: ReadyTunnelHelperTransport(),
+      service: StaticHelperService(status: .enabled),
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
+    )
+    let snapshot = Self.tunDiagnosticsSnapshot(
+      checks: [
+        TunDiagnosticCheck(
+          id: "interface",
+          title: "TUN Interface",
+          status: .fail,
+          message: "No utun interface was found."
+        )
+      ],
+      includeExternal: true,
+      time: 2
+    )
+    let inspector = RecordingTunRuntimeInspector(snapshots: [snapshot])
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      helperClient: helper,
+      tunnelReadinessProbe: RecordingCoreReadinessProbe(),
+      tunRuntimeInspector: inspector,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.requestProxyRoutingMode(.tun)
+    for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
+      await Task.yield()
+    }
+
+    model.start()
+
+    for _ in 0..<160 where model.tunDiagnostics.checks.isEmpty && model.lastError == nil {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertTrue(model.isRunning)
+    XCTAssertTrue(model.tunEnabled)
+    XCTAssertNil(model.lastError)
+    XCTAssertEqual(model.tunDiagnostics.overallStatus, .fail)
+  }
+
+  func testTunDiagnosticsManualRefreshUsesRequestedExternalProbeFlag() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let helper = TunnelHelperClient(
+      transport: ReadyTunnelHelperTransport(),
+      service: StaticHelperService(status: .enabled),
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
+    )
+    let first = Self.tunDiagnosticsSnapshot(
+      checks: [TunDiagnosticCheck(id: "controller", title: "Controller", status: .pass, message: "ready")],
+      includeExternal: true,
+      time: 3
+    )
+    let second = Self.tunDiagnosticsSnapshot(
+      checks: [TunDiagnosticCheck(id: "external-tcp", title: "External TCP", status: .skipped, message: "skipped")],
+      includeExternal: false,
+      time: 4
+    )
+    let inspector = RecordingTunRuntimeInspector(snapshots: [first, second])
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      helperClient: helper,
+      tunnelReadinessProbe: RecordingCoreReadinessProbe(),
+      tunRuntimeInspector: inspector,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.requestProxyRoutingMode(.tun)
+    for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
+      await Task.yield()
+    }
+    model.start()
+    for _ in 0..<160 where model.tunDiagnostics.updatedAt != first.updatedAt && model.lastError == nil {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    model.refreshTunDiagnostics(includeExternal: false)
+    for _ in 0..<160 where model.tunDiagnostics.updatedAt != second.updatedAt {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(model.tunDiagnostics, second)
+    let configurations = await inspector.configurations()
+    XCTAssertEqual(configurations.map(\.includeExternal), [true, false])
+  }
+
+  func testTunDiagnosticsRefreshUsesLiveHelperStatusInsteadOfCachedStartupPID() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let helper = TunnelHelperClient(
+      transport: StoppedStatusAfterStartTunnelHelperTransport(),
+      service: StaticHelperService(status: .enabled),
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
+    )
+    let snapshot = Self.tunDiagnosticsSnapshot(
+      checks: [TunDiagnosticCheck(id: "helper-pid", title: "Helper PID", status: .fail, message: "stopped")],
+      includeExternal: false,
+      time: 41
+    )
+    let inspector = RecordingTunRuntimeInspector(snapshots: [snapshot])
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      helperClient: helper,
+      tunnelReadinessProbe: RecordingCoreReadinessProbe(),
+      tunRuntimeInspector: inspector,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.requestProxyRoutingMode(.tun)
+    for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
+      await Task.yield()
+    }
+    model.start()
+
+    for _ in 0..<160 where model.tunDiagnostics.updatedAt != snapshot.updatedAt && model.lastError == nil {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertTrue(model.isRunning)
+    XCTAssertNil(model.tunHelperPID)
+    let configurations = await inspector.configurations()
+    XCTAssertEqual(configurations.first?.helperPID, nil)
+  }
+
+  func testRepairTunDNSReappliesOverrideAndRefreshesDiagnostics() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let helper = TunnelHelperClient(
+      transport: ReadyTunnelHelperTransport(),
+      service: StaticHelperService(status: .enabled),
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
+    )
+    let first = Self.tunDiagnosticsSnapshot(
+      checks: [TunDiagnosticCheck(id: "system-dns", title: "System DNS", status: .pass, message: "applied")],
+      includeExternal: true,
+      time: 5
+    )
+    let repaired = Self.tunDiagnosticsSnapshot(
+      checks: [TunDiagnosticCheck(id: "system-dns", title: "System DNS", status: .pass, message: "repaired")],
+      includeExternal: false,
+      time: 6
+    )
+    let inspector = RecordingTunRuntimeInspector(snapshots: [first, repaired])
+    let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      systemProxyController: SystemProxyController(commandRunner: commandRunner),
+      helperClient: helper,
+      tunnelReadinessProbe: RecordingCoreReadinessProbe(),
+      tunRuntimeInspector: inspector,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.requestProxyRoutingMode(.tun)
+    for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
+      await Task.yield()
+    }
+    model.start()
+    for _ in 0..<160 where model.tunDiagnostics.updatedAt != first.updatedAt && model.lastError == nil {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let applyCommand = "/usr/sbin/networksetup -setdnsservers Wi-Fi 114.114.114.114"
+    let initialApplyCount = commandRunner.commands.filter { $0 == applyCommand }.count
+    model.repairTunDNS()
+
+    for _ in 0..<160 where commandRunner.commands.filter({ $0 == applyCommand }).count <= initialApplyCount
+      || model.tunDiagnostics.updatedAt != repaired.updatedAt {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(model.tunSystemDNSState, .applied(serviceCount: 1))
+    XCTAssertNil(model.lastError)
+    XCTAssertEqual(model.tunDiagnostics, repaired)
+    let configurations = await inspector.configurations()
+    XCTAssertEqual(configurations.last?.includeExternal, false)
+  }
+
+  func testTunTerminationRestoresSystemDNSAndClearsDiagnostics() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let helperTransport = ReadyTunnelHelperTransport()
+    let helper = TunnelHelperClient(
+      transport: helperTransport,
+      service: StaticHelperService(status: .enabled),
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
+    )
+    let snapshot = Self.tunDiagnosticsSnapshot(
+      checks: [TunDiagnosticCheck(id: "controller", title: "Controller", status: .pass, message: "ready")],
+      includeExternal: true,
+      time: 7
+    )
+    let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      systemProxyController: SystemProxyController(commandRunner: commandRunner),
+      helperClient: helper,
+      tunnelReadinessProbe: RecordingCoreReadinessProbe(),
+      tunRuntimeInspector: RecordingTunRuntimeInspector(snapshots: [snapshot]),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.requestProxyRoutingMode(.tun)
+    for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
+      await Task.yield()
+    }
+    model.start()
+    for _ in 0..<160 where model.tunDiagnostics.updatedAt != snapshot.updatedAt && model.lastError == nil {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let didCleanUp = await model.prepareForTermination()
+    let stopCount = await helperTransport.stopCount()
+
+    XCTAssertTrue(didCleanUp)
+    XCTAssertEqual(stopCount, 1)
+    XCTAssertFalse(model.isRunning)
+    XCTAssertEqual(model.tunSystemDNSState, .restored)
+    XCTAssertEqual(model.tunDiagnostics.checks, [])
+    XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setdnsservers Wi-Fi Empty"))
+  }
+
   func testSelectingProfileWhileRunningRestartsRuntimeWithNewProfile() async throws {
     let paths = try Self.makeRuntimePaths()
     let firstConfigURL = paths.appSupport.appendingPathComponent("first.yaml")
@@ -4359,6 +4697,18 @@ final class DashboardRuntimeStateTests: XCTestCase {
     try JSONEncoder().encode(snapshot).write(to: url)
   }
 
+  private static func tunDiagnosticsSnapshot(
+    checks: [TunDiagnosticCheck],
+    includeExternal: Bool,
+    time: TimeInterval
+  ) -> TunDiagnosticsSnapshot {
+    TunDiagnosticsSnapshot(
+      checks: checks,
+      updatedAt: Date(timeIntervalSince1970: time),
+      externalProbeIncluded: includeExternal
+    )
+  }
+
   private static func makeRuntimePaths() throws -> RuntimePaths {
     let root = FileManager.default.temporaryDirectory
       .appendingPathComponent("ClashMaxDashboardTests-\(UUID().uuidString)", isDirectory: true)
@@ -4872,7 +5222,7 @@ private actor ReadyTunnelHelperTransport: HelperXPCTransport {
   private var stops = 0
 
   func status() async throws -> HelperClientResponse {
-    HelperClientResponse(payload: HelperXPCPayload.response(ok: true, running: false))
+    HelperClientResponse(payload: HelperXPCPayload.response(ok: true, running: starts > stops, pid: starts > stops ? 99 : 0))
   }
 
   func startTunnel(coreURL: URL, configURL: URL, workDirectory: URL, secret: String) async throws -> HelperClientResponse {
@@ -4898,6 +5248,28 @@ private actor ReadyTunnelHelperTransport: HelperXPCTransport {
   func stopCount() -> Int { stops }
 }
 
+private actor StoppedStatusAfterStartTunnelHelperTransport: HelperXPCTransport {
+  func status() async throws -> HelperClientResponse {
+    HelperClientResponse(payload: HelperXPCPayload.response(ok: true, running: false))
+  }
+
+  func startTunnel(coreURL: URL, configURL: URL, workDirectory: URL, secret: String) async throws -> HelperClientResponse {
+    HelperClientResponse(payload: HelperXPCPayload.response(ok: true, running: true, pid: 99))
+  }
+
+  func stopTunnel() async throws -> HelperClientResponse {
+    HelperClientResponse(payload: HelperXPCPayload.response(ok: true, running: false))
+  }
+
+  func restartTunnel(coreURL: URL, configURL: URL, workDirectory: URL, secret: String) async throws -> HelperClientResponse {
+    try await startTunnel(coreURL: coreURL, configURL: configURL, workDirectory: workDirectory, secret: secret)
+  }
+
+  func recentLogs() async throws -> [String] {
+    []
+  }
+}
+
 private actor FailingStatusTunnelHelperTransport: HelperXPCTransport {
   func status() async throws -> HelperClientResponse {
     throw AppError.helperResponse("lookup failed")
@@ -4917,6 +5289,30 @@ private actor FailingStatusTunnelHelperTransport: HelperXPCTransport {
 
   func recentLogs() async throws -> [String] {
     []
+  }
+}
+
+private actor RecordingTunRuntimeInspector: TunRuntimeInspecting {
+  private var snapshots: [TunDiagnosticsSnapshot]
+  private var fallbackSnapshot: TunDiagnosticsSnapshot = .empty
+  private var requests: [TunRuntimeInspectionConfiguration] = []
+
+  init(snapshots: [TunDiagnosticsSnapshot]) {
+    self.snapshots = snapshots
+  }
+
+  func inspect(_ configuration: TunRuntimeInspectionConfiguration) async -> TunDiagnosticsSnapshot {
+    requests.append(configuration)
+    guard !snapshots.isEmpty else {
+      return fallbackSnapshot
+    }
+    let snapshot = snapshots.removeFirst()
+    fallbackSnapshot = snapshot
+    return snapshot
+  }
+
+  func configurations() -> [TunRuntimeInspectionConfiguration] {
+    requests
   }
 }
 
