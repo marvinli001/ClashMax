@@ -62,6 +62,7 @@ The interface stays restrained, compact, and easy to scan. The first screen is t
 - The Mihomo controller listens on `127.0.0.1` by default.
 - A new controller secret is generated for every launch, and Bearer authentication is used for control API access.
 - TUN mode is handled by a privileged helper, and the helper validates app-owned core/config paths.
+- MVP core policy is intentionally single-channel: only the app-owned bundled Mihomo core is supported. Future core channels must add a manifest, signature/hash verification, helper allowlisting, UI state, and rollback first.
 - macOS TUN runtime config does not write Linux-only `auto-redirect`.
 
 ## Downloads And Updates

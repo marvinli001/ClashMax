@@ -11,6 +11,13 @@ struct SettingsView: View {
     self.bundledCoreInfo = bundledCoreInfo
   }
 
+  private var latestHelperExitSummary: String? {
+    appModel.helperLogs.reversed().first { line in
+      line.localizedCaseInsensitiveContains("mihomo exited with code")
+        || line.localizedCaseInsensitiveContains("last exit code")
+    }
+  }
+
   var body: some View {
     AdaptivePage(
       title: "Settings",
@@ -183,7 +190,8 @@ struct SettingsView: View {
 
             HelperStatusDetailView(
               detail: appModel.tunHelperStatusDetail,
-              logCount: appModel.helperLogs.count
+              logCount: appModel.helperLogs.count,
+              latestExitSummary: latestHelperExitSummary
             )
 
             if settings.developerMode {
@@ -491,6 +499,7 @@ struct SettingsView: View {
 private struct HelperStatusDetailView: View {
   let detail: TunnelHelperStatusDetail
   let logCount: Int
+  let latestExitSummary: String?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -502,6 +511,9 @@ private struct HelperStatusDetailView: View {
       helperStatusRow("XPC", value: detail.xpcReachable ? "Reachable" : "Unreachable", positive: detail.xpcReachable)
       helperStatusRow("Running", value: runningText, positive: detail.running)
       helperStatusRow("Recent Logs", value: logCount > 0 ? "\(logCount)" : "Empty", positive: logCount > 0)
+      if let latestExitSummary {
+        helperStatusRow("Last Exit", value: latestExitSummary, positive: false)
+      }
       Text(detail.message)
         .font(.caption)
         .foregroundStyle(.secondary)

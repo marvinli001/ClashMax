@@ -762,7 +762,49 @@ struct TunDNSSettings: Codable, Equatable, Sendable {
     self.hosts = Self.normalizedMap(hosts)
   }
 
-  static let `default` = TunDNSSettings()
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    self.init(
+      fakeIPFilter: container.decodeDefault([String].self, forKey: .fakeIPFilter, default: []),
+      nameserver: container.decodeDefault([String].self, forKey: .nameserver, default: []),
+      fallback: container.decodeDefault([String].self, forKey: .fallback, default: []),
+      proxyServerNameserver: container.decodeDefault([String].self, forKey: .proxyServerNameserver, default: []),
+      directNameserver: container.decodeDefault([String].self, forKey: .directNameserver, default: []),
+      nameserverPolicy: container.decodeDefault([String: String].self, forKey: .nameserverPolicy, default: [:]),
+      hosts: container.decodeDefault([String: String].self, forKey: .hosts, default: [:])
+    )
+  }
+
+  static let legacyEmpty = TunDNSSettings()
+  static let chinaNetworkDefault = TunDNSSettings(
+    fakeIPFilter: [
+      "*.lan",
+      "*.local",
+      "localhost.ptlogin2.qq.com",
+      "captive.apple.com",
+      "time.apple.com",
+      "time-ios.apple.com",
+      "time-macos.apple.com",
+      "connectivitycheck.gstatic.com",
+      "detectportal.firefox.com",
+      "msftconnecttest.com",
+      "msftncsi.com",
+      "router.asus.com",
+      "routerlogin.net",
+      "tplogin.cn",
+      "miwifi.com",
+      "tendawifi.com"
+    ],
+    nameserver: [
+      "https://dns.alidns.com/dns-query",
+      "https://doh.pub/dns-query"
+    ],
+    fallback: [
+      "tls://8.8.4.4",
+      "tls://1.1.1.1"
+    ]
+  )
+  static let `default` = chinaNetworkDefault
 
   var hasRuntimeOverlay: Bool {
     !fakeIPFilter.isEmpty

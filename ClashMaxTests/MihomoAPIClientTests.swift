@@ -238,6 +238,13 @@ final class MihomoAPIClientTests: XCTestCase {
     request = try XCTUnwrap(recorder.lastRequest)
     XCTAssertEqual(request.httpMethod, "PUT")
     XCTAssertEqual(request.url?.path, "/configs")
+    XCTAssertEqual(request.url?.query, "force=true")
     XCTAssertEqual(String(data: try XCTUnwrap(recorder.lastBody), encoding: .utf8), #"{"path":"/tmp/runtime.yaml"}"#)
+
+    try await client.setTunEnabled(false)
+    request = try XCTUnwrap(recorder.lastRequest)
+    XCTAssertEqual(request.httpMethod, "PATCH")
+    XCTAssertEqual(request.url?.path, "/configs")
+    XCTAssertEqual(String(data: try XCTUnwrap(recorder.lastBody), encoding: .utf8), #"{"tun":{"enable":false}}"#)
   }
 }

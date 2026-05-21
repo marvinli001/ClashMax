@@ -50,6 +50,10 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(dns["enable"] as? Bool, true)
     XCTAssertEqual(dns["enhanced-mode"] as? String, "fake-ip")
     XCTAssertEqual(dns["fake-ip-range"] as? String, "198.18.0.1/16")
+    XCTAssertEqual(dns["nameserver"] as? [String], ["https://dns.alidns.com/dns-query", "https://doh.pub/dns-query"])
+    XCTAssertEqual(dns["fallback"] as? [String], ["tls://8.8.4.4", "tls://1.1.1.1"])
+    XCTAssertTrue((dns["fake-ip-filter"] as? [String])?.contains("*.lan") == true)
+    XCTAssertTrue((dns["fake-ip-filter"] as? [String])?.contains("captive.apple.com") == true)
   }
 
   func testInvalidYamlProducesReadableError() {
@@ -100,6 +104,9 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(enabledDNS["enable"] as? Bool, true)
     XCTAssertEqual(enabledDNS["enhanced-mode"] as? String, "fake-ip")
     XCTAssertEqual(enabledDNS["fake-ip-range"] as? String, "198.18.0.1/16")
+    XCTAssertEqual(enabledDNS["nameserver"] as? [String], ["https://dns.alidns.com/dns-query", "https://doh.pub/dns-query"])
+    XCTAssertEqual(enabledDNS["fallback"] as? [String], ["tls://8.8.4.4", "tls://1.1.1.1"])
+    XCTAssertTrue((enabledDNS["fake-ip-filter"] as? [String])?.contains("router.asus.com") == true)
 
     overrides.tunEnabled = false
     let disabledOutput = try ConfigNormalizer().runtimeConfig(from: source, overrides: overrides)

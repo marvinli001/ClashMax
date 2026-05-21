@@ -581,6 +581,15 @@ private struct TunDiagnosticsRuntimeCard: View {
         .buttonStyle(.borderless)
         .disabled(!appModel.canRepairTunDNS)
         .help("Repair TUN system DNS")
+
+        Button {
+          appModel.repairTunRouting()
+        } label: {
+          Image(systemName: "network")
+        }
+        .buttonStyle(.borderless)
+        .disabled(!appModel.canRepairTunRouting)
+        .help("Repair TUN routing")
       }
 
       HStack(spacing: 10) {

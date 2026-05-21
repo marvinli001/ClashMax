@@ -11,6 +11,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
   private static let proxyRoutingModeDefaultsKey = "io.github.clashmax.proxyRoutingMode"
   private static let systemProxySettingsDefaultsKey = "io.github.clashmax.systemProxySettings"
   private static let tunSettingsDefaultsKey = "io.github.clashmax.tunSettings"
+  private static let tunDNSDefaultsVersionKey = "io.github.clashmax.tunDNSDefaultsVersion"
   private static let networkExtensionRoutingSettingsDefaultsKey = "io.github.clashmax.networkExtensionRoutingSettings"
   private static let delayTestSettingsDefaultsKey = "io.github.clashmax.delayTestSettings"
   private static let externalControllerSettingsDefaultsKey = "io.github.clashmax.externalControllerSettings"
@@ -552,6 +553,92 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(model.tunSettings.effectiveSystemDNSServers, ["114.114.114.114"])
     XCTAssertEqual(model.tunSettings.dns, .default)
     XCTAssertEqual(model.overrides.tunSettings, model.tunSettings)
+  }
+
+  func testNewTunSettingsUseDefaultDNSOverlay() throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: defaults
+    )
+
+    XCTAssertEqual(model.tunSettings.dns, .default)
+    XCTAssertEqual(model.tunSettings.dns.nameserver, ["https://dns.alidns.com/dns-query", "https://doh.pub/dns-query"])
+    XCTAssertEqual(model.tunSettings.dns.fallback, ["tls://8.8.4.4", "tls://1.1.1.1"])
+    XCTAssertTrue(model.tunSettings.dns.fakeIPFilter.contains("*.local"))
+  }
+
+  func testTunDNSDefaultsMigrationFillsEmptyLegacyOverlay() throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    try Self.storeJSON(
+      [
+        "stack": "mixed",
+        "device": "utun1024",
+        "autoRoute": true,
+        "strictRoute": false,
+        "autoDetectInterface": true,
+        "dnsHijack": ["any:53"],
+        "mtu": 1500,
+        "routeExcludeAddresses": [],
+        "dnsFakeIPEnabled": true,
+        "fakeIPRange": "198.18.0.1/16",
+        "systemDNSOverrideEnabled": true,
+        "systemDNSServers": ["114.114.114.114"],
+        "dns": [:]
+      ],
+      forKey: Self.tunSettingsDefaultsKey,
+      defaults: defaults
+    )
+
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: defaults
+    )
+
+    XCTAssertEqual(model.tunSettings.dns, .default)
+    XCTAssertEqual(defaults.integer(forKey: Self.tunDNSDefaultsVersionKey), 1)
+  }
+
+  func testTunDNSDefaultsMigrationPreservesCustomOverlay() throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    try Self.storeJSON(
+      [
+        "stack": "mixed",
+        "device": "utun1024",
+        "autoRoute": true,
+        "strictRoute": false,
+        "autoDetectInterface": true,
+        "dnsHijack": ["any:53"],
+        "mtu": 1500,
+        "routeExcludeAddresses": [],
+        "dnsFakeIPEnabled": true,
+        "fakeIPRange": "198.18.0.1/16",
+        "systemDNSOverrideEnabled": true,
+        "systemDNSServers": ["114.114.114.114"],
+        "dns": [
+          "nameserver": ["https://dns.example/dns-query"],
+          "fakeIPFilter": ["*.custom"]
+        ]
+      ],
+      forKey: Self.tunSettingsDefaultsKey,
+      defaults: defaults
+    )
+
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: defaults
+    )
+
+    XCTAssertEqual(model.tunSettings.dns.nameserver, ["https://dns.example/dns-query"])
+    XCTAssertEqual(model.tunSettings.dns.fakeIPFilter, ["*.custom"])
+    XCTAssertEqual(defaults.integer(forKey: Self.tunDNSDefaultsVersionKey), 1)
   }
 
   func testNetworkExtensionRoutingSettingsMigratesMissingFieldsFromUserDefaults() throws {
@@ -4051,6 +4138,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     let applyCommand = "/usr/sbin/networksetup -setdnsservers Wi-Fi 114.114.114.114"
     let initialApplyCount = commandRunner.commands.filter { $0 == applyCommand }.count
+    model.lastError = nil
     model.repairTunDNS()
 
     for _ in 0..<160 where commandRunner.commands.filter({ $0 == applyCommand }).count <= initialApplyCount
@@ -4064,6 +4152,275 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(model.tunDiagnostics, repaired)
     let configurations = await inspector.configurations()
     XCTAssertEqual(configurations.last?.includeExternal, false)
+  }
+
+  func testTunStopDisablesMihomoTunBeforeStoppingHelper() async throws {
+    let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
+    let helperTransport = ReadyTunnelHelperTransport()
+    let model = try await makeRunningTunnelModel(client: client, helperTransport: helperTransport)
+
+    model.stop()
+    for _ in 0..<160 {
+      let currentStopCount = await helperTransport.stopCount()
+      if currentStopCount > 0 { break }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let tunEnabledUpdates = await client.tunEnabledUpdateValues()
+    let stopCount = await helperTransport.stopCount()
+    XCTAssertEqual(tunEnabledUpdates, [false])
+    XCTAssertEqual(stopCount, 1)
+    XCTAssertFalse(model.tunnelCoreRunning)
+    XCTAssertFalse(model.tunEnabled)
+  }
+
+  func testRunningTunSettingsSaveReloadsRuntimeConfig() async throws {
+    let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
+    let helperTransport = ReadyTunnelHelperTransport()
+    let model = try await makeRunningTunnelModel(client: client, helperTransport: helperTransport)
+    var settings = TunSettings.default
+    settings.mtu = 1400
+
+    XCTAssertTrue(model.updateTunSettings(settings))
+    for _ in 0..<160 {
+      let reloadPaths = await client.reloadRequestPaths()
+      if !reloadPaths.isEmpty || model.lastError != nil { break }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let reloadForces = await client.reloadRequestForces()
+    let restartCount = await helperTransport.restartCount()
+    XCTAssertEqual(reloadForces, [true])
+    XCTAssertEqual(restartCount, 0)
+    XCTAssertNil(model.lastError)
+  }
+
+  func testRunningTunSettingsSaveFallsBackToHelperRestartWhenReloadFails() async throws {
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [],
+      testDelayResult: 0,
+      reloadFailureMessage: "reload refused"
+    )
+    let helperTransport = ReadyTunnelHelperTransport()
+    let model = try await makeRunningTunnelModel(client: client, helperTransport: helperTransport)
+    var settings = TunSettings.default
+    settings.mtu = 1400
+
+    XCTAssertTrue(model.updateTunSettings(settings))
+    for _ in 0..<160 {
+      let currentRestartCount = await helperTransport.restartCount()
+      if currentRestartCount > 0 || model.lastError != nil { break }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let reloadForces = await client.reloadRequestForces()
+    let restartCount = await helperTransport.restartCount()
+    XCTAssertEqual(reloadForces, [true])
+    XCTAssertEqual(restartCount, 1)
+    XCTAssertTrue(model.tunEnabled)
+    XCTAssertNil(model.lastError)
+  }
+
+  func testRunningTunSettingsSaveSurfacesDNSApplyFailureWithoutHelperRestart() async throws {
+    let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
+    let helperTransport = ReadyTunnelHelperTransport()
+    let commandRunner = FailingDNSApplyCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+    let model = try await makeRunningTunnelModel(
+      client: client,
+      helperTransport: helperTransport,
+      systemProxyController: SystemProxyController(commandRunner: commandRunner)
+    )
+    var settings = TunSettings.default
+    settings.mtu = 1400
+
+    XCTAssertTrue(model.updateTunSettings(settings))
+    for _ in 0..<160 where model.lastError == nil {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let reloadForces = await client.reloadRequestForces()
+    let restartCount = await helperTransport.restartCount()
+    XCTAssertEqual(reloadForces, [true])
+    XCTAssertEqual(restartCount, 0)
+    XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setdnsservers Wi-Fi 114.114.114.114"))
+    XCTAssertTrue(model.lastError?.contains("Could not apply TUN settings without restart") == true)
+    XCTAssertTrue(model.lastError?.contains("Injected DNS failure") == true)
+  }
+
+  func testRepairTunRoutingReloadsConfigWhenDiagnosticsClear() async throws {
+    let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
+    let helperTransport = ReadyTunnelHelperTransport()
+    let snapshot = Self.tunDiagnosticsSnapshot(
+      checks: [TunDiagnosticCheck(id: "default-route", title: "Default Route", status: .pass, message: "ok")],
+      includeExternal: false,
+      time: 51
+    )
+    let inspector = RecordingTunRuntimeInspector(snapshots: [snapshot])
+    let model = try await makeRunningTunnelModel(
+      client: client,
+      helperTransport: helperTransport,
+      tunRuntimeInspector: inspector
+    )
+
+    model.repairTunRouting()
+    for _ in 0..<160 where model.tunDiagnostics.updatedAt != snapshot.updatedAt && model.lastError == nil {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let reloadForces = await client.reloadRequestForces()
+    let restartCount = await helperTransport.restartCount()
+    XCTAssertEqual(reloadForces, [true])
+    XCTAssertEqual(restartCount, 0)
+    XCTAssertEqual(model.tunDiagnostics, snapshot)
+    XCTAssertNil(model.lastError)
+  }
+
+  func testRepairTunRoutingRestartsHelperWhenReloadLeavesRouteIssue() async throws {
+    let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
+    let helperTransport = ReadyTunnelHelperTransport()
+    let routeIssue = Self.tunDiagnosticsSnapshot(
+      checks: [TunDiagnosticCheck(id: "default-route", title: "Default Route", status: .fail, message: "stale")],
+      includeExternal: false,
+      time: 52
+    )
+    let repaired = Self.tunDiagnosticsSnapshot(
+      checks: [TunDiagnosticCheck(id: "default-route", title: "Default Route", status: .pass, message: "ok")],
+      includeExternal: false,
+      time: 53
+    )
+    let inspector = RecordingTunRuntimeInspector(snapshots: [routeIssue, repaired])
+    let model = try await makeRunningTunnelModel(
+      client: client,
+      helperTransport: helperTransport,
+      tunRuntimeInspector: inspector
+    )
+
+    model.repairTunRouting()
+    for _ in 0..<160 {
+      let currentRestartCount = await helperTransport.restartCount()
+      if currentRestartCount > 0, model.tunDiagnostics.updatedAt == repaired.updatedAt {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let reloadForces = await client.reloadRequestForces()
+    let restartCount = await helperTransport.restartCount()
+    XCTAssertEqual(reloadForces, [true])
+    XCTAssertEqual(restartCount, 1)
+    XCTAssertEqual(model.tunDiagnostics, repaired)
+    XCTAssertNil(model.lastError)
+  }
+
+  func testRepairTunRoutingStopsTunnelWhenRestartLeavesRouteIssue() async throws {
+    let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
+    let helperTransport = ReadyTunnelHelperTransport()
+    let routeIssue = Self.tunDiagnosticsSnapshot(
+      checks: [TunDiagnosticCheck(id: "default-route", title: "Default Route", status: .fail, message: "stale")],
+      includeExternal: false,
+      time: 54
+    )
+    let stillBroken = Self.tunDiagnosticsSnapshot(
+      checks: [TunDiagnosticCheck(id: "default-route", title: "Default Route", status: .fail, message: "still stale")],
+      includeExternal: false,
+      time: 55
+    )
+    let inspector = RecordingTunRuntimeInspector(snapshots: [routeIssue, stillBroken])
+    let model = try await makeRunningTunnelModel(
+      client: client,
+      helperTransport: helperTransport,
+      tunRuntimeInspector: inspector
+    )
+
+    model.repairTunRouting()
+    for _ in 0..<160 {
+      let currentStopCount = await helperTransport.stopCount()
+      if currentStopCount >= 2 || model.lastError != nil { break }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let reloadForces = await client.reloadRequestForces()
+    let restartCount = await helperTransport.restartCount()
+    let stopCount = await helperTransport.stopCount()
+    XCTAssertEqual(reloadForces, [true])
+    XCTAssertEqual(restartCount, 1)
+    XCTAssertEqual(stopCount, 2)
+    XCTAssertFalse(model.tunnelCoreRunning)
+    XCTAssertFalse(model.tunEnabled)
+    XCTAssertTrue(model.lastError?.contains("stopped TUN safely") == true)
+    XCTAssertTrue(model.lastError?.contains("Default Route: still stale") == true)
+  }
+
+  func testRepairTunRoutingStopsTunnelWhenReloadFallbackRestartStillHasRouteIssue() async throws {
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [],
+      testDelayResult: 0,
+      reloadFailureMessage: "reload refused"
+    )
+    let helperTransport = ReadyTunnelHelperTransport()
+    let routeIssue = Self.tunDiagnosticsSnapshot(
+      checks: [TunDiagnosticCheck(id: "default-route", title: "Default Route", status: .fail, message: "stale")],
+      includeExternal: false,
+      time: 56
+    )
+    let inspector = RecordingTunRuntimeInspector(snapshots: [routeIssue])
+    let model = try await makeRunningTunnelModel(
+      client: client,
+      helperTransport: helperTransport,
+      tunRuntimeInspector: inspector
+    )
+
+    model.repairTunRouting()
+    for _ in 0..<160 {
+      let currentStopCount = await helperTransport.stopCount()
+      if currentStopCount >= 2 || model.lastError != nil { break }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let reloadForces = await client.reloadRequestForces()
+    let restartCount = await helperTransport.restartCount()
+    let stopCount = await helperTransport.stopCount()
+    XCTAssertEqual(reloadForces, [true])
+    XCTAssertEqual(restartCount, 1)
+    XCTAssertEqual(stopCount, 2)
+    XCTAssertFalse(model.tunnelCoreRunning)
+    XCTAssertFalse(model.tunEnabled)
+    XCTAssertTrue(model.lastError?.contains("stopped TUN safely") == true)
+    XCTAssertTrue(model.lastError?.contains("Default Route: stale") == true)
+  }
+
+  func testRepairTunRoutingStopsTunnelWhenRestartFails() async throws {
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [],
+      testDelayResult: 0,
+      reloadFailureMessage: "reload refused"
+    )
+    let helperTransport = FailingRestartTunnelHelperTransport()
+    let model = try await makeRunningTunnelModel(client: client, helperTransport: helperTransport)
+
+    model.repairTunRouting()
+    for _ in 0..<160 {
+      let currentStopCount = await helperTransport.stopCount()
+      if currentStopCount > 0 || model.lastError != nil { break }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let restartCount = await helperTransport.restartCount()
+    let stopCount = await helperTransport.stopCount()
+    XCTAssertEqual(restartCount, 1)
+    XCTAssertEqual(stopCount, 1)
+    XCTAssertFalse(model.tunnelCoreRunning)
+    XCTAssertFalse(model.tunEnabled)
+    XCTAssertTrue(model.lastError?.contains("stopped TUN safely") == true)
   }
 
   func testTunTerminationRestoresSystemDNSAndClearsDiagnostics() async throws {
@@ -4735,6 +5092,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
   private static func clearSharedRoutingDefaults() {
     UserDefaults.standard.removeObject(forKey: proxyRoutingModeDefaultsKey)
     UserDefaults.standard.removeObject(forKey: developerModeDefaultsKey)
+    UserDefaults.standard.removeObject(forKey: tunDNSDefaultsVersionKey)
   }
 
   private func makeRunningRuntimeModel(
@@ -4769,6 +5127,42 @@ final class DashboardRuntimeStateTests: XCTestCase {
       api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
     )
 
+    return model
+  }
+
+  private func makeRunningTunnelModel(
+    client: any MihomoAPIControlling,
+    helperTransport: any HelperXPCTransport,
+    tunRuntimeInspector: any TunRuntimeInspecting = RecordingTunRuntimeInspector(snapshots: []),
+    systemProxyController: SystemProxyController? = nil,
+    tunnelReadinessProbe: CoreReadinessProbing = RecordingCoreReadinessProbe()
+  ) async throws -> AppModel {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let helper = TunnelHelperClient(
+      transport: helperTransport,
+      service: StaticHelperService(status: .enabled),
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      systemProxyController: systemProxyController ?? SystemProxyController(
+        commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+      ),
+      helperClient: helper,
+      tunnelReadinessProbe: tunnelReadinessProbe,
+      tunRuntimeInspector: tunRuntimeInspector,
+      apiClient: client,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.proxyRoutingMode = .tun
+    model.tunnelCoreRunning = true
+    model.tunEnabled = true
     return model
   }
 
@@ -4924,6 +5318,9 @@ private actor RecordingMihomoController: MihomoAPIControlling {
   private let closeConnectionDelayNanoseconds: UInt64
   private let healthCheckFailureMessage: String?
   private let closeConnectionFailureMessage: String?
+  private let reloadFailureMessage: String?
+  private let restartFailureMessage: String?
+  private let setTunEnabledFailureMessage: String?
   private let ignoreHealthCheckCancellation: Bool
   private let ignoreCloseConnectionCancellation: Bool
   private var modeUpdates: [RunMode] = []
@@ -4934,6 +5331,9 @@ private actor RecordingMihomoController: MihomoAPIControlling {
   private var healthCheckRequests: [String] = []
   private var closedConnections: [String] = []
   private var closedAllRequestCount = 0
+  private var reloadRequests: [(path: String, force: Bool)] = []
+  private var restartRequests: [String?] = []
+  private var tunEnabledUpdates: [Bool] = []
 
   init(
     proxyGroupsResponse: [ProxyGroup],
@@ -4948,6 +5348,9 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     closeConnectionDelayNanoseconds: UInt64 = 0,
     healthCheckFailureMessage: String? = nil,
     closeConnectionFailureMessage: String? = nil,
+    reloadFailureMessage: String? = nil,
+    restartFailureMessage: String? = nil,
+    setTunEnabledFailureMessage: String? = nil,
     ignoreHealthCheckCancellation: Bool = false,
     ignoreCloseConnectionCancellation: Bool = false
   ) {
@@ -4964,6 +5367,9 @@ private actor RecordingMihomoController: MihomoAPIControlling {
       closeConnectionDelayNanoseconds: closeConnectionDelayNanoseconds,
       healthCheckFailureMessage: healthCheckFailureMessage,
       closeConnectionFailureMessage: closeConnectionFailureMessage,
+      reloadFailureMessage: reloadFailureMessage,
+      restartFailureMessage: restartFailureMessage,
+      setTunEnabledFailureMessage: setTunEnabledFailureMessage,
       ignoreHealthCheckCancellation: ignoreHealthCheckCancellation,
       ignoreCloseConnectionCancellation: ignoreCloseConnectionCancellation
     )
@@ -4982,6 +5388,9 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     closeConnectionDelayNanoseconds: UInt64 = 0,
     healthCheckFailureMessage: String? = nil,
     closeConnectionFailureMessage: String? = nil,
+    reloadFailureMessage: String? = nil,
+    restartFailureMessage: String? = nil,
+    setTunEnabledFailureMessage: String? = nil,
     ignoreHealthCheckCancellation: Bool = false,
     ignoreCloseConnectionCancellation: Bool = false
   ) {
@@ -4998,6 +5407,9 @@ private actor RecordingMihomoController: MihomoAPIControlling {
       closeConnectionDelayNanoseconds: closeConnectionDelayNanoseconds,
       healthCheckFailureMessage: healthCheckFailureMessage,
       closeConnectionFailureMessage: closeConnectionFailureMessage,
+      reloadFailureMessage: reloadFailureMessage,
+      restartFailureMessage: restartFailureMessage,
+      setTunEnabledFailureMessage: setTunEnabledFailureMessage,
       ignoreHealthCheckCancellation: ignoreHealthCheckCancellation,
       ignoreCloseConnectionCancellation: ignoreCloseConnectionCancellation
     )
@@ -5016,6 +5428,9 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     closeConnectionDelayNanoseconds: UInt64 = 0,
     healthCheckFailureMessage: String? = nil,
     closeConnectionFailureMessage: String? = nil,
+    reloadFailureMessage: String? = nil,
+    restartFailureMessage: String? = nil,
+    setTunEnabledFailureMessage: String? = nil,
     ignoreHealthCheckCancellation: Bool = false,
     ignoreCloseConnectionCancellation: Bool = false
   ) {
@@ -5031,6 +5446,9 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     self.closeConnectionDelayNanoseconds = closeConnectionDelayNanoseconds
     self.healthCheckFailureMessage = healthCheckFailureMessage
     self.closeConnectionFailureMessage = closeConnectionFailureMessage
+    self.reloadFailureMessage = reloadFailureMessage
+    self.restartFailureMessage = restartFailureMessage
+    self.setTunEnabledFailureMessage = setTunEnabledFailureMessage
     self.ignoreHealthCheckCancellation = ignoreHealthCheckCancellation
     self.ignoreCloseConnectionCancellation = ignoreCloseConnectionCancellation
   }
@@ -5095,9 +5513,26 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     closedAllRequestCount += 1
   }
 
-  func reloadConfig(path: String) async throws {}
+  func setTunEnabled(_ enabled: Bool) async throws {
+    if let setTunEnabledFailureMessage {
+      throw AppError.helperResponse(setTunEnabledFailureMessage)
+    }
+    tunEnabledUpdates.append(enabled)
+  }
 
-  func restart(configPath: String?) async throws {}
+  func reloadConfig(path: String, force: Bool) async throws {
+    reloadRequests.append((path, force))
+    if let reloadFailureMessage {
+      throw AppError.helperResponse(reloadFailureMessage)
+    }
+  }
+
+  func restart(configPath: String?) async throws {
+    if let restartFailureMessage {
+      throw AppError.helperResponse(restartFailureMessage)
+    }
+    restartRequests.append(configPath)
+  }
 
   nonisolated func trafficStream() -> AsyncThrowingStream<TrafficSample, Error> {
     AsyncThrowingStream { _ in }
@@ -5145,6 +5580,22 @@ private actor RecordingMihomoController: MihomoAPIControlling {
 
   func closeAllRequestCount() -> Int {
     closedAllRequestCount
+  }
+
+  func reloadRequestPaths() -> [String] {
+    reloadRequests.map(\.path)
+  }
+
+  func reloadRequestForces() -> [Bool] {
+    reloadRequests.map(\.force)
+  }
+
+  func restartRequestCount() -> Int {
+    restartRequests.count
+  }
+
+  func tunEnabledUpdateValues() -> [Bool] {
+    tunEnabledUpdates
   }
 
   private func delay(at index: Int, in delays: [UInt64]) -> UInt64 {
@@ -5220,6 +5671,7 @@ private final class RecordingProxyPortReadinessProbe: ProxyPortReadinessProbing 
 private actor ReadyTunnelHelperTransport: HelperXPCTransport {
   private var starts = 0
   private var stops = 0
+  private var restarts = 0
 
   func status() async throws -> HelperClientResponse {
     HelperClientResponse(payload: HelperXPCPayload.response(ok: true, running: starts > stops, pid: starts > stops ? 99 : 0))
@@ -5236,6 +5688,7 @@ private actor ReadyTunnelHelperTransport: HelperXPCTransport {
   }
 
   func restartTunnel(coreURL: URL, configURL: URL, workDirectory: URL, secret: String) async throws -> HelperClientResponse {
+    restarts += 1
     _ = try await stopTunnel()
     return try await startTunnel(coreURL: coreURL, configURL: configURL, workDirectory: workDirectory, secret: secret)
   }
@@ -5245,6 +5698,37 @@ private actor ReadyTunnelHelperTransport: HelperXPCTransport {
   }
 
   func startCount() -> Int { starts }
+  func stopCount() -> Int { stops }
+  func restartCount() -> Int { restarts }
+}
+
+private actor FailingRestartTunnelHelperTransport: HelperXPCTransport {
+  private var restarts = 0
+  private var stops = 0
+
+  func status() async throws -> HelperClientResponse {
+    HelperClientResponse(payload: HelperXPCPayload.response(ok: true, running: true, pid: 99))
+  }
+
+  func startTunnel(coreURL: URL, configURL: URL, workDirectory: URL, secret: String) async throws -> HelperClientResponse {
+    HelperClientResponse(payload: HelperXPCPayload.response(ok: true, running: true, pid: 99))
+  }
+
+  func stopTunnel() async throws -> HelperClientResponse {
+    stops += 1
+    return HelperClientResponse(payload: HelperXPCPayload.response(ok: true, running: false))
+  }
+
+  func restartTunnel(coreURL: URL, configURL: URL, workDirectory: URL, secret: String) async throws -> HelperClientResponse {
+    restarts += 1
+    throw AppError.helperResponse("restart refused")
+  }
+
+  func recentLogs() async throws -> [String] {
+    []
+  }
+
+  func restartCount() -> Int { restarts }
   func stopCount() -> Int { stops }
 }
 
