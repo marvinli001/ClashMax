@@ -10,6 +10,7 @@ private enum AppStartupAbort: Error {
 
 private enum RuntimeStopPurpose {
   case userInitiated
+  case safetyShutdown
   case termination
 
   var continuesAfterNetworkExtensionStopFailure: Bool {
@@ -80,14 +81,19 @@ private struct NetworkExtensionStopCleanupResult {
 }
 
 private extension TunDiagnosticsSnapshot {
+  private static let repairableRoutingIssueIDs: Set<String> = [
+    "interface",
+    "default-route",
+    "route-exclude",
+    "dns-hijack"
+  ]
+
   var repairableRoutingIssue: TunDiagnosticCheck? {
-    guard let issue = primaryIssue, [.fail, .warn].contains(issue.status) else {
-      return nil
+    checks.first { check in
+      check.status == .fail && Self.repairableRoutingIssueIDs.contains(check.id)
+    } ?? checks.first { check in
+      check.status == .warn && Self.repairableRoutingIssueIDs.contains(check.id)
     }
-    guard ["interface", "default-route", "route-exclude", "dns-hijack"].contains(issue.id) else {
-      return nil
-    }
-    return issue
   }
 
   var hasRepairableRoutingIssue: Bool {
@@ -2009,6 +2015,12 @@ final class AppModel: ObservableObject {
       try await restartRunningTunHelper(runtimeConfig: runtimeConfig, settings: settings, reason: reason)
       didRestartHelper = true
     }
+    didRestartHelper = try await verifyRunningTunFacts(
+      runtimeConfig: runtimeConfig,
+      settings: settings,
+      reason: reason,
+      didRestartHelper: didRestartHelper
+    )
     if !didRestartHelper {
       try await reconcileTunSystemDNS(for: settings)
     }
@@ -2052,6 +2064,39 @@ final class AppModel: ObservableObject {
     tunnelCoreRunning = true
     tunEnabled = true
     runtimeOwner = .tunnel
+  }
+
+  private func verifyRunningTunFacts(
+    runtimeConfig: URL,
+    settings: TunSettings,
+    reason: String,
+    didRestartHelper: Bool
+  ) async throws -> Bool {
+    var didRestartHelper = didRestartHelper
+    let postReloadSnapshot = await inspectTunRuntimeNow(includeExternal: false)
+    guard postReloadSnapshot.hasRepairableRoutingIssue else {
+      return didRestartHelper
+    }
+
+    if !didRestartHelper {
+      appendAppLog(
+        level: "warn",
+        message: "\(reason): runtime diagnostics still report \(postReloadSnapshot.repairableRoutingIssueMessage), restarting helper instead."
+      )
+      try await restartRunningTunHelper(runtimeConfig: runtimeConfig, settings: settings, reason: reason)
+      didRestartHelper = true
+      let postRestartSnapshot = await inspectTunRuntimeNow(includeExternal: false)
+      if postRestartSnapshot.hasRepairableRoutingIssue {
+        throw AppError.helperResponse(
+          "\(reason): TUN runtime diagnostics still report \(postRestartSnapshot.repairableRoutingIssueMessage) after helper restart."
+        )
+      }
+      return didRestartHelper
+    }
+
+    throw AppError.helperResponse(
+      "\(reason): TUN runtime diagnostics still report \(postReloadSnapshot.repairableRoutingIssueMessage) after helper restart."
+    )
   }
 
   func updateNetworkExtensionRoutingSettings(_ settings: NetworkExtensionRoutingSettings) -> Bool {
@@ -2272,13 +2317,14 @@ final class AppModel: ObservableObject {
       } catch is CancellationError {
         return
       } catch {
-        appendAppLog(level: "warn", message: "TUN routing repair failed: \(UserFacingError.message(for: error))")
-        let result = await stopRuntimeCoordinated()
+        let repairMessage = UserFacingError.message(for: error)
+        appendAppLog(level: "warn", message: "TUN routing repair failed: \(repairMessage)")
+        let result = await stopRuntimeCoordinated(.safetyShutdown)
         handleStopResult(result)
         if result.succeeded {
-          lastError = "TUN routing repair could not complete, so ClashMax stopped TUN safely: \(UserFacingError.message(for: error))"
+          lastError = "TUN routing repair could not complete, so ClashMax stopped TUN safely: \(repairMessage)"
         } else {
-          lastError = "Could not repair TUN routing: \(UserFacingError.message(for: error))"
+          lastError = "Could not repair TUN routing: \(repairMessage)"
         }
       }
     }

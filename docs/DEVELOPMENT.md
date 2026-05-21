@@ -115,6 +115,49 @@ Manual installed-bundle NE smoke test:
    only after NE shutdown, and System DNS returns to the pre-start snapshot. Use
    the `Repair DNS` action if restore reports a failure.
 
+Manual installed-bundle TUN validation matrix:
+
+Use this matrix for real macOS data-plane validation. Unit tests can prove
+runtime YAML, helper/XPC state, and repair semantics, but they cannot prove
+kernel routing, DNS service order, sleep/wake behavior, or UDP behavior on a
+real machine.
+
+1. Build a signed app, install it as `/Applications/ClashMax.app`, and launch
+   that installed bundle rather than an Xcode-run bundle.
+2. Select TUN mode and start ClashMax. On first run, approve the privileged
+   helper in System Settings if macOS prompts for it, then retry start.
+3. Quit and relaunch ClashMax, keep the same installed app, and confirm helper
+   status is reused without another approval prompt. The Settings helper detail
+   should show the helper as enabled, bootstrapped, protocol-compatible, and
+   fingerprint-matched.
+4. Start, stop, and restart TUN mode several times. Confirm Mihomo starts under
+   the helper, the dashboard reaches running state, stop clears TUN diagnostics,
+   and System DNS restores to the pre-start snapshot.
+5. Put the Mac to sleep, wake it, and verify ClashMax either remains connected
+   or reports an actionable TUN/DNS repair state. Re-run diagnostics after wake.
+6. Switch networks, for example Wi-Fi to Ethernet or hotspot and back. Confirm
+   default-route, route-exclude, DNS hijack, and System DNS diagnostics still
+   match the active service after the network change.
+7. Verify browser traffic and non-browser traffic. Use both a browser request
+   and a command-line request that does not rely on the macOS HTTP proxy, such
+   as `curl --proxy "" https://example.com`.
+8. Verify UDP and QUIC traffic with an endpoint that actually uses UDP, such as
+   HTTP/3/QUIC or another UDP probe routed through Mihomo.
+9. Verify DNS leak behavior. Check that DNS queries use the ClashMax/Mihomo DNS
+   path, fake-ip answers are returned for matching domains when fake-ip is
+   enabled, and external resolvers are not used unexpectedly.
+10. Verify route exclusions. Add a known CIDR to route-exclude, restart or apply
+    TUN settings, and confirm traffic to that CIDR bypasses TUN while normal
+    traffic remains captured.
+11. Verify online TUN setting changes. Change DNS hijack, route-exclude, or
+    MTU while TUN is running; ClashMax should reload config, inspect runtime
+    facts, fall back to helper restart if diagnostics still warn, and surface a
+    clear error if the runtime state still does not match.
+12. Verify repair-failure safety semantics. Simulate or force a repair failure
+    where route diagnostics still warn after reload and helper restart. `Repair
+    Routing` must stop TUN safely, clear diagnostics, mark the runtime stopped,
+    and preserve the failed diagnostic in the final user-facing error.
+
 Before claiming progress, run the narrowest command that proves the claim and
 report the actual result. If new Swift files are added or project membership is
 changed, regenerate the Xcode project before trusting build results.

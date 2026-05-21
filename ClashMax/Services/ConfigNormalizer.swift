@@ -146,8 +146,26 @@ struct ConfigNormalizer {
   }
 
   private func applyTunDNSOverlay(_ overlay: TunDNSSettings, to dns: inout [String: Any]) {
+    if let preferH3 = overlay.preferH3 {
+      dns["prefer-h3"] = preferH3
+    }
+    if let useHosts = overlay.useHosts {
+      dns["use-hosts"] = useHosts
+    }
+    if let useSystemHosts = overlay.useSystemHosts {
+      dns["use-system-hosts"] = useSystemHosts
+    }
+    if let respectRules = overlay.respectRules {
+      dns["respect-rules"] = respectRules
+    }
     if !overlay.fakeIPFilter.isEmpty {
       dns["fake-ip-filter"] = mergedStringList(existing: dns["fake-ip-filter"], overlay: overlay.fakeIPFilter)
+    }
+    if !overlay.defaultNameserver.isEmpty {
+      dns["default-nameserver"] = mergedStringList(
+        existing: dns["default-nameserver"],
+        overlay: overlay.defaultNameserver
+      )
     }
     if !overlay.nameserver.isEmpty {
       dns["nameserver"] = mergedStringList(existing: dns["nameserver"], overlay: overlay.nameserver)
@@ -164,11 +182,26 @@ struct ConfigNormalizer {
     if !overlay.directNameserver.isEmpty {
       dns["direct-nameserver"] = mergedStringList(existing: dns["direct-nameserver"], overlay: overlay.directNameserver)
     }
+    if let directNameserverFollowPolicy = overlay.directNameserverFollowPolicy {
+      dns["direct-nameserver-follow-policy"] = directNameserverFollowPolicy
+    }
     if !overlay.nameserverPolicy.isEmpty {
-      dns["nameserver-policy"] = mergedStringMap(existing: dns["nameserver-policy"], overlay: overlay.nameserverPolicy)
+      dns["nameserver-policy"] = mergedResolverPolicyMap(
+        existing: dns["nameserver-policy"],
+        overlay: overlay.nameserverPolicy
+      )
+    }
+    if !overlay.proxyServerNameserverPolicy.isEmpty {
+      dns["proxy-server-nameserver-policy"] = mergedResolverPolicyMap(
+        existing: dns["proxy-server-nameserver-policy"],
+        overlay: overlay.proxyServerNameserverPolicy
+      )
     }
     if !overlay.hosts.isEmpty {
       dns["hosts"] = mergedStringMap(existing: dns["hosts"], overlay: overlay.hosts)
+    }
+    if !overlay.fallbackFilter.isEmpty {
+      dns["fallback-filter"] = mergedFallbackFilter(existing: dns["fallback-filter"], overlay: overlay.fallbackFilter)
     }
   }
 
@@ -187,6 +220,61 @@ struct ConfigNormalizer {
     }
     for entry in TunDNSSettings.normalizedMap(overlay) {
       merged[entry.key] = entry.value
+    }
+    return merged
+  }
+
+  private func mergedResolverPolicyMap(existing: Any?, overlay: [String: String]) -> [String: Any] {
+    var merged: [String: Any] = [:]
+    if let existingMap = existing as? [String: String] {
+      for entry in TunDNSSettings.normalizedMap(existingMap) {
+        merged[entry.key] = entry.value
+      }
+    } else if let existingMap = existing as? [String: Any] {
+      for entry in existingMap {
+        let key = entry.key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty, let value = normalizedResolverPolicyValue(entry.value) else { continue }
+        merged[key] = value
+      }
+    }
+    for entry in TunDNSSettings.normalizedMap(overlay) {
+      merged[entry.key] = entry.value
+    }
+    return merged
+  }
+
+  private func normalizedResolverPolicyValue(_ value: Any) -> Any? {
+    if let string = value as? String {
+      let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+      return trimmed.isEmpty ? nil : trimmed
+    }
+    if let strings = value as? [String] {
+      let normalized = TunDNSSettings.normalizedList(strings)
+      return normalized.isEmpty ? nil : normalized
+    }
+    if let values = value as? [Any] {
+      let normalized = TunDNSSettings.normalizedList(values.compactMap { $0 as? String })
+      return normalized.isEmpty ? nil : normalized
+    }
+    return nil
+  }
+
+  private func mergedFallbackFilter(existing: Any?, overlay: TunDNSFallbackFilter) -> [String: Any] {
+    var merged = existing as? [String: Any] ?? [:]
+    if let geoIP = overlay.geoIP {
+      merged["geoip"] = geoIP
+    }
+    if let geoIPCode = overlay.geoIPCode {
+      merged["geoip-code"] = geoIPCode
+    }
+    if !overlay.geoSite.isEmpty {
+      merged["geosite"] = mergedStringList(existing: merged["geosite"], overlay: overlay.geoSite)
+    }
+    if !overlay.ipCIDR.isEmpty {
+      merged["ipcidr"] = mergedStringList(existing: merged["ipcidr"], overlay: overlay.ipCIDR)
+    }
+    if !overlay.domain.isEmpty {
+      merged["domain"] = mergedStringList(existing: merged["domain"], overlay: overlay.domain)
     }
     return merged
   }

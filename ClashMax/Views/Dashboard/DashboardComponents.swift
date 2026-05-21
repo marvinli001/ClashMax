@@ -431,14 +431,20 @@ private struct TunSettingsPopover: View {
   @State private var routeDraft = ""
   @State private var systemDNSDraft = ""
   @State private var fakeIPFilterDraft = ""
+  @State private var defaultNameserverDraft = ""
   @State private var nameserverDraft = ""
   @State private var fallbackDraft = ""
   @State private var proxyServerNameserverDraft = ""
   @State private var directNameserverDraft = ""
   @State private var policyKeyDraft = ""
   @State private var policyValueDraft = ""
+  @State private var proxyPolicyKeyDraft = ""
+  @State private var proxyPolicyValueDraft = ""
   @State private var hostKeyDraft = ""
   @State private var hostValueDraft = ""
+  @State private var fallbackGeoSiteDraft = ""
+  @State private var fallbackIPCIDRDraft = ""
+  @State private var fallbackDomainDraft = ""
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
@@ -499,12 +505,26 @@ private struct TunSettingsPopover: View {
 
       DisclosureGroup("Runtime DNS Overlay") {
         VStack(alignment: .leading, spacing: 12) {
+          OptionalBoolPicker(title: "Prefer HTTP/3", value: $settings.dns.preferH3)
+          OptionalBoolPicker(title: "Use Hosts", value: $settings.dns.useHosts)
+          OptionalBoolPicker(title: "Use System Hosts", value: $settings.dns.useSystemHosts)
+          OptionalBoolPicker(title: "Respect Rules", value: $settings.dns.respectRules)
+
           EditableStringList(
             title: "Fake IP Filter",
             placeholder: "*.lan",
             values: $settings.dns.fakeIPFilter,
             draft: $fakeIPFilterDraft,
             validator: TunDNSSettings.isValidPattern,
+            normalizer: TunDNSSettings.normalizedList
+          )
+
+          EditableStringList(
+            title: "Default Nameserver",
+            placeholder: "223.5.5.5",
+            values: $settings.dns.defaultNameserver,
+            draft: $defaultNameserverDraft,
+            validator: TunDNSSettings.isValidDefaultNameserverResolver,
             normalizer: TunDNSSettings.normalizedList
           )
 
@@ -544,6 +564,11 @@ private struct TunSettingsPopover: View {
             normalizer: TunDNSSettings.normalizedList
           )
 
+          OptionalBoolPicker(
+            title: "Direct Nameserver Follows Policy",
+            value: $settings.dns.directNameserverFollowPolicy
+          )
+
           EditableKeyValueList(
             title: "Nameserver Policy",
             keyPlaceholder: "geosite:cn",
@@ -551,6 +576,18 @@ private struct TunSettingsPopover: View {
             values: $settings.dns.nameserverPolicy,
             keyDraft: $policyKeyDraft,
             valueDraft: $policyValueDraft,
+            keyValidator: TunDNSSettings.isValidPattern,
+            valueValidator: TunDNSSettings.isValidResolver,
+            normalizer: TunDNSSettings.normalizedMap
+          )
+
+          EditableKeyValueList(
+            title: "Proxy Server Nameserver Policy",
+            keyPlaceholder: "www.yournode.com",
+            valuePlaceholder: "114.114.114.114",
+            values: $settings.dns.proxyServerNameserverPolicy,
+            keyDraft: $proxyPolicyKeyDraft,
+            valueDraft: $proxyPolicyValueDraft,
             keyValidator: TunDNSSettings.isValidPattern,
             valueValidator: TunDNSSettings.isValidResolver,
             normalizer: TunDNSSettings.normalizedMap
@@ -567,6 +604,42 @@ private struct TunSettingsPopover: View {
             valueValidator: TunDNSSettings.isValidHostValue,
             normalizer: TunDNSSettings.normalizedMap
           )
+
+          DisclosureGroup("Fallback Filter") {
+            VStack(alignment: .leading, spacing: 12) {
+              OptionalBoolPicker(title: "GeoIP", value: $settings.dns.fallbackFilter.geoIP)
+              TextField("GeoIP Code", text: fallbackGeoIPCode)
+                .textFieldStyle(.roundedBorder)
+
+              EditableStringList(
+                title: "Geosite",
+                placeholder: "gfw",
+                values: $settings.dns.fallbackFilter.geoSite,
+                draft: $fallbackGeoSiteDraft,
+                validator: TunDNSSettings.isValidPattern,
+                normalizer: TunDNSSettings.normalizedList
+              )
+
+              EditableStringList(
+                title: "IP CIDR",
+                placeholder: "240.0.0.0/4",
+                values: $settings.dns.fallbackFilter.ipCIDR,
+                draft: $fallbackIPCIDRDraft,
+                validator: TunSettings.isValidRouteExcludeCIDR,
+                normalizer: NetworkExtensionRoutingSettings.normalizedRouteExcludeCIDRs
+              )
+
+              EditableStringList(
+                title: "Domain",
+                placeholder: "+.google.com",
+                values: $settings.dns.fallbackFilter.domain,
+                draft: $fallbackDomainDraft,
+                validator: TunDNSSettings.isValidPattern,
+                normalizer: TunDNSSettings.normalizedList
+              )
+            }
+            .padding(.top, 8)
+          }
         }
         .padding(.top, 8)
       }
@@ -580,6 +653,16 @@ private struct TunSettingsPopover: View {
 
       popoverActions(onCancel: onCancel, onSave: onSave, saveDisabled: settings.validationError != nil)
     }
+  }
+
+  private var fallbackGeoIPCode: Binding<String> {
+    Binding(
+      get: { settings.dns.fallbackFilter.geoIPCode ?? "" },
+      set: { value in
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        settings.dns.fallbackFilter.geoIPCode = trimmed.isEmpty ? nil : trimmed
+      }
+    )
   }
 }
 
@@ -623,6 +706,42 @@ private struct CurrentSystemProxySummary: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
     .font(.callout)
+  }
+}
+
+private struct OptionalBoolPicker: View {
+  let title: String
+  @Binding var value: Bool?
+
+  var body: some View {
+    Picker(title, selection: selection) {
+      Text("Inherit").tag(0)
+      Text("On").tag(1)
+      Text("Off").tag(2)
+    }
+    .pickerStyle(.segmented)
+  }
+
+  private var selection: Binding<Int> {
+    Binding(
+      get: {
+        switch value {
+        case nil: 0
+        case true: 1
+        case false: 2
+        }
+      },
+      set: { selected in
+        switch selected {
+        case 1:
+          value = true
+        case 2:
+          value = false
+        default:
+          value = nil
+        }
+      }
+    )
   }
 }
 

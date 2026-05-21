@@ -725,53 +725,177 @@ enum TunStack: String, Codable, CaseIterable, Identifiable, Sendable {
   }
 }
 
-struct TunDNSSettings: Codable, Equatable, Sendable {
-  var fakeIPFilter: [String]
-  var nameserver: [String]
-  var fallback: [String]
-  var proxyServerNameserver: [String]
-  var directNameserver: [String]
-  var nameserverPolicy: [String: String]
-  var hosts: [String: String]
+struct TunDNSFallbackFilter: Codable, Equatable, Sendable {
+  var geoIP: Bool?
+  var geoIPCode: String?
+  var geoSite: [String]
+  var ipCIDR: [String]
+  var domain: [String]
 
   private enum CodingKeys: String, CodingKey {
-    case fakeIPFilter
-    case nameserver
-    case fallback
-    case proxyServerNameserver
-    case directNameserver
-    case nameserverPolicy
-    case hosts
+    case geoIP
+    case geoIPCode
+    case geoSite
+    case ipCIDR
+    case domain
   }
 
   init(
-    fakeIPFilter: [String] = [],
-    nameserver: [String] = [],
-    fallback: [String] = [],
-    proxyServerNameserver: [String] = [],
-    directNameserver: [String] = [],
-    nameserverPolicy: [String: String] = [:],
-    hosts: [String: String] = [:]
+    geoIP: Bool? = nil,
+    geoIPCode: String? = nil,
+    geoSite: [String] = [],
+    ipCIDR: [String] = [],
+    domain: [String] = []
   ) {
-    self.fakeIPFilter = Self.normalizedList(fakeIPFilter)
-    self.nameserver = Self.normalizedList(nameserver)
-    self.fallback = Self.normalizedList(fallback)
-    self.proxyServerNameserver = Self.normalizedList(proxyServerNameserver)
-    self.directNameserver = Self.normalizedList(directNameserver)
-    self.nameserverPolicy = Self.normalizedMap(nameserverPolicy)
-    self.hosts = Self.normalizedMap(hosts)
+    self.geoIP = geoIP
+    self.geoIPCode = Self.normalizedOptionalString(geoIPCode)
+    self.geoSite = TunDNSSettings.normalizedList(geoSite)
+    self.ipCIDR = NetworkExtensionRoutingSettings.normalizedRouteExcludeCIDRs(ipCIDR)
+    self.domain = TunDNSSettings.normalizedList(domain)
   }
 
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     self.init(
+      geoIP: try? container.decodeIfPresent(Bool.self, forKey: .geoIP),
+      geoIPCode: try? container.decodeIfPresent(String.self, forKey: .geoIPCode),
+      geoSite: container.decodeDefault([String].self, forKey: .geoSite, default: []),
+      ipCIDR: container.decodeDefault([String].self, forKey: .ipCIDR, default: []),
+      domain: container.decodeDefault([String].self, forKey: .domain, default: [])
+    )
+  }
+
+  static let empty = TunDNSFallbackFilter()
+
+  var isEmpty: Bool {
+    geoIP == nil
+      && geoIPCode == nil
+      && geoSite.isEmpty
+      && ipCIDR.isEmpty
+      && domain.isEmpty
+  }
+
+  var validationError: String? {
+    if let geoIPCode, !Self.isValidGeoIPCode(geoIPCode) {
+      return "Invalid TUN DNS fallback geoip-code: \(geoIPCode)"
+    }
+    if let invalid = geoSite.first(where: { !TunDNSSettings.isValidPattern($0) }) {
+      return "Invalid TUN DNS fallback geosite: \(invalid)"
+    }
+    if let invalid = ipCIDR.first(where: { !TunSettings.isValidRouteExcludeCIDR($0) }) {
+      return "Invalid TUN DNS fallback ipcidr: \(invalid)"
+    }
+    if let invalid = domain.first(where: { !TunDNSSettings.isValidPattern($0) }) {
+      return "Invalid TUN DNS fallback domain: \(invalid)"
+    }
+    return nil
+  }
+
+  private static func normalizedOptionalString(_ value: String?) -> String? {
+    let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return trimmed.isEmpty ? nil : trimmed
+  }
+
+  private static func isValidGeoIPCode(_ value: String) -> Bool {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty, trimmed.count <= 32, !trimmed.contains(where: \.isWhitespace) else {
+      return false
+    }
+    return trimmed.range(of: #"^[A-Za-z0-9_-]+$"#, options: .regularExpression) != nil
+  }
+}
+
+struct TunDNSSettings: Codable, Equatable, Sendable {
+  var preferH3: Bool?
+  var useHosts: Bool?
+  var useSystemHosts: Bool?
+  var respectRules: Bool?
+  var fakeIPFilter: [String]
+  var defaultNameserver: [String]
+  var nameserver: [String]
+  var fallback: [String]
+  var proxyServerNameserver: [String]
+  var directNameserver: [String]
+  var directNameserverFollowPolicy: Bool?
+  var nameserverPolicy: [String: String]
+  var proxyServerNameserverPolicy: [String: String]
+  var hosts: [String: String]
+  var fallbackFilter: TunDNSFallbackFilter
+
+  private enum CodingKeys: String, CodingKey {
+    case preferH3
+    case useHosts
+    case useSystemHosts
+    case respectRules
+    case fakeIPFilter
+    case defaultNameserver
+    case nameserver
+    case fallback
+    case proxyServerNameserver
+    case directNameserver
+    case directNameserverFollowPolicy
+    case nameserverPolicy
+    case proxyServerNameserverPolicy
+    case hosts
+    case fallbackFilter
+  }
+
+  init(
+    preferH3: Bool? = nil,
+    useHosts: Bool? = nil,
+    useSystemHosts: Bool? = nil,
+    respectRules: Bool? = nil,
+    fakeIPFilter: [String] = [],
+    defaultNameserver: [String] = [],
+    nameserver: [String] = [],
+    fallback: [String] = [],
+    proxyServerNameserver: [String] = [],
+    directNameserver: [String] = [],
+    directNameserverFollowPolicy: Bool? = nil,
+    nameserverPolicy: [String: String] = [:],
+    proxyServerNameserverPolicy: [String: String] = [:],
+    hosts: [String: String] = [:],
+    fallbackFilter: TunDNSFallbackFilter = .empty
+  ) {
+    self.preferH3 = preferH3
+    self.useHosts = useHosts
+    self.useSystemHosts = useSystemHosts
+    self.respectRules = respectRules
+    self.fakeIPFilter = Self.normalizedList(fakeIPFilter)
+    self.defaultNameserver = Self.normalizedList(defaultNameserver)
+    self.nameserver = Self.normalizedList(nameserver)
+    self.fallback = Self.normalizedList(fallback)
+    self.proxyServerNameserver = Self.normalizedList(proxyServerNameserver)
+    self.directNameserver = Self.normalizedList(directNameserver)
+    self.directNameserverFollowPolicy = directNameserverFollowPolicy
+    self.nameserverPolicy = Self.normalizedMap(nameserverPolicy)
+    self.proxyServerNameserverPolicy = Self.normalizedMap(proxyServerNameserverPolicy)
+    self.hosts = Self.normalizedMap(hosts)
+    self.fallbackFilter = fallbackFilter
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    self.init(
+      preferH3: try? container.decodeIfPresent(Bool.self, forKey: .preferH3),
+      useHosts: try? container.decodeIfPresent(Bool.self, forKey: .useHosts),
+      useSystemHosts: try? container.decodeIfPresent(Bool.self, forKey: .useSystemHosts),
+      respectRules: try? container.decodeIfPresent(Bool.self, forKey: .respectRules),
       fakeIPFilter: container.decodeDefault([String].self, forKey: .fakeIPFilter, default: []),
+      defaultNameserver: container.decodeDefault([String].self, forKey: .defaultNameserver, default: []),
       nameserver: container.decodeDefault([String].self, forKey: .nameserver, default: []),
       fallback: container.decodeDefault([String].self, forKey: .fallback, default: []),
       proxyServerNameserver: container.decodeDefault([String].self, forKey: .proxyServerNameserver, default: []),
       directNameserver: container.decodeDefault([String].self, forKey: .directNameserver, default: []),
+      directNameserverFollowPolicy: try? container.decodeIfPresent(Bool.self, forKey: .directNameserverFollowPolicy),
       nameserverPolicy: container.decodeDefault([String: String].self, forKey: .nameserverPolicy, default: [:]),
-      hosts: container.decodeDefault([String: String].self, forKey: .hosts, default: [:])
+      proxyServerNameserverPolicy: container.decodeDefault(
+        [String: String].self,
+        forKey: .proxyServerNameserverPolicy,
+        default: [:]
+      ),
+      hosts: container.decodeDefault([String: String].self, forKey: .hosts, default: [:]),
+      fallbackFilter: container.decodeDefault(TunDNSFallbackFilter.self, forKey: .fallbackFilter, default: .empty)
     )
   }
 
@@ -807,18 +931,29 @@ struct TunDNSSettings: Codable, Equatable, Sendable {
   static let `default` = chinaNetworkDefault
 
   var hasRuntimeOverlay: Bool {
-    !fakeIPFilter.isEmpty
+    preferH3 != nil
+      || useHosts != nil
+      || useSystemHosts != nil
+      || respectRules != nil
+      || !fakeIPFilter.isEmpty
+      || !defaultNameserver.isEmpty
       || !nameserver.isEmpty
       || !fallback.isEmpty
       || !proxyServerNameserver.isEmpty
       || !directNameserver.isEmpty
+      || directNameserverFollowPolicy != nil
       || !nameserverPolicy.isEmpty
+      || !proxyServerNameserverPolicy.isEmpty
       || !hosts.isEmpty
+      || !fallbackFilter.isEmpty
   }
 
   var validationError: String? {
     if let invalid = fakeIPFilter.first(where: { !Self.isValidPattern($0) }) {
       return "Invalid TUN fake-ip filter: \(invalid)"
+    }
+    if let invalid = defaultNameserver.first(where: { !Self.isValidDefaultNameserverResolver($0) }) {
+      return "Invalid TUN DNS default-nameserver: \(invalid)"
     }
     for (title, values) in [
       ("nameserver", nameserver),
@@ -833,8 +968,14 @@ struct TunDNSSettings: Codable, Equatable, Sendable {
     if let invalid = nameserverPolicy.first(where: { !Self.isValidPattern($0.key) || !Self.isValidResolver($0.value) }) {
       return "Invalid TUN nameserver policy: \(invalid.key)=\(invalid.value)"
     }
+    if let invalid = proxyServerNameserverPolicy.first(where: { !Self.isValidPattern($0.key) || !Self.isValidResolver($0.value) }) {
+      return "Invalid TUN proxy-server-nameserver policy: \(invalid.key)=\(invalid.value)"
+    }
     if let invalid = hosts.first(where: { !Self.isValidPattern($0.key) || !Self.isValidHostValue($0.value) }) {
       return "Invalid TUN host entry: \(invalid.key)=\(invalid.value)"
+    }
+    if let fallbackFilterValidationError = fallbackFilter.validationError {
+      return fallbackFilterValidationError
     }
     return nil
   }
@@ -857,6 +998,39 @@ struct TunDNSSettings: Codable, Equatable, Sendable {
       let value = entry.value.trimmingCharacters(in: .whitespacesAndNewlines)
       guard !key.isEmpty, !value.isEmpty else { return }
       result[key] = value
+    }
+  }
+
+  static func isValidDefaultNameserverResolver(_ value: String) -> Bool {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty, trimmed.count <= 512, !trimmed.contains(where: \.isWhitespace) else {
+      return false
+    }
+    if NetworkExtensionRoutingSettings.isValidDNSServer(trimmed) {
+      return true
+    }
+
+    let normalized = trimmed.lowercased()
+    guard let schemeSeparator = normalized.range(of: "://") else {
+      return false
+    }
+    let scheme = String(normalized[..<schemeSeparator.lowerBound])
+    guard ["udp", "tcp", "tls", "https", "quic"].contains(scheme),
+          hasValidResolverAuthorityPort(trimmed),
+          let components = URLComponents(string: trimmed),
+          components.scheme?.lowercased() == scheme,
+          isValidResolverIPAddressHost(components.host)
+    else {
+      return false
+    }
+
+    switch scheme {
+    case "udp", "tcp", "tls", "quic":
+      return components.path.isEmpty && components.query == nil
+    case "https":
+      return !components.path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    default:
+      return false
     }
   }
 
@@ -915,6 +1089,11 @@ struct TunDNSSettings: Codable, Equatable, Sendable {
 
   static func isValidHostValue(_ value: String) -> Bool {
     isValidResolver(value)
+  }
+
+  private static func isValidResolverIPAddressHost(_ value: String?) -> Bool {
+    guard let value else { return false }
+    return NetworkExtensionRoutingSettings.isValidDNSServer(value.trimmingCharacters(in: .whitespacesAndNewlines))
   }
 
   private static func isValidResolverHost(_ value: String?) -> Bool {

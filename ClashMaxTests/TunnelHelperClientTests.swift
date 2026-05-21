@@ -28,7 +28,40 @@ final class TunnelHelperClientTests: XCTestCase {
     XCTAssertEqual(response.pid, 42)
     XCTAssertEqual(response.code, HelperResponseCode.alreadyRunning)
     XCTAssertEqual(response.message, "already running")
+    XCTAssertEqual(response.protocolVersion, ClashMaxHelperProtocolVersion.current)
+    XCTAssertEqual(response.helperBuildVersion, ClashMaxHelperBuild.version)
     XCTAssertEqual(HelperXPCPayload.logLines(from: HelperXPCPayload.logs(["one", "two"])), ["one", "two"])
+  }
+
+  func testHelperProtocolCompatibilityClassifiesMissingOldAndCompatibleVersions() throws {
+    let missing = HelperClientResponse(payload: HelperXPCPayload.response(
+      ok: true,
+      protocolVersion: nil,
+      helperBuildVersion: nil
+    ))
+    let old = HelperClientResponse(payload: HelperXPCPayload.response(
+      ok: true,
+      protocolVersion: ClashMaxHelperProtocolVersion.minimumCompatible - 1,
+      helperBuildVersion: "old"
+    ))
+    let compatible = HelperClientResponse(payload: HelperXPCPayload.response(
+      ok: true,
+      protocolVersion: ClashMaxHelperProtocolVersion.minimumCompatible,
+      helperBuildVersion: "current"
+    ))
+
+    XCTAssertNil(missing.protocolVersion)
+    XCTAssertFalse(missing.protocolCompatible)
+    XCTAssertTrue(missing.protocolMigrationRequired)
+    XCTAssertFalse(old.protocolCompatible)
+    XCTAssertTrue(old.protocolMigrationRequired)
+    XCTAssertTrue(compatible.protocolCompatible)
+    XCTAssertFalse(compatible.protocolMigrationRequired)
+    XCTAssertNil(TunnelHelperClient.helperProtocolMigrationMessage(for: compatible))
+    XCTAssertFalse(try XCTUnwrap(TunnelHelperClient.helperProtocolMigrationMessage(for: missing)).isEmpty)
+    let oldMessage = try XCTUnwrap(TunnelHelperClient.helperProtocolMigrationMessage(for: old))
+    XCTAssertTrue(oldMessage.contains("v\(ClashMaxHelperProtocolVersion.minimumCompatible - 1)"))
+    XCTAssertTrue(oldMessage.contains("v\(ClashMaxHelperProtocolVersion.minimumCompatible)"))
   }
 
   func testHelperResponseClassifiesUserFacingFailureCodes() {
@@ -79,6 +112,10 @@ final class TunnelHelperClientTests: XCTestCase {
     XCTAssertTrue(detail.xpcReachable)
     XCTAssertTrue(detail.running)
     XCTAssertEqual(detail.pid, 456)
+    XCTAssertEqual(detail.protocolVersion, ClashMaxHelperProtocolVersion.current)
+    XCTAssertTrue(detail.protocolCompatible)
+    XCTAssertFalse(detail.migrationRequired)
+    XCTAssertEqual(detail.helperBuildVersion, ClashMaxHelperBuild.version)
   }
 
   func testStructuredStatusReportsFingerprintMismatchAndXPCFailure() async throws {
@@ -100,6 +137,32 @@ final class TunnelHelperClientTests: XCTestCase {
     XCTAssertEqual(detail.fingerprintMatches, false)
     XCTAssertFalse(detail.xpcReachable)
     XCTAssertTrue(detail.message.contains("XPC is unreachable"))
+  }
+
+  func testStructuredStatusReportsMissingHelperProtocolAsMigrationRequired() async throws {
+    let service = FakeHelperService(status: .enabled)
+    let missingProtocolResponse = HelperClientResponse(payload: HelperXPCPayload.response(
+      ok: true,
+      running: false,
+      protocolVersion: nil,
+      helperBuildVersion: nil
+    ))
+    let transport = FakeHelperTransport(statusResponse: missingProtocolResponse)
+    let client = TunnelHelperClient(
+      transport: transport,
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "current"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "current")
+    )
+
+    let detail = await client.statusDetail()
+
+    XCTAssertTrue(detail.xpcReachable)
+    XCTAssertFalse(detail.bootstrapped)
+    XCTAssertNil(detail.protocolVersion)
+    XCTAssertFalse(detail.protocolCompatible)
+    XCTAssertTrue(detail.migrationRequired)
+    XCTAssertEqual(detail.message, try XCTUnwrap(TunnelHelperClient.helperProtocolMigrationMessage(for: missingProtocolResponse)))
   }
 
   func testUnregisterClearsStoredFingerprintAndServiceRegistration() async throws {
@@ -207,6 +270,66 @@ final class TunnelHelperClientTests: XCTestCase {
     XCTAssertEqual(client.statusMessage, TunnelHelperClient.bootstrappedMessage)
   }
 
+  func testRegisterRepairsOldHelperProtocolBeforeVerifyingBootstrappedState() async throws {
+    let service = FakeHelperService(status: .enabled)
+    let transport = SequencedHelperTransport(statuses: [
+      HelperClientResponse(payload: HelperXPCPayload.response(
+        ok: true,
+        protocolVersion: ClashMaxHelperProtocolVersion.minimumCompatible - 1,
+        helperBuildVersion: "old"
+      )),
+      HelperClientResponse(payload: HelperXPCPayload.response(
+        ok: true,
+        protocolVersion: ClashMaxHelperProtocolVersion.current,
+        helperBuildVersion: "current"
+      ))
+    ])
+    let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: "same")
+    let client = TunnelHelperClient(
+      transport: transport,
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "same"),
+      registrationRecordStore: recordStore
+    )
+
+    try await client.register()
+
+    XCTAssertEqual(service.unregisterCount, 1)
+    XCTAssertEqual(service.registerCount, 1)
+    XCTAssertEqual(client.statusMessage, TunnelHelperClient.bootstrappedMessage)
+  }
+
+  func testRegisterFailsWithMigrationMessageWhenRepairedHelperProtocolIsStillOld() async throws {
+    let service = FakeHelperService(status: .enabled)
+    let oldResponse = HelperClientResponse(payload: HelperXPCPayload.response(
+      ok: true,
+      protocolVersion: ClashMaxHelperProtocolVersion.minimumCompatible - 1,
+      helperBuildVersion: "old"
+    ))
+    let transport = SequencedHelperTransport(statuses: [
+      oldResponse,
+      oldResponse
+    ])
+    let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: "same")
+    let client = TunnelHelperClient(
+      transport: transport,
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "same"),
+      registrationRecordStore: recordStore
+    )
+
+    do {
+      try await client.register()
+      XCTFail("Expected helper migration failure")
+    } catch {
+      let message = UserFacingError.message(for: error)
+      XCTAssertEqual(message, try XCTUnwrap(TunnelHelperClient.helperProtocolMigrationMessage(for: oldResponse)))
+      XCTAssertEqual(client.statusMessage, message)
+    }
+    XCTAssertEqual(service.unregisterCount, 1)
+    XCTAssertEqual(service.registerCount, 1)
+  }
+
   func testRegisterOpensSystemSettingsWhenHelperRequiresApproval() async throws {
     let service = FakeHelperService(status: .requiresApproval)
     let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
@@ -279,6 +402,65 @@ final class TunnelHelperClientTests: XCTestCase {
 
     XCTAssertEqual(state, .ready)
     XCTAssertEqual(client.statusMessage, TunnelHelperClient.bootstrappedMessage)
+  }
+
+  func testPreparingTunnelReregistersOldHelperProtocolAndUsesRepairedHelper() async throws {
+    let service = FakeHelperService(status: .enabled)
+    let transport = SequencedHelperTransport(statuses: [
+      HelperClientResponse(payload: HelperXPCPayload.response(
+        ok: true,
+        protocolVersion: ClashMaxHelperProtocolVersion.minimumCompatible - 1,
+        helperBuildVersion: "old"
+      )),
+      HelperClientResponse(payload: HelperXPCPayload.response(
+        ok: true,
+        protocolVersion: ClashMaxHelperProtocolVersion.current,
+        helperBuildVersion: "current"
+      ))
+    ])
+    let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: "current")
+    let client = TunnelHelperClient(
+      transport: transport,
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "current"),
+      registrationRecordStore: recordStore
+    )
+
+    let state = await client.prepareForTunnelStart()
+
+    XCTAssertEqual(state, .ready)
+    XCTAssertEqual(service.unregisterCount, 1)
+    XCTAssertEqual(service.registerCount, 1)
+    XCTAssertEqual(recordStore.storedFingerprint, "current")
+    XCTAssertEqual(client.statusMessage, TunnelHelperClient.bootstrappedMessage)
+  }
+
+  func testPreparingTunnelSurfacesMigrationMessageWhenRepairedHelperIsStillOld() async throws {
+    let service = FakeHelperService(status: .enabled)
+    let oldResponse = HelperClientResponse(payload: HelperXPCPayload.response(
+      ok: true,
+      protocolVersion: ClashMaxHelperProtocolVersion.minimumCompatible - 1,
+      helperBuildVersion: "old"
+    ))
+    let transport = SequencedHelperTransport(statuses: [
+      oldResponse,
+      oldResponse
+    ])
+    let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: "current")
+    let client = TunnelHelperClient(
+      transport: transport,
+      service: service,
+      fingerprintProvider: StaticHelperFingerprintProvider(fingerprint: "current"),
+      registrationRecordStore: recordStore
+    )
+
+    let state = await client.prepareForTunnelStart()
+
+    XCTAssertTrue(state.isFailure)
+    XCTAssertEqual(state.message, try XCTUnwrap(TunnelHelperClient.helperProtocolMigrationMessage(for: oldResponse)))
+    XCTAssertEqual(service.unregisterCount, 1)
+    XCTAssertEqual(service.registerCount, 1)
+    XCTAssertEqual(client.statusMessage, state.message)
   }
 
   func testWarmRegistrationKeepsEnabledHelperRegisteredWithoutPingingXPC() async throws {

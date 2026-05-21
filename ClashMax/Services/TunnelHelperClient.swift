@@ -111,6 +111,8 @@ struct HelperClientResponse: Sendable {
   var pid: Int
   var code: String
   var message: String
+  var protocolVersion: Int?
+  var helperBuildVersion: String?
 
   init(payload: NSString) {
     let dictionary = HelperXPCPayload.responseDictionary(from: payload)
@@ -121,18 +123,40 @@ struct HelperClientResponse: Sendable {
       ?? 0
     code = dictionary[HelperResponseKey.code] as? String ?? ""
     message = dictionary[HelperResponseKey.message] as? String ?? ""
+    protocolVersion = (dictionary[HelperResponseKey.protocolVersion] as? NSNumber)?.intValue
+      ?? dictionary[HelperResponseKey.protocolVersion] as? Int
+    helperBuildVersion = dictionary[HelperResponseKey.helperBuildVersion] as? String
   }
 
   static func failure(_ message: String, code: String = "") -> HelperClientResponse {
     HelperClientResponse(ok: false, running: false, pid: 0, code: code, message: message)
   }
 
-  private init(ok: Bool, running: Bool, pid: Int, code: String, message: String) {
+  private init(
+    ok: Bool,
+    running: Bool,
+    pid: Int,
+    code: String,
+    message: String,
+    protocolVersion: Int? = ClashMaxHelperProtocolVersion.current,
+    helperBuildVersion: String? = ClashMaxHelperBuild.version
+  ) {
     self.ok = ok
     self.running = running
     self.pid = pid
     self.code = code
     self.message = message
+    self.protocolVersion = protocolVersion
+    self.helperBuildVersion = helperBuildVersion
+  }
+
+  var protocolCompatible: Bool {
+    guard let protocolVersion else { return false }
+    return protocolVersion >= ClashMaxHelperProtocolVersion.minimumCompatible
+  }
+
+  var protocolMigrationRequired: Bool {
+    !protocolCompatible
   }
 
   var userFacingMessage: String {
@@ -148,6 +172,8 @@ struct HelperClientResponse: Sendable {
       return "TUN helper rejected the app or core signature. Reinstall a signed ClashMax build, then click Repair Helper."
     case HelperResponseCode.launchFailed:
       return "TUN helper could not launch Mihomo: \(fallback)"
+    case HelperResponseCode.incompatibleProtocol:
+      return fallback
     default:
       return fallback
     }
@@ -198,6 +224,10 @@ struct TunnelHelperStatusDetail: Equatable, Sendable {
   var xpcReachable: Bool
   var running: Bool
   var pid: Int?
+  var protocolVersion: Int?
+  var helperBuildVersion: String?
+  var protocolCompatible: Bool
+  var migrationRequired: Bool
   var message: String
 
   static let unknown = TunnelHelperStatusDetail(
@@ -211,6 +241,10 @@ struct TunnelHelperStatusDetail: Equatable, Sendable {
     xpcReachable: false,
     running: false,
     pid: nil,
+    protocolVersion: nil,
+    helperBuildVersion: nil,
+    protocolCompatible: false,
+    migrationRequired: false,
     message: String(localized: "Helper status has not been checked.")
   )
 }
@@ -243,12 +277,7 @@ final class TunnelHelperClient: ObservableObject {
     let fingerprint = try fingerprintProvider.currentFingerprint()
     switch service.status {
     case .enabled:
-      if registrationRecordStore.helperFingerprint().map({ $0 != fingerprint }) == true {
-        try await repairRegistration(fingerprint: fingerprint)
-        return
-      }
-      registrationRecordStore.setHelperFingerprint(fingerprint)
-      try await verifyBootstrapped()
+      try await repairRegistration(fingerprint: fingerprint)
     case .requiresApproval:
       statusMessage = Self.statusMessage(for: service.status)
       registrationRecordStore.setHelperFingerprint(fingerprint)
@@ -353,6 +382,10 @@ final class TunnelHelperClient: ObservableObject {
         xpcReachable: false,
         running: false,
         pid: nil,
+        protocolVersion: nil,
+        helperBuildVersion: nil,
+        protocolCompatible: false,
+        migrationRequired: false,
         message: baseMessage
       )
     }
@@ -360,20 +393,26 @@ final class TunnelHelperClient: ObservableObject {
     do {
       let response = try await statusWithTimeout()
       let isRunning = response.running || response.pid > 0
-      let message = response.ok
-        ? Self.bootstrappedMessage
-        : response.userFacingMessage
+      let migrationMessage = Self.helperProtocolMigrationMessage(for: response)
+      let isProtocolCompatible = migrationMessage == nil
+      let isBootstrapped = response.ok && isProtocolCompatible
+      let message = migrationMessage
+        ?? (response.ok ? Self.bootstrappedMessage : response.userFacingMessage)
       return TunnelHelperStatusDetail(
         serviceStatus: serviceStatus,
         registered: true,
         enabled: true,
         requiresApproval: false,
-        bootstrapped: response.ok,
+        bootstrapped: isBootstrapped,
         fingerprintRecorded: storedFingerprint != nil,
         fingerprintMatches: fingerprintMatches,
         xpcReachable: true,
         running: isRunning,
         pid: response.pid > 0 ? response.pid : nil,
+        protocolVersion: response.protocolVersion,
+        helperBuildVersion: response.helperBuildVersion,
+        protocolCompatible: isProtocolCompatible,
+        migrationRequired: migrationMessage != nil,
         message: message
       )
     } catch {
@@ -388,6 +427,10 @@ final class TunnelHelperClient: ObservableObject {
         xpcReachable: false,
         running: false,
         pid: nil,
+        protocolVersion: nil,
+        helperBuildVersion: nil,
+        protocolCompatible: false,
+        migrationRequired: false,
         message: "TUN helper XPC is unreachable: \(UserFacingError.message(for: error))"
       )
     }
@@ -447,6 +490,17 @@ final class TunnelHelperClient: ObservableObject {
   static let bootstrappedMessage = String(localized: "Helper registered and bootstrapped.")
   static let registeredMessage = String(localized: "TUN helper is registered.")
   static let notBootstrappedMessage = String(localized: "TUN helper is registered, but launchd cannot start it. Click Repair after installing the latest build.")
+  static func helperProtocolMigrationMessage(for response: HelperClientResponse) -> String? {
+    guard response.protocolMigrationRequired else { return nil }
+    if let protocolVersion = response.protocolVersion {
+      return String(
+        format: String(localized: "Registered TUN helper protocol v%lld is older than ClashMax requires (v%lld). Click Repair Helper to reinstall the bundled helper, then approve it in System Settings if prompted."),
+        Int64(protocolVersion),
+        Int64(ClashMaxHelperProtocolVersion.minimumCompatible)
+      )
+    }
+    return String(localized: "Registered TUN helper does not report a helper protocol version. Click Repair Helper to reinstall the bundled helper, then approve it in System Settings if prompted.")
+  }
 
   private func repairRegistration(fingerprint: String) async throws {
     switch service.status {
@@ -622,6 +676,10 @@ final class TunnelHelperClient: ObservableObject {
   private func bootstrappedPreparationState() async -> TunHelperPreparationState {
     do {
       let response = try await statusWithTimeout()
+      if let migrationMessage = Self.helperProtocolMigrationMessage(for: response) {
+        statusMessage = migrationMessage
+        return .notBootstrapped(migrationMessage)
+      }
       guard response.ok else {
         let message = response.message.isEmpty ? Self.notBootstrappedMessage : response.message
         statusMessage = message
@@ -636,16 +694,24 @@ final class TunnelHelperClient: ObservableObject {
   }
 
   private func verifyBootstrapped() async throws {
+    let response: HelperClientResponse
     do {
-      let response = try await statusWithTimeout()
-      guard response.ok else {
-        throw AppError.helperResponse(response.message.isEmpty ? Self.notBootstrappedMessage : response.message)
-      }
-      markHelperBootstrapped()
+      response = try await statusWithTimeout()
     } catch {
       statusMessage = Self.notBootstrappedMessage
       throw AppError.helperResponse(Self.notBootstrappedMessage)
     }
+
+    if let migrationMessage = Self.helperProtocolMigrationMessage(for: response) {
+      statusMessage = migrationMessage
+      throw AppError.helperResponse(migrationMessage)
+    }
+    guard response.ok else {
+      let message = response.message.isEmpty ? Self.notBootstrappedMessage : response.message
+      statusMessage = message
+      throw AppError.helperResponse(message)
+    }
+    markHelperBootstrapped()
   }
 
   private func markHelperBootstrapped() {

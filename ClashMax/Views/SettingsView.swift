@@ -503,14 +503,30 @@ private struct HelperStatusDetailView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      helperStatusRow("Registered", value: detail.registered ? "Yes" : "No", positive: detail.registered)
-      helperStatusRow("Enabled", value: detail.enabled ? "Yes" : "No", positive: detail.enabled)
-      helperStatusRow("Approval", value: detail.requiresApproval ? "Required" : "Clear", positive: !detail.requiresApproval)
-      helperStatusRow("Bootstrapped", value: detail.bootstrapped ? "Yes" : "No", positive: detail.bootstrapped)
+      helperStatusRow("Registered", value: yesNo(detail.registered), positive: detail.registered)
+      helperStatusRow("Enabled", value: yesNo(detail.enabled), positive: detail.enabled)
+      helperStatusRow(
+        "Approval",
+        value: detail.requiresApproval ? String(localized: "Required") : String(localized: "Clear"),
+        positive: !detail.requiresApproval
+      )
+      helperStatusRow("Bootstrapped", value: yesNo(detail.bootstrapped), positive: detail.bootstrapped)
       helperStatusRow("Fingerprint", value: fingerprintText, positive: detail.fingerprintMatches == true)
-      helperStatusRow("XPC", value: detail.xpcReachable ? "Reachable" : "Unreachable", positive: detail.xpcReachable)
+      helperStatusRow(
+        "XPC",
+        value: detail.xpcReachable ? String(localized: "Reachable") : String(localized: "Unreachable"),
+        positive: detail.xpcReachable
+      )
+      helperStatusRow("Protocol", value: protocolText, positive: detail.protocolCompatible)
+      if let helperBuildVersion = detail.helperBuildVersion {
+        helperStatusRow("Helper Build", value: helperBuildVersion, positive: detail.protocolCompatible)
+      }
       helperStatusRow("Running", value: runningText, positive: detail.running)
-      helperStatusRow("Recent Logs", value: logCount > 0 ? "\(logCount)" : "Empty", positive: logCount > 0)
+      helperStatusRow(
+        "Recent Logs",
+        value: logCount > 0 ? "\(logCount)" : String(localized: "Empty"),
+        positive: logCount > 0
+      )
       if let latestExitSummary {
         helperStatusRow("Last Exit", value: latestExitSummary, positive: false)
       }
@@ -525,25 +541,39 @@ private struct HelperStatusDetailView: View {
     .background(.quaternary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
   }
 
+  private func yesNo(_ value: Bool) -> String {
+    value ? String(localized: "Yes") : String(localized: "No")
+  }
+
   private var fingerprintText: String {
     guard detail.fingerprintRecorded else {
-      return "Not Recorded"
+      return String(localized: "Not Recorded")
     }
     switch detail.fingerprintMatches {
     case true:
-      return "Match"
+      return String(localized: "Match")
     case false:
-      return "Mismatch"
+      return String(localized: "Mismatch")
     case nil:
-      return "Unknown"
+      return String(localized: "Unknown")
     }
+  }
+
+  private var protocolText: String {
+    if let protocolVersion = detail.protocolVersion {
+      if detail.migrationRequired {
+        return String(format: String(localized: "v%lld Needs Repair"), Int64(protocolVersion))
+      }
+      return "v\(protocolVersion)"
+    }
+    return detail.migrationRequired ? String(localized: "Missing") : String(localized: "Unknown")
   }
 
   private var runningText: String {
     if let pid = detail.pid {
-      return "PID \(pid)"
+      return String(format: String(localized: "PID %lld"), Int64(pid))
     }
-    return detail.running ? "Yes" : "No"
+    return yesNo(detail.running)
   }
 
   private func helperStatusRow(_ title: String, value: String, positive: Bool) -> some View {
@@ -551,7 +581,7 @@ private struct HelperStatusDetailView: View {
       Text(LocalizedStringKey(title))
         .foregroundStyle(.secondary)
       Spacer()
-      Text(LocalizedStringKey(value))
+      Text(value)
         .foregroundStyle(positive ? Color.green : Color.secondary)
         .multilineTextAlignment(.trailing)
     }

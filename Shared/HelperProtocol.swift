@@ -68,6 +68,8 @@ enum HelperResponseKey {
   static let pid = "pid"
   static let code = "code"
   static let message = "message"
+  static let protocolVersion = "protocolVersion"
+  static let helperBuildVersion = "helperBuildVersion"
 }
 
 enum HelperResponseCode {
@@ -75,17 +77,57 @@ enum HelperResponseCode {
   static let invalidPath = "invalidPath"
   static let untrustedSignature = "untrustedSignature"
   static let launchFailed = "launchFailed"
+  static let incompatibleProtocol = "incompatibleProtocol"
+}
+
+enum ClashMaxHelperProtocolVersion {
+  static let current = 1
+  static let minimumCompatible = 1
+}
+
+enum ClashMaxHelperBuild {
+  static var version: String {
+    let info = Bundle.main.infoDictionary ?? [:]
+    let shortVersion = info["CFBundleShortVersionString"] as? String
+    let buildVersion = info["CFBundleVersion"] as? String
+
+    switch (shortVersion?.isEmpty == false ? shortVersion : nil, buildVersion?.isEmpty == false ? buildVersion : nil) {
+    case let (short?, build?):
+      return "\(short) (\(build))"
+    case let (short?, nil):
+      return short
+    case let (nil, build?):
+      return build
+    case (nil, nil):
+      return "unknown"
+    }
+  }
 }
 
 enum HelperXPCPayload {
-  static func response(ok: Bool, running: Bool = false, pid: Int = 0, code: String = "", message: String = "") -> NSString {
-    jsonString([
+  static func response(
+    ok: Bool,
+    running: Bool = false,
+    pid: Int = 0,
+    code: String = "",
+    message: String = "",
+    protocolVersion: Int? = ClashMaxHelperProtocolVersion.current,
+    helperBuildVersion: String? = ClashMaxHelperBuild.version
+  ) -> NSString {
+    var payload: [String: Any] = [
       HelperResponseKey.ok: ok,
       HelperResponseKey.running: running,
       HelperResponseKey.pid: pid,
       HelperResponseKey.code: code,
       HelperResponseKey.message: message
-    ]) as NSString
+    ]
+    if let protocolVersion {
+      payload[HelperResponseKey.protocolVersion] = protocolVersion
+    }
+    if let helperBuildVersion, !helperBuildVersion.isEmpty {
+      payload[HelperResponseKey.helperBuildVersion] = helperBuildVersion
+    }
+    return jsonString(payload) as NSString
   }
 
   static func responseDictionary(from payload: NSString) -> [String: Any] {

@@ -156,6 +156,20 @@ final class ConfigNormalizerTests: XCTestCase {
         - 8.8.8.8
       hosts:
         router.lan: 192.168.1.1
+      nameserver-policy:
+        "+.existing-array":
+          - https://1.1.1.1/dns-query
+          - tls://8.8.8.8
+        "+.existing-string": 8.8.4.4
+      proxy-server-nameserver-policy:
+        "proxy.example.com":
+          - 114.114.114.114
+          - tls://1.1.1.1
+      fallback-filter:
+        geoip: false
+        geosite: [category-ads-all]
+        ipcidr: [10.0.0.0/8]
+        domain: ["+.facebook.com"]
     tun:
       enable: false
       auto-redirect: true
@@ -172,13 +186,27 @@ final class ConfigNormalizerTests: XCTestCase {
       mtu: 1500,
       routeExcludeAddresses: [],
       dns: TunDNSSettings(
+        preferH3: false,
+        useHosts: false,
+        useSystemHosts: true,
+        respectRules: true,
         fakeIPFilter: ["*.corp", "*.lan"],
+        defaultNameserver: ["223.5.5.5"],
         nameserver: ["8.8.8.8", "https://dns.example/dns-query"],
         fallback: ["1.1.1.1"],
         proxyServerNameserver: ["9.9.9.9"],
         directNameserver: ["223.5.5.5"],
+        directNameserverFollowPolicy: true,
         nameserverPolicy: ["+.corp": "system"],
-        hosts: ["internal.test": "10.0.0.2"]
+        proxyServerNameserverPolicy: ["www.yournode.com": "114.114.114.114"],
+        hosts: ["internal.test": "10.0.0.2"],
+        fallbackFilter: TunDNSFallbackFilter(
+          geoIP: true,
+          geoIPCode: "CN",
+          geoSite: ["gfw"],
+          ipCIDR: ["240.0.0.0/4"],
+          domain: ["+.google.com"]
+        )
       )
     )
 
@@ -188,17 +216,48 @@ final class ConfigNormalizerTests: XCTestCase {
     let tun = try XCTUnwrap(yaml["tun"] as? [String: Any])
 
     XCTAssertEqual(dns["enable"] as? Bool, true)
+    XCTAssertEqual(dns["prefer-h3"] as? Bool, false)
+    XCTAssertEqual(dns["use-hosts"] as? Bool, false)
+    XCTAssertEqual(dns["use-system-hosts"] as? Bool, true)
+    XCTAssertEqual(dns["respect-rules"] as? Bool, true)
     XCTAssertEqual(dns["enhanced-mode"] as? String, "fake-ip")
     XCTAssertEqual(dns["fake-ip-range"] as? String, "198.18.0.1/16")
     XCTAssertEqual(dns["fake-ip-filter"] as? [String], ["*.corp", "*.lan"])
+    XCTAssertEqual(dns["default-nameserver"] as? [String], ["223.5.5.5"])
     XCTAssertEqual(dns["nameserver"] as? [String], ["8.8.8.8", "https://dns.example/dns-query"])
     XCTAssertEqual(dns["fallback"] as? [String], ["1.1.1.1"])
     XCTAssertEqual(dns["proxy-server-nameserver"] as? [String], ["9.9.9.9"])
     XCTAssertEqual(dns["direct-nameserver"] as? [String], ["223.5.5.5"])
-    XCTAssertEqual((dns["nameserver-policy"] as? [String: String])?["+.corp"], "system")
+    XCTAssertEqual(dns["direct-nameserver-follow-policy"] as? Bool, true)
+    let nameserverPolicy = try XCTUnwrap(dns["nameserver-policy"] as? [String: Any])
+    XCTAssertEqual(nameserverPolicy["+.existing-array"] as? [String], ["https://1.1.1.1/dns-query", "tls://8.8.8.8"])
+    XCTAssertEqual(nameserverPolicy["+.existing-string"] as? String, "8.8.4.4")
+    XCTAssertEqual(nameserverPolicy["+.corp"] as? String, "system")
+    let proxyServerNameserverPolicy = try XCTUnwrap(dns["proxy-server-nameserver-policy"] as? [String: Any])
+    XCTAssertEqual(proxyServerNameserverPolicy["proxy.example.com"] as? [String], ["114.114.114.114", "tls://1.1.1.1"])
+    XCTAssertEqual(proxyServerNameserverPolicy["www.yournode.com"] as? String, "114.114.114.114")
     XCTAssertEqual((dns["hosts"] as? [String: String])?["router.lan"], "192.168.1.1")
     XCTAssertEqual((dns["hosts"] as? [String: String])?["internal.test"], "10.0.0.2")
+    let fallbackFilter = try XCTUnwrap(dns["fallback-filter"] as? [String: Any])
+    XCTAssertEqual(fallbackFilter["geoip"] as? Bool, true)
+    XCTAssertEqual(fallbackFilter["geoip-code"] as? String, "CN")
+    XCTAssertEqual(fallbackFilter["geosite"] as? [String], ["category-ads-all", "gfw"])
+    XCTAssertEqual(fallbackFilter["ipcidr"] as? [String], ["10.0.0.0/8", "240.0.0.0/4"])
+    XCTAssertEqual(fallbackFilter["domain"] as? [String], ["+.facebook.com", "+.google.com"])
     XCTAssertNil(tun["auto-redirect"])
+  }
+
+  func testTunDNSSettingsDecodeLegacyDefaultsForAdvancedFields() throws {
+    let decoded = try JSONDecoder().decode(TunDNSSettings.self, from: Data("{}".utf8))
+
+    XCTAssertNil(decoded.preferH3)
+    XCTAssertNil(decoded.useHosts)
+    XCTAssertNil(decoded.useSystemHosts)
+    XCTAssertNil(decoded.respectRules)
+    XCTAssertTrue(decoded.defaultNameserver.isEmpty)
+    XCTAssertNil(decoded.directNameserverFollowPolicy)
+    XCTAssertTrue(decoded.proxyServerNameserverPolicy.isEmpty)
+    XCTAssertTrue(decoded.fallbackFilter.isEmpty)
   }
 
   func testRuntimeConfigCanApplyTunDNSOverlayWithoutFakeIP() throws {
@@ -335,6 +394,86 @@ final class ConfigNormalizerTests: XCTestCase {
 
     XCTAssertThrowsError(try ConfigNormalizer().runtimeConfig(from: "proxies:\n  - name: DIRECT\n    type: direct", overrides: overrides)) { error in
       XCTAssertTrue(String(describing: error).contains("Invalid TUN DNS fallback: ftp://dns.example/query"))
+    }
+
+    overrides.tunSettings = TunSettings(
+      stack: .mixed,
+      device: "utun1024",
+      autoRoute: true,
+      strictRoute: false,
+      autoDetectInterface: true,
+      dnsHijack: ["any:53"],
+      mtu: 1500,
+      routeExcludeAddresses: [],
+      dns: TunDNSSettings(defaultNameserver: ["bad resolver"])
+    )
+
+    XCTAssertThrowsError(try ConfigNormalizer().runtimeConfig(from: "proxies:\n  - name: DIRECT\n    type: direct", overrides: overrides)) { error in
+      XCTAssertTrue(String(describing: error).contains("Invalid TUN DNS default-nameserver: bad resolver"))
+    }
+
+    overrides.tunSettings = TunSettings(
+      stack: .mixed,
+      device: "utun1024",
+      autoRoute: true,
+      strictRoute: false,
+      autoDetectInterface: true,
+      dnsHijack: ["any:53"],
+      mtu: 1500,
+      routeExcludeAddresses: [],
+      dns: TunDNSSettings(defaultNameserver: ["https://dns.alidns.com/dns-query"])
+    )
+
+    XCTAssertThrowsError(try ConfigNormalizer().runtimeConfig(from: "proxies:\n  - name: DIRECT\n    type: direct", overrides: overrides)) { error in
+      XCTAssertTrue(String(describing: error).contains("Invalid TUN DNS default-nameserver: https://dns.alidns.com/dns-query"))
+    }
+
+    overrides.tunSettings = TunSettings(
+      stack: .mixed,
+      device: "utun1024",
+      autoRoute: true,
+      strictRoute: false,
+      autoDetectInterface: true,
+      dnsHijack: ["any:53"],
+      mtu: 1500,
+      routeExcludeAddresses: [],
+      dns: TunDNSSettings(proxyServerNameserverPolicy: ["+.corp": "bad resolver"])
+    )
+
+    XCTAssertThrowsError(try ConfigNormalizer().runtimeConfig(from: "proxies:\n  - name: DIRECT\n    type: direct", overrides: overrides)) { error in
+      XCTAssertTrue(String(describing: error).contains("Invalid TUN proxy-server-nameserver policy: +.corp=bad resolver"))
+    }
+
+    overrides.tunSettings = TunSettings(
+      stack: .mixed,
+      device: "utun1024",
+      autoRoute: true,
+      strictRoute: false,
+      autoDetectInterface: true,
+      dnsHijack: ["any:53"],
+      mtu: 1500,
+      routeExcludeAddresses: [],
+      dns: TunDNSSettings(fallbackFilter: TunDNSFallbackFilter(ipCIDR: ["240.0.0.0/33"]))
+    )
+
+    XCTAssertThrowsError(try ConfigNormalizer().runtimeConfig(from: "proxies:\n  - name: DIRECT\n    type: direct", overrides: overrides)) { error in
+      XCTAssertTrue(String(describing: error).contains("Invalid TUN DNS fallback ipcidr: 240.0.0.0/33"))
+    }
+
+    overrides.tunSettings = TunSettings(
+      stack: .mixed,
+      device: "utun1024",
+      autoRoute: true,
+      strictRoute: false,
+      autoDetectInterface: true,
+      dnsHijack: ["any:53"],
+      mtu: 1500,
+      routeExcludeAddresses: [],
+      dns: TunDNSSettings(fallbackFilter: TunDNSFallbackFilter(domain: ["bad domain"]))
+    )
+
+    XCTAssertThrowsError(try ConfigNormalizer().runtimeConfig(from: "proxies:\n  - name: DIRECT\n    type: direct", overrides: overrides)) { error in
+      XCTAssertTrue(String(describing: error).contains("Invalid TUN DNS fallback domain: bad domain"))
     }
   }
 

@@ -726,6 +726,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     XCTAssertFalse(model.updateTunSettings(settings))
     XCTAssertEqual(model.lastError, "Invalid TUN DNS nameserver: https://999.1.1.1/dns-query")
+
+    settings = .default
+    settings.dns = TunDNSSettings(defaultNameserver: ["https://dns.alidns.com/dns-query"])
+
+    XCTAssertFalse(model.updateTunSettings(settings))
+    XCTAssertEqual(model.lastError, "Invalid TUN DNS default-nameserver: https://dns.alidns.com/dns-query")
   }
 
   func testExternalControllerSettingsMigratesMissingCORSFromUserDefaults() throws {
@@ -4224,6 +4230,89 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertNil(model.lastError)
   }
 
+  func testRunningTunSettingsSaveRestartsHelperWhenReloadLeavesRouteIssue() async throws {
+    let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
+    let helperTransport = ReadyTunnelHelperTransport()
+    let routeIssue = Self.tunDiagnosticsSnapshot(
+      checks: [
+        Self.nonRoutingControllerFailureCheck(),
+        TunDiagnosticCheck(id: "default-route", title: "Default Route", status: .fail, message: "stale")
+      ],
+      includeExternal: false,
+      time: 44
+    )
+    let repaired = Self.tunDiagnosticsSnapshot(
+      checks: [TunDiagnosticCheck(id: "default-route", title: "Default Route", status: .pass, message: "ok")],
+      includeExternal: false,
+      time: 45
+    )
+    let inspector = RecordingTunRuntimeInspector(snapshots: [routeIssue, repaired])
+    let model = try await makeRunningTunnelModel(
+      client: client,
+      helperTransport: helperTransport,
+      tunRuntimeInspector: inspector
+    )
+    var settings = TunSettings.default
+    settings.mtu = 1400
+
+    XCTAssertTrue(model.updateTunSettings(settings))
+    for _ in 0..<160 {
+      let currentRestartCount = await helperTransport.restartCount()
+      if currentRestartCount > 0, model.tunDiagnostics.updatedAt == repaired.updatedAt {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let reloadForces = await client.reloadRequestForces()
+    let restartCount = await helperTransport.restartCount()
+    XCTAssertEqual(reloadForces, [true])
+    XCTAssertEqual(restartCount, 1)
+    XCTAssertEqual(model.tunDiagnostics, repaired)
+    XCTAssertNil(model.lastError)
+  }
+
+  func testRunningTunSettingsSaveSurfacesErrorWhenHelperRestartLeavesRouteIssue() async throws {
+    let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
+    let helperTransport = ReadyTunnelHelperTransport()
+    let routeIssue = Self.tunDiagnosticsSnapshot(
+      checks: [
+        Self.nonRoutingControllerFailureCheck(),
+        TunDiagnosticCheck(id: "default-route", title: "Default Route", status: .fail, message: "stale")
+      ],
+      includeExternal: false,
+      time: 46
+    )
+    let stillBroken = Self.tunDiagnosticsSnapshot(
+      checks: [TunDiagnosticCheck(id: "default-route", title: "Default Route", status: .fail, message: "still stale")],
+      includeExternal: false,
+      time: 47
+    )
+    let inspector = RecordingTunRuntimeInspector(snapshots: [routeIssue, stillBroken])
+    let model = try await makeRunningTunnelModel(
+      client: client,
+      helperTransport: helperTransport,
+      tunRuntimeInspector: inspector
+    )
+    var settings = TunSettings.default
+    settings.mtu = 1400
+
+    XCTAssertTrue(model.updateTunSettings(settings))
+    for _ in 0..<160 where model.lastError == nil {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let reloadForces = await client.reloadRequestForces()
+    let restartCount = await helperTransport.restartCount()
+    XCTAssertEqual(reloadForces, [true])
+    XCTAssertEqual(restartCount, 1)
+    XCTAssertTrue(model.tunEnabled)
+    XCTAssertTrue(model.lastError?.contains("Could not apply TUN settings without restart") == true)
+    XCTAssertTrue(model.lastError?.contains("Default Route: still stale") == true)
+  }
+
   func testRunningTunSettingsSaveSurfacesDNSApplyFailureWithoutHelperRestart() async throws {
     let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
     let helperTransport = ReadyTunnelHelperTransport()
@@ -4284,7 +4373,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
     let helperTransport = ReadyTunnelHelperTransport()
     let routeIssue = Self.tunDiagnosticsSnapshot(
-      checks: [TunDiagnosticCheck(id: "default-route", title: "Default Route", status: .fail, message: "stale")],
+      checks: [
+        Self.nonRoutingControllerFailureCheck(),
+        TunDiagnosticCheck(id: "default-route", title: "Default Route", status: .fail, message: "stale")
+      ],
       includeExternal: false,
       time: 52
     )
@@ -4322,7 +4414,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
     let helperTransport = ReadyTunnelHelperTransport()
     let routeIssue = Self.tunDiagnosticsSnapshot(
-      checks: [TunDiagnosticCheck(id: "default-route", title: "Default Route", status: .fail, message: "stale")],
+      checks: [
+        Self.nonRoutingControllerFailureCheck(),
+        TunDiagnosticCheck(id: "default-route", title: "Default Route", status: .fail, message: "stale")
+      ],
       includeExternal: false,
       time: 54
     )
@@ -4340,8 +4435,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.repairTunRouting()
     for _ in 0..<160 {
-      let currentStopCount = await helperTransport.stopCount()
-      if currentStopCount >= 2 || model.lastError != nil { break }
+      if !model.tunnelCoreRunning,
+         !model.tunEnabled,
+         model.tunDiagnostics == .empty,
+         model.lastError?.contains("stopped TUN safely") == true {
+        break
+      }
       await Task.yield()
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
@@ -4366,7 +4465,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
     let helperTransport = ReadyTunnelHelperTransport()
     let routeIssue = Self.tunDiagnosticsSnapshot(
-      checks: [TunDiagnosticCheck(id: "default-route", title: "Default Route", status: .fail, message: "stale")],
+      checks: [
+        Self.nonRoutingControllerFailureCheck(),
+        TunDiagnosticCheck(id: "default-route", title: "Default Route", status: .fail, message: "stale")
+      ],
       includeExternal: false,
       time: 56
     )
@@ -4379,8 +4481,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.repairTunRouting()
     for _ in 0..<160 {
-      let currentStopCount = await helperTransport.stopCount()
-      if currentStopCount >= 2 || model.lastError != nil { break }
+      if !model.tunnelCoreRunning,
+         !model.tunEnabled,
+         model.tunDiagnostics == .empty,
+         model.lastError?.contains("stopped TUN safely") == true {
+        break
+      }
       await Task.yield()
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
@@ -4408,8 +4514,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.repairTunRouting()
     for _ in 0..<160 {
-      let currentStopCount = await helperTransport.stopCount()
-      if currentStopCount > 0 || model.lastError != nil { break }
+      if !model.tunnelCoreRunning,
+         !model.tunEnabled,
+         model.tunDiagnostics == .empty,
+         model.lastError?.contains("stopped TUN safely") == true {
+        break
+      }
       await Task.yield()
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
@@ -5063,6 +5173,15 @@ final class DashboardRuntimeStateTests: XCTestCase {
       checks: checks,
       updatedAt: Date(timeIntervalSince1970: time),
       externalProbeIncluded: includeExternal
+    )
+  }
+
+  private static func nonRoutingControllerFailureCheck() -> TunDiagnosticCheck {
+    TunDiagnosticCheck(
+      id: "controller",
+      title: "Controller",
+      status: .fail,
+      message: "controller unavailable"
     )
   }
 
