@@ -336,6 +336,40 @@ final class ProfileStoreTests: XCTestCase {
 
     XCTAssertEqual(try String(contentsOfFile: profile.originalConfigPath, encoding: .utf8), updatedSubscription)
   }
+
+  func testRuntimePathsPrepareDirectoriesUseOwnerOnlyPermissions() throws {
+    let fixture = try TemporaryProfileFixture()
+
+    for directory in [fixture.paths.appSupport, fixture.paths.profiles, fixture.paths.runtime, fixture.paths.subscriptions, fixture.paths.logs] {
+      try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: directory.path)
+    }
+
+    try fixture.paths.prepareDirectories()
+
+    for directory in [fixture.paths.appSupport, fixture.paths.profiles, fixture.paths.runtime, fixture.paths.subscriptions, fixture.paths.logs] {
+      XCTAssertEqual(try posixPermissions(at: directory), SecureFileIO.privateDirectoryPermissions)
+    }
+  }
+
+  func testProfileDiskIOWritesManifestAndProfileSourcesWithOwnerOnlyPermissions() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let diskIO = ProfileDiskIO()
+    let profileURL = fixture.paths.profiles.appendingPathComponent("profile.yaml")
+    let subscriptionURL = fixture.paths.profiles.appendingPathComponent("subscription.yaml")
+
+    try await diskIO.saveManifest(ProfileManifest(profiles: [], activeProfileID: nil), to: fixture.paths.manifestURL)
+    _ = try await diskIO.importLocalConfig(from: fixture.configURL, to: profileURL)
+    try await diskIO.writeProfileSource("proxies:\n  - name: DIRECT\n    type: direct\n", to: subscriptionURL)
+
+    XCTAssertEqual(try posixPermissions(at: fixture.paths.manifestURL), SecureFileIO.privateFilePermissions)
+    XCTAssertEqual(try posixPermissions(at: profileURL), SecureFileIO.privateFilePermissions)
+    XCTAssertEqual(try posixPermissions(at: subscriptionURL), SecureFileIO.privateFilePermissions)
+  }
+
+  private func posixPermissions(at url: URL) throws -> Int {
+    let value = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber)
+    return value.intValue & 0o777
+  }
 }
 
 private struct TemporaryProfileFixture {
@@ -354,9 +388,7 @@ private struct TemporaryProfileFixture {
       subscriptions: root.appendingPathComponent("Subscriptions", isDirectory: true),
       logs: root.appendingPathComponent("Logs", isDirectory: true)
     )
-    for directory in [paths.appSupport, paths.profiles, paths.runtime, paths.subscriptions, paths.logs] {
-      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    }
+    try paths.prepareDirectories()
     configURL = root.appendingPathComponent("sample.yaml")
     try config.write(to: configURL, atomically: true, encoding: .utf8)
   }

@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 struct RuntimePaths: Sendable {
@@ -23,10 +24,14 @@ struct RuntimePaths: Sendable {
       logs: root.appendingPathComponent("Logs", isDirectory: true)
     )
 
-    for directory in [paths.appSupport, paths.profiles, paths.runtime, paths.subscriptions, paths.logs] {
-      try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-    }
+    try paths.prepareDirectories(fileManager: fileManager)
     return paths
+  }
+
+  func prepareDirectories(fileManager: FileManager = .default) throws {
+    for directory in [appSupport, profiles, runtime, subscriptions, logs] {
+      try SecureFileIO.createPrivateDirectory(at: directory, fileManager: fileManager)
+    }
   }
 
   var manifestURL: URL {
@@ -39,6 +44,71 @@ struct RuntimePaths: Sendable {
 
   func runtimeProviderContentURL(for profile: Profile) -> URL {
     runtime.appendingPathComponent("\(profile.id.uuidString).provider.txt")
+  }
+}
+
+enum SecureFileIO {
+  static let privateDirectoryPermissions = 0o700
+  static let privateFilePermissions = 0o600
+
+  static func createPrivateDirectory(at url: URL, fileManager: FileManager = .default) throws {
+    try fileManager.createDirectory(
+      at: url,
+      withIntermediateDirectories: true,
+      attributes: [.posixPermissions: privateDirectoryPermissions]
+    )
+    try setPermissions(privateDirectoryPermissions, at: url, fileManager: fileManager)
+  }
+
+  static func writePrivateString(_ string: String, to url: URL, fileManager: FileManager = .default) throws {
+    try writePrivateData(Data(string.utf8), to: url, fileManager: fileManager)
+  }
+
+  static func writePrivateData(_ data: Data, to url: URL, fileManager: FileManager = .default) throws {
+    try createPrivateDirectory(at: url.deletingLastPathComponent(), fileManager: fileManager)
+
+    let temporaryURL = url.deletingLastPathComponent()
+      .appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).tmp")
+    var didMoveTemporaryFile = false
+
+    do {
+      guard fileManager.createFile(
+        atPath: temporaryURL.path,
+        contents: data,
+        attributes: [.posixPermissions: privateFilePermissions]
+      ) else {
+        throw POSIXError(.EIO)
+      }
+      try setPermissions(privateFilePermissions, at: temporaryURL, fileManager: fileManager)
+      try renameReplacingItem(at: temporaryURL, to: url)
+      didMoveTemporaryFile = true
+      try setPermissions(privateFilePermissions, at: url, fileManager: fileManager)
+    } catch {
+      if !didMoveTemporaryFile {
+        try? fileManager.removeItem(at: temporaryURL)
+      }
+      throw error
+    }
+  }
+
+  private static func setPermissions(_ permissions: Int, at url: URL, fileManager: FileManager) throws {
+    try fileManager.setAttributes([.posixPermissions: permissions], ofItemAtPath: url.path)
+  }
+
+  private static func renameReplacingItem(at sourceURL: URL, to destinationURL: URL) throws {
+    let result: Int32 = sourceURL.withUnsafeFileSystemRepresentation { sourcePath in
+      destinationURL.withUnsafeFileSystemRepresentation { destinationPath in
+        guard let sourcePath, let destinationPath else {
+          errno = EINVAL
+          return Int32(-1)
+        }
+        return Darwin.rename(sourcePath, destinationPath)
+      }
+    }
+
+    guard result == 0 else {
+      throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+    }
   }
 }
 

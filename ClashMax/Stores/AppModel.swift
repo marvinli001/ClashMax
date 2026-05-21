@@ -365,7 +365,6 @@ final class AppModel: ObservableObject {
       return AppModel(paths: paths)
     } catch {
       let fallback = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("ClashMax", isDirectory: true)
-      try? FileManager.default.createDirectory(at: fallback, withIntermediateDirectories: true)
       let paths = RuntimePaths(
         appSupport: fallback,
         profiles: fallback.appendingPathComponent("Profiles", isDirectory: true),
@@ -373,6 +372,7 @@ final class AppModel: ObservableObject {
         subscriptions: fallback.appendingPathComponent("Subscriptions", isDirectory: true),
         logs: fallback.appendingPathComponent("Logs", isDirectory: true)
       )
+      try? paths.prepareDirectories()
       let model = AppModel(paths: paths)
       model.lastError = UserFacingError.message(for: error)
       return model

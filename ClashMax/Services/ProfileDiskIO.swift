@@ -25,13 +25,13 @@ actor ProfileDiskIO {
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     encoder.dateEncodingStrategy = .iso8601
     let data = try encoder.encode(manifest)
-    try data.write(to: url, options: [.atomic])
+    try SecureFileIO.writePrivateData(data, to: url, fileManager: fileManager)
   }
 
   func importLocalConfig(from sourceURL: URL, to destinationURL: URL) throws -> String {
     let source = try String(contentsOf: sourceURL, encoding: .utf8)
     try ProfileConfigValidator.validate(source)
-    try source.write(to: destinationURL, atomically: true, encoding: .utf8)
+    try SecureFileIO.writePrivateString(source, to: destinationURL, fileManager: fileManager)
     return source
   }
 
@@ -40,7 +40,7 @@ actor ProfileDiskIO {
   }
 
   func writeProfileSource(_ source: String, to url: URL) throws {
-    try source.write(to: url, atomically: true, encoding: .utf8)
+    try SecureFileIO.writePrivateString(source, to: url, fileManager: fileManager)
   }
 
   func removeProfileConfig(atPath path: String) throws {

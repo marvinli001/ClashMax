@@ -169,7 +169,7 @@ final class TunnelHelperValidationTests: XCTestCase {
     XCTAssertTrue(first.ok)
     XCTAssertTrue(first.running)
     XCTAssertGreaterThan(first.pid, 0)
-    XCTAssertEqual(try waitForLaunchState(fixture: fixture, expected: "\(first.pid):old"), "\(first.pid):old")
+    XCTAssertEqual(try waitForLaunchState(fixture: fixture, expected: "\(first.pid):1:unset"), "\(first.pid):1:unset")
 
     let second = try start(service, fixture: fixture, secret: "new")
     XCTAssertFalse(second.ok)
@@ -177,7 +177,7 @@ final class TunnelHelperValidationTests: XCTestCase {
     XCTAssertEqual(second.pid, first.pid)
     XCTAssertEqual(second.code, HelperResponseCode.alreadyRunning)
     XCTAssertTrue(second.message.localizedCaseInsensitiveContains("already running"))
-    XCTAssertEqual(try waitForLaunchState(fixture: fixture, expected: "\(first.pid):old"), "\(first.pid):old")
+    XCTAssertEqual(try waitForLaunchState(fixture: fixture, expected: "\(first.pid):1:unset"), "\(first.pid):1:unset")
   }
 
   func testHelperRestartTunnelWaitsForOldProcessBeforeStartingReplacement() throws {
@@ -187,14 +187,14 @@ final class TunnelHelperValidationTests: XCTestCase {
 
     let first = try start(service, fixture: fixture, secret: "old")
     XCTAssertTrue(first.ok)
-    XCTAssertEqual(try waitForLaunchState(fixture: fixture, expected: "\(first.pid):old"), "\(first.pid):old")
+    XCTAssertEqual(try waitForLaunchState(fixture: fixture, expected: "\(first.pid):1:unset"), "\(first.pid):1:unset")
 
     let restarted = try restart(service, fixture: fixture, secret: "new")
     XCTAssertTrue(restarted.ok)
     XCTAssertTrue(restarted.running)
     XCTAssertGreaterThan(restarted.pid, 0)
     XCTAssertFalse(isProcessAlive(pid_t(first.pid)))
-    XCTAssertEqual(try waitForLaunchState(fixture: fixture, expected: "\(restarted.pid):new"), "\(restarted.pid):new")
+    XCTAssertEqual(try waitForLaunchState(fixture: fixture, expected: "\(restarted.pid):1:unset"), "\(restarted.pid):1:unset")
   }
 
   func testHelperConcurrentStartTunnelAllowsOnlyOneRunningProcess() throws {
@@ -233,8 +233,8 @@ final class TunnelHelperValidationTests: XCTestCase {
     XCTAssertEqual(rejectedResponse.code, HelperResponseCode.alreadyRunning)
     XCTAssertEqual(rejectedResponse.pid, acceptedResponse.1.pid)
     XCTAssertEqual(
-      try waitForLaunchState(fixture: fixture, expected: "\(acceptedResponse.1.pid):\(acceptedResponse.0)"),
-      "\(acceptedResponse.1.pid):\(acceptedResponse.0)"
+      try waitForLaunchState(fixture: fixture, expected: "\(acceptedResponse.1.pid):1:unset"),
+      "\(acceptedResponse.1.pid):1:unset"
     )
   }
 
@@ -263,7 +263,7 @@ final class TunnelHelperValidationTests: XCTestCase {
 
     let response = try start(service, fixture: fixture, secret: "cleanup")
     XCTAssertTrue(response.ok)
-    XCTAssertEqual(try waitForLaunchState(fixture: fixture, expected: "\(response.pid):cleanup"), "\(response.pid):cleanup")
+    XCTAssertEqual(try waitForLaunchState(fixture: fixture, expected: "\(response.pid):1:unset"), "\(response.pid):1:unset")
     let process = try XCTUnwrap(launchedProcess)
     let outputHandle = try XCTUnwrap((process.standardOutput as? Pipe)?.fileHandleForReading)
     let errorHandle = try XCTUnwrap((process.standardError as? Pipe)?.fileHandleForReading)
@@ -282,7 +282,7 @@ final class TunnelHelperValidationTests: XCTestCase {
   func testHelperStatusClearsOutputAndTerminationHandlersForExitedTrackedProcess() throws {
     let fixture = try makeRuntimeFixture(coreScript: """
     #!/bin/sh
-    printf "%s:%s\\n" "$$" "$CLASHMAX_SECRET" > "$PWD/launch-state.txt"
+    printf "%s:%s:%s\\n" "$$" "${CLASHMAX_HELPER:-0}" "${CLASHMAX_SECRET-unset}" > "$PWD/launch-state.txt"
     exit 0
     """)
     var launchedProcess: Process?
@@ -293,7 +293,7 @@ final class TunnelHelperValidationTests: XCTestCase {
 
     let response = try start(service, fixture: fixture, secret: "exited")
     XCTAssertTrue(response.ok)
-    XCTAssertEqual(try waitForLaunchState(fixture: fixture, expected: "\(response.pid):exited"), "\(response.pid):exited")
+    XCTAssertEqual(try waitForLaunchState(fixture: fixture, expected: "\(response.pid):1:unset"), "\(response.pid):1:unset")
     let process = try XCTUnwrap(launchedProcess)
     waitForProcessExit(process)
     XCTAssertFalse(process.isRunning)
@@ -344,7 +344,7 @@ final class TunnelHelperValidationTests: XCTestCase {
     coreScript: String = """
     #!/bin/sh
     trap 'sleep 1; exit 0' TERM
-    printf "%s:%s\\n" "$$" "$CLASHMAX_SECRET" > "$PWD/launch-state.txt"
+    printf "%s:%s:%s\\n" "$$" "${CLASHMAX_HELPER:-0}" "${CLASHMAX_SECRET-unset}" > "$PWD/launch-state.txt"
     while true; do sleep 1; done
     """
   ) throws -> PathFixture {

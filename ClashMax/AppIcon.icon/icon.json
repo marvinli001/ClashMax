@@ -3,7 +3,20 @@
   "fill-specializations" : [
     {
       "value" : {
-        "automatic-gradient" : "extended-srgb:0.00000,0.53333,1.00000,1.00000"
+        "linear-gradient" : [
+          "extended-gray:1.00000,1.00000",
+          "extended-gray:1.00000,1.00000"
+        ],
+        "orientation" : {
+          "start" : {
+            "x" : 0.5,
+            "y" : 0
+          },
+          "stop" : {
+            "x" : 0.5,
+            "y" : 0.7
+          }
+        }
       }
     },
     {

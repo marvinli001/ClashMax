@@ -743,7 +743,7 @@ final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Senda
     return paths
   }
 
-  private func launchProcessLocked(paths: HelperValidatedTunnelPaths, secret: String) throws -> Process {
+  private func launchProcessLocked(paths: HelperValidatedTunnelPaths, secret _: String) throws -> Process {
     let process = Process()
     let pipe = Pipe()
     process.executableURL = paths.coreURL
@@ -751,8 +751,7 @@ final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Senda
     process.currentDirectoryURL = paths.workDirectory
     process.environment = ProcessInfo.processInfo.environment.merging([
       "SAFE_PATHS": paths.workDirectory.path,
-      "CLASHMAX_HELPER": "1",
-      "CLASHMAX_SECRET": secret
+      "CLASHMAX_HELPER": "1"
     ]) { _, new in new }
     process.standardOutput = pipe
     process.standardError = pipe

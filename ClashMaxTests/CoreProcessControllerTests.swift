@@ -367,6 +367,50 @@ final class CoreProcessControllerTests: XCTestCase {
     XCTAssertEqual(receivedExitCode, 7)
   }
 
+  func testFoundationRunningProcessClearsHandlersAfterTerminationNotification() throws {
+    let process = Process()
+    let pipe = Pipe()
+    let drain = LiveOutputDrain()
+    process.standardOutput = pipe
+    process.standardError = pipe
+    process.terminationHandler = { _ in }
+    drain.attach(pipe.fileHandleForReading)
+    let runningProcess = FoundationRunningProcess(process: process, drain: drain)
+    var receivedExitCode: Int32?
+    runningProcess.onTermination = { exitCode in
+      receivedExitCode = exitCode
+    }
+
+    runningProcess.notifyTermination(exitCode: 9)
+
+    XCTAssertEqual(receivedExitCode, 9)
+    XCTAssertNil(process.terminationHandler)
+    XCTAssertNil(pipe.fileHandleForReading.readabilityHandler)
+  }
+
+  func testFoundationRunningProcessClearsHandlersAfterLateTerminationHandlerReceivesCachedExit() throws {
+    let process = Process()
+    let pipe = Pipe()
+    let drain = LiveOutputDrain()
+    process.standardOutput = pipe
+    process.standardError = pipe
+    process.terminationHandler = { _ in }
+    drain.attach(pipe.fileHandleForReading)
+    let runningProcess = FoundationRunningProcess(process: process, drain: drain)
+
+    runningProcess.notifyTermination(exitCode: 10)
+    XCTAssertNil(process.terminationHandler)
+    XCTAssertNotNil(pipe.fileHandleForReading.readabilityHandler)
+
+    var receivedExitCode: Int32?
+    runningProcess.onTermination = { exitCode in
+      receivedExitCode = exitCode
+    }
+
+    XCTAssertEqual(receivedExitCode, 10)
+    XCTAssertNil(pipe.fileHandleForReading.readabilityHandler)
+  }
+
   private func orphanReaperFixture(pid: Int32) -> (
     pid: Int32,
     coreURL: URL,

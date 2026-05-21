@@ -160,13 +160,13 @@ final class CoreProcessController: ObservableObject {
       var startupTerminationMessage: String?
       recordStartup("Mihomo launch pid: \(launchedProcessID)")
       runningProcess = process
-      process.onTermination = { [weak self] exitCode in
+      process.onTermination = { [weak self, weak process] exitCode in
         guard let self else { return }
         guard self.runningProcess?.processIdentifier == launchedProcessID else { return }
         if self.stopWasRequested || (startupCompleted && exitCode == 0) {
           self.status = .stopped
         } else {
-          let tail = process.recentOutputTail(maxBytes: 4096)
+          let tail = process?.recentOutputTail(maxBytes: 4096) ?? ""
           let message = Self.processExitMessage(exitCode: exitCode, outputTail: tail)
           if !startupCompleted {
             startupTerminationMessage = message
@@ -962,10 +962,11 @@ final class FoundationProcessLauncher: CoreProcessLaunching {
     drain.attach(stderrPipe.fileHandleForReading)
 
     let wrapper = FoundationRunningProcess(process: process, drain: drain)
-    process.terminationHandler = { process in
+    process.terminationHandler = { [weak wrapper] process in
       let exitCode = process.terminationStatus
-      Task { @MainActor in
-        wrapper.notifyTermination(exitCode: exitCode)
+      process.terminationHandler = nil
+      Task { @MainActor [weak wrapper] in
+        wrapper?.notifyTermination(exitCode: exitCode)
       }
     }
 
@@ -979,11 +980,14 @@ final class FoundationRunningProcess: RunningCoreProcess {
   private let process: Process
   private let drain: LiveOutputDrain
   private var pendingTerminationStatus: Int32?
+  private var didNotifyTermination = false
+  private var didCleanupAfterTermination = false
   var onTermination: ((Int32) -> Void)? {
     didSet {
       if let pendingTerminationStatus {
         self.pendingTerminationStatus = nil
         onTermination?(pendingTerminationStatus)
+        cleanupAfterTermination()
       }
     }
   }
@@ -1016,11 +1020,24 @@ final class FoundationRunningProcess: RunningCoreProcess {
   }
 
   func notifyTermination(exitCode: Int32) {
+    guard !didNotifyTermination else { return }
+    didNotifyTermination = true
+    process.terminationHandler = nil
+
     if let onTermination {
       onTermination(exitCode)
+      cleanupAfterTermination()
     } else {
       pendingTerminationStatus = exitCode
     }
+  }
+
+  private func cleanupAfterTermination() {
+    guard !didCleanupAfterTermination else { return }
+    didCleanupAfterTermination = true
+    process.terminationHandler = nil
+    drain.detachAll()
+    onTermination = nil
   }
 }
 

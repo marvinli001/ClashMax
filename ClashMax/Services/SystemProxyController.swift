@@ -277,7 +277,7 @@ final class SystemProxyController: @unchecked Sendable {
         }
       } catch {
         if restoreOnFailure {
-          try? await restoreCapturedDNSSnapshots()
+          _ = try? await restoreCapturedDNSSnapshots()
         }
         throw error
       }

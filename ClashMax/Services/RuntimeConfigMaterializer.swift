@@ -34,7 +34,7 @@ struct RuntimeConfigMaterializer: Sendable {
 
       let providerContentPath: String?
       if try ProfileConfigInspector.format(of: source) == .proxyProviderContent {
-        try source.write(to: providerContentURL, atomically: true, encoding: .utf8)
+        try SecureFileIO.writePrivateString(source, to: providerContentURL)
         writtenURLs.append(providerContentURL)
         providerContentPath = providerContentURL.path
       } else {
@@ -51,7 +51,7 @@ struct RuntimeConfigMaterializer: Sendable {
         selectionOverrides: request.selectionOverrides
       )
       try Task.checkCancellation()
-      try output.write(to: runtimeConfigURL, atomically: true, encoding: .utf8)
+      try SecureFileIO.writePrivateString(output, to: runtimeConfigURL)
       writtenURLs.append(runtimeConfigURL)
       try Task.checkCancellation()
       return runtimeConfigURL

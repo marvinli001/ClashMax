@@ -528,6 +528,8 @@ final class ConfigNormalizerTests: XCTestCase {
     let firstProviderPath = try XCTUnwrap(firstProvider["path"] as? String)
     XCTAssertNotEqual(firstProviderPath, providerURL.path)
     XCTAssertTrue(FileManager.default.fileExists(atPath: firstProviderPath))
+    XCTAssertEqual(try posixPermissions(at: firstURL), SecureFileIO.privateFilePermissions)
+    XCTAssertEqual(try posixPermissions(at: URL(fileURLWithPath: firstProviderPath)), SecureFileIO.privateFilePermissions)
   }
 
   func testURIProviderContentBuildsRuntimeConfigWithFileProvider() throws {
@@ -675,5 +677,10 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(groups.first?.nodes[1].serverPort, 443)
     XCTAssertEqual(groups.first?.nodes[2].serverHost, "example.net")
     XCTAssertEqual(groups.first?.nodes[2].serverPort, 8443)
+  }
+
+  private func posixPermissions(at url: URL) throws -> Int {
+    let value = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber)
+    return value.intValue & 0o777
   }
 }
