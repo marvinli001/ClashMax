@@ -21,7 +21,7 @@ struct PublicIPInfoCard: View {
   private func content(now: Date) -> some View {
     let state = publicIP.state
 
-    return VStack(alignment: .leading, spacing: 12) {
+    return VStack(alignment: .leading, spacing: cardVerticalSpacing) {
       HStack(spacing: 10) {
         DashboardSectionHeader(
           title: "Public IP",
@@ -70,8 +70,8 @@ struct PublicIPInfoCard: View {
   }
 
   private func infoBody(_ info: PublicIPInfo) -> some View {
-    VStack(alignment: .leading, spacing: 12) {
-      if isCompact {
+    VStack(alignment: .leading, spacing: isCompact ? 8 : 12) {
+      if shouldStackIdentity {
         VStack(alignment: .leading, spacing: 10) {
           regionIdentity(for: info)
           ipAddressPill(for: info)
@@ -85,7 +85,7 @@ struct PublicIPInfoCard: View {
         }
       }
 
-      LazyVGrid(columns: detailColumns, alignment: .leading, spacing: 8) {
+      LazyVGrid(columns: detailColumns, alignment: .leading, spacing: isCompact ? 6 : 8) {
         PublicIPInfoDetail(title: "ASN / ISP", value: asnISPSummary(for: info))
         PublicIPInfoDetail(title: "Organization", value: info.organization ?? "--")
         PublicIPInfoDetail(title: "Location", value: locationSummary(for: info))
@@ -173,6 +173,14 @@ struct PublicIPInfoCard: View {
     availableWidth < 460
   }
 
+  private var shouldStackIdentity: Bool {
+    availableWidth < 360
+  }
+
+  private var cardVerticalSpacing: CGFloat {
+    isCompact ? 10 : 12
+  }
+
   private func refreshTickID(for date: Date) -> Int {
     Int(date.timeIntervalSince1970 / 5)
   }
@@ -221,12 +229,12 @@ private struct PublicIPInfoDetail: View {
   let value: String
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 3) {
+    VStack(alignment: .leading, spacing: 2) {
       Text(title)
         .font(.caption2)
         .foregroundStyle(.secondary)
       Text(value)
-        .font(.callout)
+        .font(.system(.caption, design: .rounded).weight(.semibold))
         .lineLimit(1)
         .minimumScaleFactor(0.68)
     }
