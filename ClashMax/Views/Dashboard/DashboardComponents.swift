@@ -380,28 +380,21 @@ private struct SystemProxySettingsPopover: View {
     VStack(alignment: .leading, spacing: 16) {
       popoverHeader("System Proxy Settings", systemImage: "network.badge.shield.half.filled")
 
-      GroupBox("Current System Proxy") {
-        VStack(alignment: .leading, spacing: 6) {
-          LabeledContent("Status") {
-            Text(isActive ? "Enabled" : "Not Enabled")
-              .foregroundStyle(isActive ? Color.green : Color.secondary)
-          }
-          LabeledContent("Service Address") {
-            Text(serviceAddress)
-              .monospacedDigit()
-              .foregroundStyle(.secondary)
-          }
-        }
-        .padding(.vertical, 2)
-      }
+      CurrentSystemProxySummary(isActive: isActive, serviceAddress: serviceAddress)
 
       Form {
         TextField("Proxy Host", text: $settings.proxyHost)
         Toggle("Use Default Bypass", isOn: $settings.useDefaultBypass)
         Toggle("Validate Bypass Entries", isOn: $settings.validateBypass)
         Toggle("Proxy Guard", isOn: $settings.guardEnabled)
-        Stepper("Guard Interval \(settings.normalizedGuardIntervalSeconds)s", value: $settings.guardIntervalSeconds, in: SystemProxySettings.minimumGuardIntervalSeconds...SystemProxySettings.maximumGuardIntervalSeconds, step: 5)
-          .disabled(!settings.guardEnabled)
+        LabeledContent("Guard Interval") {
+          CompactIntegerStepperField(
+            value: $settings.guardIntervalSeconds,
+            range: SystemProxySettings.minimumGuardIntervalSeconds...SystemProxySettings.maximumGuardIntervalSeconds,
+            step: 5
+          )
+        }
+        .disabled(!settings.guardEnabled)
       }
 
       EditableStringList(
@@ -458,7 +451,9 @@ private struct TunSettingsPopover: View {
         Toggle("Auto Route", isOn: $settings.autoRoute)
         Toggle("Strict Route", isOn: $settings.strictRoute)
         Toggle("Auto Detect Interface", isOn: $settings.autoDetectInterface)
-        Stepper("MTU \(settings.normalizedMTU)", value: $settings.mtu, in: 576...9_000, step: 10)
+        LabeledContent("MTU") {
+          CompactIntegerStepperField(value: $settings.mtu, range: 576...9_000, step: 10)
+        }
         Toggle("Fake IP DNS", isOn: $settings.dnsFakeIPEnabled)
         TextField("Fake IP Range", text: $settings.fakeIPRange)
           .disabled(!settings.dnsFakeIPEnabled)
@@ -501,6 +496,110 @@ private struct TunSettingsPopover: View {
 
       popoverActions(onCancel: onCancel, onSave: onSave, saveDisabled: settings.validationError != nil)
     }
+  }
+}
+
+private struct CurrentSystemProxySummary: View {
+  let isActive: Bool
+  let serviceAddress: String
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text("Current System Proxy")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+
+      VStack(alignment: .leading, spacing: 7) {
+        summaryRow("Status") {
+          Text(isActive ? "Enabled" : "Not Enabled")
+            .foregroundStyle(isActive ? Color.green : Color.secondary)
+        }
+
+        summaryRow("Service Address") {
+          Text(serviceAddress)
+            .monospacedDigit()
+            .foregroundStyle(.secondary)
+        }
+      }
+      .padding(.horizontal, 10)
+      .padding(.vertical, 9)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(.quaternary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private func summaryRow<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+    HStack(alignment: .firstTextBaseline, spacing: 12) {
+      Text(LocalizedStringKey(title))
+        .foregroundStyle(.secondary)
+        .frame(width: 104, alignment: .trailing)
+
+      content()
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    .font(.callout)
+  }
+}
+
+private struct CompactIntegerStepperField: View {
+  @Binding var value: Int
+  let range: ClosedRange<Int>
+  let step: Int
+  @State private var draft = ""
+
+  var body: some View {
+    HStack(spacing: 6) {
+      TextField("", text: $draft)
+        .textFieldStyle(.roundedBorder)
+        .multilineTextAlignment(.trailing)
+        .monospacedDigit()
+        .frame(width: 64)
+        .onSubmit(commitDraft)
+        .onChange(of: draft) { _, newValue in
+          updateValueIfValid(newValue)
+        }
+        .onAppear(perform: syncDraft)
+        .onChange(of: value) { _, _ in
+          syncDraft()
+        }
+
+      Stepper("", value: clampedValue, in: range, step: step)
+        .labelsHidden()
+    }
+    .fixedSize()
+  }
+
+  private var clampedValue: Binding<Int> {
+    Binding(
+      get: { clamped(value) },
+      set: { value = clamped($0) }
+    )
+  }
+
+  private func updateValueIfValid(_ text: String) {
+    guard let parsed = Int(text), range.contains(parsed) else { return }
+    value = parsed
+  }
+
+  private func commitDraft() {
+    guard let parsed = Int(draft) else {
+      syncDraft()
+      return
+    }
+    value = clamped(parsed)
+    syncDraft()
+  }
+
+  private func syncDraft() {
+    let current = "\(clamped(value))"
+    if draft != current {
+      draft = current
+    }
+  }
+
+  private func clamped(_ value: Int) -> Int {
+    min(max(value, range.lowerBound), range.upperBound)
   }
 }
 
