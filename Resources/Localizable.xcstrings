@@ -1767,6 +1767,23 @@
         }
       }
     },
+    "Last Exit" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Last Exit"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近退出"
+          }
+        }
+      }
+    },
     "Launch at Login" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2655,6 +2672,40 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "修复 DNS"
+          }
+        }
+      }
+    },
+    "Repair Routing" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Repair Routing"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "修复路由"
+          }
+        }
+      }
+    },
+    "Repair TUN routing" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Repair TUN routing"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "修复 TUN 路由"
           }
         }
       }

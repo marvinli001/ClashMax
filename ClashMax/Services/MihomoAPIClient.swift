@@ -11,11 +11,18 @@ protocol MihomoAPIControlling: Sendable {
   func healthCheckProvider(named provider: String) async throws
   func closeConnection(id: String) async throws
   func closeAllConnections() async throws
-  func reloadConfig(path: String) async throws
+  func setTunEnabled(_ enabled: Bool) async throws
+  func reloadConfig(path: String, force: Bool) async throws
   func restart(configPath: String?) async throws
   func trafficStream() -> AsyncThrowingStream<TrafficSample, Error>
   func logStream(level: String) -> AsyncThrowingStream<LogEntry, Error>
   func connectionStream(interval: Int) -> AsyncThrowingStream<[ConnectionSnapshot], Error>
+}
+
+extension MihomoAPIControlling {
+  func reloadConfig(path: String) async throws {
+    try await reloadConfig(path: path, force: true)
+  }
 }
 
 struct MihomoAPIClient: Sendable {
@@ -67,6 +74,17 @@ struct MihomoAPIClient: Sendable {
     _ = try await data(for: request)
   }
 
+  func setTunEnabled(_ enabled: Bool) async throws {
+    var request = try request(path: "/configs")
+    request.httpMethod = "PATCH"
+    request.httpBody = try JSONSerialization.data(
+      withJSONObject: ["tun": ["enable": enabled]],
+      options: [.withoutEscapingSlashes]
+    )
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    _ = try await data(for: request)
+  }
+
   func restart(configPath: String? = nil) async throws {
     var request = try request(path: "/restart")
     request.httpMethod = "POST"
@@ -77,8 +95,8 @@ struct MihomoAPIClient: Sendable {
     _ = try await data(for: request)
   }
 
-  func reloadConfig(path: String) async throws {
-    var request = try request(path: "/configs")
+  func reloadConfig(path: String, force: Bool = true) async throws {
+    var request = try request(path: "/configs", queryItems: [URLQueryItem(name: "force", value: force ? "true" : "false")])
     request.httpMethod = "PUT"
     request.httpBody = try JSONSerialization.data(withJSONObject: ["path": path], options: [.withoutEscapingSlashes])
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")

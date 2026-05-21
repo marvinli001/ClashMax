@@ -79,6 +79,29 @@ private struct NetworkExtensionStopCleanupResult {
   var dnsRestoreError: Error?
 }
 
+private extension TunDiagnosticsSnapshot {
+  var repairableRoutingIssue: TunDiagnosticCheck? {
+    guard let issue = primaryIssue, [.fail, .warn].contains(issue.status) else {
+      return nil
+    }
+    guard ["interface", "default-route", "route-exclude", "dns-hijack"].contains(issue.id) else {
+      return nil
+    }
+    return issue
+  }
+
+  var hasRepairableRoutingIssue: Bool {
+    repairableRoutingIssue != nil
+  }
+
+  var repairableRoutingIssueMessage: String {
+    guard let issue = repairableRoutingIssue else {
+      return "TUN routing diagnostics still report a repairable issue."
+    }
+    return "\(issue.title): \(issue.message)"
+  }
+}
+
 private enum LastErrorOrigin {
   case networkExtension
 }
@@ -235,6 +258,13 @@ final class AppModel: ObservableObject {
       || tunnelCoreRunning
       || systemProxyController.hasManagedSystemDNSState
   }
+  var canRepairTunRouting: Bool {
+    runtimeOwner == .tunnel
+      || tunEnabled
+      || tunnelCoreRunning
+      || tunDiagnostics.primaryIssue != nil
+      || systemProxyController.hasManagedSystemDNSState
+  }
   @Published var tunnelCoreRunning = false
   @Published private(set) var networkExtensionSystemDNSState: SystemDNSOverrideState = .inactive
   @Published private(set) var tunSystemDNSState: SystemDNSOverrideState = .inactive
@@ -348,6 +378,8 @@ final class AppModel: ObservableObject {
   private var runtimeReloadTask: Task<Void, Never>?
   private var runtimeReloadToken: UUID?
   private var runtimeReloadPending = false
+  private var tunSettingsApplyTask: Task<Void, Never>?
+  private var tunSettingsApplyToken: UUID?
   private var streamTasks: [Task<Void, Never>] = []
   private var networkExtensionDiagnosticsTask: Task<Void, Never>?
   private var tunDiagnosticsTask: Task<Void, Never>?
@@ -358,6 +390,7 @@ final class AppModel: ObservableObject {
   static let startWallClockSeconds: TimeInterval = 22
   private static let tunHelperApprovalPollingAttempts = 8
   private static let tunHelperApprovalPollingIntervalNanoseconds: UInt64 = 1_000_000_000
+  private static let tunControllerCleanupTimeoutSeconds: TimeInterval = 2
 
   static func bootstrap() -> AppModel {
     do {
@@ -1923,9 +1956,102 @@ final class AppModel: ObservableObject {
     }
     tunSettings = settings
     if proxyRoutingMode == .tun, isRunning {
-      restart()
+      scheduleRunningTunSettingsApply(settings)
     }
     return true
+  }
+
+  private func scheduleRunningTunSettingsApply(_ settings: TunSettings) {
+    tunSettingsApplyTask?.cancel()
+    let token = UUID()
+    tunSettingsApplyToken = token
+    tunSettingsApplyTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer {
+        if self.tunSettingsApplyToken == token {
+          self.tunSettingsApplyTask = nil
+          self.tunSettingsApplyToken = nil
+        }
+      }
+      do {
+        try await applyRunningTunSettings(settings, reason: "TUN settings updated")
+        guard self.tunSettingsApplyToken == token, !Task.isCancelled else { return }
+        lastError = nil
+      } catch is CancellationError {
+        return
+      } catch {
+        guard self.tunSettingsApplyToken == token else { return }
+        lastError = "Could not apply TUN settings without restart: \(UserFacingError.message(for: error))"
+      }
+    }
+  }
+
+  private func applyRunningTunSettings(_ settings: TunSettings, reason: String) async throws {
+    guard runtimeOwner == .tunnel || tunEnabled || tunnelCoreRunning else { return }
+    let runtimeConfig = try await materializeTunRuntimeConfig(settings)
+    var didRestartHelper = false
+    if let apiClient {
+      do {
+        try await apiClient.reloadConfig(path: runtimeConfig.path, force: true)
+        appendAppLog(level: "info", message: "\(reason): Mihomo reloaded \(runtimeConfig.path).")
+      } catch is CancellationError {
+        throw CancellationError()
+      } catch {
+        appendAppLog(
+          level: "warn",
+          message: "\(reason): Mihomo reload failed, restarting helper instead: \(UserFacingError.message(for: error))"
+        )
+        try await restartRunningTunHelper(runtimeConfig: runtimeConfig, settings: settings, reason: reason)
+        didRestartHelper = true
+      }
+    } else {
+      appendAppLog(level: "warn", message: "\(reason): controller unavailable, restarting helper instead.")
+      try await restartRunningTunHelper(runtimeConfig: runtimeConfig, settings: settings, reason: reason)
+      didRestartHelper = true
+    }
+    if !didRestartHelper {
+      try await reconcileTunSystemDNS(for: settings)
+    }
+    refreshTunDiagnostics(includeExternal: false)
+    reloadRuntimeData()
+  }
+
+  private func materializeTunRuntimeConfig(_ settings: TunSettings) async throws -> URL {
+    let profile = try requireActiveProfile()
+    var runtimeOverrides = overrides
+    runtimeOverrides.tunEnabled = true
+    runtimeOverrides.tunSettings = settings
+    return try await generateRuntimeConfig(
+      for: profile,
+      overrides: runtimeOverrides,
+      selections: previewSelections
+    )
+  }
+
+  private func restartRunningTunHelper(
+    runtimeConfig: URL,
+    settings: TunSettings,
+    reason: String
+  ) async throws {
+    let response = try await helperClient.restartTunnel(
+      coreURL: try bundledCoreURL(),
+      configURL: runtimeConfig,
+      workDirectory: paths.runtime,
+      secret: overrides.secret
+    )
+    if !response.ok {
+      throw AppError.helperResponse(response.userFacingMessage)
+    }
+    guard response.running else {
+      throw AppError.helperResponse("Helper reported restart success but TUN is not running.")
+    }
+    tunHelperPID = response.pid > 0 ? response.pid : nil
+    let version = try await tunnelReadinessProbe.waitUntilReady(api: overrides.endpoint)
+    appendAppLog(level: "info", message: "\(reason): TUN helper restarted, controller ready with version \(version).")
+    try await reconcileTunSystemDNS(for: settings)
+    tunnelCoreRunning = true
+    tunEnabled = true
+    runtimeOwner = .tunnel
   }
 
   func updateNetworkExtensionRoutingSettings(_ settings: NetworkExtensionRoutingSettings) -> Bool {
@@ -2015,6 +2141,16 @@ final class AppModel: ObservableObject {
     }
   }
 
+  private func reconcileTunSystemDNS(for settings: TunSettings) async throws {
+    if settings.systemDNSOverrideEnabled {
+      try await applyTunSystemDNS(settings, restoreOnFailure: false)
+    } else if systemProxyController.hasManagedSystemDNSState {
+      _ = try await restoreTunSystemDNS()
+    } else {
+      setTunSystemDNSState(.inactive)
+    }
+  }
+
   private func setNetworkExtensionSystemDNSState(_ state: SystemDNSOverrideState) {
     networkExtensionSystemDNSState = state
     networkExtensionController.updateSystemDNSOverrideDiagnostics(
@@ -2056,13 +2192,7 @@ final class AppModel: ObservableObject {
       guard let self else { return }
       do {
         if runtimeOwner == .tunnel || tunEnabled || tunnelCoreRunning {
-          if tunSettings.systemDNSOverrideEnabled {
-            try await applyTunSystemDNS(tunSettings, restoreOnFailure: false)
-          } else if systemProxyController.hasManagedSystemDNSState {
-            _ = try await restoreTunSystemDNS()
-          } else {
-            setTunSystemDNSState(.inactive)
-          }
+          try await reconcileTunSystemDNS(for: tunSettings)
         } else if systemProxyController.hasManagedSystemDNSState {
           _ = try await restoreTunSystemDNS()
         } else {
@@ -2074,6 +2204,106 @@ final class AppModel: ObservableObject {
         lastError = "Could not repair TUN DNS settings: \(UserFacingError.message(for: error))"
       }
     }
+  }
+
+  func repairTunRouting() {
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      do {
+        if runtimeOwner == .tunnel || tunEnabled || tunnelCoreRunning {
+          try await reconcileTunSystemDNS(for: tunSettings)
+          let runtimeConfig = try await materializeTunRuntimeConfig(tunSettings)
+          var didRestartHelper = false
+          if let apiClient {
+            do {
+              try await apiClient.reloadConfig(path: runtimeConfig.path, force: true)
+              appendAppLog(level: "info", message: "TUN routing repair reloaded \(runtimeConfig.path).")
+            } catch is CancellationError {
+              throw CancellationError()
+            } catch {
+              appendAppLog(
+                level: "warn",
+                message: "TUN routing repair reload failed, restarting helper instead: \(UserFacingError.message(for: error))"
+              )
+              try await restartRunningTunHelper(
+                runtimeConfig: runtimeConfig,
+                settings: tunSettings,
+                reason: "TUN routing repair"
+              )
+              didRestartHelper = true
+            }
+          } else {
+            try await restartRunningTunHelper(
+              runtimeConfig: runtimeConfig,
+              settings: tunSettings,
+              reason: "TUN routing repair"
+            )
+            didRestartHelper = true
+          }
+
+          let postReloadSnapshot = await inspectTunRuntimeNow(includeExternal: false)
+          if !didRestartHelper, postReloadSnapshot.hasRepairableRoutingIssue {
+            try await restartRunningTunHelper(
+              runtimeConfig: runtimeConfig,
+              settings: tunSettings,
+              reason: "TUN routing repair"
+            )
+            didRestartHelper = true
+            let postRestartSnapshot = await inspectTunRuntimeNow(includeExternal: false)
+            if postRestartSnapshot.hasRepairableRoutingIssue {
+              throw AppError.helperResponse(
+                "TUN routing repair still reports \(postRestartSnapshot.repairableRoutingIssueMessage) after helper restart."
+              )
+            }
+          } else if didRestartHelper, postReloadSnapshot.hasRepairableRoutingIssue {
+            throw AppError.helperResponse(
+              "TUN routing repair still reports \(postReloadSnapshot.repairableRoutingIssueMessage) after helper restart."
+            )
+          }
+          reloadRuntimeData()
+        } else if systemProxyController.hasManagedSystemDNSState {
+          _ = try await restoreTunSystemDNS()
+          tunDiagnostics = .empty
+        } else {
+          setTunSystemDNSState(.inactive)
+          tunDiagnostics = .empty
+        }
+        lastError = nil
+      } catch is CancellationError {
+        return
+      } catch {
+        appendAppLog(level: "warn", message: "TUN routing repair failed: \(UserFacingError.message(for: error))")
+        let result = await stopRuntimeCoordinated()
+        handleStopResult(result)
+        if result.succeeded {
+          lastError = "TUN routing repair could not complete, so ClashMax stopped TUN safely: \(UserFacingError.message(for: error))"
+        } else {
+          lastError = "Could not repair TUN routing: \(UserFacingError.message(for: error))"
+        }
+      }
+    }
+  }
+
+  private func inspectTunRuntimeNow(includeExternal: Bool) async -> TunDiagnosticsSnapshot {
+    guard runtimeOwner == .tunnel || tunEnabled || tunnelCoreRunning else {
+      tunDiagnostics = .empty
+      return .empty
+    }
+    stopTunDiagnostics(clear: false)
+    let helperStatus = await liveTunHelperStatus(using: helperClient)
+    tunHelperPID = helperStatus.pid
+    let snapshot = await tunRuntimeInspector.inspect(
+      TunRuntimeInspectionConfiguration(
+        api: overrides.endpoint,
+        tunSettings: tunSettings,
+        helperPID: helperStatus.pid,
+        helperStatusMessage: helperStatus.message,
+        systemDNSState: tunSystemDNSState,
+        includeExternal: includeExternal
+      )
+    )
+    tunDiagnostics = snapshot
+    return snapshot
   }
 
   private func applySystemProxySettings() async throws {
@@ -2133,6 +2363,23 @@ final class AppModel: ObservableObject {
   private var shouldRestoreTunDNS: Bool {
     (runtimeOwner == .tunnel || tunEnabled || tunnelCoreRunning)
       && systemProxyController.hasManagedSystemDNSState
+  }
+
+  private func disableRunningTunBeforeStop() async {
+    guard let apiClient else { return }
+    do {
+      try await withTimeout(seconds: Self.tunControllerCleanupTimeoutSeconds) { @Sendable [apiClient] in
+        try await apiClient.setTunEnabled(false)
+      }
+      appendAppLog(level: "info", message: "Requested Mihomo to disable TUN before stopping the helper.")
+    } catch is CancellationError {
+      return
+    } catch {
+      appendAppLog(
+        level: "warn",
+        message: "Could not disable Mihomo TUN before helper stop: \(UserFacingError.message(for: error))"
+      )
+    }
   }
 
   private func stopNetworkExtensionIfNeeded() async -> NetworkExtensionStopCleanupResult {
@@ -2475,6 +2722,10 @@ final class AppModel: ObservableObject {
     runtimeReloadTask = nil
     runtimeReloadToken = nil
     runtimeReloadPending = false
+
+    tunSettingsApplyTask?.cancel()
+    tunSettingsApplyTask = nil
+    tunSettingsApplyToken = nil
   }
 
   private func stopRuntime(purpose: RuntimeStopPurpose) async -> RuntimeStopResult {
@@ -2489,6 +2740,9 @@ final class AppModel: ObservableObject {
       guard purpose.continuesAfterNetworkExtensionStopFailure else {
         return result
       }
+    }
+    if runtimeOwner == .tunnel || tunEnabled || tunnelCoreRunning {
+      await disableRunningTunBeforeStop()
     }
     if shouldRestoreTunDNS {
       do {

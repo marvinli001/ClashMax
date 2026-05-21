@@ -62,6 +62,8 @@ final class PersistedSettingsStore: ObservableObject {
   private static let developerModeDefaultsKey = "io.github.clashmax.developerMode"
   private static let systemProxySettingsDefaultsKey = "io.github.clashmax.systemProxySettings"
   private static let tunSettingsDefaultsKey = "io.github.clashmax.tunSettings"
+  private static let tunDNSDefaultsVersionKey = "io.github.clashmax.tunDNSDefaultsVersion"
+  private static let currentTunDNSDefaultsVersion = 1
   private static let networkExtensionRoutingSettingsDefaultsKey = "io.github.clashmax.networkExtensionRoutingSettings"
   private static let delayTestSettingsDefaultsKey = "io.github.clashmax.delayTestSettings"
   private static let appThemeDefaultsKey = "io.github.clashmax.appTheme"
@@ -94,11 +96,12 @@ final class PersistedSettingsStore: ObservableObject {
       forKey: Self.systemProxySettingsDefaultsKey,
       defaults: defaults
     ) ?? .default
-    tunSettings = Self.loadCodable(
+    let loadedTunSettings = Self.loadCodable(
       TunSettings.self,
       forKey: Self.tunSettingsDefaultsKey,
       defaults: defaults
     ) ?? .default
+    tunSettings = Self.migrateTunDNSDefaultsIfNeeded(loadedTunSettings, defaults: defaults)
     networkExtensionRoutingSettings = Self.loadCodable(
       NetworkExtensionRoutingSettings.self,
       forKey: Self.networkExtensionRoutingSettingsDefaultsKey,
@@ -199,6 +202,26 @@ final class PersistedSettingsStore: ObservableObject {
   private static func loadCodable<T: Decodable>(_ type: T.Type, forKey key: String, defaults: UserDefaults) -> T? {
     guard let data = defaults.data(forKey: key) else { return nil }
     return try? JSONDecoder().decode(type, from: data)
+  }
+
+  private static func migrateTunDNSDefaultsIfNeeded(_ settings: TunSettings, defaults: UserDefaults) -> TunSettings {
+    let storedVersion = defaults.integer(forKey: tunDNSDefaultsVersionKey)
+    guard storedVersion < currentTunDNSDefaultsVersion else {
+      return settings
+    }
+    defaults.set(currentTunDNSDefaultsVersion, forKey: tunDNSDefaultsVersionKey)
+    guard settings.dns == .legacyEmpty else {
+      return settings
+    }
+    var migrated = settings
+    migrated.dns = .default
+    saveCodable(migrated, forKey: tunSettingsDefaultsKey, defaults: defaults)
+    return migrated
+  }
+
+  private static func saveCodable<T: Encodable>(_ value: T, forKey key: String, defaults: UserDefaults) {
+    guard let data = try? JSONEncoder().encode(value) else { return }
+    defaults.set(data, forKey: key)
   }
 
   private static func isLoginItemRegistered(_ status: SMAppService.Status) -> Bool {

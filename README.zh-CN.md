@@ -62,6 +62,7 @@ ClashMax 是一个使用 SwiftUI 构建的原生 macOS Mihomo 图形客户端。
 - Mihomo controller 默认只监听 `127.0.0.1`。
 - 每次启动生成新的 controller secret，并使用 Bearer 认证访问控制面。
 - TUN 模式由 privileged helper 负责，helper 校验 app-owned core/config paths。
+- MVP core 策略保持单通道：只支持 App 自带的 bundled Mihomo core。未来如支持 core channel，必须先补 manifest、签名/哈希校验、helper allowlist、UI 状态和回滚策略。
 - macOS TUN runtime config 不写入 Linux-only `auto-redirect`。
 
 ## 下载与更新
