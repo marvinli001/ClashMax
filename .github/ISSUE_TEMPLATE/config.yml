@@ -1,0 +1,6 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Q&A, announcements, and project conversation
+    url: https://github.com/marvinli001/ClashMax/discussions
+    about: Use Discussions for questions, setup conversations, announcements, and broader project dialogue.
+

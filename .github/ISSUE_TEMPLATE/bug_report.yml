@@ -1,0 +1,64 @@
+name: Bug report
+description: Report a reproducible ClashMax problem.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for reproducible bugs. Remove subscription URLs, proxy credentials, private domains, and personal network details before posting logs or screenshots.
+  - type: input
+    id: version
+    attributes:
+      label: ClashMax version
+      description: Use Settings -> About, the release tag, or the app bundle version.
+      placeholder: "1.0.7 (13)"
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and Mac architecture
+      placeholder: "macOS 26.x, Apple Silicon / Intel"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Dashboard / runtime start-stop
+        - Profiles / subscriptions
+        - Proxies / delay testing
+        - Connections / rules / logs
+        - System Proxy
+        - TUN helper
+        - NE Transparent Proxy Experimental
+        - Updates / Sparkle
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened?
+      description: Describe the actual behavior and the expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Install ClashMax.app in /Applications
+        2. Import or select a profile
+        3. Start runtime in ...
+        4. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Paste redacted logs or attach screenshots. Do not include secrets, subscription URLs, or node credentials.
+      render: text
+

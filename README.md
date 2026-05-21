@@ -1,5 +1,8 @@
+<p align="center">
+  <img src="ClashMaxHeroIMG.png" alt="ClashMax native macOS Mihomo proxy client" width="100%">
+</p>
+
 <div align="center">
-  <img src="ClashMax/Assets.xcassets/AppIcon.appiconset/icon_256x256.png" width="128" height="128" alt="ClashMax icon">
   <h1>ClashMax</h1>
   <p><strong>English</strong> | <a href="README.zh-CN.md">简体中文</a></p>
   <p>A native Mihomo proxy client for macOS, focused on profile management, runtime control, proxy groups, connections, rules, logs, and system integration.</p>
@@ -16,6 +19,14 @@
 ClashMax is a native macOS graphical Mihomo client built with SwiftUI. It is not a cross-platform shell. It is a proxy control console designed around macOS workflows: import profiles, start the core, switch proxy groups, inspect connections and rules, follow logs, and move quickly between system proxy mode and TUN mode.
 
 The interface stays restrained, compact, and easy to scan. The first screen is the actual proxy console, with common status and actions presented directly instead of being blocked by a marketing page or lengthy onboarding.
+
+## How To Use ClashMax
+
+1. Open the [latest GitHub Release](https://github.com/marvinli001/ClashMax/releases/latest) and download the `ClashMax-X.Y.Z.zip` asset for the current release.
+2. Unzip the archive to get `ClashMax.app`.
+3. Move `ClashMax.app` into the system `/Applications` folder. This is required for the normal installed-app workflow and for macOS system integration paths such as helper approval and the experimental Network Extension.
+4. Launch ClashMax from `/Applications`, import a Clash/Mihomo YAML profile or add a subscription, then start the runtime from the Dashboard.
+5. If macOS asks for permissions, approve the requested helper or System Extension prompts. TUN mode and `NE Transparent Proxy Experimental` need the corresponding macOS approval before they can run.
 
 ## Core Capabilities
 
@@ -56,6 +67,12 @@ The interface stays restrained, compact, and easy to scan. The first screen is t
 ## Downloads And Updates
 
 Release builds are distributed through GitHub Releases. After installation, ClashMax can check for app updates in-app. Each app release includes the matching stable Mihomo core, so users do not need to install or maintain a separate core binary.
+
+## Community
+
+- Use [Issues](https://github.com/marvinli001/ClashMax/issues) for actionable feedback, reproducible bugs, and trackable implementation tasks.
+- Use [Discussions](https://github.com/marvinli001/ClashMax/discussions) for questions, announcements, setup conversations, and broader project discussion.
+- Before opening a report, remove subscription URLs, node credentials, private domains, and other sensitive profile data from screenshots or logs.
 
 ## Local Development
 

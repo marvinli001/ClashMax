@@ -1,0 +1,42 @@
+name: Feedback
+description: Share actionable product feedback for ClashMax.
+title: "[Feedback]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use Issues for actionable feedback that can become a task. Use Discussions for open-ended conversation, questions, and announcements.
+  - type: textarea
+    id: feedback
+    attributes:
+      label: Feedback
+      description: What should be improved, and why does it matter in daily proxy use?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Dashboard
+        - Profiles
+        - Proxies
+        - Connections
+        - Rules
+        - Logs
+        - Settings
+        - Menu bar
+        - System Proxy
+        - TUN helper
+        - NE Transparent Proxy Experimental
+        - Downloads / updates
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: current_workflow
+    attributes:
+      label: Current workflow
+      description: Describe how you use ClashMax today and where the experience breaks down.
+

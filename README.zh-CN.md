@@ -1,5 +1,8 @@
+<p align="center">
+  <img src="ClashMaxHeroIMG-ZHHans.png" alt="ClashMax 原生 macOS Mihomo 代理客户端" width="100%">
+</p>
+
 <div align="center">
-  <img src="ClashMax/Assets.xcassets/AppIcon.appiconset/icon_256x256.png" width="128" height="128" alt="ClashMax icon">
   <h1>ClashMax</h1>
   <p><a href="README.md">English</a> | <strong>简体中文</strong></p>
   <p>面向 macOS 的原生 Mihomo 代理客户端，聚焦配置管理、运行控制、代理组、连接、规则、日志和系统集成。</p>
@@ -16,6 +19,14 @@
 ClashMax 是一个使用 SwiftUI 构建的原生 macOS Mihomo 图形客户端。它不是跨平台外壳，而是围绕 macOS 工作流设计的代理控制台：导入配置、启动核心、切换代理组、查看连接和规则、跟踪日志，并在系统代理模式和 TUN 模式之间快速切换。
 
 应用界面保持克制、紧凑、可扫描。第一屏就是实际代理控制台，常用状态和操作直接呈现，不通过营销页或冗长引导阻断使用。
+
+## 如何使用 ClashMax
+
+1. 打开 [最新 GitHub Release](https://github.com/marvinli001/ClashMax/releases/latest)，下载当前版本的 `ClashMax-X.Y.Z.zip`。
+2. 解压 zip，得到 `ClashMax.app`。
+3. 将 `ClashMax.app` 移动到系统 `/Applications` 目录。普通安装使用、helper 授权以及实验性的 Network Extension 路径都应从这个已安装位置启动。
+4. 从 `/Applications` 启动 ClashMax，导入 Clash/Mihomo YAML 配置或添加订阅，然后在 Dashboard 启动运行时。
+5. 如果 macOS 弹出权限提示，请按需批准 helper 或 System Extension。TUN 模式和 `NE Transparent Proxy Experimental` 都需要对应的 macOS 授权后才能运行。
 
 ## 核心能力
 
@@ -56,6 +67,12 @@ ClashMax 是一个使用 SwiftUI 构建的原生 macOS Mihomo 图形客户端。
 ## 下载与更新
 
 发布版通过 GitHub Releases 提供。安装后，ClashMax 可在应用内检查 App 更新；每个 App release 都包含对应的 stable Mihomo 内核，用户不需要单独安装或维护 core binary。
+
+## 社区与反馈
+
+- [Issues](https://github.com/marvinli001/ClashMax/issues) 用于收集可执行反馈、可复现 bug 和可跟踪开发任务。
+- [Discussions](https://github.com/marvinli001/ClashMax/discussions) 用于问答、公告、安装使用交流和更宽泛的项目对话。
+- 提交日志或截图前，请移除订阅 URL、节点凭据、私有域名和其他敏感 profile 信息。
 
 ## 本地开发
 

@@ -1,0 +1,44 @@
+name: Task
+description: Track implementation, documentation, release, or maintenance work.
+title: "[Task]: "
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What concrete outcome should this task deliver?
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: List the files, features, or workflows expected to change.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: How should maintainers know this task is complete?
+      placeholder: |
+        - ...
+        - Verification command:
+    validations:
+      required: true
+  - type: dropdown
+    id: risk
+    attributes:
+      label: Risk area
+      options:
+        - Low-risk documentation or UI copy
+        - UI behavior
+        - Runtime config / Mihomo control
+        - System Proxy
+        - TUN helper
+        - NE Transparent Proxy Experimental
+        - Signing / release / updates
+        - Security-sensitive
+    validations:
+      required: true
+
