@@ -23,6 +23,34 @@ final class SystemProxyControllerTests: XCTestCase {
     XCTAssertFalse(script.contains("codesign --force"))
   }
 
+  func testTunSmokeRunbookAndScriptCoverReadOnlyInstalledBundleGate() throws {
+    let testFile = URL(fileURLWithPath: #filePath)
+    let projectRoot = testFile.deletingLastPathComponent().deletingLastPathComponent()
+    let runbook = try String(
+      contentsOf: projectRoot.appendingPathComponent("docs/TUN_SMOKE_TEST.md"),
+      encoding: .utf8
+    )
+    let script = try String(
+      contentsOf: projectRoot.appendingPathComponent("script/tun_smoke_check.sh"),
+      encoding: .utf8
+    )
+
+    XCTAssertTrue(runbook.contains("/Applications/ClashMax.app"))
+    XCTAssertTrue(runbook.contains("sleep"))
+    XCTAssertTrue(runbook.contains("network"))
+    XCTAssertTrue(runbook.contains("UDP"))
+    XCTAssertTrue(runbook.contains("DNS leak"))
+    XCTAssertTrue(runbook.contains("real installed-bundle TUN smoke remains manual"))
+    XCTAssertTrue(script.contains("launchctl print"))
+    XCTAssertTrue(script.contains("scutil --dns"))
+    XCTAssertTrue(script.contains("netstat -rn"))
+    XCTAssertTrue(script.contains("This script is read-only"))
+    XCTAssertFalse(script.contains("sudo "))
+    XCTAssertFalse(script.contains("launchctl bootstrap"))
+    XCTAssertFalse(script.contains("launchctl bootout"))
+    XCTAssertFalse(script.contains("networksetup -set"))
+  }
+
   func testAppBundleExtendedAttributesAreClearedBeforeSigning() throws {
     let testFile = URL(fileURLWithPath: #filePath)
     let projectRoot = testFile.deletingLastPathComponent().deletingLastPathComponent()

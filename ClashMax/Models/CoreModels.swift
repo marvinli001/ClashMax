@@ -430,6 +430,177 @@ struct ExternalControllerSettings: Codable, Equatable, Sendable {
   }
 }
 
+struct ManagedRuleOverlayRule: Codable, Equatable, Identifiable, Sendable {
+  enum Kind: String, CaseIterable, Codable, Identifiable, Sendable {
+    case domain = "DOMAIN"
+    case domainSuffix = "DOMAIN-SUFFIX"
+    case domainKeyword = "DOMAIN-KEYWORD"
+    case ipCIDR = "IP-CIDR"
+    case ipCIDR6 = "IP-CIDR6"
+    case geoIP = "GEOIP"
+    case geoSite = "GEOSITE"
+    case match = "MATCH"
+
+    var id: String { rawValue }
+    var displayName: String { rawValue }
+
+    var requiresValue: Bool {
+      self != .match
+    }
+
+    var allowsNoResolve: Bool {
+      switch self {
+      case .ipCIDR, .ipCIDR6, .geoIP:
+        return true
+      case .domain, .domainSuffix, .domainKeyword, .geoSite, .match:
+        return false
+      }
+    }
+  }
+
+  var id: UUID
+  var kind: Kind
+  var value: String
+  var policy: String
+  var noResolve: Bool
+
+  private enum CodingKeys: String, CodingKey {
+    case id
+    case kind
+    case value
+    case policy
+    case noResolve
+  }
+
+  init(
+    id: UUID = UUID(),
+    kind: Kind,
+    value: String = "",
+    policy: String,
+    noResolve: Bool = false
+  ) {
+    self.id = id
+    self.kind = kind
+    self.value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    self.policy = policy.trimmingCharacters(in: .whitespacesAndNewlines)
+    self.noResolve = kind.allowsNoResolve && noResolve
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    let kind = container.decodeDefault(Kind.self, forKey: .kind, default: .domainSuffix)
+    self.init(
+      id: container.decodeDefault(UUID.self, forKey: .id, default: UUID()),
+      kind: kind,
+      value: container.decodeDefault(String.self, forKey: .value, default: ""),
+      policy: container.decodeDefault(String.self, forKey: .policy, default: "DIRECT"),
+      noResolve: container.decodeDefault(Bool.self, forKey: .noResolve, default: false)
+    )
+  }
+
+  var runtimeRule: String {
+    var components = [kind.rawValue]
+    if kind.requiresValue {
+      components.append(normalizedValue)
+    }
+    components.append(normalizedPolicy)
+    if kind.allowsNoResolve && noResolve {
+      components.append("no-resolve")
+    }
+    return components.joined(separator: ",")
+  }
+
+  var normalizedValue: String {
+    value.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  var normalizedPolicy: String {
+    policy.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  var validationError: String? {
+    if kind.requiresValue, normalizedValue.isEmpty {
+      return "Rule value cannot be empty."
+    }
+    if kind.requiresValue, !Self.isValidField(normalizedValue) {
+      return "Rule value cannot contain commas or line breaks."
+    }
+    if normalizedPolicy.isEmpty {
+      return "Rule policy cannot be empty."
+    }
+    if !Self.isValidField(normalizedPolicy) {
+      return "Rule policy cannot contain commas or line breaks."
+    }
+    return nil
+  }
+
+  private static func isValidField(_ value: String) -> Bool {
+    !value.contains(",") && !value.contains(where: \.isNewline)
+  }
+}
+
+struct RuleOverlaySettings: Codable, Equatable, Sendable {
+  var enabled: Bool
+  var prependRules: [ManagedRuleOverlayRule]
+  var appendRules: [ManagedRuleOverlayRule]
+
+  private enum CodingKeys: String, CodingKey {
+    case enabled
+    case prependRules
+    case appendRules
+  }
+
+  init(
+    enabled: Bool = false,
+    prependRules: [ManagedRuleOverlayRule] = [],
+    appendRules: [ManagedRuleOverlayRule] = []
+  ) {
+    self.enabled = enabled
+    self.prependRules = prependRules
+    self.appendRules = appendRules
+  }
+
+  static let disabled = RuleOverlaySettings()
+
+  var hasRuntimeOverlay: Bool {
+    enabled && (!prependRules.isEmpty || !appendRules.isEmpty)
+  }
+
+  var validationError: String? {
+    for rule in prependRules + appendRules {
+      if let error = rule.validationError {
+        return error
+      }
+    }
+    return nil
+  }
+
+  var runtimePrependRules: [String] {
+    guard enabled else { return [] }
+    return prependRules.compactMap { rule in
+      rule.validationError == nil ? rule.runtimeRule : nil
+    }
+  }
+
+  var runtimeAppendRules: [String] {
+    guard enabled else { return [] }
+    return appendRules.compactMap { rule in
+      rule.validationError == nil ? rule.runtimeRule : nil
+    }
+  }
+
+  var summary: String {
+    guard enabled else {
+      return String(localized: "Disabled")
+    }
+    let count = prependRules.count + appendRules.count
+    if count == 0 {
+      return String(localized: "Enabled, no rules")
+    }
+    return String(format: String(localized: "%lld managed rules"), Int64(count))
+  }
+}
+
 struct RuntimeOverrides: Codable, Equatable, Sendable {
   var mixedPort: Int
   var externalControllerHost: String
@@ -442,6 +613,7 @@ struct RuntimeOverrides: Codable, Equatable, Sendable {
   var unifiedDelay: Bool
   var dnsEnabled: Bool?
   var externalControllerCORS: ExternalControllerCORSSettings
+  var ruleOverlay: RuleOverlaySettings
   var tunEnabled: Bool
   var tunSettings: TunSettings
 
@@ -457,6 +629,7 @@ struct RuntimeOverrides: Codable, Equatable, Sendable {
     case unifiedDelay
     case dnsEnabled
     case externalControllerCORS
+    case ruleOverlay
     case tunEnabled
     case tunSettings
   }
@@ -471,6 +644,7 @@ struct RuntimeOverrides: Codable, Equatable, Sendable {
     mode: RunMode,
     logLevel: String,
     dnsEnabled: Bool?,
+    ruleOverlay: RuleOverlaySettings = .disabled,
     tunEnabled: Bool,
     unifiedDelay: Bool = false,
     externalControllerCORS: ExternalControllerCORSSettings = .default,
@@ -487,6 +661,7 @@ struct RuntimeOverrides: Codable, Equatable, Sendable {
     self.unifiedDelay = unifiedDelay
     self.dnsEnabled = dnsEnabled
     self.externalControllerCORS = externalControllerCORS
+    self.ruleOverlay = ruleOverlay
     self.tunEnabled = tunEnabled
     self.tunSettings = tunSettings
   }
@@ -502,6 +677,7 @@ struct RuntimeOverrides: Codable, Equatable, Sendable {
       mode: .rule,
       logLevel: "info",
       dnsEnabled: nil,
+      ruleOverlay: .disabled,
       tunEnabled: false,
       unifiedDelay: false,
       externalControllerCORS: .default,
@@ -534,6 +710,11 @@ struct RuntimeOverrides: Codable, Equatable, Sendable {
       ExternalControllerCORSSettings.self,
       forKey: .externalControllerCORS,
       default: defaults.externalControllerCORS
+    )
+    ruleOverlay = container.decodeDefault(
+      RuleOverlaySettings.self,
+      forKey: .ruleOverlay,
+      default: defaults.ruleOverlay
     )
     tunEnabled = container.decodeDefault(Bool.self, forKey: .tunEnabled, default: defaults.tunEnabled)
     tunSettings = container.decodeDefault(TunSettings.self, forKey: .tunSettings, default: defaults.tunSettings)
@@ -927,6 +1108,39 @@ struct TunDNSSettings: Codable, Equatable, Sendable {
     ]
   )
   static let `default` = chinaNetworkDefault
+  static let profileDefault = TunDNSSettings()
+  static let globalSecureDefault = TunDNSSettings(
+    fakeIPFilter: chinaNetworkDefault.fakeIPFilter,
+    defaultNameserver: ["1.1.1.1", "8.8.8.8"],
+    nameserver: [
+      "https://cloudflare-dns.com/dns-query",
+      "https://dns.google/dns-query"
+    ],
+    fallback: [
+      "tls://1.1.1.1",
+      "tls://8.8.8.8"
+    ]
+  )
+  static let presets = [
+    TunDNSPreset(
+      id: "china-default",
+      title: String(localized: "China Optimized"),
+      description: String(localized: "AliDNS and DNSPod with common LAN and captive-portal fake-ip exclusions."),
+      settings: .chinaNetworkDefault
+    ),
+    TunDNSPreset(
+      id: "profile",
+      title: String(localized: "Profile DNS"),
+      description: String(localized: "Do not add app-managed DNS resolvers; keep the profile DNS map."),
+      settings: .profileDefault
+    ),
+    TunDNSPreset(
+      id: "global-secure",
+      title: String(localized: "Global Secure"),
+      description: String(localized: "Cloudflare and Google DoH/TLS resolvers with the standard fake-ip exclusions."),
+      settings: .globalSecureDefault
+    )
+  ]
 
   var hasRuntimeOverlay: Bool {
     preferH3 != nil
@@ -1172,6 +1386,13 @@ struct TunDNSSettings: Codable, Equatable, Sendable {
     }
     return true
   }
+}
+
+struct TunDNSPreset: Equatable, Identifiable, Sendable {
+  var id: String
+  var title: String
+  var description: String
+  var settings: TunDNSSettings
 }
 
 struct TunSettings: Codable, Equatable, Sendable {

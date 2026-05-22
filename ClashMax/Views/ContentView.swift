@@ -49,6 +49,8 @@ struct ContentView: View {
     switch appModel.selectedSection {
     case .home:
       DashboardView()
+    case .status:
+      StatusView()
     case .profiles:
       ProfilesView()
     case .proxies:

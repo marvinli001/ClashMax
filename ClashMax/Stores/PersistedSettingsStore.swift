@@ -31,6 +31,12 @@ final class PersistedSettingsStore: ObservableObject {
       saveCodable(networkExtensionRoutingSettings, forKey: Self.networkExtensionRoutingSettingsDefaultsKey)
     }
   }
+  @Published var ruleOverlaySettings = RuleOverlaySettings.disabled {
+    didSet {
+      overrides.ruleOverlay = ruleOverlaySettings
+      saveCodable(ruleOverlaySettings, forKey: Self.ruleOverlaySettingsDefaultsKey)
+    }
+  }
   @Published var delayTestSettings = DelayTestSettings.default {
     didSet {
       overrides.unifiedDelay = delayTestSettings.unifiedDelay
@@ -67,6 +73,7 @@ final class PersistedSettingsStore: ObservableObject {
   private static let tunDNSDefaultsVersionKey = "io.github.clashmax.tunDNSDefaultsVersion"
   private static let currentTunDNSDefaultsVersion = 1
   private static let networkExtensionRoutingSettingsDefaultsKey = "io.github.clashmax.networkExtensionRoutingSettings"
+  private static let ruleOverlaySettingsDefaultsKey = "io.github.clashmax.ruleOverlaySettings"
   private static let delayTestSettingsDefaultsKey = "io.github.clashmax.delayTestSettings"
   private static let appThemeDefaultsKey = "io.github.clashmax.appTheme"
   private static let externalControllerSettingsDefaultsKey = "io.github.clashmax.externalControllerSettings"
@@ -104,6 +111,11 @@ final class PersistedSettingsStore: ObservableObject {
       forKey: Self.networkExtensionRoutingSettingsDefaultsKey,
       defaults: defaults
     ) ?? .default
+    ruleOverlaySettings = Self.loadCodable(
+      RuleOverlaySettings.self,
+      forKey: Self.ruleOverlaySettingsDefaultsKey,
+      defaults: defaults
+    ) ?? .disabled
     delayTestSettings = Self.loadCodable(
       DelayTestSettings.self,
       forKey: Self.delayTestSettingsDefaultsKey,
@@ -124,6 +136,7 @@ final class PersistedSettingsStore: ObservableObject {
       migratedCORSSettings: migratedCORSSettings
     )
     overrides.tunSettings = tunSettings
+    overrides.ruleOverlay = ruleOverlaySettings
     overrides.ipv6Enabled = ipv6Enabled
     overrides.unifiedDelay = delayTestSettings.unifiedDelay
     syncExternalControllerSettings()

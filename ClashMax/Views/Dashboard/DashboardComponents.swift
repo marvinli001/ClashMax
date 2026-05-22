@@ -464,6 +464,22 @@ private struct TunSettingsPopover: View {
         Toggle("System DNS Override", isOn: $settings.systemDNSOverrideEnabled)
       }
 
+      VStack(alignment: .leading, spacing: 6) {
+        Picker("DNS Preset", selection: dnsPresetSelection) {
+          ForEach(TunDNSSettings.presets) { preset in
+            Text(preset.title).tag(preset.id)
+          }
+          Text("Custom").tag(Self.customDNSPresetID)
+        }
+        .pickerStyle(.menu)
+
+        Text(dnsPresetDescription)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(2)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+
       EditableStringList(
         title: "DNS Hijack",
         placeholder: "any:53",
@@ -652,6 +668,25 @@ private struct TunSettingsPopover: View {
         settings.dns.fallbackFilter.geoIPCode = trimmed.isEmpty ? nil : trimmed
       }
     )
+  }
+
+  private static let customDNSPresetID = "custom"
+
+  private var dnsPresetSelection: Binding<String> {
+    Binding(
+      get: {
+        TunDNSSettings.presets.first { $0.settings == settings.dns }?.id ?? Self.customDNSPresetID
+      },
+      set: { id in
+        guard let preset = TunDNSSettings.presets.first(where: { $0.id == id }) else { return }
+        settings.dns = preset.settings
+      }
+    )
+  }
+
+  private var dnsPresetDescription: String {
+    TunDNSSettings.presets.first { $0.settings == settings.dns }?.description
+      ?? String(localized: "Custom app-managed DNS overlay.")
   }
 }
 

@@ -6,6 +6,7 @@ struct SettingsView: View {
   @EnvironmentObject private var settings: PersistedSettingsStore
   @EnvironmentObject private var appUpdateController: AppUpdateController
   private let bundledCoreInfo: BundledCoreInfo
+  @State private var isRuleOverlayPresented = false
 
   init(bundledCoreInfo: BundledCoreInfo = BundledCoreInfo()) {
     self.bundledCoreInfo = bundledCoreInfo
@@ -166,6 +167,21 @@ struct SettingsView: View {
             .labelsHidden()
             .pickerStyle(.menu)
             .frame(width: 120, alignment: .trailing)
+          }
+        }
+
+        Section("Rules") {
+          SettingsControlRow("Rule Overlay", description: settings.ruleOverlaySettings.summary) {
+            Button {
+              isRuleOverlayPresented = true
+            } label: {
+              Label("Configure", systemImage: "slider.horizontal.3")
+            }
+            .popover(isPresented: $isRuleOverlayPresented, arrowEdge: .bottom) {
+              RuleOverlaySettingsPopover(settings: $settings.ruleOverlaySettings)
+                .frame(width: 560)
+                .padding(18)
+            }
           }
         }
 
@@ -501,6 +517,150 @@ struct SettingsView: View {
       }
       .disabled(!appModel.canRepairNetworkExtensionDNS)
     }
+  }
+}
+
+private struct RuleOverlaySettingsPopover: View {
+  @Binding var settings: RuleOverlaySettings
+  @State private var position = RuleOverlayPosition.prepend
+  @State private var kind = ManagedRuleOverlayRule.Kind.domainSuffix
+  @State private var value = ""
+  @State private var policy = "DIRECT"
+  @State private var noResolve = false
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      popoverHeader("Rule Overlay", systemImage: "list.bullet.rectangle")
+
+      Toggle("Enable Rule Overlay", isOn: $settings.enabled)
+        .toggleStyle(.switch)
+
+      VStack(alignment: .leading, spacing: 10) {
+        Picker("Position", selection: $position) {
+          ForEach(RuleOverlayPosition.allCases) { position in
+            Text(position.displayName).tag(position)
+          }
+        }
+        .pickerStyle(.segmented)
+
+        Picker("Rule Type", selection: $kind) {
+          ForEach(ManagedRuleOverlayRule.Kind.allCases) { kind in
+            Text(kind.displayName).tag(kind)
+          }
+        }
+        .pickerStyle(.menu)
+
+        if kind.requiresValue {
+          TextField("Rule Value", text: $value)
+            .textFieldStyle(.roundedBorder)
+        }
+
+        TextField("Policy", text: $policy)
+          .textFieldStyle(.roundedBorder)
+
+        if kind.allowsNoResolve {
+          Toggle("No Resolve", isOn: $noResolve)
+            .toggleStyle(.checkbox)
+        }
+
+        HStack {
+          if let error = draftRule.validationError {
+            Label(error, systemImage: "exclamationmark.triangle.fill")
+              .font(.caption)
+              .foregroundStyle(.red)
+              .lineLimit(2)
+          }
+          Spacer()
+          Button {
+            addRule()
+          } label: {
+            Label("Add Rule", systemImage: "plus")
+          }
+          .disabled(!settings.enabled || draftRule.validationError != nil)
+        }
+      }
+
+      Divider()
+
+      RuleOverlayRuleList(title: "Before Profile Rules", rules: $settings.prependRules)
+      RuleOverlayRuleList(title: "After Profile Rules", rules: $settings.appendRules)
+    }
+  }
+
+  private var draftRule: ManagedRuleOverlayRule {
+    ManagedRuleOverlayRule(kind: kind, value: value, policy: policy, noResolve: noResolve)
+  }
+
+  private func addRule() {
+    let rule = draftRule
+    guard rule.validationError == nil else { return }
+    switch position {
+    case .prepend:
+      settings.prependRules.append(rule)
+    case .append:
+      settings.appendRules.append(rule)
+    }
+    value = ""
+    if !kind.allowsNoResolve {
+      noResolve = false
+    }
+  }
+}
+
+private enum RuleOverlayPosition: String, CaseIterable, Identifiable {
+  case prepend
+  case append
+
+  var id: String { rawValue }
+
+  var displayName: String {
+    switch self {
+    case .prepend:
+      return String(localized: "Before profile")
+    case .append:
+      return String(localized: "After profile")
+    }
+  }
+}
+
+private struct RuleOverlayRuleList: View {
+  let title: String
+  @Binding var rules: [ManagedRuleOverlayRule]
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text(LocalizedStringKey(title))
+        .font(.caption)
+        .foregroundStyle(.secondary)
+
+      if rules.isEmpty {
+        Text("Empty")
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+      } else {
+        ForEach(Array(rules.enumerated()), id: \.element.id) { index, rule in
+          HStack(spacing: 8) {
+            Text(rule.runtimeRule)
+              .font(.system(.caption, design: .monospaced))
+              .lineLimit(1)
+              .truncationMode(.middle)
+            Spacer()
+            Button {
+              rules.remove(at: index)
+            } label: {
+              Image(systemName: "trash")
+                .frame(width: 20, height: 20)
+            }
+            .buttonStyle(.borderless)
+            .help("Remove rule")
+          }
+          .padding(.horizontal, 8)
+          .padding(.vertical, 6)
+          .background(.quaternary, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 }
 
@@ -1105,6 +1265,11 @@ private struct ExternalControlSettingsSheet: View {
 
 private func localizedSettingsText(_ value: String) -> String {
   NSLocalizedString(value, comment: "")
+}
+
+private func popoverHeader(_ title: String, systemImage: String) -> some View {
+  Label(LocalizedStringKey(title), systemImage: systemImage)
+    .font(.title3.weight(.semibold))
 }
 
 private struct PortControl: View {

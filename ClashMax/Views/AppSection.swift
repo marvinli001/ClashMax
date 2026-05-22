@@ -2,6 +2,7 @@ import Foundation
 
 enum AppSection: String, CaseIterable, Identifiable {
   case home
+  case status
   case profiles
   case proxies
   case connections
@@ -14,6 +15,7 @@ enum AppSection: String, CaseIterable, Identifiable {
   var title: String {
     switch self {
     case .home: String(localized: "Home")
+    case .status: String(localized: "Status")
     case .profiles: String(localized: "Profiles")
     case .proxies: String(localized: "Proxies")
     case .connections: String(localized: "Connections")
@@ -26,6 +28,7 @@ enum AppSection: String, CaseIterable, Identifiable {
   var symbolName: String {
     switch self {
     case .home: "gauge.with.dots.needle.67percent"
+    case .status: "waveform.path.ecg.rectangle"
     case .profiles: "doc.text"
     case .proxies: "point.3.connected.trianglepath.dotted"
     case .connections: "network"

@@ -201,6 +201,113 @@ struct AppNotice: Equatable {
   }
 }
 
+struct RuntimeDiagnosticsReport: Equatable, Sendable {
+  static let redactedSecret = "<redacted>"
+
+  var generatedAt: Date
+  var statusSummary: String
+  var profileName: String
+  var runtimeOwner: RuntimeOwner
+  var routingMode: ProxyRoutingMode
+  var runMode: RunMode
+  var controllerHost: String
+  var controllerPort: Int
+  var controllerSecret: String
+  var coreStatus: String
+  var systemProxyEnabled: Bool
+  var tunEnabled: Bool
+  var networkExtensionEnabled: Bool
+  var tunSystemDNS: String
+  var networkExtensionSystemDNS: String
+  var tunDNSMode: String
+  var ruleOverlaySummary: String
+  var helperDetail: TunnelHelperStatusDetail
+  var tunDiagnostics: TunDiagnosticsSnapshot
+  var networkExtensionDiagnostics: NetworkExtensionDiagnosticsSnapshot
+  var readinessIssue: String?
+  var lastError: String?
+  var recentLogs: [String]
+  var helperLogs: [String]
+
+  var plainText: String {
+    let lines = rawLines().map(redacted)
+    return lines.joined(separator: "\n")
+  }
+
+  private func rawLines() -> [String] {
+    var lines = [
+      "ClashMax Runtime Diagnostics",
+      "Generated: \(generatedAt.formatted(date: .numeric, time: .standard))",
+      "Status: \(statusSummary)",
+      "Profile: \(profileName)",
+      "Runtime Owner: \(runtimeOwner.rawValue)",
+      "Routing Mode: \(routingMode.displayName)",
+      "Run Mode: \(runMode.displayName)",
+      "Controller: \(controllerHost):\(controllerPort)",
+      "Controller Secret: \(controllerSecret)",
+      "Core: \(coreStatus)",
+      "System Proxy: \(systemProxyEnabled ? "enabled" : "disabled")",
+      "TUN: \(tunEnabled ? "enabled" : "disabled")",
+      "NE Proxy: \(networkExtensionEnabled ? "enabled" : "disabled")",
+      "TUN DNS: \(tunSystemDNS) / \(tunDNSMode)",
+      "NE System DNS: \(networkExtensionSystemDNS)",
+      "Rule Overlay: \(ruleOverlaySummary)",
+      "Helper Service: \(helperDetail.serviceStatus.displayName)",
+      "Helper Fingerprint: \(helperFingerprintSummary)",
+      "Helper Protocol: \(helperDetail.protocolVersion.map { "v\($0)" } ?? "unknown")",
+      "Helper Build: \(helperDetail.helperBuildVersion ?? "unknown")",
+      "Helper Running: \(helperDetail.pid.map { "pid \($0)" } ?? (helperDetail.running ? "yes" : "no"))",
+      "Helper Safe Paths: helper validates bundled core, runtime config, and work directory before launch",
+      "Helper Status: \(helperDetail.message)",
+      "TUN Diagnostics: \(tunDiagnostics.summaryLabel)",
+      "NE Diagnostics: TCP \(networkExtensionDiagnostics.activeTCPBridgeCount), UDP \(networkExtensionDiagnostics.activeUDPBridgeCount), DNS \(networkExtensionDiagnostics.dnsCaptureCount)",
+    ]
+    if let readinessIssue {
+      lines.append("Readiness: \(readinessIssue)")
+    }
+    if let lastError {
+      lines.append("Last Error: \(lastError)")
+    }
+    if !tunDiagnostics.checks.isEmpty {
+      lines.append("TUN Checks:")
+      lines.append(contentsOf: tunDiagnostics.checks.map { "- \($0.title): \($0.status.displayName) - \($0.message)" })
+    }
+    if !helperLogs.isEmpty {
+      lines.append("Helper Logs:")
+      lines.append(contentsOf: helperLogs.suffix(8).map { "- \($0)" })
+    }
+    if !recentLogs.isEmpty {
+      lines.append("Runtime Logs:")
+      lines.append(contentsOf: recentLogs.suffix(12).map { "- \($0)" })
+    }
+    return lines
+  }
+
+  private var helperFingerprintSummary: String {
+    guard helperDetail.fingerprintRecorded else {
+      return "not recorded"
+    }
+    switch helperDetail.fingerprintMatches {
+    case true:
+      return "match"
+    case false:
+      return "mismatch"
+    case nil:
+      return "unknown"
+    }
+  }
+
+  private func redacted(_ value: String) -> String {
+    let trimmedSecret = controllerSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedSecret.isEmpty else {
+      return value.replacingOccurrences(of: "Controller Secret: ", with: "Controller Secret: \(Self.redactedSecret)")
+    }
+    return value
+      .replacingOccurrences(of: "Bearer \(trimmedSecret)", with: "Bearer \(Self.redactedSecret)")
+      .replacingOccurrences(of: trimmedSecret, with: Self.redactedSecret)
+  }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
   @Published var selectedSection: AppSection = .home
@@ -227,6 +334,10 @@ final class AppModel: ObservableObject {
   var networkExtensionRoutingSettings: NetworkExtensionRoutingSettings {
     get { settings.networkExtensionRoutingSettings }
     set { settings.networkExtensionRoutingSettings = newValue }
+  }
+  var ruleOverlaySettings: RuleOverlaySettings {
+    get { settings.ruleOverlaySettings }
+    set { settings.ruleOverlaySettings = newValue }
   }
   var delayTestSettings: DelayTestSettings {
     get { settings.delayTestSettings }
@@ -624,6 +735,70 @@ final class AppModel: ObservableObject {
 
   var userVisibleLogs: [LogEntry] {
     LogVisibility.visibleEntries(in: logs, developerMode: developerMode)
+  }
+
+  func runtimeDiagnosticsReport(now: Date = Date()) -> RuntimeDiagnosticsReport {
+    RuntimeDiagnosticsReport(
+      generatedAt: now,
+      statusSummary: statusSummary,
+      profileName: profileStore.activeProfile?.name ?? "No Profile",
+      runtimeOwner: runtimeOwner,
+      routingMode: proxyRoutingMode,
+      runMode: overrides.mode,
+      controllerHost: overrides.externalControllerHost,
+      controllerPort: overrides.externalControllerPort,
+      controllerSecret: overrides.secret,
+      coreStatus: coreDiagnosticsStatus,
+      systemProxyEnabled: systemProxyEnabled,
+      tunEnabled: tunEnabled,
+      networkExtensionEnabled: networkExtensionEnabled,
+      tunSystemDNS: tunSystemDNSState.displayName,
+      networkExtensionSystemDNS: networkExtensionSystemDNSState.displayName,
+      tunDNSMode: tunSettings.dnsFakeIPEnabled ? "fake-ip" : "profile",
+      ruleOverlaySummary: ruleOverlaySettings.summary,
+      helperDetail: tunHelperStatusDetail,
+      tunDiagnostics: tunDiagnostics,
+      networkExtensionDiagnostics: networkExtensionController.diagnostics,
+      readinessIssue: readinessIssue,
+      lastError: lastError,
+      recentLogs: userVisibleLogs.map { entry in
+        "\(entry.date.formatted(date: .omitted, time: .standard)) [\(entry.level)] \(entry.message)"
+      },
+      helperLogs: helperLogs
+    )
+  }
+
+  func copyRuntimeDiagnostics() {
+    let report = runtimeDiagnosticsReport()
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(report.plainText, forType: .string)
+    appNotice = AppNotice(message: String(localized: "Diagnostics copied."), tone: .success)
+  }
+
+  func openRuntimeLogs() {
+    selectedSection = .logs
+  }
+
+  func openLogsFolder() {
+    try? paths.prepareDirectories()
+    if !NSWorkspace.shared.open(paths.logs) {
+      selectedSection = .logs
+    }
+  }
+
+  private var coreDiagnosticsStatus: String {
+    switch coreController.status {
+    case .stopped:
+      return "stopped"
+    case .starting:
+      return "starting"
+    case let .running(version):
+      return version.map { "running \($0)" } ?? "running"
+    case let .crashed(message):
+      return "crashed: \(message)"
+    case .restarting:
+      return "restarting"
+    }
   }
 
   var proxyRuntimeActionMessage: String {

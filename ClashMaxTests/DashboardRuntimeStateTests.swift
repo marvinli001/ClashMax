@@ -543,6 +543,102 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertFalse(secondModel.overrides.externalControllerCORS.enabled)
   }
 
+  func testRuntimeDiagnosticsReportRedactsControllerSecret() throws {
+    let paths = try Self.makeRuntimePaths()
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.externalControllerSettings = ExternalControllerSettings(
+      host: "127.0.0.1",
+      port: 19097,
+      secret: "secret-token"
+    )
+    model.lastError = "Controller rejected Bearer secret-token"
+    model.helperLogs = ["state = running", "last exit code = 0", "debug secret-token"]
+    model.runtimeData.appendLog(level: "debug", message: "curl -H Authorization: Bearer secret-token")
+    model.runtimeData.flushPendingLogs()
+
+    let report = model.runtimeDiagnosticsReport(now: Date(timeIntervalSince1970: 1_700_000_000))
+    let text = report.plainText
+
+    XCTAssertFalse(text.contains("secret-token"))
+    XCTAssertTrue(text.contains("Controller Secret: \(RuntimeDiagnosticsReport.redactedSecret)"))
+    XCTAssertTrue(text.contains("Bearer \(RuntimeDiagnosticsReport.redactedSecret)"))
+    XCTAssertTrue(text.contains("debug \(RuntimeDiagnosticsReport.redactedSecret)"))
+  }
+
+  func testRuntimeDiagnosticsReportUsesPreciseHelperFingerprintState() {
+    func report(fingerprintRecorded: Bool, fingerprintMatches: Bool?) -> String {
+      var helperDetail = TunnelHelperStatusDetail.unknown
+      helperDetail.fingerprintRecorded = fingerprintRecorded
+      helperDetail.fingerprintMatches = fingerprintMatches
+
+      return RuntimeDiagnosticsReport(
+        generatedAt: Date(timeIntervalSince1970: 1_700_000_000),
+        statusSummary: "Stopped",
+        profileName: "No Profile",
+        runtimeOwner: .stopped,
+        routingMode: .systemProxy,
+        runMode: .rule,
+        controllerHost: "127.0.0.1",
+        controllerPort: 9097,
+        controllerSecret: "secret",
+        coreStatus: "Stopped",
+        systemProxyEnabled: false,
+        tunEnabled: false,
+        networkExtensionEnabled: false,
+        tunSystemDNS: "Off",
+        networkExtensionSystemDNS: "Off",
+        tunDNSMode: "profile",
+        ruleOverlaySummary: "Disabled",
+        helperDetail: helperDetail,
+        tunDiagnostics: .empty,
+        networkExtensionDiagnostics: .empty,
+        readinessIssue: nil,
+        lastError: nil,
+        recentLogs: [],
+        helperLogs: []
+      ).plainText
+    }
+
+    XCTAssertTrue(report(fingerprintRecorded: false, fingerprintMatches: nil).contains("Helper Fingerprint: not recorded"))
+    XCTAssertTrue(report(fingerprintRecorded: true, fingerprintMatches: nil).contains("Helper Fingerprint: unknown"))
+    XCTAssertTrue(report(fingerprintRecorded: true, fingerprintMatches: true).contains("Helper Fingerprint: match"))
+    XCTAssertTrue(report(fingerprintRecorded: true, fingerprintMatches: false).contains("Helper Fingerprint: mismatch"))
+  }
+
+  func testRuleOverlaySettingsPersistIntoRuntimeOverrides() throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    let firstModel = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: defaults
+    )
+    let overlay = RuleOverlaySettings(
+      enabled: true,
+      prependRules: [
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "corp.example", policy: "DIRECT")
+      ],
+      appendRules: [
+        ManagedRuleOverlayRule(kind: .match, policy: "Proxy")
+      ]
+    )
+
+    firstModel.ruleOverlaySettings = overlay
+
+    let secondModel = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: defaults
+    )
+
+    XCTAssertEqual(secondModel.ruleOverlaySettings, overlay)
+    XCTAssertEqual(secondModel.overrides.ruleOverlay, overlay)
+  }
+
   func testTunSettingsMigratesMissingRouteExcludeAddressesFromUserDefaults() throws {
     let paths = try Self.makeRuntimePaths()
     let defaults = try Self.makeIsolatedDefaults()

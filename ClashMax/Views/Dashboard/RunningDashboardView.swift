@@ -784,6 +784,317 @@ private struct NetworkExtensionDiagnosticsRuntimeCard: View {
   }
 }
 
+struct StatusView: View {
+  @EnvironmentObject private var appModel: AppModel
+
+  var body: some View {
+    AdaptivePage(
+      title: "Status",
+      subtitle: "Runtime facts, diagnostics, logs, and repair."
+    ) {
+      ViewThatFits(in: .horizontal) {
+        HStack(spacing: 8) {
+          statusActions
+        }
+        VStack(alignment: .leading, spacing: 8) {
+          statusActions
+        }
+      }
+    } content: {
+      ScrollView {
+        VStack(spacing: 12) {
+          StatusRuntimeOverviewCard()
+
+          LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 320), spacing: DashboardLayoutMetrics.dashboardGridSpacing)],
+            spacing: DashboardLayoutMetrics.dashboardGridSpacing
+          ) {
+            StatusDNSCard()
+            StatusRuleOverlayCard()
+          }
+
+          StatusHelperDiagnosticsCard()
+
+          if appModel.proxyRoutingMode == .tun || appModel.tunEnabled || appModel.tunnelCoreRunning {
+            TunDiagnosticsRuntimeCard()
+          }
+
+          if appModel.proxyRoutingMode == .neProxy || appModel.networkExtensionController.vpnStatus.isActive {
+            NetworkExtensionDiagnosticsRuntimeCard()
+          }
+
+          RecentLogsRuntimeCard()
+        }
+        .frame(maxWidth: 1080)
+        .frame(maxWidth: .infinity)
+      }
+    }
+    .background(Color(nsColor: .windowBackgroundColor))
+  }
+
+  private var statusActions: some View {
+    Group {
+      Button {
+        refreshStatus()
+      } label: {
+        Label("Refresh", systemImage: "arrow.clockwise")
+      }
+
+      Button {
+        appModel.copyRuntimeDiagnostics()
+      } label: {
+        Label("Copy Diagnostics", systemImage: "doc.on.doc")
+      }
+
+      Button {
+        appModel.openRuntimeLogs()
+      } label: {
+        Label("Open Logs", systemImage: "terminal")
+      }
+
+      Button {
+        appModel.openLogsFolder()
+      } label: {
+        Label("Open Log Folder", systemImage: "folder")
+      }
+    }
+  }
+
+  private func refreshStatus() {
+    appModel.refreshHelperStatus()
+    appModel.refreshNetworkExtensionStatus()
+    appModel.refreshTunDiagnostics()
+    if appModel.isCoreRunning {
+      appModel.reloadRuntimeData()
+    }
+  }
+}
+
+private struct StatusRuntimeOverviewCard: View {
+  @EnvironmentObject private var appModel: AppModel
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      DashboardSectionHeader(title: "Runtime Status", symbolName: "waveform.path.ecg.rectangle")
+
+      HStack(spacing: 10) {
+        RuntimeStat(title: "State", value: appModel.statusSummary, tint: statusTint)
+        RuntimeStat(title: "Mode", value: appModel.proxyRoutingMode.displayName, tint: .cyan)
+        RuntimeStat(title: "Profile", value: appModel.profileStore.activeProfile?.name ?? "None", tint: .orange)
+        RuntimeStat(title: "Core", value: appModel.coreController.status.displayName, tint: coreTint)
+      }
+
+      Divider()
+        .opacity(0.24)
+
+      RuntimeLine(title: "Controller", value: "\(appModel.overrides.externalControllerHost):\(appModel.overrides.externalControllerPort)")
+      RuntimeLine(title: "Controller Secret", value: RuntimeDiagnosticsReport.redactedSecret)
+      RuntimeLine(title: "Run Mode", value: appModel.overrides.mode.displayName)
+      RuntimeLine(title: "System Proxy", value: appModel.systemProxyEnabled ? "Enabled" : "Not Enabled")
+      RuntimeLine(title: "TUN", value: appModel.tunEnabled ? "Enabled" : "Not Enabled")
+      RuntimeLine(title: "NE Proxy", value: appModel.networkExtensionEnabled ? "Enabled" : "Not Enabled")
+      if let readinessIssue = appModel.readinessIssue {
+        RuntimeLine(title: "Readiness", value: readinessIssue)
+      }
+      if let error = appModel.lastError {
+        RuntimeLine(title: "Last Error", value: error)
+      }
+    }
+    .padding(14)
+    .frame(maxWidth: .infinity, alignment: .topLeading)
+    .dashboardCard()
+  }
+
+  private var statusTint: Color {
+    appModel.isRunning ? .green : .secondary
+  }
+
+  private var coreTint: Color {
+    switch appModel.coreController.status {
+    case .running:
+      return .green
+    case .crashed:
+      return .red
+    case .starting, .restarting:
+      return .orange
+    case .stopped:
+      return .secondary
+    }
+  }
+}
+
+private struct StatusDNSCard: View {
+  @EnvironmentObject private var appModel: AppModel
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      DashboardSectionHeader(title: "Effective DNS", symbolName: "server.rack")
+
+      RuntimeLine(title: "Routing", value: appModel.proxyRoutingMode.displayName)
+      RuntimeLine(title: "TUN DNS Mode", value: appModel.tunSettings.dnsFakeIPEnabled ? "Fake IP" : "Profile")
+      RuntimeLine(title: "TUN System DNS", value: appModel.tunSettings.systemDNSOverrideEnabled ? appModel.tunSystemDNSState.displayName : "Off")
+      RuntimeLine(title: "DNS Hijack", value: appModel.tunSettings.normalizedDNSHijack.joined(separator: ", "))
+      RuntimeLine(title: "Fake IP Range", value: appModel.tunSettings.dnsFakeIPEnabled ? appModel.tunSettings.normalizedFakeIPRange : "Off")
+      RuntimeLine(title: "Nameserver", value: summarized(appModel.tunSettings.dns.nameserver))
+      RuntimeLine(title: "Fallback", value: summarized(appModel.tunSettings.dns.fallback))
+      RuntimeLine(title: "NE System DNS", value: appModel.networkExtensionSystemDNSState.displayName)
+
+      if let dnsError = appModel.tunSystemDNSState.errorMessage ?? appModel.networkExtensionSystemDNSState.errorMessage {
+        RuntimeLine(title: "DNS Repair", value: dnsError)
+      }
+    }
+    .padding(14)
+    .frame(maxWidth: .infinity, minHeight: 220, alignment: .topLeading)
+    .dashboardCard()
+  }
+
+  private func summarized(_ values: [String]) -> String {
+    values.isEmpty ? "Profile" : values.prefix(3).joined(separator: ", ")
+  }
+}
+
+private struct StatusRuleOverlayCard: View {
+  @EnvironmentObject private var appModel: AppModel
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      DashboardSectionHeader(title: "Rule Overlay", symbolName: "list.bullet.rectangle")
+
+      HStack(spacing: 10) {
+        RuntimeStat(
+          title: "Status",
+          value: appModel.ruleOverlaySettings.enabled ? "Enabled" : "Disabled",
+          tint: appModel.ruleOverlaySettings.enabled ? .green : .secondary
+        )
+        RuntimeStat(
+          title: "Before",
+          value: "\(appModel.ruleOverlaySettings.prependRules.count)",
+          tint: .cyan
+        )
+        RuntimeStat(
+          title: "After",
+          value: "\(appModel.ruleOverlaySettings.appendRules.count)",
+          tint: .orange
+        )
+      }
+
+      Divider()
+        .opacity(0.24)
+
+      RuntimeLine(title: "Runtime Source", value: "Generated runtime YAML")
+      RuntimeLine(title: "Profile YAML", value: "Unchanged")
+      if let validationError = appModel.ruleOverlaySettings.validationError {
+        RuntimeLine(title: "Validation", value: validationError)
+      }
+      ForEach(Array((appModel.ruleOverlaySettings.prependRules + appModel.ruleOverlaySettings.appendRules).prefix(4))) { rule in
+        RuntimeLine(title: rule.kind.displayName, value: rule.runtimeRule)
+      }
+    }
+    .padding(14)
+    .frame(maxWidth: .infinity, minHeight: 220, alignment: .topLeading)
+    .dashboardCard()
+  }
+}
+
+private struct StatusHelperDiagnosticsCard: View {
+  @EnvironmentObject private var appModel: AppModel
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      HStack(spacing: 10) {
+        DashboardSectionHeader(title: "Helper Diagnostics", symbolName: "checkmark.shield")
+        Spacer()
+        Button {
+          appModel.repairHelperRegistration()
+        } label: {
+          Image(systemName: "wrench.and.screwdriver")
+        }
+        .buttonStyle(.borderless)
+        .help("Repair Helper")
+
+        Button {
+          appModel.openHelperApprovalSettings()
+        } label: {
+          Image(systemName: "gearshape")
+        }
+        .buttonStyle(.borderless)
+        .help("Open helper approval settings")
+      }
+
+      HStack(spacing: 10) {
+        RuntimeStat(title: "Registered", value: yesNo(appModel.tunHelperStatusDetail.registered), tint: appModel.tunHelperStatusDetail.registered ? .green : .secondary)
+        RuntimeStat(title: "Approval", value: appModel.tunHelperStatusDetail.requiresApproval ? "Required" : "Clear", tint: appModel.tunHelperStatusDetail.requiresApproval ? .orange : .green)
+        RuntimeStat(title: "XPC", value: appModel.tunHelperStatusDetail.xpcReachable ? "Reachable" : "Unreachable", tint: appModel.tunHelperStatusDetail.xpcReachable ? .green : .secondary)
+        RuntimeStat(title: "Running", value: runningText, tint: appModel.tunHelperStatusDetail.running ? .green : .secondary)
+      }
+
+      Divider()
+        .opacity(0.24)
+
+      RuntimeLine(title: "Service", value: appModel.tunHelperStatusDetail.serviceStatus.displayName)
+      RuntimeLine(title: "Fingerprint", value: fingerprintText)
+      RuntimeLine(title: "Protocol", value: protocolText)
+      RuntimeLine(title: "Helper Build", value: appModel.tunHelperStatusDetail.helperBuildVersion ?? "Unknown")
+      RuntimeLine(title: "Launchctl", value: latestLaunchctlStatus)
+      RuntimeLine(title: "Last Exit", value: latestExitSummary ?? "Unknown")
+      RuntimeLine(title: "Safe Paths", value: "Bundled core, runtime config, and work directory validated")
+      RuntimeLine(title: "Message", value: appModel.tunHelperStatusDetail.message)
+    }
+    .padding(14)
+    .frame(maxWidth: .infinity, alignment: .topLeading)
+    .dashboardCard()
+    .onAppear {
+      appModel.refreshHelperRegistrationStatus()
+    }
+  }
+
+  private func yesNo(_ value: Bool) -> String {
+    value ? "Yes" : "No"
+  }
+
+  private var runningText: String {
+    if let pid = appModel.tunHelperStatusDetail.pid {
+      return "PID \(pid)"
+    }
+    return yesNo(appModel.tunHelperStatusDetail.running)
+  }
+
+  private var fingerprintText: String {
+    guard appModel.tunHelperStatusDetail.fingerprintRecorded else {
+      return "Not Recorded"
+    }
+    switch appModel.tunHelperStatusDetail.fingerprintMatches {
+    case true:
+      return "Match"
+    case false:
+      return "Mismatch"
+    case nil:
+      return "Unknown"
+    }
+  }
+
+  private var protocolText: String {
+    guard let version = appModel.tunHelperStatusDetail.protocolVersion else {
+      return appModel.tunHelperStatusDetail.migrationRequired ? "Missing" : "Unknown"
+    }
+    return appModel.tunHelperStatusDetail.migrationRequired ? "v\(version) Needs Repair" : "v\(version)"
+  }
+
+  private var latestExitSummary: String? {
+    appModel.helperLogs.reversed().first { line in
+      line.localizedCaseInsensitiveContains("mihomo exited with code")
+        || line.localizedCaseInsensitiveContains("last exit code")
+    }
+  }
+
+  private var latestLaunchctlStatus: String {
+    appModel.helperLogs.reversed().first { line in
+      line.localizedCaseInsensitiveContains("state =")
+        || line.localizedCaseInsensitiveContains("job state =")
+    } ?? "Unknown"
+  }
+}
+
 private struct TrafficRuntimeCard: View {
   let samples: [TrafficSample]
   let isLoading: Bool

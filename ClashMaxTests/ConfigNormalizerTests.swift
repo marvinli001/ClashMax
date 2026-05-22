@@ -785,6 +785,66 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertNil(autoGroup["now"])
   }
 
+  func testRuntimeConfigAppliesTypedRuleOverlayWithoutMutatingSourceRules() throws {
+    let source = """
+    mixed-port: 7890
+    proxies:
+      - name: Direct
+        type: direct
+    proxy-groups:
+      - name: Proxy
+        type: select
+        proxies: [Direct, DIRECT]
+    rules:
+      - DOMAIN-SUFFIX,example.org,Proxy
+      - MATCH,DIRECT
+    """
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.ruleOverlay = RuleOverlaySettings(
+      enabled: true,
+      prependRules: [
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "corp.example", policy: "DIRECT")
+      ],
+      appendRules: [
+        ManagedRuleOverlayRule(kind: .match, policy: "Proxy")
+      ]
+    )
+
+    let output = try ConfigNormalizer().runtimeConfig(from: source, overrides: overrides)
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+
+    XCTAssertEqual(
+      yaml["rules"] as? [String],
+      [
+        "DOMAIN-SUFFIX,corp.example,DIRECT",
+        "DOMAIN-SUFFIX,example.org,Proxy",
+        "MATCH,DIRECT",
+        "MATCH,Proxy"
+      ]
+    )
+    XCTAssertTrue(source.contains("DOMAIN-SUFFIX,example.org,Proxy"))
+    XCTAssertFalse(source.contains("corp.example"))
+  }
+
+  func testRuntimeConfigRejectsInvalidRuleOverlay() throws {
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.ruleOverlay = RuleOverlaySettings(
+      enabled: true,
+      prependRules: [
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "bad,example", policy: "DIRECT")
+      ]
+    )
+
+    XCTAssertThrowsError(
+      try ConfigNormalizer().runtimeConfig(
+        from: "proxies: []\nproxy-groups: []\nrules: []\n",
+        overrides: overrides
+      )
+    ) { error in
+      XCTAssertEqual(String(describing: error), "Rule value cannot contain commas or line breaks.")
+    }
+  }
+
   func testPreviewGroupsExtractXboardStyleInlineYaml() throws {
     let source = """
     mixed-port: 7890

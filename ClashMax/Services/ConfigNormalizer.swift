@@ -131,6 +131,13 @@ struct ConfigNormalizer {
     }
     root["tun"] = tun
 
+    if overrides.ruleOverlay.hasRuntimeOverlay {
+      if let validationError = overrides.ruleOverlay.validationError {
+        throw NormalizerError.invalidProfile(validationError)
+      }
+      root["rules"] = mergedRules(existing: root["rules"], overlay: overrides.ruleOverlay)
+    }
+
     if !selectionOverrides.isEmpty,
        var groups = root["proxy-groups"] as? [Any] {
       for index in groups.indices {
@@ -150,6 +157,12 @@ struct ConfigNormalizer {
     }
 
     return try Yams.dump(object: root, sortKeys: false)
+  }
+
+  private func mergedRules(existing: Any?, overlay: RuleOverlaySettings) -> [String] {
+    overlay.runtimePrependRules
+      + normalizedRuleList(from: existing)
+      + overlay.runtimeAppendRules
   }
 
   private func applyTunDNSOverlay(_ overlay: TunDNSSettings, to dns: inout [String: Any]) {
@@ -337,6 +350,24 @@ struct ConfigNormalizer {
     default:
       return []
     }
+  }
+
+  private func normalizedRuleList(from value: Any?) -> [String] {
+    switch value {
+    case let values as [String]:
+      return values.compactMap(Self.normalizedRuleText)
+    case let values as [Any]:
+      return values.compactMap { $0 as? String }.compactMap(Self.normalizedRuleText)
+    case let value as String:
+      return [value].compactMap(Self.normalizedRuleText)
+    default:
+      return []
+    }
+  }
+
+  private static func normalizedRuleText(_ value: String) -> String? {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
   }
 
   private func normalizedRouteExcludeCIDRs(from value: Any?) throws -> [String] {
