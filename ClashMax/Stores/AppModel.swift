@@ -203,8 +203,6 @@ struct AppNotice: Equatable {
 
 @MainActor
 final class AppModel: ObservableObject {
-  static let developerModeFallbackNoticeMessage = "Developer Mode is off, so NE Transparent Proxy Experimental is hidden. ClashMax switched back to System Proxy."
-
   @Published var selectedSection: AppSection = .home
   var overrides: RuntimeOverrides {
     get { settings.overrides }
@@ -493,9 +491,6 @@ final class AppModel: ObservableObject {
     networkExtensionController.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
       .store(in: &storeCancellables)
-    if settings.didFallbackUnsupportedProxyRoutingMode {
-      publishDeveloperModeFallbackNotice()
-    }
     recoverDanglingSystemProxyIfNeeded()
     recoverDanglingManagedDNSIfNeeded()
     let needsManifestRefresh = self.profileStore.activeProfileID == nil
@@ -580,9 +575,6 @@ final class AppModel: ObservableObject {
     }
     if proxyRoutingMode == .tun, !tunHelperPreparationState.allowsStartAttempt {
       return tunHelperPreparationState.message
-    }
-    if proxyRoutingMode.requiresDeveloperMode, !developerMode {
-      return "NE Transparent Proxy Experimental requires Developer Mode."
     }
     return nil
   }
@@ -933,7 +925,7 @@ final class AppModel: ObservableObject {
     let profile = try requireActiveProfile()
     let routingMode = proxyRoutingMode
     let shouldUseTun = routingMode == .tun
-    let shouldUseNetworkExtension = routingMode == .networkExtensionExperimental
+    let shouldUseNetworkExtension = routingMode == .neProxy
     let networkExtensionSettings = networkExtensionRoutingSettings
     settings.syncExternalControllerSettings()
     overrides.tunEnabled = shouldUseTun
@@ -1078,11 +1070,6 @@ final class AppModel: ObservableObject {
 
   func setProxyRoutingMode(_ mode: ProxyRoutingMode) {
     guard proxyRoutingMode != mode else { return }
-    guard !mode.requiresDeveloperMode || developerMode else {
-      appNotice = nil
-      lastError = "NE Transparent Proxy Experimental requires Developer Mode."
-      return
-    }
     appNotice = nil
     let shouldRestart = isRunning || startInFlight
     if mode != .systemProxy, systemProxyEnabled {
@@ -1113,16 +1100,9 @@ final class AppModel: ObservableObject {
   }
 
   func setDeveloperMode(_ enabled: Bool) {
-    let wasDeveloperOnlyMode = proxyRoutingMode.requiresDeveloperMode
-    let shouldRestart = !enabled && wasDeveloperOnlyMode && (isRunning || startInFlight)
     settings.developerMode = enabled
     if enabled {
       appNotice = nil
-    }
-    guard !enabled, wasDeveloperOnlyMode, proxyRoutingMode == .systemProxy else { return }
-    publishDeveloperModeFallbackNotice()
-    if shouldRestart {
-      restart()
     }
   }
 
@@ -1209,7 +1189,7 @@ final class AppModel: ObservableObject {
     if overrides.dnsEnabled == true {
       return true
     }
-    let isNetworkExtensionRuntime = proxyRoutingMode == .networkExtensionExperimental
+    let isNetworkExtensionRuntime = proxyRoutingMode == .neProxy
       || runtimeOwner == .networkExtension
       || networkExtensionController.vpnStatus.isActive
     guard isNetworkExtensionRuntime else { return false }
@@ -1220,7 +1200,7 @@ final class AppModel: ObservableObject {
     let profile = try requireActiveProfile()
     var runtimeOverrides = overrides
     runtimeOverrides.tunEnabled = false
-    let isNetworkExtensionRuntime = proxyRoutingMode == .networkExtensionExperimental
+    let isNetworkExtensionRuntime = proxyRoutingMode == .neProxy
       || runtimeOwner == .networkExtension
       || networkExtensionController.vpnStatus.isActive
     let options = RuntimeConfigOptions(
@@ -3171,13 +3151,6 @@ final class AppModel: ObservableObject {
 
   private func appendAppLog(level: String, message: String) {
     runtimeData.appendLog(level: level, message: message)
-  }
-
-  private func publishDeveloperModeFallbackNotice() {
-    let message = Self.developerModeFallbackNoticeMessage
-    lastError = nil
-    appNotice = AppNotice(message: message, tone: .info)
-    appendAppLog(level: "info", message: message)
   }
 
   private func publishStartupDiagnostics(level: String = "info") {

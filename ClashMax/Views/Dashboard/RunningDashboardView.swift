@@ -73,7 +73,7 @@ struct RunningDashboardView: View {
       }
       .staggeredArrival(index: 3, reduceMotion: reduceMotion, trigger: state)
 
-      if appModel.proxyRoutingMode == .networkExtensionExperimental {
+      if appModel.proxyRoutingMode == .neProxy {
         NetworkExtensionDiagnosticsRuntimeCard()
           .staggeredArrival(index: 4, reduceMotion: reduceMotion, trigger: state)
       }
@@ -564,7 +564,7 @@ private struct NetworkStatusCard: View {
       appModel.systemProxyEnabled ? "System Proxy 127.0.0.1:\(appModel.overrides.mixedPort)" : "System Proxy ready"
     case .tun:
       appModel.tunEnabled ? "TUN helper controlled" : "TUN ready"
-    case .networkExtensionExperimental:
+    case .neProxy:
       appModel.networkExtensionEnabled
         ? "NE transparent proxy controlled - System Proxy off - TUN helper untouched"
         : "NE transparent proxy ready - System Proxy off - TUN helper untouched"

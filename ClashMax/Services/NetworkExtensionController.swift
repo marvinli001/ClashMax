@@ -25,7 +25,7 @@ struct NetworkExtensionRuntimeConfiguration: Equatable, Sendable {
   ) -> NetworkExtensionRuntimeConfiguration {
     NetworkExtensionRuntimeConfiguration(
       providerBundleIdentifier: NetworkExtensionRuntimeConstants.providerBundleIdentifier,
-      localizedDescription: "ClashMax NE Transparent Proxy Experimental",
+      localizedDescription: "ClashMax NE Proxy",
       serverAddress: "ClashMax Local Mihomo",
       socksHost: "127.0.0.1",
       socksPort: overrides.mixedPort,

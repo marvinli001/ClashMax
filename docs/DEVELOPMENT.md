@@ -42,10 +42,10 @@ discipline is recorded.
 - Local test verification may disable signing with `CODE_SIGNING_ALLOWED=NO`.
   Packaging, helper, entitlement, or notarization changes still require the
   appropriate signed-release verification before shipping.
-- The `NE Transparent Proxy Experimental` routing mode is Developer Mode only.
-  It uses a macOS System Extension containing a transparent app-proxy provider and requires
-  Developer ID signing with Network Extension, System Extension, and App Group
-  capabilities before it can run on a real machine.
+- The `NE Proxy` routing mode uses a macOS System Extension containing a
+  transparent app-proxy provider and requires Developer ID signing with Network
+  Extension, System Extension, and App Group capabilities before it can run on a
+  real machine.
 - The current Network Extension stage targets TCP and UDP transparent proxying:
   system TCP flows use SOCKS5 CONNECT and UDP flows, including UDP DNS flows,
   use SOCKS5 UDP ASSOCIATE through the local Mihomo SOCKS5/mixed port. NE mode
@@ -104,7 +104,7 @@ Manual installed-bundle NE smoke test:
 
 1. Build a signed app, copy it to `/Applications/ClashMax.app`, then approve the
    System Extension in System Settings.
-2. Enable Developer Mode and select `Network Extension Experimental`.
+2. Select `NE Proxy`.
 3. Start ClashMax and confirm the dashboard shows NE connected, DNS capture
    enabled, DNS runtime as fake-ip, and System DNS as applied.
 4. Verify TCP traffic through a browser or `curl`, then verify UDP traffic with a

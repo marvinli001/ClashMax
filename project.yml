@@ -65,7 +65,7 @@ targets:
         LSApplicationCategoryType: public.app-category.utilities
         NSPrincipalClass: NSApplication
         NSHumanReadableCopyright: GPL-3.0
-        NSSystemExtensionUsageDescription: ClashMax uses an experimental transparent proxy Network Extension to route TCP and UDP traffic through its local Mihomo proxy without enabling System Proxy or the privileged TUN helper.
+        NSSystemExtensionUsageDescription: ClashMax uses NE Proxy to route TCP and UDP traffic through its local Mihomo proxy without enabling System Proxy or the privileged TUN helper.
         SUFeedURL: https://marvinli001.github.io/ClashMax/appcast.xml
         SUPublicEDKey: "Gh5U2F2/392N+X0I2t1ojmM3uHPYKR2Ceww618dTaLc="
         SUEnableAutomaticChecks: true
@@ -247,7 +247,7 @@ targets:
         CFBundlePackageType: SYSX
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
-        NSSystemExtensionUsageDescription: ClashMax uses an experimental transparent proxy Network Extension to route TCP and UDP traffic through its local Mihomo proxy without enabling System Proxy or the privileged TUN helper.
+        NSSystemExtensionUsageDescription: ClashMax uses NE Proxy to route TCP and UDP traffic through its local Mihomo proxy without enabling System Proxy or the privileged TUN helper.
         NetworkExtension:
           NEMachServiceName: group.678WA95W4U.io.github.clashmax.ClashMax.network-extension
           NEProviderClasses:

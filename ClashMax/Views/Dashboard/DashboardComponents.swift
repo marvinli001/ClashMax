@@ -57,17 +57,15 @@ struct RunModePicker: View {
 
 struct ProxyRoutingModePicker: View {
   let selection: Binding<ProxyRoutingMode>
-  let developerMode: Bool
 
-  init(selection: Binding<ProxyRoutingMode>, developerMode: Bool = false) {
+  init(selection: Binding<ProxyRoutingMode>) {
     self.selection = selection
-    self.developerMode = developerMode
   }
 
   var body: some View {
     Picker("Proxy Routing", selection: selection) {
-      ForEach(ProxyRoutingMode.visibleCases(developerMode: developerMode)) { mode in
-        Text(segmentTitle(for: mode))
+      ForEach(ProxyRoutingMode.allCases) { mode in
+        Text(mode.displayName)
           .lineLimit(1)
           .tag(mode)
       }
@@ -75,15 +73,6 @@ struct ProxyRoutingModePicker: View {
     .labelsHidden()
     .pickerStyle(.segmented)
     .help(selection.wrappedValue.displayName)
-  }
-
-  private func segmentTitle(for mode: ProxyRoutingMode) -> String {
-    switch mode {
-    case .networkExtensionExperimental:
-      String(localized: "NE Proxy")
-    default:
-      mode.displayName
-    }
   }
 }
 
@@ -133,7 +122,7 @@ struct ProxyRoutingSettingsButton: View {
         onReset: { tunDraft = .default },
         onSave: saveTunSettings
       )
-    case .networkExtensionExperimental:
+    case .neProxy:
       NetworkExtensionSettingsPopover(
         settings: $networkExtensionDraft,
         error: settingsError,

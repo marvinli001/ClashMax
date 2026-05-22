@@ -52,13 +52,8 @@ final class PersistedSettingsStore: ObservableObject {
   @Published var developerMode = false {
     didSet {
       defaults.set(developerMode, forKey: Self.developerModeDefaultsKey)
-      if !developerMode, proxyRoutingMode.requiresDeveloperMode {
-        didFallbackUnsupportedProxyRoutingMode = true
-        proxyRoutingMode = .systemProxy
-      }
     }
   }
-  private(set) var didFallbackUnsupportedProxyRoutingMode = false
 
   private let defaults: UserDefaults
   private let loginItemService: any LoginItemManaging
@@ -91,13 +86,7 @@ final class PersistedSettingsStore: ObservableObject {
       forKey: Self.proxyRoutingModeDefaultsKey,
       defaults: defaults
     ) ?? .systemProxy
-    if storedProxyRoutingMode.requiresDeveloperMode, !developerMode {
-      proxyRoutingMode = .systemProxy
-      saveCodable(proxyRoutingMode, forKey: Self.proxyRoutingModeDefaultsKey)
-      didFallbackUnsupportedProxyRoutingMode = true
-    } else {
-      proxyRoutingMode = storedProxyRoutingMode
-    }
+    proxyRoutingMode = storedProxyRoutingMode
     systemProxySettings = Self.loadCodable(
       SystemProxySettings.self,
       forKey: Self.systemProxySettingsDefaultsKey,

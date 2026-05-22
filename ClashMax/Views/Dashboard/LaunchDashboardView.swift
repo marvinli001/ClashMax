@@ -178,15 +178,9 @@ private struct LaunchControlDeck: View {
         VStack(alignment: .leading, spacing: 12) {
           startButton
         }
-      } else if appModel.developerMode {
-        HStack(spacing: 14) {
-          routingControl(fillsWidth: true)
-          startButton
-        }
       } else {
         HStack(spacing: 14) {
-          routingControl(fillsWidth: false)
-          Spacer(minLength: 0)
+          routingControl(fillsWidth: true)
           startButton
         }
       }
@@ -271,7 +265,7 @@ private struct LaunchControlDeck: View {
     ProxyRoutingModePicker(selection: Binding(
       get: { appModel.proxyRoutingMode },
       set: { appModel.requestProxyRoutingMode($0) }
-    ), developerMode: appModel.developerMode)
+    ))
     .fixedSize(horizontal: true, vertical: false)
   }
 

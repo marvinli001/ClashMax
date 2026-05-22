@@ -2417,7 +2417,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       testDelayResult: 73
     )
     let model = try await makeRunningRuntimeModel(client: client)
-    model.proxyRoutingMode = .networkExtensionExperimental
+    model.proxyRoutingMode = .neProxy
     model.networkExtensionRoutingSettings = NetworkExtensionRoutingSettings(
       dnsCaptureEnabled: true,
       dnsFakeIPEnabled: false,
@@ -2885,14 +2885,13 @@ final class DashboardRuntimeStateTests: XCTestCase {
       proxyPortReadinessProbe: proxyPortReadiness,
       defaults: try Self.makeIsolatedDefaults()
     )
-    model.developerMode = true
     XCTAssertTrue(
       model.updateNetworkExtensionRoutingSettings(
         NetworkExtensionRoutingSettings(excludeLAN: true, customRouteExcludeCIDRs: ["100.64.0.0/10"])
       )
     )
-    model.requestProxyRoutingMode(.networkExtensionExperimental)
-    for _ in 0..<40 where model.proxyRoutingMode != .networkExtensionExperimental {
+    model.requestProxyRoutingMode(.neProxy)
+    for _ in 0..<40 where model.proxyRoutingMode != .neProxy {
       await Task.yield()
     }
 
@@ -2981,8 +2980,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
       defaults: try Self.makeIsolatedDefaults()
     )
-    model.developerMode = true
-    model.setProxyRoutingMode(.networkExtensionExperimental)
+    model.setProxyRoutingMode(.neProxy)
     model.start()
 
     for _ in 0..<400 where model.runtimeOwner != .networkExtension || model.startInFlight {
@@ -3052,8 +3050,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
       defaults: try Self.makeIsolatedDefaults()
     )
-    model.developerMode = true
-    model.setProxyRoutingMode(.networkExtensionExperimental)
+    model.setProxyRoutingMode(.neProxy)
     model.start()
     for _ in 0..<160 where proxyManager.startConfigurations.count < 1 || model.startInFlight {
       await Task.yield()
@@ -3196,8 +3193,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
       defaults: try Self.makeIsolatedDefaults()
     )
-    model.developerMode = true
-    model.setProxyRoutingMode(.networkExtensionExperimental)
+    model.setProxyRoutingMode(.neProxy)
     model.start()
     for _ in 0..<400 where model.runtimeOwner != .networkExtension || model.startInFlight {
       await Task.yield()
@@ -3348,8 +3344,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       proxyPortReadinessProbe: proxyPortReadiness,
       defaults: try Self.makeIsolatedDefaults()
     )
-    model.developerMode = true
-    model.setProxyRoutingMode(.networkExtensionExperimental)
+    model.setProxyRoutingMode(.neProxy)
 
     model.start()
 
@@ -3399,8 +3394,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       proxyPortReadinessProbe: proxyPortReadiness,
       defaults: try Self.makeIsolatedDefaults()
     )
-    model.developerMode = true
-    model.setProxyRoutingMode(.networkExtensionExperimental)
+    model.setProxyRoutingMode(.neProxy)
 
     model.start()
 
@@ -3447,8 +3441,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
       defaults: try Self.makeIsolatedDefaults()
     )
-    model.developerMode = true
-    model.setProxyRoutingMode(.networkExtensionExperimental)
+    model.setProxyRoutingMode(.neProxy)
     model.start()
     for _ in 0..<400 where model.runtimeOwner != .networkExtension || model.startInFlight {
       await Task.yield()
@@ -3495,8 +3488,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
       defaults: try Self.makeIsolatedDefaults()
     )
-    model.developerMode = true
-    model.setProxyRoutingMode(.networkExtensionExperimental)
+    model.setProxyRoutingMode(.neProxy)
     model.start()
     for _ in 0..<160 where model.runtimeOwner != .networkExtension || model.startInFlight {
       await Task.yield()
@@ -3566,8 +3558,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
       defaults: try Self.makeIsolatedDefaults()
     )
-    model.developerMode = true
-    model.setProxyRoutingMode(.networkExtensionExperimental)
+    model.setProxyRoutingMode(.neProxy)
     model.start()
     for _ in 0..<400 where model.runtimeOwner != .networkExtension || model.startInFlight {
       await Task.yield()
@@ -3628,8 +3619,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
       defaults: try Self.makeIsolatedDefaults()
     )
-    model.developerMode = true
-    model.setProxyRoutingMode(.networkExtensionExperimental)
+    model.setProxyRoutingMode(.neProxy)
     model.start()
     for _ in 0..<400 where model.runtimeOwner != .networkExtension || model.startInFlight {
       await Task.yield()
@@ -3693,8 +3683,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       publicIPInfoClient: publicIPFetcher,
       defaults: try Self.makeIsolatedDefaults()
     )
-    model.developerMode = true
-    model.setProxyRoutingMode(.networkExtensionExperimental)
+    model.setProxyRoutingMode(.neProxy)
     model.start()
     for _ in 0..<160 where model.runtimeOwner != .networkExtension || model.startInFlight {
       await Task.yield()
@@ -3744,8 +3733,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
       defaults: try Self.makeIsolatedDefaults()
     )
-    model.developerMode = true
-    model.setProxyRoutingMode(.networkExtensionExperimental)
+    model.setProxyRoutingMode(.neProxy)
     model.start()
     for _ in 0..<160 where model.runtimeOwner != .networkExtension || model.startInFlight {
       await Task.yield()
@@ -3794,8 +3782,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
       defaults: try Self.makeIsolatedDefaults()
     )
-    model.developerMode = true
-    model.setProxyRoutingMode(.networkExtensionExperimental)
+    model.setProxyRoutingMode(.neProxy)
     model.start()
     for _ in 0..<160 where model.runtimeOwner != .networkExtension || model.startInFlight {
       await Task.yield()
@@ -3841,8 +3828,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
       defaults: try Self.makeIsolatedDefaults()
     )
-    model.developerMode = true
-    model.setProxyRoutingMode(.networkExtensionExperimental)
+    model.setProxyRoutingMode(.neProxy)
     model.start()
 
     for _ in 0..<160 where model.startInFlight || model.lastError == nil {
@@ -3888,8 +3874,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
       defaults: try Self.makeIsolatedDefaults()
     )
-    model.developerMode = true
-    model.setProxyRoutingMode(.networkExtensionExperimental)
+    model.setProxyRoutingMode(.neProxy)
     model.start()
 
     for _ in 0..<160 where model.startInFlight || model.lastError == nil {
@@ -3904,10 +3889,23 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(proxyManager.stopIdentifiers, [NetworkExtensionController.providerBundleIdentifier])
   }
 
-  func testNetworkExtensionPersistedModeFallsBackWhenDeveloperModeIsOff() throws {
+  func testProxyRoutingModesIncludeNEProxyWhenDeveloperModeIsOff() throws {
+    let paths = try Self.makeRuntimePaths()
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    XCTAssertFalse(model.developerMode)
+    XCTAssertTrue(ProxyRoutingMode.allCases.contains(.neProxy))
+    XCTAssertEqual(ProxyRoutingMode.neProxy.displayName, String(localized: "NE Proxy"))
+  }
+
+  func testNetworkExtensionLegacyPersistedModeLoadsWhenDeveloperModeIsOff() throws {
     let defaults = try Self.makeIsolatedDefaults()
     defaults.set(
-      try JSONEncoder().encode(ProxyRoutingMode.networkExtensionExperimental),
+      try XCTUnwrap("\"networkExtensionExperimental\"".data(using: .utf8)),
       forKey: Self.proxyRoutingModeDefaultsKey
     )
     let paths = try Self.makeRuntimePaths()
@@ -3919,18 +3917,32 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
 
     XCTAssertFalse(model.developerMode)
-    XCTAssertEqual(model.proxyRoutingMode, .systemProxy)
+    XCTAssertEqual(model.proxyRoutingMode, .neProxy)
     XCTAssertNil(model.lastError)
-    XCTAssertEqual(
-      model.appNotice,
-      AppNotice(message: AppModel.developerModeFallbackNoticeMessage, tone: .info)
-    )
+    XCTAssertNil(model.appNotice)
     let persistedData = try XCTUnwrap(defaults.data(forKey: Self.proxyRoutingModeDefaultsKey))
     let persistedMode = try JSONDecoder().decode(ProxyRoutingMode.self, from: persistedData)
-    XCTAssertEqual(persistedMode, .systemProxy)
+    XCTAssertEqual(persistedMode, .neProxy)
+    XCTAssertEqual(persistedMode.rawValue, "networkExtensionExperimental")
   }
 
-  func testDisablingDeveloperModePublishesInformationalFallbackNotice() throws {
+  func testNetworkExtensionCanBeSelectedWhenDeveloperModeIsOff() throws {
+    let paths = try Self.makeRuntimePaths()
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    XCTAssertFalse(model.developerMode)
+    model.setProxyRoutingMode(.neProxy)
+
+    XCTAssertEqual(model.proxyRoutingMode, .neProxy)
+    XCTAssertNil(model.lastError)
+    XCTAssertNil(model.appNotice)
+  }
+
+  func testDisablingDeveloperModeKeepsNetworkExtensionSelected() throws {
     let paths = try Self.makeRuntimePaths()
     let model = AppModel(
       paths: paths,
@@ -3939,15 +3951,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
 
     model.developerMode = true
-    model.setProxyRoutingMode(.networkExtensionExperimental)
+    model.setProxyRoutingMode(.neProxy)
     model.developerMode = false
 
-    XCTAssertEqual(model.proxyRoutingMode, .systemProxy)
+    XCTAssertEqual(model.proxyRoutingMode, .neProxy)
     XCTAssertNil(model.lastError)
-    XCTAssertEqual(
-      model.appNotice,
-      AppNotice(message: AppModel.developerModeFallbackNoticeMessage, tone: .info)
-    )
+    XCTAssertNil(model.appNotice)
   }
 
   func testNetworkExtensionRefreshClearsPublishedApprovalErrorAfterApproval() async throws {

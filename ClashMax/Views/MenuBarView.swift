@@ -41,7 +41,7 @@ struct MenuBarView: View {
       get: { appModel.proxyRoutingMode },
       set: { appModel.requestProxyRoutingMode($0) }
     )) {
-      ForEach(ProxyRoutingMode.visibleCases(developerMode: appModel.developerMode)) { mode in
+      ForEach(ProxyRoutingMode.allCases) { mode in
         Text(mode.displayName).tag(mode)
       }
     }

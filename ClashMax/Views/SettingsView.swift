@@ -175,7 +175,7 @@ struct SettingsView: View {
               get: { settings.proxyRoutingMode },
               set: { appModel.requestProxyRoutingMode($0) }
             )) {
-              ForEach(ProxyRoutingMode.visibleCases(developerMode: settings.developerMode)) { mode in
+              ForEach(ProxyRoutingMode.allCases) { mode in
                 Label(mode.displayName, systemImage: mode.symbolName).tag(mode)
               }
             }
@@ -217,10 +217,10 @@ struct SettingsView: View {
                 }
               }
             }
-          } else if settings.proxyRoutingMode == .networkExtensionExperimental {
+          } else if settings.proxyRoutingMode == .neProxy {
             SettingsControlRow(
               "TUN Helper",
-              description: "NE Transparent Proxy mode does not touch the privileged TUN helper."
+              description: "NE Proxy mode does not touch the privileged TUN helper."
             ) {
               Image(systemName: "checkmark.shield")
                 .foregroundStyle(.secondary)
@@ -236,8 +236,8 @@ struct SettingsView: View {
           }
         }
 
-        if settings.developerMode {
-          Section("NE Transparent Proxy Experimental") {
+        if settings.proxyRoutingMode == .neProxy {
+          Section("NE Proxy") {
             SettingsControlRow("System Extension", description: appModel.networkExtensionController.statusMessage) {
               ViewThatFits(in: .horizontal) {
                 networkExtensionActionButtons

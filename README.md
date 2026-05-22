@@ -26,7 +26,7 @@ The interface stays restrained, compact, and easy to scan. The first screen is t
 2. Unzip the archive to get `ClashMax.app`.
 3. Move `ClashMax.app` into the system `/Applications` folder. This is required for the normal installed-app workflow and for macOS system integration paths such as helper approval and the experimental Network Extension.
 4. Launch ClashMax from `/Applications`, import a Clash/Mihomo YAML profile or add a subscription, then start the runtime from the Dashboard.
-5. If macOS asks for permissions, approve the requested helper or System Extension prompts. TUN mode and `NE Transparent Proxy Experimental` need the corresponding macOS approval before they can run.
+5. If macOS asks for permissions, approve the requested helper or System Extension prompts. TUN mode and `NE Proxy` need the corresponding macOS approval before they can run.
 
 ## Core Capabilities
 

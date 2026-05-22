@@ -26,7 +26,7 @@ ClashMax 是一个使用 SwiftUI 构建的原生 macOS Mihomo 图形客户端。
 2. 解压 zip，得到 `ClashMax.app`。
 3. 将 `ClashMax.app` 移动到系统 `/Applications` 目录。普通安装使用、helper 授权以及实验性的 Network Extension 路径都应从这个已安装位置启动。
 4. 从 `/Applications` 启动 ClashMax，导入 Clash/Mihomo YAML 配置或添加订阅，然后在 Dashboard 启动运行时。
-5. 如果 macOS 弹出权限提示，请按需批准 helper 或 System Extension。TUN 模式和 `NE Transparent Proxy Experimental` 都需要对应的 macOS 授权后才能运行。
+5. 如果 macOS 弹出权限提示，请按需批准 helper 或 System Extension。TUN 模式和 `NE Proxy` 都需要对应的 macOS 授权后才能运行。
 
 ## 核心能力
 
