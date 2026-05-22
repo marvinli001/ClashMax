@@ -2,6 +2,17 @@ import XCTest
 @testable import ClashMax
 
 final class SubscriptionFetcherTests: XCTestCase {
+  func testRequestMovesBasicAuthCredentialsIntoAuthorizationHeader() throws {
+    let fetcher = SubscriptionFetcher()
+    let request = fetcher.request(url: URL(string: "https://user:p%40ss@example.com/sub?token=abc")!)
+
+    XCTAssertEqual(request.url?.absoluteString, "https://example.com/sub?token=abc")
+    XCTAssertEqual(
+      request.value(forHTTPHeaderField: "Authorization"),
+      "Basic \(Data("user:p@ss".utf8).base64EncodedString())"
+    )
+  }
+
   func testFetchParsesMetadataHeadersAndStripsUTF8BOM() async throws {
     let fetcher = SubscriptionFetcher()
     let source = "\u{FEFF}proxies:\n  - name: DIRECT\n    type: direct\n"
@@ -27,6 +38,61 @@ final class SubscriptionFetcherTests: XCTestCase {
     XCTAssertEqual(result.metadata.remoteFileName, "Remote Profile.yaml")
     XCTAssertEqual(result.metadata.updateIntervalMinutes, 720)
     XCTAssertEqual(result.metadata.webPageURL, URL(string: "https://example.com/dashboard"))
+  }
+
+  func testFetchParsesPrefixedSubscriptionUserInfoHeader() throws {
+    let fetcher = SubscriptionFetcher()
+    let response = HTTPURLResponse(
+      url: URL(string: "https://example.com/sub")!,
+      statusCode: 200,
+      httpVersion: nil,
+      headerFields: [
+        "x-amz-meta-subscription-userinfo": "upload=512; download=1024; total=2048"
+      ]
+    )!
+
+    let result = try fetcher.decode(
+      data: Data("proxies:\n  - name: DIRECT\n    type: direct\n".utf8),
+      response: response
+    )
+
+    XCTAssertEqual(result.metadata.traffic?.upload, 512)
+    XCTAssertEqual(result.metadata.traffic?.download, 1024)
+    XCTAssertEqual(result.metadata.traffic?.total, 2048)
+  }
+
+  func testDecodeHonorsResponseCharset() throws {
+    let fetcher = SubscriptionFetcher()
+    let source = "proxies:\n  - name: Café\n    type: direct\n"
+    let response = HTTPURLResponse(
+      url: URL(string: "https://example.com/sub")!,
+      statusCode: 200,
+      httpVersion: nil,
+      headerFields: ["Content-Type": "text/yaml; charset=iso-8859-1"]
+    )!
+
+    let result = try fetcher.decode(data: source.data(using: .isoLatin1)!, response: response)
+
+    XCTAssertEqual(result.source, source)
+  }
+
+  func testDecodeClassifiesHTMLLoginPageAsSubscriptionPanelError() throws {
+    let fetcher = SubscriptionFetcher()
+    let response = HTTPURLResponse(
+      url: URL(string: "https://example.com/sub")!,
+      statusCode: 200,
+      httpVersion: nil,
+      headerFields: ["Content-Type": "text/html; charset=utf-8"]
+    )!
+
+    XCTAssertThrowsError(
+      try fetcher.decode(
+        data: Data("<!doctype html><html><title>Login</title></html>".utf8),
+        response: response
+      )
+    ) { error in
+      XCTAssertTrue(String(describing: error).contains("subscription returned a login or error page"))
+    }
   }
 
   func testFetchRetriesDirectThenLocalProxyThenSystemProxy() async throws {

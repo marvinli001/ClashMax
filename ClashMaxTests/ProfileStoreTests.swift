@@ -137,7 +137,62 @@ final class ProfileStoreTests: XCTestCase {
     XCTAssertEqual(store.profiles.first?.subscriptionMetadata?.traffic?.download, 5)
   }
 
-  func testSubscriptionNameUsesRemoteNameThenYamlThenHostFallback() async throws {
+  func testSubscriptionDeepLinksNormalizeFetchURLAndUseNameFallback() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let secrets = InMemorySecretStore()
+    let store = ProfileStore(paths: fixture.paths, keychain: secrets)
+    let cases = [
+      (
+        "clash://install-config?url=https%3A%2F%2Fexample.com%2Fapi%2Fv1%2Fclient%2Fsubscribe%3Ftoken%3Dabc&name=Airport%20One",
+        "https://example.com/api/v1/client/subscribe?token=abc",
+        "Airport One"
+      ),
+      (
+        "clash-verge://install-config?url=https%3A%2F%2Fverge.example%2Fsub%3Ftoken%3Ddef&name=Verge%20Airport",
+        "https://verge.example/sub?token=def",
+        "Verge Airport"
+      )
+    ]
+
+    for testCase in cases {
+      let recorder = URLProtocolRecorder(
+        responseBody: "proxies:\n  - name: DIRECT\n    type: direct\n"
+      )
+      let profile = try await store.addSubscription(
+        url: URL(string: testCase.0)!,
+        session: URLSession(configuration: recorder.configuration)
+      )
+
+      XCTAssertEqual(recorder.lastRequest?.url?.absoluteString, testCase.1)
+      XCTAssertEqual(try secrets.load(account: "subscription.\(profile.id.uuidString)"), testCase.1)
+      XCTAssertEqual(profile.name, testCase.2)
+      XCTAssertFalse(profile.nameIsUserCustomized)
+    }
+  }
+
+  func testSubscriptionDirtyURLRepairsMissingQueryMarkerBeforeFetchAndStorage() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let secrets = InMemorySecretStore()
+    let store = ProfileStore(paths: fixture.paths, keychain: secrets)
+    let recorder = URLProtocolRecorder(responseBody: "proxies:\n  - name: DIRECT\n    type: direct\n")
+
+    let profile = try await store.addSubscription(
+      url: URL(string: "https://example.com/subscriptions/%E6%B5%8B%E8%AF%95.yaml&token=abc")!,
+      session: URLSession(configuration: recorder.configuration)
+    )
+
+    XCTAssertEqual(
+      recorder.lastRequest?.url?.absoluteString,
+      "https://example.com/subscriptions/%E6%B5%8B%E8%AF%95.yaml?token=abc"
+    )
+    XCTAssertEqual(
+      try secrets.load(account: "subscription.\(profile.id.uuidString)"),
+      "https://example.com/subscriptions/%E6%B5%8B%E8%AF%95.yaml?token=abc"
+    )
+    XCTAssertEqual(profile.name, "测试")
+  }
+
+  func testSubscriptionNameUsesRemoteNameThenYamlThenPathThenHostFallback() async throws {
     let fixture = try TemporaryProfileFixture()
     let store = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
     let remoteSession = URLSession(configuration: URLProtocolRecorder(
@@ -161,9 +216,17 @@ final class ProfileStoreTests: XCTestCase {
 
     XCTAssertEqual(yamlProfile.name, "YAML Group")
 
+    let pathSession = URLSession(configuration: URLProtocolRecorder.configurationReturning("proxies:\n  - name: DIRECT\n    type: direct\n"))
+    let pathProfile = try await store.addSubscription(
+      url: URL(string: "https://path.example/subscriptions/%E6%B5%8B%E8%AF%95.yaml?token=abc")!,
+      session: pathSession
+    )
+
+    XCTAssertEqual(pathProfile.name, "测试")
+
     let hostSession = URLSession(configuration: URLProtocolRecorder.configurationReturning("proxies:\n  - name: DIRECT\n    type: direct\n"))
     let hostProfile = try await store.addSubscription(
-      url: URL(string: "https://host.example/sub")!,
+      url: URL(string: "https://host.example")!,
       session: hostSession
     )
 

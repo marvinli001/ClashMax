@@ -115,22 +115,31 @@ final class ProfileStore: ObservableObject {
   }
 
   @discardableResult
-  func addSubscription(name: String = "", url: URL, session: URLSession = .shared) async throws -> Profile {
+  func addSubscription(
+    name: String = "",
+    url: URL,
+    displayNameHint: String? = nil,
+    session: URLSession = .shared
+  ) async throws -> Profile {
     await waitForManifestLoad()
     return try await withMutationLock {
-      let result = try await fetchSubscription(url: url, session: session)
+      let resolution = try Self.resolvedSubscriptionURL(from: url, displayNameHint: displayNameHint)
+      let result = Self.fetchResult(
+        try await fetchSubscription(url: resolution.url, session: session),
+        displayNameHint: resolution.displayNameHint
+      )
       let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
       let suggestedName = await Self.subscriptionDisplayNameAsync(
         metadata: result.metadata,
         source: result.source,
-        url: url
+        url: resolution.url
       )
 
       let id = UUID()
       let destination = paths.profiles.appendingPathComponent("\(id.uuidString).yaml")
       try await diskIO.writeProfileSource(result.source, to: destination)
       do {
-        try await secretIO.save(url.absoluteString, account: Self.subscriptionAccount(for: id))
+        try await secretIO.save(resolution.url.absoluteString, account: Self.subscriptionAccount(for: id))
       } catch {
         try? await diskIO.removeProfileConfig(atPath: destination.path)
         throw error
@@ -154,7 +163,7 @@ final class ProfileStore: ObservableObject {
       }
       profiles = nextProfiles
       activeProfileID = profile.id
-      subscriptionURLCache[id] = url.absoluteString
+      subscriptionURLCache[id] = resolution.url.absoluteString
       return profile
     }
   }
@@ -168,11 +177,21 @@ final class ProfileStore: ObservableObject {
             let url = URL(string: rawURL)
       else { return }
 
+      let resolution = try Self.resolvedSubscriptionURL(
+        from: url,
+        displayNameHint: profile.subscriptionMetadata?.displayNameHint
+      )
       let previousSource = try? await diskIO.readProfileSource(atPath: profile.originalConfigPath)
-      let result = try await fetchSubscription(url: url, session: session)
-      let nextProfiles = await profilesByApplyingSubscriptionDetails(result, sourceURL: url, for: profile.id)
+      let result = Self.fetchResult(
+        try await fetchSubscription(url: resolution.url, session: session),
+        displayNameHint: resolution.displayNameHint
+      )
+      let nextProfiles = await profilesByApplyingSubscriptionDetails(result, sourceURL: resolution.url, for: profile.id)
       do {
         try await diskIO.writeProfileSource(result.source, to: URL(fileURLWithPath: profile.originalConfigPath))
+        if rawURL != resolution.url.absoluteString {
+          try await secretIO.save(resolution.url.absoluteString, account: Self.subscriptionAccount(for: id))
+        }
         try await saveManifest(profiles: nextProfiles, activeProfileID: activeProfileID)
       } catch {
         if let previousSource {
@@ -181,24 +200,33 @@ final class ProfileStore: ObservableObject {
         throw error
       }
       profiles = nextProfiles
-      subscriptionURLCache[id] = rawURL
+      subscriptionURLCache[id] = resolution.url.absoluteString
     }
   }
 
-  func updateSubscriptionSource(_ profile: Profile, url: URL, session: URLSession = .shared) async throws {
+  func updateSubscriptionSource(
+    _ profile: Profile,
+    url: URL,
+    displayNameHint: String? = nil,
+    session: URLSession = .shared
+  ) async throws {
     await waitForManifestLoad()
     try await withMutationLock {
       guard profiles.contains(where: { $0.id == profile.id }),
             case let .subscription(id) = profile.source
       else { return }
+      let resolution = try Self.resolvedSubscriptionURL(from: url, displayNameHint: displayNameHint)
       let account = Self.subscriptionAccount(for: id)
       let previousSource = try? await diskIO.readProfileSource(atPath: profile.originalConfigPath)
       let previousURL = try await storedSubscriptionURL(for: id)
-      let result = try await fetchSubscription(url: url, session: session)
-      let nextProfiles = await profilesByApplyingSubscriptionDetails(result, sourceURL: url, for: profile.id)
+      let result = Self.fetchResult(
+        try await fetchSubscription(url: resolution.url, session: session),
+        displayNameHint: resolution.displayNameHint
+      )
+      let nextProfiles = await profilesByApplyingSubscriptionDetails(result, sourceURL: resolution.url, for: profile.id)
       do {
         try await diskIO.writeProfileSource(result.source, to: URL(fileURLWithPath: profile.originalConfigPath))
-        try await secretIO.save(url.absoluteString, account: account)
+        try await secretIO.save(resolution.url.absoluteString, account: account)
         try await saveManifest(profiles: nextProfiles, activeProfileID: activeProfileID)
       } catch {
         if let previousSource {
@@ -212,7 +240,7 @@ final class ProfileStore: ObservableObject {
         throw error
       }
       profiles = nextProfiles
-      subscriptionURLCache[id] = url.absoluteString
+      subscriptionURLCache[id] = resolution.url.absoluteString
     }
   }
 
@@ -235,18 +263,19 @@ final class ProfileStore: ObservableObject {
       guard case let .subscription(id) = profile.source,
             let index = profiles.firstIndex(where: { $0.id == profile.id }),
             let rawURL = try await storedSubscriptionURL(for: id),
-            let url = URL(string: rawURL)
+            let url = URL(string: rawURL),
+            let resolution = SubscriptionURLResolver.resolve(url: url)
       else { return }
       let source = (try? await diskIO.readProfileSource(atPath: profile.originalConfigPath)) ?? ""
       let metadata = profiles[index].subscriptionMetadata ?? SubscriptionMetadata()
-      let displayName = await Self.subscriptionDisplayNameAsync(metadata: metadata, source: source, url: url)
+      let displayName = await Self.subscriptionDisplayNameAsync(metadata: metadata, source: source, url: resolution.url)
       var nextProfiles = profiles
       nextProfiles[index].name = displayName
       nextProfiles[index].nameIsUserCustomized = false
       nextProfiles[index].updatedAt = Date()
       try await saveManifest(profiles: nextProfiles, activeProfileID: activeProfileID)
       profiles = nextProfiles
-      subscriptionURLCache[id] = rawURL
+      subscriptionURLCache[id] = resolution.url.absoluteString
     }
   }
 
@@ -294,6 +323,31 @@ final class ProfileStore: ObservableObject {
     return try await subscriptionFetcher.fetch(url: url) { _ in
       try await session.data(for: subscriptionFetcher.request(url: url))
     }
+  }
+
+  nonisolated private static func resolvedSubscriptionURL(
+    from url: URL,
+    displayNameHint: String? = nil
+  ) throws -> SubscriptionURLResolution {
+    guard var resolution = SubscriptionURLResolver.resolve(url: url) else {
+      throw AppError.invalidProfileConfig("Invalid subscription URL.")
+    }
+    if let explicitHint = SubscriptionURLResolver.normalizedDisplayName(displayNameHint) {
+      resolution.displayNameHint = explicitHint
+    }
+    return resolution
+  }
+
+  nonisolated private static func fetchResult(
+    _ result: SubscriptionFetchResult,
+    displayNameHint: String?
+  ) -> SubscriptionFetchResult {
+    guard let displayNameHint = SubscriptionURLResolver.normalizedDisplayName(displayNameHint) else {
+      return result
+    }
+    var metadata = result.metadata
+    metadata.displayNameHint = displayNameHint
+    return SubscriptionFetchResult(source: result.source, metadata: metadata)
   }
 
   private func loadManifestFromDisk() async {
@@ -384,8 +438,14 @@ final class ProfileStore: ObservableObject {
     if let remoteName = metadata.remoteFileName.map(Self.normalizedRemoteProfileName), !remoteName.isEmpty {
       return remoteName
     }
+    if let displayNameHint = metadata.displayNameHint, !displayNameHint.isEmpty {
+      return displayNameHint
+    }
     if let profileName = Self.profileName(from: source), !profileName.isEmpty {
       return profileName
+    }
+    if let pathName = Self.profileName(fromURLPath: url), !pathName.isEmpty {
+      return pathName
     }
     if let host = url.host(percentEncoded: false), !host.isEmpty {
       return host
@@ -400,6 +460,15 @@ final class ProfileStore: ObservableObject {
       ? url.deletingPathExtension().lastPathComponent
       : trimmed
     return withoutExtension.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  nonisolated private static func profileName(fromURLPath url: URL) -> String? {
+    let segments = url.path(percentEncoded: false)
+      .split(separator: "/")
+      .map(String.init)
+    guard let lastSegment = segments.last else { return nil }
+    let normalized = normalizedRemoteProfileName(lastSegment)
+    return normalized.isEmpty ? nil : normalized
   }
 
   nonisolated private static func profileName(from source: String) -> String? {

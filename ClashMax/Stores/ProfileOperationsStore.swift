@@ -21,7 +21,12 @@ final class ProfileOperationsStore: ObservableObject {
   }
 
   @discardableResult
-  func addSubscription(name: String = "", url: URL, session: URLSession = .shared) async throws -> Profile? {
+  func addSubscription(
+    name: String = "",
+    url: URL,
+    displayNameHint: String? = nil,
+    session: URLSession = .shared
+  ) async throws -> Profile? {
     guard !isAddingSubscription else { return nil }
     isAddingSubscription = true
     message = nil
@@ -30,6 +35,7 @@ final class ProfileOperationsStore: ObservableObject {
     let profile = try await profileStore.addSubscription(
       name: name.trimmingCharacters(in: .whitespacesAndNewlines),
       url: url,
+      displayNameHint: displayNameHint,
       session: session
     )
     message = "Added subscription \(profile.name)."
@@ -59,7 +65,12 @@ final class ProfileOperationsStore: ObservableObject {
   }
 
   @discardableResult
-  func updateSubscriptionSource(_ profile: Profile, url: URL, session: URLSession = .shared) async throws -> Bool {
+  func updateSubscriptionSource(
+    _ profile: Profile,
+    url: URL,
+    displayNameHint: String? = nil,
+    session: URLSession = .shared
+  ) async throws -> Bool {
     guard profile.isSubscription else {
       throw AppError.invalidProfileConfig("Only subscription profiles can update their source URL.")
     }
@@ -69,7 +80,12 @@ final class ProfileOperationsStore: ObservableObject {
     message = nil
     defer { setProfile(profile.id, updating: false) }
 
-    try await profileStore.updateSubscriptionSource(profile, url: url, session: session)
+    try await profileStore.updateSubscriptionSource(
+      profile,
+      url: url,
+      displayNameHint: displayNameHint,
+      session: session
+    )
     let name = profileStore.profiles.first { $0.id == profile.id }?.name ?? profile.name
     message = "Updated subscription source for \(name)."
     return true

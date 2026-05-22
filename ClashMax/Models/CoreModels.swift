@@ -1826,6 +1826,7 @@ struct SubscriptionTrafficUsage: Codable, Equatable, Sendable {
 struct SubscriptionMetadata: Codable, Equatable, Sendable {
   var traffic: SubscriptionTrafficUsage?
   var remoteFileName: String?
+  var displayNameHint: String?
   var updateIntervalMinutes: Int?
   var webPageURL: URL?
   var lastFetchedAt: Date?
@@ -1833,12 +1834,14 @@ struct SubscriptionMetadata: Codable, Equatable, Sendable {
   init(
     traffic: SubscriptionTrafficUsage? = nil,
     remoteFileName: String? = nil,
+    displayNameHint: String? = nil,
     updateIntervalMinutes: Int? = nil,
     webPageURL: URL? = nil,
     lastFetchedAt: Date? = nil
   ) {
     self.traffic = traffic
     self.remoteFileName = remoteFileName
+    self.displayNameHint = displayNameHint
     self.updateIntervalMinutes = updateIntervalMinutes
     self.webPageURL = webPageURL
     self.lastFetchedAt = lastFetchedAt

@@ -837,7 +837,7 @@ final class AppModel: ObservableObject {
   @discardableResult
   func addSubscription(name: String = "", urlString: String, session: URLSession = .shared) async -> Bool {
     let trimmedURLString = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard let url = URL(string: trimmedURLString) else {
+    guard let resolution = SubscriptionURLResolver.resolve(rawInput: trimmedURLString) else {
       profileOperations.clearMessage()
       lastError = "Invalid subscription URL."
       return false
@@ -847,7 +847,12 @@ final class AppModel: ObservableObject {
     profileOperations.clearMessage()
 
     do {
-      guard try await profileOperations.addSubscription(name: name, url: url, session: session) != nil else {
+      guard try await profileOperations.addSubscription(
+        name: name,
+        url: resolution.url,
+        displayNameHint: resolution.displayNameHint,
+        session: session
+      ) != nil else {
         return false
       }
       await refreshProfilePreviewAndWait()
@@ -886,7 +891,7 @@ final class AppModel: ObservableObject {
   @discardableResult
   func updateSubscriptionSource(_ profile: Profile, urlString: String, session: URLSession = .shared) async -> Bool {
     let trimmedURLString = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard let url = URL(string: trimmedURLString) else {
+    guard let resolution = SubscriptionURLResolver.resolve(rawInput: trimmedURLString) else {
       profileOperations.clearMessage()
       lastError = "Invalid subscription URL."
       return false
@@ -896,7 +901,12 @@ final class AppModel: ObservableObject {
     profileOperations.clearMessage()
 
     do {
-      let updated = try await profileOperations.updateSubscriptionSource(profile, url: url, session: session)
+      let updated = try await profileOperations.updateSubscriptionSource(
+        profile,
+        url: resolution.url,
+        displayNameHint: resolution.displayNameHint,
+        session: session
+      )
       await refreshProfilePreviewAndWait()
       loadPreviewSelectionsForActiveProfile()
       return updated
