@@ -241,6 +241,12 @@ final class MihomoAPIClientTests: XCTestCase {
     XCTAssertEqual(request.url?.query, "force=true")
     XCTAssertEqual(String(data: try XCTUnwrap(recorder.lastBody), encoding: .utf8), #"{"path":"/tmp/runtime.yaml"}"#)
 
+    try await client.updateIPv6(true)
+    request = try XCTUnwrap(recorder.lastRequest)
+    XCTAssertEqual(request.httpMethod, "PATCH")
+    XCTAssertEqual(request.url?.path, "/configs")
+    XCTAssertEqual(String(data: try XCTUnwrap(recorder.lastBody), encoding: .utf8), #"{"ipv6":true}"#)
+
     try await client.setTunEnabled(false)
     request = try XCTUnwrap(recorder.lastRequest)
     XCTAssertEqual(request.httpMethod, "PATCH")

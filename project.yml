@@ -32,6 +32,9 @@ packages:
   Pow:
     url: https://github.com/EmergeTools/Pow.git
     from: "1.0.0"
+  SwiftUIShimmer:
+    url: https://github.com/markiv/SwiftUI-Shimmer.git
+    from: "1.5.1"
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     from: "2.9.1"
@@ -70,6 +73,8 @@ targets:
     dependencies:
       - package: Yams
       - package: Pow
+      - package: SwiftUIShimmer
+        product: Shimmer
       - package: Sparkle
       - target: ClashMaxHelper
         embed: false

@@ -47,7 +47,7 @@ struct PublicIPInfoCard: View {
       if let info = state.info {
         infoBody(info)
       } else if state.isLoading {
-        placeholderBody(title: "Refreshing public IP", symbolName: "hourglass")
+        publicIPSkeletonBody
       } else {
         placeholderBody(
           title: "Public IP unavailable",
@@ -94,6 +94,33 @@ struct PublicIPInfoCard: View {
         PublicIPInfoDetail(title: "Source", value: info.sourceName)
       }
     }
+  }
+
+  private var publicIPSkeletonBody: some View {
+    VStack(alignment: .leading, spacing: isCompact ? 8 : 12) {
+      if shouldStackIdentity {
+        VStack(alignment: .leading, spacing: 10) {
+          ClashMaxCurrentNodeSkeleton(isCompact: isCompact)
+        }
+      } else {
+        HStack(spacing: 12) {
+          ClashMaxCurrentNodeSkeleton(isCompact: isCompact)
+          Spacer(minLength: 8)
+          ClashMaxSkeletonBar(width: 128, height: 32, cornerRadius: 8)
+        }
+      }
+
+      LazyVGrid(columns: detailColumns, alignment: .leading, spacing: isCompact ? 6 : 8) {
+        ForEach(0..<6, id: \.self) { index in
+          VStack(alignment: .leading, spacing: 5) {
+            ClashMaxSkeletonBar(width: 62, height: 8)
+            ClashMaxSkeletonBar(width: index.isMultiple(of: 2) ? 128 : 96, height: 11)
+          }
+        }
+      }
+    }
+    .frame(maxWidth: .infinity, minHeight: isCompact ? 98 : 128, alignment: .topLeading)
+    .accessibilityHidden(true)
   }
 
   private func regionIdentity(for info: PublicIPInfo) -> some View {

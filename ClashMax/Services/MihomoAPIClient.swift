@@ -2,6 +2,7 @@ import Foundation
 
 protocol MihomoAPIControlling: Sendable {
   func updateMode(_ mode: RunMode) async throws
+  func updateIPv6(_ enabled: Bool) async throws
   func proxyGroups() async throws -> [ProxyGroup]
   func structuredProxyProviders() async throws -> [ProxyProvider]
   func rules() async throws -> [String]
@@ -70,6 +71,14 @@ struct MihomoAPIClient: Sendable {
     var request = try request(path: "/configs")
     request.httpMethod = "PATCH"
     request.httpBody = try JSONSerialization.data(withJSONObject: ["mode": mode.rawValue])
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    _ = try await data(for: request)
+  }
+
+  func updateIPv6(_ enabled: Bool) async throws {
+    var request = try request(path: "/configs")
+    request.httpMethod = "PATCH"
+    request.httpBody = try JSONSerialization.data(withJSONObject: ["ipv6": enabled])
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     _ = try await data(for: request)
   }

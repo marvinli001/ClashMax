@@ -23,7 +23,9 @@ struct ConnectionsView: View {
       }
       .disabled(runtimeData.connections.isEmpty || runtimeData.closingAllConnections || !appModel.canControlRuntimeProxies)
     } content: {
-      if runtimeData.connections.isEmpty {
+      if showsLoadingSkeleton {
+        ClashMaxSkeletonTable(rows: 7)
+      } else if runtimeData.connections.isEmpty {
         CenteredUnavailableState(
           title: "No active connections",
           systemImage: "network.slash",
@@ -72,5 +74,11 @@ struct ConnectionsView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
       }
     }
+  }
+
+  private var showsLoadingSkeleton: Bool {
+    runtimeData.connections.isEmpty
+      && appModel.profileStore.activeProfile != nil
+      && (appModel.runtimeDataLoading || appModel.dashboardRuntimeState.isStarting)
   }
 }

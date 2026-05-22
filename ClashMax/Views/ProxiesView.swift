@@ -9,7 +9,8 @@ struct ProxiesView: View {
   @State private var expandedGroupIDs: Set<String>?
 
   var body: some View {
-    let groups = filteredGroups(from: appModel.visibleProxyGroups)
+    let unfilteredGroups = appModel.visibleProxyGroups
+    let groups = filteredGroups(from: unfilteredGroups)
     let searchQuery = normalizedSearchQuery
     let visibleExpandedGroupIDs = ProxyGroupExpansionPolicy.resolvedExpansion(
       current: expandedGroupIDs,
@@ -52,11 +53,17 @@ struct ProxiesView: View {
       }
       .disabled(!ProxiesPageActionState.canRefresh(isStarting: isStarting))
     } content: {
-      if groups.isEmpty {
+      if showsLoadingSkeleton(unfilteredGroups: unfilteredGroups) {
+        ScrollView {
+          ClashMaxProxyGroupSkeletonList(groupCount: 3)
+            .padding(.vertical, 2)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+      } else if groups.isEmpty {
         CenteredUnavailableState(
-          title: "No proxy groups",
+          title: emptyStateTitle(unfilteredGroups: unfilteredGroups, searchQuery: searchQuery),
           systemImage: "point.3.connected.trianglepath.dotted",
-          message: appModel.proxyGroupsUnavailableMessage
+          message: emptyStateMessage(unfilteredGroups: unfilteredGroups, searchQuery: searchQuery)
         )
       } else {
         VStack(alignment: .leading, spacing: 10) {
@@ -118,6 +125,15 @@ struct ProxiesView: View {
     }
   }
 
+  private func showsLoadingSkeleton(unfilteredGroups: [ProxyGroup]) -> Bool {
+    ProxyPageVisibilityPolicy.showsLoadingSkeleton(
+      unfilteredGroupCount: unfilteredGroups.count,
+      hasActiveProfile: appModel.profileStore.activeProfile != nil,
+      isRuntimeDataLoading: appModel.runtimeDataLoading,
+      isStarting: appModel.dashboardRuntimeState.isStarting
+    )
+  }
+
   private func subtitle(for groups: [ProxyGroup]) -> String {
     if groups.isEmpty {
       return String(localized: "Proxy groups load from the active profile and runtime.")
@@ -139,6 +155,20 @@ struct ProxiesView: View {
       return String(localized: "1 group")
     }
     return localizedProxiesCount("%lld groups", count)
+  }
+
+  private func emptyStateTitle(unfilteredGroups: [ProxyGroup], searchQuery: String) -> String {
+    if !searchQuery.isEmpty, !unfilteredGroups.isEmpty {
+      return String(localized: "No matching proxies")
+    }
+    return String(localized: "No proxy groups")
+  }
+
+  private func emptyStateMessage(unfilteredGroups: [ProxyGroup], searchQuery: String) -> String {
+    if !searchQuery.isEmpty, !unfilteredGroups.isEmpty {
+      return String(localized: "No proxy groups match the current search.")
+    }
+    return appModel.proxyGroupsUnavailableMessage
   }
 
   private var proxyControls: some View {
@@ -289,6 +319,15 @@ private struct ProxyNodeGridAnimationState: Equatable {
 enum ProxyPageVisibilityPolicy {
   static func showsProviderSummary(developerMode: Bool, providerCount: Int) -> Bool {
     developerMode && providerCount > 0
+  }
+
+  static func showsLoadingSkeleton(
+    unfilteredGroupCount: Int,
+    hasActiveProfile: Bool,
+    isRuntimeDataLoading: Bool,
+    isStarting: Bool
+  ) -> Bool {
+    unfilteredGroupCount == 0 && hasActiveProfile && (isRuntimeDataLoading || isStarting)
   }
 }
 

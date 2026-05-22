@@ -51,6 +51,7 @@ struct ConfigNormalizer {
     root["external-controller"] = "\(overrides.externalControllerHost):\(overrides.externalControllerPort)"
     root["secret"] = overrides.secret
     root["allow-lan"] = overrides.allowLan
+    root["ipv6"] = overrides.ipv6Enabled
     root["mode"] = overrides.mode.rawValue
     root["log-level"] = overrides.logLevel
     root["unified-delay"] = overrides.unifiedDelay
@@ -67,6 +68,9 @@ struct ConfigNormalizer {
     if let dnsEnabled = overrides.dnsEnabled {
       var dns = root["dns"] as? [String: Any] ?? [:]
       dns["enable"] = dnsEnabled
+      if dnsEnabled {
+        dns["ipv6"] = overrides.ipv6Enabled
+      }
       root["dns"] = dns
     }
     if let networkExtensionRoutingSettings = options.networkExtensionRoutingSettings {
@@ -74,6 +78,7 @@ struct ConfigNormalizer {
       if networkExtensionRoutingSettings.dnsCaptureEnabled || networkExtensionRoutingSettings.dnsFakeIPEnabled {
         dns["enable"] = true
         dns["listen"] = networkExtensionRoutingSettings.normalizedDNSListenAddress
+        dns["ipv6"] = overrides.ipv6Enabled
       }
       if networkExtensionRoutingSettings.dnsFakeIPEnabled {
         dns["enhanced-mode"] = "fake-ip"
@@ -95,6 +100,7 @@ struct ConfigNormalizer {
       if settings.dnsFakeIPEnabled {
         var dns = root["dns"] as? [String: Any] ?? [:]
         dns["enable"] = true
+        dns["ipv6"] = overrides.ipv6Enabled
         dns["enhanced-mode"] = "fake-ip"
         dns["fake-ip-range"] = settings.normalizedFakeIPRange
         applyTunDNSOverlay(settings.dns, to: &dns)
@@ -102,6 +108,7 @@ struct ConfigNormalizer {
       } else if settings.dns.hasRuntimeOverlay {
         var dns = root["dns"] as? [String: Any] ?? [:]
         dns["enable"] = true
+        dns["ipv6"] = overrides.ipv6Enabled
         applyTunDNSOverlay(settings.dns, to: &dns)
         root["dns"] = dns
       }

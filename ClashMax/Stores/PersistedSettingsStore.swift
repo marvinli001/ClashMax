@@ -14,6 +14,12 @@ final class PersistedSettingsStore: ObservableObject {
       saveCodable(systemProxySettings, forKey: Self.systemProxySettingsDefaultsKey)
     }
   }
+  @Published var ipv6Enabled = false {
+    didSet {
+      overrides.ipv6Enabled = ipv6Enabled
+      defaults.set(ipv6Enabled, forKey: Self.ipv6EnabledDefaultsKey)
+    }
+  }
   @Published var tunSettings = TunSettings.default {
     didSet {
       overrides.tunSettings = tunSettings
@@ -61,6 +67,7 @@ final class PersistedSettingsStore: ObservableObject {
   private static let proxyRoutingModeDefaultsKey = "io.github.clashmax.proxyRoutingMode"
   private static let developerModeDefaultsKey = "io.github.clashmax.developerMode"
   private static let systemProxySettingsDefaultsKey = "io.github.clashmax.systemProxySettings"
+  private static let ipv6EnabledDefaultsKey = "io.github.clashmax.ipv6Enabled"
   private static let tunSettingsDefaultsKey = "io.github.clashmax.tunSettings"
   private static let tunDNSDefaultsVersionKey = "io.github.clashmax.tunDNSDefaultsVersion"
   private static let currentTunDNSDefaultsVersion = 1
@@ -96,6 +103,7 @@ final class PersistedSettingsStore: ObservableObject {
       forKey: Self.systemProxySettingsDefaultsKey,
       defaults: defaults
     ) ?? .default
+    ipv6Enabled = defaults.bool(forKey: Self.ipv6EnabledDefaultsKey)
     let loadedTunSettings = Self.loadCodable(
       TunSettings.self,
       forKey: Self.tunSettingsDefaultsKey,
@@ -127,6 +135,7 @@ final class PersistedSettingsStore: ObservableObject {
       migratedCORSSettings: migratedCORSSettings
     )
     overrides.tunSettings = tunSettings
+    overrides.ipv6Enabled = ipv6Enabled
     overrides.unifiedDelay = delayTestSettings.unifiedDelay
     syncExternalControllerSettings()
     refreshLaunchSettings()

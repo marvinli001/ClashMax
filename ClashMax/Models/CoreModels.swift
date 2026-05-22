@@ -444,6 +444,7 @@ struct RuntimeOverrides: Codable, Equatable, Sendable {
   var externalControllerPort: Int
   var secret: String
   var allowLan: Bool
+  var ipv6Enabled: Bool
   var mode: RunMode
   var logLevel: String
   var unifiedDelay: Bool
@@ -458,6 +459,7 @@ struct RuntimeOverrides: Codable, Equatable, Sendable {
     case externalControllerPort
     case secret
     case allowLan
+    case ipv6Enabled
     case mode
     case logLevel
     case unifiedDelay
@@ -473,6 +475,7 @@ struct RuntimeOverrides: Codable, Equatable, Sendable {
     externalControllerPort: Int,
     secret: String,
     allowLan: Bool,
+    ipv6Enabled: Bool = false,
     mode: RunMode,
     logLevel: String,
     dnsEnabled: Bool?,
@@ -486,6 +489,7 @@ struct RuntimeOverrides: Codable, Equatable, Sendable {
     self.externalControllerPort = externalControllerPort
     self.secret = secret
     self.allowLan = allowLan
+    self.ipv6Enabled = ipv6Enabled
     self.mode = mode
     self.logLevel = logLevel
     self.unifiedDelay = unifiedDelay
@@ -502,6 +506,7 @@ struct RuntimeOverrides: Codable, Equatable, Sendable {
       externalControllerPort: 9097,
       secret: secret,
       allowLan: false,
+      ipv6Enabled: false,
       mode: .rule,
       logLevel: "info",
       dnsEnabled: nil,
@@ -528,6 +533,7 @@ struct RuntimeOverrides: Codable, Equatable, Sendable {
     )
     secret = container.decodeDefault(String.self, forKey: .secret, default: defaults.secret)
     allowLan = container.decodeDefault(Bool.self, forKey: .allowLan, default: defaults.allowLan)
+    ipv6Enabled = container.decodeDefault(Bool.self, forKey: .ipv6Enabled, default: defaults.ipv6Enabled)
     mode = container.decodeDefault(RunMode.self, forKey: .mode, default: defaults.mode)
     logLevel = container.decodeDefault(String.self, forKey: .logLevel, default: defaults.logLevel)
     unifiedDelay = container.decodeDefault(Bool.self, forKey: .unifiedDelay, default: defaults.unifiedDelay)

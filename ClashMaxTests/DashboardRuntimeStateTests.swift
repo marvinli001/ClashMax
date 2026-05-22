@@ -414,6 +414,33 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertFalse(ProxiesPageActionState.canRefresh(isStarting: true))
   }
 
+  func testProxyPageLoadingSkeletonUsesUnfilteredGroups() {
+    XCTAssertTrue(
+      ProxyPageVisibilityPolicy.showsLoadingSkeleton(
+        unfilteredGroupCount: 0,
+        hasActiveProfile: true,
+        isRuntimeDataLoading: true,
+        isStarting: false
+      )
+    )
+    XCTAssertFalse(
+      ProxyPageVisibilityPolicy.showsLoadingSkeleton(
+        unfilteredGroupCount: 1,
+        hasActiveProfile: true,
+        isRuntimeDataLoading: true,
+        isStarting: false
+      )
+    )
+    XCTAssertFalse(
+      ProxyPageVisibilityPolicy.showsLoadingSkeleton(
+        unfilteredGroupCount: 0,
+        hasActiveProfile: false,
+        isRuntimeDataLoading: true,
+        isStarting: false
+      )
+    )
+  }
+
   func testDeveloperModeDefaultsOffAndPersists() throws {
     let paths = try Self.makeRuntimePaths()
     let suiteName = "ClashMaxDeveloperModeTests-\(UUID().uuidString)"
@@ -822,6 +849,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(decoded.externalControllerPort, 19197)
     XCTAssertEqual(decoded.secret, "secret-token")
     XCTAssertTrue(decoded.allowLan)
+    XCTAssertFalse(decoded.ipv6Enabled)
     XCTAssertEqual(decoded.mode, .global)
     XCTAssertEqual(decoded.logLevel, "debug")
     XCTAssertTrue(decoded.unifiedDelay)
@@ -853,6 +881,33 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(model.delayTestSettings.unifiedDelay)
     XCTAssertEqual(model.delayTestSettings.timeoutMilliseconds, DelayTestSettings.default.timeoutMilliseconds)
     XCTAssertTrue(model.overrides.unifiedDelay)
+  }
+
+  func testIPv6SettingPersistsAndSyncsRuntimeOverrides() throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    let firstModel = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: defaults
+    )
+
+    XCTAssertFalse(firstModel.ipv6Enabled)
+    XCTAssertFalse(firstModel.overrides.ipv6Enabled)
+
+    firstModel.setIPv6Enabled(true)
+
+    XCTAssertTrue(firstModel.ipv6Enabled)
+    XCTAssertTrue(firstModel.overrides.ipv6Enabled)
+
+    let secondModel = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: defaults
+    )
+
+    XCTAssertTrue(secondModel.ipv6Enabled)
+    XCTAssertTrue(secondModel.overrides.ipv6Enabled)
   }
 
   func testSystemProxySettingsMigratesMissingGuardIntervalFromUserDefaults() throws {
@@ -1019,6 +1074,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         externalControllerPort: 19197,
         secret: "secret-token",
         allowLan: true,
+        ipv6Enabled: true,
         mode: .global,
         logLevel: "debug",
         dnsEnabled: true,
@@ -2081,6 +2137,116 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(model.connections, [connection])
   }
 
+  func testRuntimeDataLoadingTracksInFlightReload() async throws {
+    let group = ProxyGroup(
+      name: "Proxy",
+      type: "select",
+      selected: "Japan",
+      nodes: [ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true)]
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [group],
+      testDelayResult: 73,
+      proxyGroupsDelayNanoseconds: 80_000_000
+    )
+    let model = try await makeRunningRuntimeModel(client: client)
+
+    XCTAssertFalse(model.runtimeDataLoading)
+
+    model.reloadRuntimeData()
+
+    for _ in 0..<40 where !model.runtimeDataLoading {
+      await Task.yield()
+    }
+
+    XCTAssertTrue(model.runtimeDataLoading)
+
+    for _ in 0..<160 where model.runtimeDataLoading {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertFalse(model.runtimeDataLoading)
+    XCTAssertEqual(model.proxyGroups, [group])
+  }
+
+  func testRuntimeDataLoadingClearsWhenReloadCannotRun() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let controller = CoreProcessController(
+      launcher: FakeProcessLauncher(),
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [
+        ProxyGroup(
+          name: "Proxy",
+          type: "select",
+          selected: "Japan",
+          nodes: [ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true)]
+        )
+      ],
+      testDelayResult: 73,
+      proxyGroupsDelayNanoseconds: 200_000_000
+    )
+    let model = AppModel(paths: paths, profileStore: store, coreController: controller, apiClient: client)
+
+    try await controller.startUserMode(
+      coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+      configURL: configURL,
+      workDirectory: paths.runtime,
+      api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+    )
+
+    model.reloadRuntimeData()
+
+    for _ in 0..<40 where !model.runtimeDataLoading {
+      await Task.yield()
+    }
+
+    XCTAssertTrue(model.runtimeDataLoading)
+
+    _ = await controller.stop()
+    model.reloadRuntimeData()
+
+    XCTAssertFalse(model.runtimeDataLoading)
+    XCTAssertTrue(model.proxyGroups.isEmpty)
+  }
+
+  func testRuntimeDataLoadingClearsWhenRuntimeActionsAreCancelled() async throws {
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [
+        ProxyGroup(
+          name: "Proxy",
+          type: "select",
+          selected: "Japan",
+          nodes: [ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true)]
+        )
+      ],
+      testDelayResult: 73,
+      proxyGroupsDelayNanoseconds: 200_000_000
+    )
+    let model = try await makeRunningRuntimeModel(client: client)
+
+    model.reloadRuntimeData()
+
+    for _ in 0..<40 where !model.runtimeDataLoading {
+      await Task.yield()
+    }
+
+    XCTAssertTrue(model.runtimeDataLoading)
+
+    _ = await model.prepareForTermination()
+
+    XCTAssertFalse(model.runtimeDataLoading)
+  }
+
   func testProviderHealthAndConnectionCloseUseRuntimeAPI() async throws {
     let paths = try Self.makeRuntimePaths()
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
@@ -2187,6 +2353,101 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     let modes = await client.updatedModes()
     XCTAssertEqual(modes, [.direct])
+  }
+
+  func testRuntimeIPv6TogglePatchesRunningCore() async throws {
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [],
+      testDelayResult: 73
+    )
+    let model = try await makeRunningRuntimeModel(client: client)
+
+    model.setIPv6Enabled(true)
+
+    for _ in 0..<20 {
+      let values = await client.ipv6UpdateValues()
+      if values == [true] {
+        break
+      }
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+
+    let values = await client.ipv6UpdateValues()
+    XCTAssertEqual(values, [true])
+  }
+
+  func testRuntimeIPv6ToggleReloadsManagedDNSConfig() async throws {
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [],
+      testDelayResult: 73
+    )
+    let model = try await makeRunningRuntimeModel(client: client)
+    var overrides = model.overrides
+    overrides.dnsEnabled = true
+    model.overrides = overrides
+
+    model.setIPv6Enabled(true)
+
+    for _ in 0..<40 {
+      let paths = await client.reloadRequestPaths()
+      if !paths.isEmpty {
+        break
+      }
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+
+    let reloadPaths = await client.reloadRequestPaths()
+    let configPath = try XCTUnwrap(reloadPaths.first)
+    let output = try String(contentsOfFile: configPath, encoding: .utf8)
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let dns = try XCTUnwrap(yaml["dns"] as? [String: Any])
+    let ipv6Updates = await client.ipv6UpdateValues()
+    let reloadForces = await client.reloadRequestForces()
+
+    XCTAssertEqual(ipv6Updates, [])
+    XCTAssertEqual(reloadForces, [true])
+    XCTAssertEqual(yaml["ipv6"] as? Bool, true)
+    XCTAssertEqual(dns["enable"] as? Bool, true)
+    XCTAssertEqual(dns["ipv6"] as? Bool, true)
+  }
+
+  func testNetworkExtensionIPv6ToggleReloadsDNSCaptureConfig() async throws {
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [],
+      testDelayResult: 73
+    )
+    let model = try await makeRunningRuntimeModel(client: client)
+    model.proxyRoutingMode = .networkExtensionExperimental
+    model.networkExtensionRoutingSettings = NetworkExtensionRoutingSettings(
+      dnsCaptureEnabled: true,
+      dnsFakeIPEnabled: false,
+      systemDNSOverrideEnabled: false
+    )
+
+    model.setIPv6Enabled(true)
+
+    for _ in 0..<40 {
+      let paths = await client.reloadRequestPaths()
+      if !paths.isEmpty {
+        break
+      }
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+
+    let reloadPaths = await client.reloadRequestPaths()
+    let configPath = try XCTUnwrap(reloadPaths.first)
+    let output = try String(contentsOfFile: configPath, encoding: .utf8)
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let dns = try XCTUnwrap(yaml["dns"] as? [String: Any])
+    let ipv6Updates = await client.ipv6UpdateValues()
+    let reloadForces = await client.reloadRequestForces()
+
+    XCTAssertEqual(ipv6Updates, [])
+    XCTAssertEqual(reloadForces, [true])
+    XCTAssertEqual(yaml["ipv6"] as? Bool, true)
+    XCTAssertEqual(dns["enable"] as? Bool, true)
+    XCTAssertEqual(dns["listen"] as? String, "127.0.0.1:1053")
+    XCTAssertEqual(dns["ipv6"] as? Bool, true)
   }
 
   func testSelectingProxyUsesLatestRequestPerGroup() async throws {
@@ -5453,6 +5714,7 @@ private actor RecordingMihomoController: MihomoAPIControlling {
   private var reloadRequests: [(path: String, force: Bool)] = []
   private var restartRequests: [String?] = []
   private var tunEnabledUpdates: [Bool] = []
+  private var ipv6Updates: [Bool] = []
 
   init(
     proxyGroupsResponse: [ProxyGroup],
@@ -5575,6 +5837,10 @@ private actor RecordingMihomoController: MihomoAPIControlling {
   func updateMode(_ mode: RunMode) async throws {
     try await sleepIfNeeded(modeUpdateDelayNanoseconds)
     modeUpdates.append(mode)
+  }
+
+  func updateIPv6(_ enabled: Bool) async throws {
+    ipv6Updates.append(enabled)
   }
 
   func proxyGroups() async throws -> [ProxyGroup] {
@@ -5715,6 +5981,10 @@ private actor RecordingMihomoController: MihomoAPIControlling {
 
   func tunEnabledUpdateValues() -> [Bool] {
     tunEnabledUpdates
+  }
+
+  func ipv6UpdateValues() -> [Bool] {
+    ipv6Updates
   }
 
   private func delay(at index: Int, in delays: [UInt64]) -> UInt64 {

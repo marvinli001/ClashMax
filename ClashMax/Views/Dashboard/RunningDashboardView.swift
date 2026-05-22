@@ -36,28 +36,32 @@ struct RunningDashboardView: View {
           value: TrafficSample.format(runtimeData.trafficSample.download),
           footnote: trafficFootnote,
           symbolName: "arrow.down",
-          tint: .cyan
+          tint: .cyan,
+          isLoading: showsInitialRuntimeSkeletons
         )
         DashboardMetricTile(
           title: "Upload",
           value: TrafficSample.format(runtimeData.trafficSample.upload),
           footnote: trafficFootnote,
           symbolName: "arrow.up",
-          tint: .indigo
+          tint: .indigo,
+          isLoading: showsInitialRuntimeSkeletons
         )
         DashboardMetricTile(
           title: "Connections",
           value: "\(runtimeData.connections.count)",
           footnote: runtimeData.connections.isEmpty ? "Waiting for runtime data" : "Live stream",
           symbolName: "network",
-          tint: .orange
+          tint: .orange,
+          isLoading: (appModel.runtimeDataLoading || state.isStarting) && runtimeData.connections.isEmpty
         )
         DashboardMetricTile(
           title: "Rules",
           value: "\(runtimeData.rules.count)",
           footnote: runtimeData.rules.isEmpty ? "Waiting for runtime data" : "Loaded rules",
           symbolName: "list.bullet.rectangle",
-          tint: .green
+          tint: .green,
+          isLoading: (appModel.runtimeDataLoading || state.isStarting) && runtimeData.rules.isEmpty
         )
       }
       .staggeredArrival(index: 2, reduceMotion: reduceMotion, trigger: state)
@@ -79,7 +83,7 @@ struct RunningDashboardView: View {
       }
 
       DashboardResponsivePair(availableWidth: availableWidth) {
-        TrafficRuntimeCard(samples: chartSamples)
+        TrafficRuntimeCard(samples: chartSamples, isLoading: showsInitialRuntimeSkeletons)
       } trailing: {
         ProxyGroupsRuntimeCard()
       }
@@ -124,6 +128,14 @@ struct RunningDashboardView: View {
 
   private var chartSamples: [TrafficSample] {
     runtimeData.trafficHistory.isEmpty ? [.zero, .zero, .zero, .zero, .zero, .zero] : runtimeData.trafficHistory
+  }
+
+  private var showsInitialRuntimeSkeletons: Bool {
+    (appModel.runtimeDataLoading || state.isStarting)
+      && runtimeData.proxyGroups.isEmpty
+      && runtimeData.connections.isEmpty
+      && runtimeData.rules.isEmpty
+      && runtimeData.trafficHistory.isEmpty
   }
 }
 
@@ -354,6 +366,8 @@ private struct CurrentProxyRuntimeCard: View {
             .frame(minWidth: 0, maxWidth: .infinity)
             .layoutPriority(2)
         }
+      } else if state.isStarting || (appModel.runtimeDataLoading && runtimeData.proxyGroups.isEmpty) {
+        ClashMaxCurrentNodeSkeleton(isCompact: availableWidth < 460)
       } else {
         DashboardEmptyRuntimeView(
           title: state.isStarting ? "Waiting for runtime data" : "No selectable proxy groups",
@@ -530,6 +544,7 @@ private struct NetworkStatusCard: View {
         RuntimeStat(title: "API", value: "Bearer", tint: .green)
         RuntimeStat(title: "Mode", value: appModel.overrides.mode.displayName, tint: .purple)
         RuntimeStat(title: "LAN", value: appModel.overrides.allowLan ? "On" : "Off", tint: .orange)
+        RuntimeStat(title: "IPv6", value: appModel.overrides.ipv6Enabled ? "On" : "Off", tint: .cyan)
       }
 
       Divider()
@@ -771,13 +786,19 @@ private struct NetworkExtensionDiagnosticsRuntimeCard: View {
 
 private struct TrafficRuntimeCard: View {
   let samples: [TrafficSample]
+  let isLoading: Bool
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       DashboardSectionHeader(title: "Traffic", symbolName: "waveform.path.ecg")
 
-      DashboardTrafficSparkline(samples: samples)
-        .frame(height: 178)
+      if isLoading {
+        ClashMaxChartSkeleton()
+          .frame(height: 178)
+      } else {
+        DashboardTrafficSparkline(samples: samples)
+          .frame(height: 178)
+      }
 
       HStack(spacing: 16) {
         LegendDot(title: "Download", color: .cyan)
@@ -808,7 +829,9 @@ private struct ProxyGroupsRuntimeCard: View {
         .help("Refresh")
       }
 
-      if runtimeData.proxyGroups.isEmpty {
+      if runtimeData.proxyGroups.isEmpty, appModel.runtimeDataLoading || appModel.dashboardRuntimeState.isStarting {
+        ClashMaxSkeletonList(rows: 4, showsLeadingIcon: true, trailingWidth: 58)
+      } else if runtimeData.proxyGroups.isEmpty {
         DashboardEmptyRuntimeView(title: "Waiting for runtime data", symbolName: "hourglass")
       } else {
         VStack(spacing: 8) {
@@ -842,13 +865,16 @@ private struct ProxyGroupsRuntimeCard: View {
 }
 
 private struct ConnectionsRulesRuntimeCard: View {
+  @EnvironmentObject private var appModel: AppModel
   @EnvironmentObject private var runtimeData: RuntimeDataStore
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       DashboardSectionHeader(title: "Connections", symbolName: "network", trailing: "\(runtimeData.rules.count) rules")
 
-      if runtimeData.connections.isEmpty {
+      if runtimeData.connections.isEmpty, appModel.runtimeDataLoading || appModel.dashboardRuntimeState.isStarting {
+        ClashMaxSkeletonList(rows: 4, showsLeadingIcon: false, trailingWidth: 52)
+      } else if runtimeData.connections.isEmpty {
         DashboardEmptyRuntimeView(title: "Waiting for runtime data", symbolName: "network.slash")
       } else {
         VStack(spacing: 8) {
@@ -888,7 +914,9 @@ private struct RecentLogsRuntimeCard: View {
     VStack(alignment: .leading, spacing: 12) {
       DashboardSectionHeader(title: "Recent Logs", symbolName: "terminal", trailing: "\(visibleLogs.count)")
 
-      if visibleLogs.isEmpty {
+      if visibleLogs.isEmpty, appModel.runtimeDataLoading || appModel.dashboardRuntimeState.isStarting {
+        ClashMaxSkeletonList(rows: 4, showsLeadingIcon: false, trailingWidth: nil)
+      } else if visibleLogs.isEmpty {
         DashboardEmptyRuntimeView(title: "Waiting for runtime data", symbolName: "text.alignleft")
       } else {
         VStack(spacing: 8) {

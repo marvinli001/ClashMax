@@ -1030,6 +1030,7 @@ struct DashboardMetricTile: View {
   let footnote: String?
   let symbolName: String
   let tint: Color
+  var isLoading = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
@@ -1043,23 +1044,32 @@ struct DashboardMetricTile: View {
         Spacer()
       }
 
-      VStack(alignment: .leading, spacing: 3) {
-        Text(title)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-        Text(value)
-          .font(.system(.title3, design: .rounded).weight(.semibold))
-          .foregroundStyle(.primary)
-          .lineLimit(1)
-          .minimumScaleFactor(0.62)
-          .contentTransition(.numericText())
-          .changeEffect(.pulse(shape: RoundedRectangle(cornerRadius: 8), style: tint.opacity(0.18), count: 1), value: value)
-
-        if let footnote {
-          Text(footnote)
-            .font(.caption2)
-            .foregroundStyle(.tertiary)
+      if isLoading {
+        VStack(alignment: .leading, spacing: 7) {
+          ClashMaxSkeletonBar(width: 74, height: 9)
+          ClashMaxSkeletonBar(width: 104, height: 18)
+          ClashMaxSkeletonBar(width: 86, height: 7)
+        }
+        .accessibilityHidden(true)
+      } else {
+        VStack(alignment: .leading, spacing: 3) {
+          Text(title)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+          Text(value)
+            .font(.system(.title3, design: .rounded).weight(.semibold))
+            .foregroundStyle(.primary)
             .lineLimit(1)
+            .minimumScaleFactor(0.62)
+            .contentTransition(.numericText())
+            .changeEffect(.pulse(shape: RoundedRectangle(cornerRadius: 8), style: tint.opacity(0.18), count: 1), value: value)
+
+          if let footnote {
+            Text(footnote)
+              .font(.caption2)
+              .foregroundStyle(.tertiary)
+              .lineLimit(1)
+          }
         }
       }
     }

@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct RulesView: View {
+  @EnvironmentObject private var appModel: AppModel
   @EnvironmentObject private var runtimeData: RuntimeDataStore
 
   var body: some View {
@@ -13,7 +14,9 @@ struct RulesView: View {
     ) {
       EmptyView()
     } content: {
-      if runtimeData.rules.isEmpty {
+      if showsLoadingSkeleton {
+        ClashMaxSkeletonTable(rows: 9)
+      } else if runtimeData.rules.isEmpty {
         CenteredUnavailableState(
           title: "No rules loaded",
           systemImage: "list.bullet.rectangle",
@@ -28,5 +31,11 @@ struct RulesView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
       }
     }
+  }
+
+  private var showsLoadingSkeleton: Bool {
+    runtimeData.rules.isEmpty
+      && appModel.profileStore.activeProfile != nil
+      && (appModel.runtimeDataLoading || appModel.dashboardRuntimeState.isStarting)
   }
 }

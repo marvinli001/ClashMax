@@ -125,6 +125,14 @@ struct SettingsView: View {
             isOn: $settings.overrides.allowLan
           )
           SettingsToggleRow(
+            "IPv6",
+            description: "Enable Mihomo IPv6 support in the runtime profile.",
+            isOn: Binding(
+              get: { appModel.ipv6Enabled },
+              set: { appModel.setIPv6Enabled($0) }
+            )
+          )
+          SettingsToggleRow(
             "Enable DNS Override",
             description: "Write app-managed DNS options into the runtime profile.",
             isOn: Binding(

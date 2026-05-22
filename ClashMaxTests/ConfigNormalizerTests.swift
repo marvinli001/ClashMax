@@ -24,6 +24,7 @@ final class ConfigNormalizerTests: XCTestCase {
       externalControllerPort: 9097,
       secret: "secret-token",
       allowLan: false,
+      ipv6Enabled: true,
       mode: .rule,
       logLevel: "info",
       dnsEnabled: true,
@@ -36,6 +37,7 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(yaml["mixed-port"] as? Int, 7890)
     XCTAssertEqual(yaml["external-controller"] as? String, "127.0.0.1:9097")
     XCTAssertEqual(yaml["secret"] as? String, "secret-token")
+    XCTAssertEqual(yaml["ipv6"] as? Bool, true)
     XCTAssertEqual(yaml["mode"] as? String, "rule")
     XCTAssertEqual((yaml["custom-field"] as? [String: Any])?["nested"] as? String, "kept")
 
@@ -48,6 +50,7 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertNil(tun["route-exclude-address"])
     XCTAssertNil(tun["auto-redirect"])
     XCTAssertEqual(dns["enable"] as? Bool, true)
+    XCTAssertEqual(dns["ipv6"] as? Bool, true)
     XCTAssertEqual(dns["enhanced-mode"] as? String, "fake-ip")
     XCTAssertEqual(dns["fake-ip-range"] as? String, "198.18.0.1/16")
     XCTAssertEqual(dns["nameserver"] as? [String], ["https://dns.alidns.com/dns-query", "https://doh.pub/dns-query"])

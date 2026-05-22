@@ -25,7 +25,9 @@ struct LogsView: View {
       .pickerStyle(.segmented)
       .frame(width: 320)
     } content: {
-      if visibleLogs.isEmpty {
+      if showsLoadingSkeleton(retainedLogs: retainedLogs) {
+        ClashMaxSkeletonTable(rows: 8)
+      } else if visibleLogs.isEmpty {
         CenteredUnavailableState(
           title: runtimeData.logs.isEmpty ? "No logs yet" : "No matching logs",
           systemImage: "text.alignleft",
@@ -50,6 +52,12 @@ struct LogsView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
       }
     }
+  }
+
+  private func showsLoadingSkeleton(retainedLogs: [LogEntry]) -> Bool {
+    retainedLogs.isEmpty
+      && appModel.profileStore.activeProfile != nil
+      && (appModel.runtimeDataLoading || appModel.dashboardRuntimeState.isStarting)
   }
 
   private func filteredLogs(from entries: [LogEntry]) -> [LogEntry] {

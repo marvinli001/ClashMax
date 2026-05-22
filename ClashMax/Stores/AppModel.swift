@@ -218,6 +218,10 @@ final class AppModel: ObservableObject {
     get { settings.systemProxySettings }
     set { settings.systemProxySettings = newValue }
   }
+  var ipv6Enabled: Bool {
+    get { settings.ipv6Enabled }
+    set { setIPv6Enabled(newValue) }
+  }
   var tunSettings: TunSettings {
     get { settings.tunSettings }
     set { settings.tunSettings = newValue }
@@ -279,6 +283,7 @@ final class AppModel: ObservableObject {
   @Published private(set) var tunHelperStatusDetail: TunnelHelperStatusDetail = .unknown
   var isAddingSubscription: Bool { profileOperations.isAddingSubscription }
   @Published private(set) var startInFlight = false
+  @Published private(set) var runtimeDataLoading = false
   @Published private(set) var sessionStartedAt: Date?
   @Published private var networkExtensionCoreCrashMessage: String?
   var proxyGroups: [ProxyGroup] {
@@ -371,6 +376,8 @@ final class AppModel: ObservableObject {
   private var didWarmTunHelperRegistrationOnLaunch = false
   private var modeUpdateTask: Task<Void, Never>?
   private var modeUpdateToken: UUID?
+  private var ipv6UpdateTask: Task<Void, Never>?
+  private var ipv6UpdateToken: UUID?
   private var proxySelectionTasks: [ProxyGroup.ID: Task<Void, Never>] = [:]
   private var proxySelectionTokens: [ProxyGroup.ID: UUID] = [:]
   private var delayTestTasks: [ProxyNode.ID: Task<Void, Never>] = [:]
@@ -1151,6 +1158,82 @@ final class AppModel: ObservableObject {
     }
   }
 
+  func setIPv6Enabled(_ enabled: Bool) {
+    guard ipv6Enabled != enabled else { return }
+    settings.ipv6Enabled = enabled
+
+    guard isRunning else { return }
+    ipv6UpdateTask?.cancel()
+    ipv6UpdateTask = nil
+    ipv6UpdateToken = nil
+    if proxyRoutingMode == .tun {
+      scheduleRunningTunSettingsApply(tunSettings)
+      return
+    }
+    guard let apiClient else {
+      lastError = proxyRuntimeActionMessage
+      return
+    }
+    let token = UUID()
+    ipv6UpdateToken = token
+    ipv6UpdateTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer {
+        if ipv6UpdateToken == token {
+          ipv6UpdateTask = nil
+          ipv6UpdateToken = nil
+        }
+      }
+      do {
+        try await applyRunningIPv6Setting(enabled, apiClient: apiClient)
+      } catch is CancellationError {
+        return
+      } catch {
+        guard ipv6UpdateToken == token else { return }
+        lastError = UserFacingError.message(for: error)
+      }
+    }
+  }
+
+  private func applyRunningIPv6Setting(_ enabled: Bool, apiClient: any MihomoAPIControlling) async throws {
+    guard runningIPv6UpdateRequiresConfigReload else {
+      try await apiClient.updateIPv6(enabled)
+      return
+    }
+    let runtimeConfig = try await materializeNonTunRuntimeConfig()
+    try await apiClient.reloadConfig(path: runtimeConfig.path, force: true)
+    appendAppLog(level: "info", message: "IPv6 setting updated: Mihomo reloaded \(runtimeConfig.path).")
+  }
+
+  private var runningIPv6UpdateRequiresConfigReload: Bool {
+    if overrides.dnsEnabled == true {
+      return true
+    }
+    let isNetworkExtensionRuntime = proxyRoutingMode == .networkExtensionExperimental
+      || runtimeOwner == .networkExtension
+      || networkExtensionController.vpnStatus.isActive
+    guard isNetworkExtensionRuntime else { return false }
+    return networkExtensionRoutingSettings.dnsCaptureEnabled || networkExtensionRoutingSettings.dnsFakeIPEnabled
+  }
+
+  private func materializeNonTunRuntimeConfig() async throws -> URL {
+    let profile = try requireActiveProfile()
+    var runtimeOverrides = overrides
+    runtimeOverrides.tunEnabled = false
+    let isNetworkExtensionRuntime = proxyRoutingMode == .networkExtensionExperimental
+      || runtimeOwner == .networkExtension
+      || networkExtensionController.vpnStatus.isActive
+    let options = RuntimeConfigOptions(
+      networkExtensionRoutingSettings: isNetworkExtensionRuntime ? networkExtensionRoutingSettings : nil
+    )
+    return try await generateRuntimeConfig(
+      for: profile,
+      overrides: runtimeOverrides,
+      selections: previewSelections,
+      options: options
+    )
+  }
+
   func requestMode(_ mode: RunMode) {
     pendingModeTask?.cancel()
     pendingModeTask = nil
@@ -1445,6 +1528,7 @@ final class AppModel: ObservableObject {
       runtimeReloadTask = nil
       runtimeReloadToken = nil
       runtimeReloadPending = false
+      runtimeDataLoading = false
       proxyGroups = []
       proxyProviders = []
       rules = []
@@ -1468,6 +1552,7 @@ final class AppModel: ObservableObject {
   private func startRuntimeReload(apiClient: any MihomoAPIControlling, clearAfterConfirmation: Bool) {
     let token = UUID()
     runtimeReloadToken = token
+    runtimeDataLoading = true
     runtimeReloadTask = Task { @MainActor [weak self] in
       guard let self else { return }
       defer {
@@ -1478,6 +1563,8 @@ final class AppModel: ObservableObject {
           self.runtimeReloadPending = false
           if shouldRunTrailing {
             self.reloadRuntimeData()
+          } else {
+            self.runtimeDataLoading = false
           }
         }
       }
@@ -2737,6 +2824,10 @@ final class AppModel: ObservableObject {
     modeUpdateTask = nil
     modeUpdateToken = nil
 
+    ipv6UpdateTask?.cancel()
+    ipv6UpdateTask = nil
+    ipv6UpdateToken = nil
+
     proxySelectionTasks.values.forEach { $0.cancel() }
     proxySelectionTasks.removeAll()
     proxySelectionTokens.removeAll()
@@ -2768,6 +2859,7 @@ final class AppModel: ObservableObject {
     runtimeReloadTask = nil
     runtimeReloadToken = nil
     runtimeReloadPending = false
+    runtimeDataLoading = false
 
     tunSettingsApplyTask?.cancel()
     tunSettingsApplyTask = nil

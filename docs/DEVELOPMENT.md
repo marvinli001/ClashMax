@@ -173,3 +173,7 @@ changed, regenerate the Xcode project before trusting build results.
   unavailable, no profile, no core binary, and validation failed.
 - Do not hide security-sensitive details behind vague copy.
 - Show actionable recovery messages when user action is required.
+- Loading skeletons must use the shared SwiftUI-Shimmer primitives, not ad hoc
+  shimmer calls. Use skeletons only for temporary async runtime/network loading;
+  never replace stopped, empty, failed, security-sensitive, or recovery states
+  with skeleton placeholders.
