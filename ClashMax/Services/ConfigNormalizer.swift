@@ -8,6 +8,8 @@ struct RuntimeConfigOptions: Equatable, Sendable {
 }
 
 struct ConfigNormalizer {
+  private static let appManagedProviderName = "clashmax-subscription-provider"
+
   enum NormalizerError: Error, CustomStringConvertible, Sendable {
     case yaml(String)
     case rootIsNotMapping
@@ -40,7 +42,7 @@ struct ConfigNormalizer {
       guard let providerContentPath else {
         throw NormalizerError.invalidProfile("Provider subscription content requires a runtime provider file path.")
       }
-      root = providerBackedConfig(providerName: normalizedProviderName(profileName), providerContentPath: providerContentPath)
+      root = providerBackedConfig(providerContentPath: providerContentPath)
       providerContentProxyNames = parsedProviderContentProxyNames(from: source)
     } else {
       root = try loadMapping(from: source)
@@ -392,8 +394,9 @@ struct ConfigNormalizer {
     return root
   }
 
-  private func providerBackedConfig(providerName: String, providerContentPath: String) -> [String: Any] {
-    [
+  private func providerBackedConfig(providerContentPath: String) -> [String: Any] {
+    let providerName = Self.appManagedProviderName
+    return [
       "proxy-providers": [
         providerName: [
           "type": "file",
@@ -425,11 +428,6 @@ struct ConfigNormalizer {
       ],
       "rules": ["MATCH,Proxy"]
     ]
-  }
-
-  private func normalizedProviderName(_ name: String) -> String {
-    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-    return trimmed.isEmpty ? "Subscription" : trimmed
   }
 }
 

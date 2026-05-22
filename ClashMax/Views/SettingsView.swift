@@ -170,6 +170,58 @@ struct SettingsView: View {
           }
         }
 
+        Section("Subscriptions") {
+          SettingsControlRow(
+            "User Agent",
+            description: "Client identity sent when fetching subscription profiles."
+          ) {
+            TextField(
+              "User Agent",
+              text: Binding(
+                get: { settings.subscriptionFetchSettings.userAgent },
+                set: { settings.subscriptionFetchSettings.userAgent = $0 }
+              )
+            )
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 220, alignment: .trailing)
+          }
+          SettingsControlRow(
+            "Request Timeout",
+            description: "Network timeout used for each subscription fetch attempt."
+          ) {
+            Stepper(
+              settings.subscriptionFetchSettings.timeoutDescription,
+              value: Binding(
+                get: { settings.subscriptionFetchSettings.timeoutSeconds },
+                set: { settings.subscriptionFetchSettings.timeoutSeconds = $0 }
+              ),
+              in: SubscriptionFetchSettings.minimumTimeoutSeconds...SubscriptionFetchSettings.maximumTimeoutSeconds,
+              step: 5
+            )
+            .frame(width: 120, alignment: .trailing)
+          }
+          SettingsToggleRow(
+            "Use Local Clash Proxy",
+            description: "Retry failed direct fetches through ClashMax's current mixed-port on 127.0.0.1.",
+            isOn: $settings.subscriptionFetchSettings.useLocalClashProxy
+          )
+          SettingsToggleRow(
+            "Use System Proxy",
+            description: "Retry failed subscription fetches through the current macOS proxy settings.",
+            isOn: $settings.subscriptionFetchSettings.useSystemProxy
+          )
+          SettingsToggleRow(
+            "Ignore TLS Errors",
+            description: "Allow subscription servers with invalid certificates. Use only for trusted panels.",
+            isOn: $settings.subscriptionFetchSettings.allowsInsecureTLS
+          )
+          SettingsToggleRow(
+            "Automatic Updates",
+            description: "Refresh subscriptions using profile-update-interval metadata when providers publish it.",
+            isOn: $settings.subscriptionFetchSettings.automaticUpdatesEnabled
+          )
+        }
+
         Section("Rules") {
           SettingsControlRow("Rule Overlay", description: settings.ruleOverlaySettings.summary) {
             Button {

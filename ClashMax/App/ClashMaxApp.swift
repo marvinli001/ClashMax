@@ -25,6 +25,10 @@ struct ClashMaxApp: App {
           appDelegate.appModel = appModel
           appModel.warmTunHelperRegistrationOnLaunch()
         }
+        .onOpenURL { url in
+          AppDelegate.showMainWindow()
+          appModel.handleIncomingURL(url)
+        }
     }
     .defaultSize(width: 1180, height: 760)
     .defaultLaunchBehavior(.presented)

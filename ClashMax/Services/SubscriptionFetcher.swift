@@ -6,7 +6,7 @@ struct SubscriptionURLResolution: Equatable, Sendable {
 }
 
 enum SubscriptionURLResolver {
-  private static let deepLinkSchemes: Set<String> = ["clash", "clash-verge"]
+  private static let deepLinkSchemes: Set<String> = ["clash", "clash-verge", "clashmeta", "flclash"]
 
   static func resolve(rawInput: String) -> SubscriptionURLResolution? {
     let trimmed = rawInput.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -130,7 +130,8 @@ struct SubscriptionFetcher {
       configuration.timeoutIntervalForRequest = options.timeout
       configuration.timeoutIntervalForResource = options.timeout
       configuration.connectionProxyDictionary = proxyDictionary(for: strategy, options: options)
-      let session = URLSession(configuration: configuration)
+      let delegate = options.allowsInsecureTLS ? SubscriptionInsecureTrustDelegate() : nil
+      let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
       defer { session.finishTasksAndInvalidate() }
       return try await session.data(for: request(url: url, options: options))
     }
@@ -341,6 +342,20 @@ struct SubscriptionFetcher {
       value.removeLast()
     }
     return value
+  }
+}
+
+private final class SubscriptionInsecureTrustDelegate: NSObject, URLSessionDelegate {
+  func urlSession(
+    _ session: URLSession,
+    didReceive challenge: URLAuthenticationChallenge
+  ) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+    guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+          let trust = challenge.protectionSpace.serverTrust
+    else {
+      return (.performDefaultHandling, nil)
+    }
+    return (.useCredential, URLCredential(trust: trust))
   }
 }
 

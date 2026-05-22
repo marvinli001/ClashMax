@@ -25,7 +25,9 @@ final class ProfileOperationsStore: ObservableObject {
     name: String = "",
     url: URL,
     displayNameHint: String? = nil,
-    session: URLSession = .shared
+    session: URLSession = .shared,
+    fetchOptions: SubscriptionFetchOptions = SubscriptionFetchOptions(),
+    preflightValidator: any SubscriptionProfilePreflightValidating = NoopSubscriptionProfilePreflightValidator()
   ) async throws -> Profile? {
     guard !isAddingSubscription else { return nil }
     isAddingSubscription = true
@@ -36,19 +38,35 @@ final class ProfileOperationsStore: ObservableObject {
       name: name.trimmingCharacters(in: .whitespacesAndNewlines),
       url: url,
       displayNameHint: displayNameHint,
-      session: session
+      session: session,
+      fetchOptions: fetchOptions,
+      preflightValidator: preflightValidator
     )
     message = "Added subscription \(profile.name)."
     return profile
   }
 
-  func updateActiveSubscription(session: URLSession = .shared) async throws -> Bool {
+  func updateActiveSubscription(
+    session: URLSession = .shared,
+    fetchOptions: SubscriptionFetchOptions = SubscriptionFetchOptions(),
+    preflightValidator: any SubscriptionProfilePreflightValidating = NoopSubscriptionProfilePreflightValidator()
+  ) async throws -> Bool {
     guard let profile = profileStore.activeProfile else { return false }
-    return try await updateSubscription(profile, session: session)
+    return try await updateSubscription(
+      profile,
+      session: session,
+      fetchOptions: fetchOptions,
+      preflightValidator: preflightValidator
+    )
   }
 
   @discardableResult
-  func updateSubscription(_ profile: Profile, session: URLSession = .shared) async throws -> Bool {
+  func updateSubscription(
+    _ profile: Profile,
+    session: URLSession = .shared,
+    fetchOptions: SubscriptionFetchOptions = SubscriptionFetchOptions(),
+    preflightValidator: any SubscriptionProfilePreflightValidating = NoopSubscriptionProfilePreflightValidator()
+  ) async throws -> Bool {
     guard profile.isSubscription else {
       throw AppError.invalidProfileConfig("Only subscription profiles can be updated.")
     }
@@ -58,7 +76,12 @@ final class ProfileOperationsStore: ObservableObject {
     message = nil
     defer { setProfile(profile.id, updating: false) }
 
-    try await profileStore.updateSubscription(profile, session: session)
+    try await profileStore.updateSubscription(
+      profile,
+      session: session,
+      fetchOptions: fetchOptions,
+      preflightValidator: preflightValidator
+    )
     let name = profileStore.profiles.first { $0.id == profile.id }?.name ?? profile.name
     message = "Updated subscription \(name)."
     return true
@@ -69,7 +92,9 @@ final class ProfileOperationsStore: ObservableObject {
     _ profile: Profile,
     url: URL,
     displayNameHint: String? = nil,
-    session: URLSession = .shared
+    session: URLSession = .shared,
+    fetchOptions: SubscriptionFetchOptions = SubscriptionFetchOptions(),
+    preflightValidator: any SubscriptionProfilePreflightValidating = NoopSubscriptionProfilePreflightValidator()
   ) async throws -> Bool {
     guard profile.isSubscription else {
       throw AppError.invalidProfileConfig("Only subscription profiles can update their source URL.")
@@ -84,7 +109,9 @@ final class ProfileOperationsStore: ObservableObject {
       profile,
       url: url,
       displayNameHint: displayNameHint,
-      session: session
+      session: session,
+      fetchOptions: fetchOptions,
+      preflightValidator: preflightValidator
     )
     let name = profileStore.profiles.first { $0.id == profile.id }?.name ?? profile.name
     message = "Updated subscription source for \(name)."

@@ -16,6 +16,20 @@
 	<string>$(PRODUCT_NAME)</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>io.github.clashmax.subscription</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>clash</string>
+				<string>clash-verge</string>
+				<string>clashmeta</string>
+				<string>flclash</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>

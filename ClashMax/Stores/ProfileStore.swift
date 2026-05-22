@@ -49,6 +49,75 @@ private actor ProfileMutationGate {
 }
 
 @MainActor
+protocol SubscriptionProfilePreflightValidating {
+  func validate(subscriptionSource: String, profileName: String) async throws
+}
+
+struct NoopSubscriptionProfilePreflightValidator: SubscriptionProfilePreflightValidating {
+  func validate(subscriptionSource: String, profileName: String) async throws {}
+}
+
+struct MihomoSubscriptionProfilePreflightValidator: SubscriptionProfilePreflightValidating {
+  var paths: RuntimePaths
+  var overrides: RuntimeOverrides
+  var coreURLProvider: @MainActor () throws -> URL
+  var runtimeConfigValidator: any RuntimeConfigValidating
+  var materializer: RuntimeConfigMaterializer
+
+  init(
+    paths: RuntimePaths,
+    overrides: RuntimeOverrides,
+    coreURLProvider: @escaping @MainActor () throws -> URL,
+    runtimeConfigValidator: any RuntimeConfigValidating = MihomoRuntimeConfigValidator(),
+    materializer: RuntimeConfigMaterializer = RuntimeConfigMaterializer()
+  ) {
+    self.paths = paths
+    self.overrides = overrides
+    self.coreURLProvider = coreURLProvider
+    self.runtimeConfigValidator = runtimeConfigValidator
+    self.materializer = materializer
+  }
+
+  func validate(subscriptionSource: String, profileName: String) async throws {
+    guard try ProfileConfigInspector.format(of: subscriptionSource) == .proxyProviderContent else {
+      return
+    }
+
+    let preflightDirectory = paths.runtime.appendingPathComponent(
+      "subscription-preflight-\(UUID().uuidString)",
+      isDirectory: true
+    )
+    try SecureFileIO.createPrivateDirectory(at: preflightDirectory)
+    defer {
+      try? FileManager.default.removeItem(at: preflightDirectory)
+    }
+
+    let sourceURL = preflightDirectory.appendingPathComponent("subscription.txt")
+    let runtimeConfigDestinationURL = preflightDirectory.appendingPathComponent("runtime.yaml")
+    let providerContentURL = preflightDirectory.appendingPathComponent("provider.txt")
+    try SecureFileIO.writePrivateString(subscriptionSource, to: sourceURL)
+
+    var preflightOverrides = overrides
+    preflightOverrides.tunEnabled = false
+    let runtimeConfigURL = try await materializer.materialize(
+      RuntimeConfigMaterializationRequest(
+        profileName: profileName,
+        sourcePath: sourceURL.path,
+        runtimeConfigURL: runtimeConfigDestinationURL,
+        providerContentURL: providerContentURL,
+        overrides: preflightOverrides,
+        selectionOverrides: [:]
+      )
+    )
+    try await runtimeConfigValidator.validate(
+      coreURL: try coreURLProvider(),
+      configURL: runtimeConfigURL,
+      workDirectory: preflightDirectory
+    )
+  }
+}
+
+@MainActor
 final class ProfileStore: ObservableObject {
   @Published private(set) var profiles: [Profile] = []
   @Published private(set) var activeProfileID: Profile.ID?
@@ -119,13 +188,15 @@ final class ProfileStore: ObservableObject {
     name: String = "",
     url: URL,
     displayNameHint: String? = nil,
-    session: URLSession = .shared
+    session: URLSession = .shared,
+    fetchOptions: SubscriptionFetchOptions = SubscriptionFetchOptions(),
+    preflightValidator: any SubscriptionProfilePreflightValidating = NoopSubscriptionProfilePreflightValidator()
   ) async throws -> Profile {
     await waitForManifestLoad()
     return try await withMutationLock {
       let resolution = try Self.resolvedSubscriptionURL(from: url, displayNameHint: displayNameHint)
       let result = Self.fetchResult(
-        try await fetchSubscription(url: resolution.url, session: session),
+        try await fetchSubscription(url: resolution.url, session: session, options: fetchOptions),
         displayNameHint: resolution.displayNameHint
       )
       let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -134,6 +205,8 @@ final class ProfileStore: ObservableObject {
         source: result.source,
         url: resolution.url
       )
+      let profileName = trimmedName.isEmpty ? suggestedName : trimmedName
+      try await preflightValidator.validate(subscriptionSource: result.source, profileName: profileName)
 
       let id = UUID()
       let destination = paths.profiles.appendingPathComponent("\(id.uuidString).yaml")
@@ -147,7 +220,7 @@ final class ProfileStore: ObservableObject {
 
       let profile = Profile(
         id: id,
-        name: trimmedName.isEmpty ? suggestedName : trimmedName,
+        name: profileName,
         nameIsUserCustomized: !trimmedName.isEmpty,
         source: .subscription(id: id),
         originalConfigPath: destination.path,
@@ -168,7 +241,12 @@ final class ProfileStore: ObservableObject {
     }
   }
 
-  func updateSubscription(_ profile: Profile, session: URLSession = .shared) async throws {
+  func updateSubscription(
+    _ profile: Profile,
+    session: URLSession = .shared,
+    fetchOptions: SubscriptionFetchOptions = SubscriptionFetchOptions(),
+    preflightValidator: any SubscriptionProfilePreflightValidating = NoopSubscriptionProfilePreflightValidator()
+  ) async throws {
     await waitForManifestLoad()
     try await withMutationLock {
       guard profiles.contains(where: { $0.id == profile.id }),
@@ -183,10 +261,12 @@ final class ProfileStore: ObservableObject {
       )
       let previousSource = try? await diskIO.readProfileSource(atPath: profile.originalConfigPath)
       let result = Self.fetchResult(
-        try await fetchSubscription(url: resolution.url, session: session),
+        try await fetchSubscription(url: resolution.url, session: session, options: fetchOptions),
         displayNameHint: resolution.displayNameHint
       )
       let nextProfiles = await profilesByApplyingSubscriptionDetails(result, sourceURL: resolution.url, for: profile.id)
+      let preflightName = nextProfiles.first { $0.id == profile.id }?.name ?? profile.name
+      try await preflightValidator.validate(subscriptionSource: result.source, profileName: preflightName)
       do {
         try await diskIO.writeProfileSource(result.source, to: URL(fileURLWithPath: profile.originalConfigPath))
         if rawURL != resolution.url.absoluteString {
@@ -208,7 +288,9 @@ final class ProfileStore: ObservableObject {
     _ profile: Profile,
     url: URL,
     displayNameHint: String? = nil,
-    session: URLSession = .shared
+    session: URLSession = .shared,
+    fetchOptions: SubscriptionFetchOptions = SubscriptionFetchOptions(),
+    preflightValidator: any SubscriptionProfilePreflightValidating = NoopSubscriptionProfilePreflightValidator()
   ) async throws {
     await waitForManifestLoad()
     try await withMutationLock {
@@ -220,10 +302,12 @@ final class ProfileStore: ObservableObject {
       let previousSource = try? await diskIO.readProfileSource(atPath: profile.originalConfigPath)
       let previousURL = try await storedSubscriptionURL(for: id)
       let result = Self.fetchResult(
-        try await fetchSubscription(url: resolution.url, session: session),
+        try await fetchSubscription(url: resolution.url, session: session, options: fetchOptions),
         displayNameHint: resolution.displayNameHint
       )
       let nextProfiles = await profilesByApplyingSubscriptionDetails(result, sourceURL: resolution.url, for: profile.id)
+      let preflightName = nextProfiles.first { $0.id == profile.id }?.name ?? profile.name
+      try await preflightValidator.validate(subscriptionSource: result.source, profileName: preflightName)
       do {
         try await diskIO.writeProfileSource(result.source, to: URL(fileURLWithPath: profile.originalConfigPath))
         try await secretIO.save(resolution.url.absoluteString, account: account)
@@ -316,12 +400,16 @@ final class ProfileStore: ObservableObject {
     "subscription.\(id.uuidString)"
   }
 
-  private func fetchSubscription(url: URL, session: URLSession) async throws -> SubscriptionFetchResult {
+  private func fetchSubscription(
+    url: URL,
+    session: URLSession,
+    options: SubscriptionFetchOptions
+  ) async throws -> SubscriptionFetchResult {
     guard session !== URLSession.shared else {
-      return try await subscriptionFetcher.fetch(url: url)
+      return try await subscriptionFetcher.fetch(url: url, options: options)
     }
-    return try await subscriptionFetcher.fetch(url: url) { _ in
-      try await session.data(for: subscriptionFetcher.request(url: url))
+    return try await subscriptionFetcher.fetch(url: url, options: options) { _ in
+      try await session.data(for: subscriptionFetcher.request(url: url, options: options))
     }
   }
 

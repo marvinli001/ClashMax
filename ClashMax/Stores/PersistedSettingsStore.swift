@@ -43,6 +43,11 @@ final class PersistedSettingsStore: ObservableObject {
       saveCodable(delayTestSettings, forKey: Self.delayTestSettingsDefaultsKey)
     }
   }
+  @Published var subscriptionFetchSettings = SubscriptionFetchSettings.default {
+    didSet {
+      saveCodable(subscriptionFetchSettings, forKey: Self.subscriptionFetchSettingsDefaultsKey)
+    }
+  }
   @Published var appTheme = AppTheme.system {
     didSet {
       saveCodable(appTheme, forKey: Self.appThemeDefaultsKey)
@@ -75,6 +80,7 @@ final class PersistedSettingsStore: ObservableObject {
   private static let networkExtensionRoutingSettingsDefaultsKey = "io.github.clashmax.networkExtensionRoutingSettings"
   private static let ruleOverlaySettingsDefaultsKey = "io.github.clashmax.ruleOverlaySettings"
   private static let delayTestSettingsDefaultsKey = "io.github.clashmax.delayTestSettings"
+  private static let subscriptionFetchSettingsDefaultsKey = "io.github.clashmax.subscriptionFetchSettings"
   private static let appThemeDefaultsKey = "io.github.clashmax.appTheme"
   private static let externalControllerSettingsDefaultsKey = "io.github.clashmax.externalControllerSettings"
   private static let externalControllerCORSSettingsDefaultsKey = "io.github.clashmax.externalControllerCORSSettings"
@@ -119,6 +125,11 @@ final class PersistedSettingsStore: ObservableObject {
     delayTestSettings = Self.loadCodable(
       DelayTestSettings.self,
       forKey: Self.delayTestSettingsDefaultsKey,
+      defaults: defaults
+    ) ?? .default
+    subscriptionFetchSettings = Self.loadCodable(
+      SubscriptionFetchSettings.self,
+      forKey: Self.subscriptionFetchSettingsDefaultsKey,
       defaults: defaults
     ) ?? .default
     appTheme = Self.loadCodable(

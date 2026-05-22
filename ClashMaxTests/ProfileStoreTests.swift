@@ -343,6 +343,60 @@ final class ProfileStoreTests: XCTestCase {
     XCTAssertEqual(try secrets.load(account: "subscription.\(profile.id.uuidString)"), "https://example.com/api/v1/client/subscribe?token=test")
   }
 
+  func testSubscriptionProviderContentPreflightRunsBeforeSavingProfile() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let secrets = InMemorySecretStore()
+    let store = ProfileStore(paths: fixture.paths, keychain: secrets)
+    let validator = RecordingSubscriptionPreflightValidator(
+      result: .failure(AppError.configValidationFailed("provider content failed mihomo validation"))
+    )
+    let providerContent = "trojan://password@example.com:443?sni=example.com#Trojan%20Node\n"
+    let session = URLSession(configuration: URLProtocolRecorder.configurationReturning(providerContent))
+
+    await XCTAssertThrowsErrorAsync {
+      try await store.addSubscription(
+        name: "Remote",
+        url: URL(string: "https://example.com/sub")!,
+        session: session,
+        preflightValidator: validator
+      )
+    } handler: { error in
+      XCTAssertTrue(String(describing: error).contains("provider content failed mihomo validation"))
+    }
+
+    XCTAssertEqual(validator.validatedNames, ["Remote"])
+    XCTAssertEqual(validator.validatedSources, [providerContent])
+    XCTAssertTrue(store.profiles.isEmpty)
+    XCTAssertTrue(secrets.storedValues.isEmpty)
+  }
+
+  func testSubscriptionProviderContentUpdatePreflightFailureKeepsExistingProfile() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let secrets = InMemorySecretStore()
+    let store = ProfileStore(paths: fixture.paths, keychain: secrets)
+    let profile = try await store.addSubscription(
+      name: "Remote",
+      url: URL(string: "https://example.com/sub")!,
+      session: URLSession(configuration: URLProtocolRecorder.configurationReturning("proxies:\n  - name: DIRECT\n    type: direct\n"))
+    )
+    let originalConfig = try String(contentsOfFile: profile.originalConfigPath, encoding: .utf8)
+    let validator = RecordingSubscriptionPreflightValidator(
+      result: .failure(AppError.configValidationFailed("wrapped provider config failed"))
+    )
+    let providerContent = "vless://00000000-0000-0000-0000-000000000000@example.com:443#Node\n"
+
+    await XCTAssertThrowsErrorAsync {
+      try await store.updateSubscription(
+        profile,
+        session: URLSession(configuration: URLProtocolRecorder.configurationReturning(providerContent)),
+        preflightValidator: validator
+      )
+    }
+
+    XCTAssertEqual(validator.validatedSources, [providerContent])
+    XCTAssertEqual(try String(contentsOfFile: profile.originalConfigPath, encoding: .utf8), originalConfig)
+  }
+
   func testImportRejectsConfigWithoutProxyDefinitions() async throws {
     let fixture = try TemporaryProfileFixture(config: "mixed-port: 7890\nrules: []\n")
     let store = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
@@ -461,6 +515,10 @@ final class InMemorySecretStore: SecretStoring, @unchecked Sendable {
   private var values: [String: String] = [:]
   private var rejectedSavedValues: Set<String> = []
 
+  var storedValues: [String: String] {
+    values
+  }
+
   func rejectSaving(_ value: String) {
     rejectedSavedValues.insert(value)
   }
@@ -478,5 +536,22 @@ final class InMemorySecretStore: SecretStoring, @unchecked Sendable {
 
   func delete(account: String) throws {
     values.removeValue(forKey: account)
+  }
+}
+
+@MainActor
+final class RecordingSubscriptionPreflightValidator: SubscriptionProfilePreflightValidating {
+  private let result: Result<Void, Error>
+  private(set) var validatedSources: [String] = []
+  private(set) var validatedNames: [String] = []
+
+  init(result: Result<Void, Error> = .success(())) {
+    self.result = result
+  }
+
+  func validate(subscriptionSource: String, profileName: String) async throws {
+    validatedSources.append(subscriptionSource)
+    validatedNames.append(profileName)
+    try result.get()
   }
 }

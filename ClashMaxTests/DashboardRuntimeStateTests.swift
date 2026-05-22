@@ -1111,6 +1111,16 @@ final class DashboardRuntimeStateTests: XCTestCase {
       DelayTestSettings(mode: .nativePing, unifiedDelay: true, timeoutMilliseconds: 2_500)
     )
     try assertRoundTrip(
+      SubscriptionFetchSettings(
+        userAgent: "Clash Verge/2.0.0",
+        timeoutSeconds: 45,
+        useLocalClashProxy: false,
+        useSystemProxy: true,
+        allowsInsecureTLS: true,
+        automaticUpdatesEnabled: false
+      )
+    )
+    try assertRoundTrip(
       ExternalControllerCORSSettings(
         enabled: true,
         allowPrivateNetwork: false,

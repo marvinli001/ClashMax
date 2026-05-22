@@ -13,6 +13,51 @@ final class SubscriptionFetcherTests: XCTestCase {
     )
   }
 
+  func testRequestUsesCustomFetchOptions() throws {
+    let fetcher = SubscriptionFetcher()
+    let request = fetcher.request(
+      url: URL(string: "https://example.com/sub")!,
+      options: SubscriptionFetchOptions(userAgent: "Clash Verge/2.0.0", timeout: 45)
+    )
+
+    XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent"), "Clash Verge/2.0.0")
+    XCTAssertEqual(request.timeoutInterval, 45)
+  }
+
+  func testSubscriptionFetchSettingsBuildOptionsFromCurrentMixedPort() throws {
+    let settings = SubscriptionFetchSettings(
+      userAgent: " Custom UA ",
+      timeoutSeconds: 500,
+      useLocalClashProxy: true,
+      useSystemProxy: false,
+      allowsInsecureTLS: true,
+      automaticUpdatesEnabled: false
+    )
+
+    let options = settings.fetchOptions(currentMixedPort: 8899)
+
+    XCTAssertEqual(options.userAgent, "Custom UA")
+    XCTAssertEqual(options.timeout, TimeInterval(SubscriptionFetchSettings.maximumTimeoutSeconds))
+    XCTAssertEqual(options.localProxyPort, 8899)
+    XCTAssertTrue(options.allowsInsecureTLS)
+    XCTAssertEqual(options.retryOrder, [.direct, .localClashProxy])
+  }
+
+  func testResolverAcceptsAdditionalClashDeepLinkSchemes() throws {
+    let cases = [
+      "clashmeta://install-config?url=https%3A%2F%2Fexample.com%2Fsub%3Ftoken%3Dabc&name=Meta",
+      "flclash://install-config?url=https%3A%2F%2Fexample.com%2Fsub%3Ftoken%3Ddef&name=FlClash"
+    ]
+
+    let resolved = cases.compactMap { SubscriptionURLResolver.resolve(rawInput: $0) }
+
+    XCTAssertEqual(resolved.map(\.url.absoluteString), [
+      "https://example.com/sub?token=abc",
+      "https://example.com/sub?token=def"
+    ])
+    XCTAssertEqual(resolved.map(\.displayNameHint), ["Meta", "FlClash"])
+  }
+
   func testFetchParsesMetadataHeadersAndStripsUTF8BOM() async throws {
     let fetcher = SubscriptionFetcher()
     let source = "\u{FEFF}proxies:\n  - name: DIRECT\n    type: direct\n"

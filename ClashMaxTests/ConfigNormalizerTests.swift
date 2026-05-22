@@ -673,7 +673,7 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(secondYAML["secret"] as? String, "second-secret")
 
     let firstProviders = try XCTUnwrap(firstYAML["proxy-providers"] as? [String: Any])
-    let firstProvider = try XCTUnwrap(firstProviders["Provider"] as? [String: Any])
+    let firstProvider = try XCTUnwrap(firstProviders["clashmax-subscription-provider"] as? [String: Any])
     let firstProviderPath = try XCTUnwrap(firstProvider["path"] as? String)
     XCTAssertNotEqual(firstProviderPath, providerURL.path)
     XCTAssertTrue(FileManager.default.fileExists(atPath: firstProviderPath))
@@ -695,7 +695,7 @@ final class ConfigNormalizerTests: XCTestCase {
     )
     let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
     let providers = try XCTUnwrap(yaml["proxy-providers"] as? [String: Any])
-    let provider = try XCTUnwrap(providers["Xboard"] as? [String: Any])
+    let provider = try XCTUnwrap(providers["clashmax-subscription-provider"] as? [String: Any])
 
     XCTAssertEqual(provider["type"] as? String, "file")
     XCTAssertEqual(provider["path"] as? String, "/Users/test/Library/Application Support/ClashMax/Runtime/provider.txt")
@@ -707,9 +707,28 @@ final class ConfigNormalizerTests: XCTestCase {
     let groups = try XCTUnwrap(yaml["proxy-groups"] as? [[String: Any]])
     let proxyGroup = try XCTUnwrap(groups.first(where: { ($0["name"] as? String) == "Proxy" }))
     XCTAssertEqual(proxyGroup["type"] as? String, "select")
-    XCTAssertEqual(proxyGroup["use"] as? [String], ["Xboard"])
+    XCTAssertEqual(proxyGroup["use"] as? [String], ["clashmax-subscription-provider"])
     XCTAssertEqual(proxyGroup["proxies"] as? [String], ["Auto", "DIRECT"])
     XCTAssertEqual(yaml["rules"] as? [String], ["MATCH,Proxy"])
+  }
+
+  func testURIProviderContentUsesInternalProviderNameWhenProfileNameMatchesGroups() throws {
+    let source = "trojan://password@example.com:443?sni=example.com#Trojan%20Node\n"
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: source,
+      providerContentPath: "/tmp/provider.txt",
+      profileName: "Proxy",
+      overrides: .defaultForLaunch(secret: "secret-token")
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let providers = try XCTUnwrap(yaml["proxy-providers"] as? [String: Any])
+    let groups = try XCTUnwrap(yaml["proxy-groups"] as? [[String: Any]])
+    let proxyGroup = try XCTUnwrap(groups.first(where: { ($0["name"] as? String) == "Proxy" }))
+
+    XCTAssertNil(providers["Proxy"])
+    XCTAssertNotNil(providers["clashmax-subscription-provider"])
+    XCTAssertEqual(proxyGroup["use"] as? [String], ["clashmax-subscription-provider"])
   }
 
   func testRuntimeConfigAppliesProviderContentSelectionOverride() throws {

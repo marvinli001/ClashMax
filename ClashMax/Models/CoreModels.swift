@@ -1871,6 +1871,7 @@ struct SubscriptionFetchOptions: Equatable, Sendable {
   var timeout: TimeInterval
   var localProxyHost: String
   var localProxyPort: Int
+  var allowsInsecureTLS: Bool
   var retryOrder: [SubscriptionFetchStrategy]
 
   init(
@@ -1878,13 +1879,108 @@ struct SubscriptionFetchOptions: Equatable, Sendable {
     timeout: TimeInterval = 20,
     localProxyHost: String = "127.0.0.1",
     localProxyPort: Int = 7890,
+    allowsInsecureTLS: Bool = false,
     retryOrder: [SubscriptionFetchStrategy] = SubscriptionFetchStrategy.defaultRetryOrder
   ) {
     self.userAgent = userAgent
     self.timeout = timeout
     self.localProxyHost = localProxyHost
     self.localProxyPort = localProxyPort
+    self.allowsInsecureTLS = allowsInsecureTLS
     self.retryOrder = retryOrder
+  }
+}
+
+struct SubscriptionFetchSettings: Codable, Equatable, Sendable {
+  static let defaultUserAgent = "clash.meta"
+  static let minimumTimeoutSeconds = 5
+  static let maximumTimeoutSeconds = 120
+
+  var userAgent: String
+  var timeoutSeconds: Int
+  var useLocalClashProxy: Bool
+  var useSystemProxy: Bool
+  var allowsInsecureTLS: Bool
+  var automaticUpdatesEnabled: Bool
+
+  private enum CodingKeys: String, CodingKey {
+    case userAgent
+    case timeoutSeconds
+    case useLocalClashProxy
+    case useSystemProxy
+    case allowsInsecureTLS
+    case automaticUpdatesEnabled
+  }
+
+  init(
+    userAgent: String = defaultUserAgent,
+    timeoutSeconds: Int = 20,
+    useLocalClashProxy: Bool = true,
+    useSystemProxy: Bool = true,
+    allowsInsecureTLS: Bool = false,
+    automaticUpdatesEnabled: Bool = true
+  ) {
+    let trimmedUserAgent = userAgent.trimmingCharacters(in: .whitespacesAndNewlines)
+    self.userAgent = trimmedUserAgent.isEmpty ? Self.defaultUserAgent : trimmedUserAgent
+    self.timeoutSeconds = min(max(timeoutSeconds, Self.minimumTimeoutSeconds), Self.maximumTimeoutSeconds)
+    self.useLocalClashProxy = useLocalClashProxy
+    self.useSystemProxy = useSystemProxy
+    self.allowsInsecureTLS = allowsInsecureTLS
+    self.automaticUpdatesEnabled = automaticUpdatesEnabled
+  }
+
+  static let `default` = SubscriptionFetchSettings()
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    let defaults = Self.default
+    self.init(
+      userAgent: container.decodeDefault(String.self, forKey: .userAgent, default: defaults.userAgent),
+      timeoutSeconds: container.decodeDefault(Int.self, forKey: .timeoutSeconds, default: defaults.timeoutSeconds),
+      useLocalClashProxy: container.decodeDefault(
+        Bool.self,
+        forKey: .useLocalClashProxy,
+        default: defaults.useLocalClashProxy
+      ),
+      useSystemProxy: container.decodeDefault(Bool.self, forKey: .useSystemProxy, default: defaults.useSystemProxy),
+      allowsInsecureTLS: container.decodeDefault(
+        Bool.self,
+        forKey: .allowsInsecureTLS,
+        default: defaults.allowsInsecureTLS
+      ),
+      automaticUpdatesEnabled: container.decodeDefault(
+        Bool.self,
+        forKey: .automaticUpdatesEnabled,
+        default: defaults.automaticUpdatesEnabled
+      )
+    )
+  }
+
+  var timeoutDescription: String {
+    "\(timeoutSeconds)s"
+  }
+
+  func fetchOptions(currentMixedPort: Int) -> SubscriptionFetchOptions {
+    var retryOrder: [SubscriptionFetchStrategy] = [.direct]
+    if useLocalClashProxy {
+      retryOrder.append(.localClashProxy)
+    }
+    if useSystemProxy {
+      retryOrder.append(.systemProxy)
+    }
+    let trimmedUserAgent = userAgent.trimmingCharacters(in: .whitespacesAndNewlines)
+    let normalizedTimeoutSeconds = min(
+      max(timeoutSeconds, Self.minimumTimeoutSeconds),
+      Self.maximumTimeoutSeconds
+    )
+    return SubscriptionFetchOptions(
+      userAgent: trimmedUserAgent.isEmpty ? Self.defaultUserAgent : trimmedUserAgent,
+      timeout: TimeInterval(normalizedTimeoutSeconds),
+      localProxyHost: "127.0.0.1",
+      localProxyPort: currentMixedPort,
+      allowsInsecureTLS: allowsInsecureTLS,
+      retryOrder: retryOrder
+    )
   }
 }
 
