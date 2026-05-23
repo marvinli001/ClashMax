@@ -3,7 +3,7 @@ import SwiftUI
 struct ProfilesView: View {
   @EnvironmentObject private var appModel: AppModel
   @EnvironmentObject private var profileStore: ProfileStore
-  @EnvironmentObject private var profileOperations: ProfileOperationsStore
+  @EnvironmentObject private var profileCoordinator: ProfileCoordinator
   @State private var subscriptionURL = ""
   @State private var profileBeingEdited: Profile?
   @State private var editProfileName = ""
@@ -38,7 +38,7 @@ struct ProfilesView: View {
                 ProfileCard(
                   profile: profile,
                   isActive: profileStore.activeProfileID == profile.id,
-                  isUpdating: profileOperations.updatingProfileIDs.contains(profile.id),
+                  isUpdating: profileCoordinator.updatingProfileIDs.contains(profile.id),
                   sourceURLString: profileStore.subscriptionURLString(for: profile),
                   selectAction: { appModel.selectProfile(profile) },
                   editAction: { beginEditing(profile) },
@@ -56,7 +56,7 @@ struct ProfilesView: View {
           }
         }
 
-        if let message = profileOperations.message {
+        if let message = profileCoordinator.message {
           Label(message, systemImage: "checkmark.circle.fill")
             .font(.callout)
             .foregroundStyle(.green)
@@ -125,11 +125,11 @@ struct ProfilesView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
 
-        if profileOperations.isAddingSubscription {
+        if profileCoordinator.isAddingSubscription {
           subscriptionLoadingIndicator
         }
       }
-      .animation(.easeInOut(duration: 0.16), value: profileOperations.isAddingSubscription)
+      .animation(.easeInOut(duration: 0.16), value: profileCoordinator.isAddingSubscription)
     }
   }
 
@@ -137,7 +137,7 @@ struct ProfilesView: View {
     TextField("Subscription URL", text: $subscriptionURL)
       .textFieldStyle(.roundedBorder)
       .frame(minWidth: 320)
-      .disabled(profileOperations.isAddingSubscription)
+      .disabled(profileCoordinator.isAddingSubscription)
   }
 
   private var addSubscriptionButton: some View {
@@ -151,17 +151,17 @@ struct ProfilesView: View {
       }
     } label: {
       HStack(spacing: 6) {
-        if profileOperations.isAddingSubscription {
+        if profileCoordinator.isAddingSubscription {
           ProgressView()
             .controlSize(.small)
         } else {
           Image(systemName: "plus")
         }
-        Text(profileOperations.isAddingSubscription ? "Adding" : "Add")
+        Text(profileCoordinator.isAddingSubscription ? "Adding" : "Add")
       }
       .frame(minWidth: 64)
     }
-    .disabled(subscriptionURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || profileOperations.isAddingSubscription)
+    .disabled(subscriptionURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || profileCoordinator.isAddingSubscription)
   }
 
   private var profileGridColumns: [GridItem] {

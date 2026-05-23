@@ -1657,7 +1657,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
   }
 
-  func testProviderSummaryRequiresDeveloperMode() {
+  func testProviderSummaryShowsWhenProvidersExist() {
     XCTAssertTrue(ProxyPageVisibilityPolicy.showsProviderSummary(developerMode: false, providerCount: 3))
     XCTAssertFalse(ProxyPageVisibilityPolicy.showsProviderSummary(developerMode: true, providerCount: 0))
     XCTAssertTrue(ProxyPageVisibilityPolicy.showsProviderSummary(developerMode: true, providerCount: 3))

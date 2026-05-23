@@ -390,7 +390,7 @@ final class AppModel: ObservableObject {
   @Published private(set) var tunDiagnostics: TunDiagnosticsSnapshot = .empty
   @Published private(set) var tunHelperPreparationState: TunHelperPreparationState = .idle
   @Published private(set) var tunHelperStatusDetail: TunnelHelperStatusDetail = .unknown
-  var isAddingSubscription: Bool { profileOperations.isAddingSubscription }
+  var isAddingSubscription: Bool { profileCoordinator.isAddingSubscription }
   @Published private(set) var startInFlight = false
   @Published private(set) var runtimeDataLoading = false
   @Published private(set) var sessionStartedAt: Date?
@@ -438,8 +438,8 @@ final class AppModel: ObservableObject {
       }
     }
   }
-  var updatingProfileIDs: Set<Profile.ID> { profileOperations.updatingProfileIDs }
-  var profileOperationMessage: String? { profileOperations.message }
+  var updatingProfileIDs: Set<Profile.ID> { profileCoordinator.updatingProfileIDs }
+  var profileOperationMessage: String? { profileCoordinator.message }
   var profilePreviewGroups: [ProxyGroup] {
     get { proxyPreview.profilePreviewGroups }
     set { proxyPreview.profilePreviewGroups = newValue }
@@ -464,8 +464,8 @@ final class AppModel: ObservableObject {
   let settings: PersistedSettingsStore
   let runtimeData = RuntimeDataStore()
   let publicIP: PublicIPCoordinator
-  let profileOperations: ProfileOperationsStore
   let proxyPreview: ProxyPreviewStore
+  let profileCoordinator: ProfileCoordinator
   let systemProxy: SystemProxyCoordinator
   let profileStore: ProfileStore
   let coreController: CoreProcessController
@@ -516,8 +516,6 @@ final class AppModel: ObservableObject {
   private var runtimeReloadPending = false
   private var tunSettingsApplyTask: Task<Void, Never>?
   private var tunSettingsApplyToken: UUID?
-  private var subscriptionAutoUpdateTask: Task<Void, Never>?
-  private var subscriptionAutoUpdateBackoffUntil: [Profile.ID: Date] = [:]
   private var streamTasks: [Task<Void, Never>] = []
   private var networkExtensionDiagnosticsTask: Task<Void, Never>?
   private var tunDiagnosticsTask: Task<Void, Never>?
@@ -526,7 +524,6 @@ final class AppModel: ObservableObject {
   static let publicIPRefreshInterval: TimeInterval = 300
   static let silentStartDefaultsKey = PersistedSettingsStore.silentStartDefaultsKey
   static let startWallClockSeconds: TimeInterval = 22
-  static let subscriptionAutoUpdateRetryDelay: TimeInterval = 15 * 60
   private static let tunHelperApprovalPollingAttempts = 8
   private static let tunHelperApprovalPollingIntervalNanoseconds: UInt64 = 1_000_000_000
   private static let tunControllerCleanupTimeoutSeconds: TimeInterval = 2
@@ -569,8 +566,8 @@ final class AppModel: ObservableObject {
   ) {
     self.paths = paths
     self.profileStore = profileStore ?? ProfileStore(paths: paths)
-    self.profileOperations = ProfileOperationsStore(profileStore: self.profileStore)
     self.proxyPreview = ProxyPreviewStore(defaults: defaults)
+    self.profileCoordinator = ProfileCoordinator(profileStore: self.profileStore, proxyPreview: self.proxyPreview)
     self.coreController = coreController
     self.helperClient = helperClient
     self.networkExtensionController = networkExtensionController
@@ -588,16 +585,49 @@ final class AppModel: ObservableObject {
       defaults: defaults
     )
     settings = PersistedSettingsStore(loginItemService: loginItemService, defaults: defaults)
+    profileCoordinator.configureRuntimeHooks(
+      automaticSubscriptionUpdatesEnabled: { [weak self] in
+        self?.settings.subscriptionFetchSettings.automaticUpdatesEnabled ?? false
+      },
+      subscriptionFetchOptions: { [weak self] profile in
+        guard let self else { return SubscriptionFetchOptions() }
+        if let profile {
+          return self.subscriptionFetchOptions(for: profile)
+        }
+        return self.subscriptionFetchOptions
+      },
+      preflightValidator: { [weak self] in
+        guard let self else { return NoopSubscriptionProfilePreflightValidator() }
+        return self.subscriptionPreflightValidator()
+      },
+      reloadActiveRuntimeConfigIfNeeded: { [weak self] profileID, logMessage in
+        guard let self else { return }
+        try await self.reloadActiveRuntimeConfigIfNeeded(for: profileID, logMessage: logMessage)
+      },
+      appendAppLog: { [weak self] level, message in
+        self?.appendAppLog(level: level, message: message)
+      },
+      clearRuntimeProxyGroups: { [weak self] in
+        self?.proxyGroups = []
+      },
+      shouldRestartRuntimeAfterProfileSelection: { [weak self] in
+        guard let self else { return false }
+        return self.isRunning || self.startInFlight
+      },
+      restartRuntime: { [weak self] in
+        self?.restart()
+      }
+    )
     settings.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
       .store(in: &storeCancellables)
     settings.$subscriptionFetchSettings
       .dropFirst()
       .sink { [weak self] _ in
-        self?.rescheduleSubscriptionAutoUpdates()
+        self?.profileCoordinator.rescheduleSubscriptionAutoUpdates()
       }
       .store(in: &storeCancellables)
-    profileOperations.objectWillChange
+    profileCoordinator.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
       .store(in: &storeCancellables)
     proxyPreview.objectWillChange
@@ -636,10 +666,10 @@ final class AppModel: ObservableObject {
         await self.profileStore.waitForManifestLoad()
         await self.refreshProfilePreviewAndWait()
         self.loadPreviewSelectionsForActiveProfile()
-        self.rescheduleSubscriptionAutoUpdates()
+        self.profileCoordinator.rescheduleSubscriptionAutoUpdates()
       }
     } else {
-      rescheduleSubscriptionAutoUpdates()
+      profileCoordinator.rescheduleSubscriptionAutoUpdates()
     }
   }
 
@@ -849,12 +879,10 @@ final class AppModel: ObservableObject {
     Task { @MainActor [weak self] in
       guard let self else { return }
       do {
-        _ = try await profileOperations.importLocalProfile(from: url)
-        await refreshProfilePreviewAndWait()
-        loadPreviewSelectionsForActiveProfile()
+        _ = try await profileCoordinator.importLocalProfile(from: url)
         lastError = nil
       } catch {
-        profileOperations.clearMessage()
+        profileCoordinator.clearMessage()
         lastError = UserFacingError.message(for: error)
       }
     }
@@ -864,16 +892,16 @@ final class AppModel: ObservableObject {
   func addSubscription(name: String = "", urlString: String, session: URLSession = .shared) async -> Bool {
     let trimmedURLString = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
     guard let resolution = SubscriptionURLResolver.resolve(rawInput: trimmedURLString) else {
-      profileOperations.clearMessage()
+      profileCoordinator.clearMessage()
       lastError = "Invalid subscription URL."
       return false
     }
 
     lastError = nil
-    profileOperations.clearMessage()
+    profileCoordinator.clearMessage()
 
     do {
-      guard try await profileOperations.addSubscription(
+      guard try await profileCoordinator.addSubscription(
         name: name,
         url: resolution.url,
         displayNameHint: resolution.displayNameHint,
@@ -883,12 +911,9 @@ final class AppModel: ObservableObject {
       ) != nil else {
         return false
       }
-      await refreshProfilePreviewAndWait()
-      loadPreviewSelectionsForActiveProfile()
-      rescheduleSubscriptionAutoUpdates()
       return true
     } catch {
-      profileOperations.clearMessage()
+      profileCoordinator.clearMessage()
       lastError = UserFacingError.message(for: error)
       return false
     }
@@ -915,20 +940,18 @@ final class AppModel: ObservableObject {
   @discardableResult
   func updateSubscription(_ profile: Profile, session: URLSession = .shared) async -> Bool {
     lastError = nil
-    profileOperations.clearMessage()
+    profileCoordinator.clearMessage()
 
     do {
-      let updated = try await profileOperations.updateSubscription(
+      let updated = try await profileCoordinator.updateSubscription(
         profile,
         session: session,
         fetchOptions: subscriptionFetchOptions(for: profile),
         preflightValidator: subscriptionPreflightValidator()
       )
-      await refreshProfilePreviewAndWait()
-      rescheduleSubscriptionAutoUpdates()
       return updated
     } catch {
-      profileOperations.clearMessage()
+      profileCoordinator.clearMessage()
       lastError = UserFacingError.message(for: error)
       return false
     }
@@ -938,16 +961,16 @@ final class AppModel: ObservableObject {
   func updateSubscriptionSource(_ profile: Profile, urlString: String, session: URLSession = .shared) async -> Bool {
     let trimmedURLString = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
     guard let resolution = SubscriptionURLResolver.resolve(rawInput: trimmedURLString) else {
-      profileOperations.clearMessage()
+      profileCoordinator.clearMessage()
       lastError = "Invalid subscription URL."
       return false
     }
 
     lastError = nil
-    profileOperations.clearMessage()
+    profileCoordinator.clearMessage()
 
     do {
-      let updated = try await profileOperations.updateSubscriptionSource(
+      let updated = try await profileCoordinator.updateSubscriptionSource(
         profile,
         url: resolution.url,
         displayNameHint: resolution.displayNameHint,
@@ -955,16 +978,9 @@ final class AppModel: ObservableObject {
         fetchOptions: subscriptionFetchOptions(for: profile),
         preflightValidator: subscriptionPreflightValidator()
       )
-      await refreshProfilePreviewAndWait()
-      loadPreviewSelectionsForActiveProfile()
-      try await reloadActiveRuntimeConfigIfNeeded(
-        for: profile.id,
-        logMessage: "Subscription source updated: Mihomo reloaded"
-      )
-      rescheduleSubscriptionAutoUpdates()
       return updated
     } catch {
-      profileOperations.clearMessage()
+      profileCoordinator.clearMessage()
       lastError = UserFacingError.message(for: error)
       return false
     }
@@ -976,25 +992,17 @@ final class AppModel: ObservableObject {
     options: SubscriptionProviderOptions
   ) async -> Bool {
     lastError = nil
-    profileOperations.clearMessage()
+    profileCoordinator.clearMessage()
 
     do {
-      try await profileOperations.updateSubscriptionProviderOptions(
+      try await profileCoordinator.updateSubscriptionProviderOptions(
         profile,
         options: options,
         preflightValidator: subscriptionPreflightValidator()
       )
-      if profile.id == profileStore.activeProfileID {
-        await refreshProfilePreviewAndWait()
-        try await reloadActiveRuntimeConfigIfNeeded(
-          for: profile.id,
-          logMessage: "Subscription provider options updated: Mihomo reloaded"
-        )
-      }
-      rescheduleSubscriptionAutoUpdates()
       return true
     } catch {
-      profileOperations.clearMessage()
+      profileCoordinator.clearMessage()
       lastError = UserFacingError.message(for: error)
       return false
     }
@@ -1009,16 +1017,16 @@ final class AppModel: ObservableObject {
   ) async -> Bool {
     let trimmedURLString = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
     guard let resolution = SubscriptionURLResolver.resolve(rawInput: trimmedURLString) else {
-      profileOperations.clearMessage()
+      profileCoordinator.clearMessage()
       lastError = "Invalid subscription URL."
       return false
     }
 
     lastError = nil
-    profileOperations.clearMessage()
+    profileCoordinator.clearMessage()
 
     do {
-      let updated = try await profileOperations.updateSubscriptionSourceAndProviderOptions(
+      let updated = try await profileCoordinator.updateSubscriptionSourceAndProviderOptions(
         profile,
         url: resolution.url,
         displayNameHint: resolution.displayNameHint,
@@ -1027,132 +1035,22 @@ final class AppModel: ObservableObject {
         fetchOptions: options.fetchOptions(from: subscriptionFetchOptions),
         preflightValidator: subscriptionPreflightValidator()
       )
-      await refreshProfilePreviewAndWait()
-      loadPreviewSelectionsForActiveProfile()
-      try await reloadActiveRuntimeConfigIfNeeded(
-        for: profile.id,
-        logMessage: "Subscription source and provider options updated: Mihomo reloaded"
-      )
-      rescheduleSubscriptionAutoUpdates()
       return updated
     } catch {
-      profileOperations.clearMessage()
+      profileCoordinator.clearMessage()
       lastError = UserFacingError.message(for: error)
       return false
     }
   }
 
-  private func rescheduleSubscriptionAutoUpdates(now: Date = Date()) {
-    subscriptionAutoUpdateTask?.cancel()
-    subscriptionAutoUpdateTask = nil
-
-    guard settings.subscriptionFetchSettings.automaticUpdatesEnabled,
-          let nextUpdateAt = nextSubscriptionAutoUpdateDate(now: now)
-    else {
-      return
-    }
-
-    let delay = max(1, nextUpdateAt.timeIntervalSince(now))
-    subscriptionAutoUpdateTask = Task { @MainActor [weak self] in
-      do {
-        try await Task.sleep(nanoseconds: Self.nanoseconds(for: delay))
-      } catch {
-        return
-      }
-      guard let self, !Task.isCancelled else { return }
-      await self.runDueSubscriptionAutoUpdates()
-    }
-  }
-
-  private func runDueSubscriptionAutoUpdates() async {
-    subscriptionAutoUpdateTask = nil
-    guard settings.subscriptionFetchSettings.automaticUpdatesEnabled else { return }
-
-    let now = Date()
-    let dueProfiles = dueSubscriptionProfiles(now: now)
-    guard !dueProfiles.isEmpty else {
-      rescheduleSubscriptionAutoUpdates(now: now)
-      return
-    }
-
-    var shouldRefreshPreview = false
-    for profile in dueProfiles {
-      do {
-        let updated = try await profileOperations.updateSubscription(
-          profile,
-          session: .shared,
-          fetchOptions: subscriptionFetchOptions(for: profile),
-          preflightValidator: subscriptionPreflightValidator()
-        )
-        if updated {
-          subscriptionAutoUpdateBackoffUntil[profile.id] = nil
-          appendAppLog(level: "info", message: "Auto-updated subscription \(profile.name).")
-          shouldRefreshPreview = shouldRefreshPreview || profile.id == profileStore.activeProfileID
-        } else {
-          subscriptionAutoUpdateBackoffUntil[profile.id] = now.addingTimeInterval(60)
-        }
-      } catch {
-        let retryAt = Date().addingTimeInterval(Self.subscriptionAutoUpdateRetryDelay)
-        subscriptionAutoUpdateBackoffUntil[profile.id] = retryAt
-        appendAppLog(
-          level: "warn",
-          message: "Could not auto-update subscription \(profile.name): \(UserFacingError.message(for: error))"
-        )
-      }
-    }
-
-    if shouldRefreshPreview {
-      await refreshProfilePreviewAndWait()
-      loadPreviewSelectionsForActiveProfile()
-    }
-    rescheduleSubscriptionAutoUpdates()
-  }
-
-  private func nextSubscriptionAutoUpdateDate(now: Date) -> Date? {
-    profileStore.profiles
-      .compactMap { subscriptionAutoUpdateDate(for: $0, now: now) }
-      .min()
-  }
-
-  private func dueSubscriptionProfiles(now: Date) -> [Profile] {
-    profileStore.profiles.filter { profile in
-      guard let updateAt = subscriptionAutoUpdateDate(for: profile, now: now) else { return false }
-      return updateAt <= now
-    }
-  }
-
-  private func subscriptionAutoUpdateDate(for profile: Profile, now: Date) -> Date? {
-    guard profile.isSubscription,
-          let metadata = profile.subscriptionMetadata,
-          let intervalMinutes = metadata.updateIntervalMinutes,
-          intervalMinutes > 0
-    else {
-      return nil
-    }
-
-    let baseDate = (metadata.lastFetchedAt ?? profile.updatedAt)
-      .addingTimeInterval(TimeInterval(intervalMinutes * 60))
-    if baseDate <= now,
-       let backoffDate = subscriptionAutoUpdateBackoffUntil[profile.id],
-       backoffDate > now {
-      return backoffDate
-    }
-    return baseDate
-  }
-
-  private static func nanoseconds(for seconds: TimeInterval) -> UInt64 {
-    UInt64(max(0, seconds) * 1_000_000_000)
-  }
-
   @discardableResult
   func renameActiveProfile(to name: String) async -> Bool {
     do {
-      try await profileOperations.renameActiveProfile(to: name)
-      await refreshProfilePreviewAndWait()
+      try await profileCoordinator.renameActiveProfile(to: name)
       lastError = nil
       return true
     } catch {
-      profileOperations.clearMessage()
+      profileCoordinator.clearMessage()
       lastError = UserFacingError.message(for: error)
       return false
     }
@@ -1167,12 +1065,11 @@ final class AppModel: ObservableObject {
   @discardableResult
   func renameProfileAsync(_ profile: Profile, to name: String) async -> Bool {
     do {
-      try await profileOperations.renameProfile(profile, to: name)
-      await refreshProfilePreviewAndWait()
+      try await profileCoordinator.renameProfile(profile, to: name)
       lastError = nil
       return true
     } catch {
-      profileOperations.clearMessage()
+      profileCoordinator.clearMessage()
       lastError = UserFacingError.message(for: error)
       return false
     }
@@ -1181,12 +1078,11 @@ final class AppModel: ObservableObject {
   @discardableResult
   func resetSubscriptionName(_ profile: Profile) async -> Bool {
     do {
-      try await profileOperations.resetSubscriptionName(profile)
-      await refreshProfilePreviewAndWait()
+      try await profileCoordinator.resetSubscriptionName(profile)
       lastError = nil
       return true
     } catch {
-      profileOperations.clearMessage()
+      profileCoordinator.clearMessage()
       lastError = UserFacingError.message(for: error)
       return false
     }
@@ -1196,16 +1092,10 @@ final class AppModel: ObservableObject {
     Task { @MainActor [weak self] in
       guard let self else { return }
       do {
-        let deletedID = profileStore.activeProfileID
-        try await profileOperations.deleteActiveProfile()
-        previewSelections = [:]
-        saveCurrentPreviewSelections(forProfileID: deletedID)
-        await refreshProfilePreviewAndWait()
-        loadPreviewSelectionsForActiveProfile()
-        rescheduleSubscriptionAutoUpdates()
+        try await profileCoordinator.deleteActiveProfile()
         lastError = nil
       } catch {
-        profileOperations.clearMessage()
+        profileCoordinator.clearMessage()
         lastError = UserFacingError.message(for: error)
       }
     }
@@ -1220,16 +1110,11 @@ final class AppModel: ObservableObject {
   @discardableResult
   func deleteProfileAsync(_ profile: Profile) async -> Bool {
     do {
-      try await profileOperations.deleteProfile(profile)
-      previewSelections = [:]
-      saveCurrentPreviewSelections(forProfileID: profile.id)
-      await refreshProfilePreviewAndWait()
-      loadPreviewSelectionsForActiveProfile()
-      rescheduleSubscriptionAutoUpdates()
+      try await profileCoordinator.deleteProfile(profile)
       lastError = nil
       return true
     } catch {
-      profileOperations.clearMessage()
+      profileCoordinator.clearMessage()
       lastError = UserFacingError.message(for: error)
       return false
     }
@@ -1243,21 +1128,12 @@ final class AppModel: ObservableObject {
 
   @discardableResult
   func selectProfileAsync(_ profile: Profile) async -> Bool {
-    let isChangingProfile = profileStore.activeProfileID != profile.id
-    guard isChangingProfile else { return false }
     do {
-      let shouldRestart = isRunning || startInFlight
-      guard try await profileOperations.selectProfile(profile) else { return false }
-      proxyGroups = []
-      await refreshProfilePreviewAndWait()
-      loadPreviewSelectionsForActiveProfile()
+      guard try await profileCoordinator.selectProfile(profile) else { return false }
       lastError = nil
-      if shouldRestart {
-        restart()
-      }
       return true
     } catch {
-      profileOperations.clearMessage()
+      profileCoordinator.clearMessage()
       lastError = UserFacingError.message(for: error)
       return false
     }
@@ -3231,8 +3107,7 @@ final class AppModel: ObservableObject {
     pendingModeTask = nil
     pendingRoutingModeTask?.cancel()
     pendingRoutingModeTask = nil
-    subscriptionAutoUpdateTask?.cancel()
-    subscriptionAutoUpdateTask = nil
+    profileCoordinator.cancelSubscriptionAutoUpdates()
     cancelRuntimeActionTasks()
     cancelTunHelperPreparation(resetState: false)
     let result = await stopRuntimeCoordinated(.termination)
@@ -3574,15 +3449,15 @@ final class AppModel: ObservableObject {
 
   @discardableResult
   private func refreshProfilePreview() -> Task<Void, Never>? {
-    proxyPreview.refreshPreview(for: profileStore.activeProfile)
+    profileCoordinator.refreshPreview()
   }
 
   private func refreshProfilePreviewAndWait() async {
-    await refreshProfilePreview()?.value
+    await profileCoordinator.refreshPreviewAndWait()
   }
 
   func waitForProfilePreviewRefresh() async {
-    await proxyPreview.waitForRefresh()
+    await profileCoordinator.waitForPreviewRefresh()
   }
 
   private func runtimeAPIClientForProxyAction() -> (any MihomoAPIControlling)? {
@@ -3816,11 +3691,11 @@ final class AppModel: ObservableObject {
   }
 
   private func loadPreviewSelectionsForActiveProfile() {
-    proxyPreview.loadSelections(for: profileStore.activeProfileID)
+    profileCoordinator.loadSelectionsForActiveProfile()
   }
 
   private func saveCurrentPreviewSelections(forProfileID overrideID: Profile.ID? = nil) {
-    proxyPreview.saveSelections(for: overrideID ?? profileStore.activeProfileID)
+    profileCoordinator.saveCurrentSelections(forProfileID: overrideID)
   }
 
   private func recoverDanglingSystemProxyIfNeeded() {
