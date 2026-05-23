@@ -56,6 +56,132 @@ extension ProfileSource {
   }
 }
 
+enum SubscriptionProviderFetchProxy: String, Codable, CaseIterable, Identifiable, Sendable {
+  case defaultOrder
+  case direct
+  case localClashProxy
+  case systemProxy
+
+  var id: String { rawValue }
+
+  var displayName: String {
+    switch self {
+    case .defaultOrder: String(localized: "Default")
+    case .direct: String(localized: "Direct")
+    case .localClashProxy: String(localized: "Local Clash Proxy")
+    case .systemProxy: String(localized: "System Proxy")
+    }
+  }
+}
+
+struct SubscriptionRequestHeader: Identifiable, Codable, Equatable, Sendable {
+  var id: UUID
+  var name: String
+  var value: String
+
+  private enum CodingKeys: String, CodingKey {
+    case id
+    case name
+    case value
+  }
+
+  init(id: UUID = UUID(), name: String = "", value: String = "") {
+    self.id = id
+    self.name = name
+    self.value = value
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+    name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
+    value = try container.decodeIfPresent(String.self, forKey: .value) ?? ""
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(id, forKey: .id)
+    try container.encode(name, forKey: .name)
+  }
+
+  var normalizedName: String {
+    name.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  var normalizedValue: String {
+    value.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+}
+
+struct SubscriptionProviderOptions: Codable, Equatable, Sendable {
+  static let minimumIntervalSeconds = 60
+  static let maximumIntervalSeconds = 86_400
+
+  var intervalSeconds: Int
+  var filter: String
+  var excludeFilter: String
+  var excludeType: String
+  var overrideYAML: String
+  var requestHeaders: [SubscriptionRequestHeader]
+  var fetchProxy: SubscriptionProviderFetchProxy
+
+  private enum CodingKeys: String, CodingKey {
+    case intervalSeconds
+    case filter
+    case excludeFilter
+    case excludeType
+    case overrideYAML
+    case requestHeaders
+    case fetchProxy
+  }
+
+  init(
+    intervalSeconds: Int = 300,
+    filter: String = "",
+    excludeFilter: String = "",
+    excludeType: String = "",
+    overrideYAML: String = "",
+    requestHeaders: [SubscriptionRequestHeader] = [],
+    fetchProxy: SubscriptionProviderFetchProxy = .defaultOrder
+  ) {
+    self.intervalSeconds = min(max(intervalSeconds, Self.minimumIntervalSeconds), Self.maximumIntervalSeconds)
+    self.filter = filter
+    self.excludeFilter = excludeFilter
+    self.excludeType = excludeType
+    self.overrideYAML = overrideYAML
+    self.requestHeaders = requestHeaders
+    self.fetchProxy = fetchProxy
+  }
+
+  static let `default` = SubscriptionProviderOptions()
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    let defaults = Self.default
+    self.init(
+      intervalSeconds: container.decodeDefault(Int.self, forKey: .intervalSeconds, default: defaults.intervalSeconds),
+      filter: container.decodeDefault(String.self, forKey: .filter, default: defaults.filter),
+      excludeFilter: container.decodeDefault(String.self, forKey: .excludeFilter, default: defaults.excludeFilter),
+      excludeType: container.decodeDefault(String.self, forKey: .excludeType, default: defaults.excludeType),
+      overrideYAML: container.decodeDefault(String.self, forKey: .overrideYAML, default: defaults.overrideYAML),
+      requestHeaders: container.decodeDefault(
+        [SubscriptionRequestHeader].self,
+        forKey: .requestHeaders,
+        default: defaults.requestHeaders
+      ),
+      fetchProxy: container.decodeDefault(SubscriptionProviderFetchProxy.self, forKey: .fetchProxy, default: defaults.fetchProxy)
+    )
+  }
+
+  var normalizedHeaders: [String: String] {
+    requestHeaders.reduce(into: [String: String]()) { result, header in
+      let name = header.normalizedName
+      guard !name.isEmpty else { return }
+      result[name] = header.normalizedValue
+    }
+  }
+}
+
 struct Profile: Identifiable, Codable, Equatable, Sendable {
   var id: UUID
   var name: String
@@ -63,6 +189,7 @@ struct Profile: Identifiable, Codable, Equatable, Sendable {
   var source: ProfileSource
   var originalConfigPath: String
   var subscriptionMetadata: SubscriptionMetadata?
+  var subscriptionProviderOptions: SubscriptionProviderOptions
   var createdAt: Date
   var updatedAt: Date
 
@@ -73,6 +200,7 @@ struct Profile: Identifiable, Codable, Equatable, Sendable {
     case source
     case originalConfigPath
     case subscriptionMetadata
+    case subscriptionProviderOptions
     case createdAt
     case updatedAt
   }
@@ -84,6 +212,7 @@ struct Profile: Identifiable, Codable, Equatable, Sendable {
     source: ProfileSource,
     originalConfigPath: String,
     subscriptionMetadata: SubscriptionMetadata? = nil,
+    subscriptionProviderOptions: SubscriptionProviderOptions = .default,
     createdAt: Date = Date(),
     updatedAt: Date = Date()
   ) {
@@ -93,6 +222,7 @@ struct Profile: Identifiable, Codable, Equatable, Sendable {
     self.source = source
     self.originalConfigPath = originalConfigPath
     self.subscriptionMetadata = subscriptionMetadata
+    self.subscriptionProviderOptions = subscriptionProviderOptions
     self.createdAt = createdAt
     self.updatedAt = updatedAt
   }
@@ -104,6 +234,11 @@ struct Profile: Identifiable, Codable, Equatable, Sendable {
     source = try container.decode(ProfileSource.self, forKey: .source)
     originalConfigPath = try container.decode(String.self, forKey: .originalConfigPath)
     subscriptionMetadata = try container.decodeIfPresent(SubscriptionMetadata.self, forKey: .subscriptionMetadata)
+    subscriptionProviderOptions = container.decodeDefault(
+      SubscriptionProviderOptions.self,
+      forKey: .subscriptionProviderOptions,
+      default: .default
+    )
     createdAt = try container.decode(Date.self, forKey: .createdAt)
     updatedAt = try container.decode(Date.self, forKey: .updatedAt)
     nameIsUserCustomized = try container.decodeIfPresent(Bool.self, forKey: .nameIsUserCustomized) ?? !source.isSubscription
@@ -1873,6 +2008,7 @@ struct SubscriptionFetchOptions: Equatable, Sendable {
   var localProxyPort: Int
   var allowsInsecureTLS: Bool
   var retryOrder: [SubscriptionFetchStrategy]
+  var customHeaders: [String: String]
 
   init(
     userAgent: String = "clash.meta",
@@ -1880,7 +2016,8 @@ struct SubscriptionFetchOptions: Equatable, Sendable {
     localProxyHost: String = "127.0.0.1",
     localProxyPort: Int = 7890,
     allowsInsecureTLS: Bool = false,
-    retryOrder: [SubscriptionFetchStrategy] = SubscriptionFetchStrategy.defaultRetryOrder
+    retryOrder: [SubscriptionFetchStrategy] = SubscriptionFetchStrategy.defaultRetryOrder,
+    customHeaders: [String: String] = [:]
   ) {
     self.userAgent = userAgent
     self.timeout = timeout
@@ -1888,6 +2025,7 @@ struct SubscriptionFetchOptions: Equatable, Sendable {
     self.localProxyPort = localProxyPort
     self.allowsInsecureTLS = allowsInsecureTLS
     self.retryOrder = retryOrder
+    self.customHeaders = customHeaders
   }
 }
 
@@ -1984,9 +2122,48 @@ struct SubscriptionFetchSettings: Codable, Equatable, Sendable {
   }
 }
 
+extension SubscriptionProviderOptions {
+  func fetchOptions(from base: SubscriptionFetchOptions) -> SubscriptionFetchOptions {
+    var options = base
+    switch fetchProxy {
+    case .defaultOrder:
+      break
+    case .direct:
+      options.retryOrder = [.direct]
+    case .localClashProxy:
+      options.retryOrder = [.localClashProxy]
+    case .systemProxy:
+      options.retryOrder = [.systemProxy]
+    }
+    options.customHeaders = normalizedHeaders
+    return options
+  }
+}
+
 struct SubscriptionFetchResult: Equatable, Sendable {
   var source: String
   var metadata: SubscriptionMetadata
+}
+
+struct ProviderSubscriptionInfo: Codable, Equatable, Sendable {
+  var upload: Int?
+  var download: Int?
+  var total: Int?
+  var expireAt: Date?
+
+  var usageSummary: String? {
+    var parts: [String] = []
+    if let upload {
+      parts.append("\(String(localized: "Upload")) \(TrafficSample.formatBytes(upload))")
+    }
+    if let download {
+      parts.append("\(String(localized: "Download")) \(TrafficSample.formatBytes(download))")
+    }
+    if let total {
+      parts.append("\(String(localized: "Total")) \(TrafficSample.formatBytes(total))")
+    }
+    return parts.isEmpty ? nil : parts.joined(separator: " / ")
+  }
 }
 
 struct ProxyProvider: Identifiable, Codable, Equatable, Sendable {
@@ -1995,7 +2172,19 @@ struct ProxyProvider: Identifiable, Codable, Equatable, Sendable {
   var type: String
   var vehicleType: String?
   var updatedAt: Date?
+  var subscriptionInfo: ProviderSubscriptionInfo? = nil
   var proxies: [ProxyNode]
+}
+
+struct RuleProvider: Identifiable, Codable, Equatable, Sendable {
+  var id: String { name }
+  var name: String
+  var type: String
+  var vehicleType: String?
+  var behavior: String?
+  var format: String?
+  var updatedAt: Date?
+  var ruleCount: Int?
 }
 
 enum RuntimeOwner: String, Codable, Equatable, Sendable {

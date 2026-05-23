@@ -712,6 +712,58 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(yaml["rules"] as? [String], ["MATCH,Proxy"])
   }
 
+  func testURIProviderContentAcceptsMihomo11925SchemesAndUnknownURIs() throws {
+    XCTAssertEqual(
+      try ProfileConfigInspector.format(of: "tailscale://tag@example.com:443#Tail\n"),
+      .proxyProviderContent
+    )
+    XCTAssertEqual(
+      try ProfileConfigInspector.format(of: "openvpn://profile@example.com:1194#OVPN\n"),
+      .proxyProviderContent
+    )
+    XCTAssertEqual(
+      try ProfileConfigInspector.format(of: "futureproxy://token@example.com:443#Future\n"),
+      .proxyProviderContent
+    )
+  }
+
+  func testURIProviderContentWritesAppManagedProviderOptions() throws {
+    let source = "trojan://password@example.com:443?sni=example.com#Trojan%20Node\n"
+    var options = RuntimeConfigOptions.default
+    options.subscriptionProviderOptions = SubscriptionProviderOptions(
+      intervalSeconds: 600,
+      filter: "HK|JP",
+      excludeFilter: "expired",
+      excludeType: "direct",
+      overrideYAML: """
+      additional-prefix: "[CM] "
+      udp: true
+      """,
+      requestHeaders: [SubscriptionRequestHeader(name: "Authorization", value: "Bearer secret")],
+      fetchProxy: .localClashProxy
+    )
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: source,
+      providerContentPath: "/tmp/provider.txt",
+      overrides: .defaultForLaunch(secret: "secret-token"),
+      options: options
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let providers = try XCTUnwrap(yaml["proxy-providers"] as? [String: Any])
+    let provider = try XCTUnwrap(providers["clashmax-subscription-provider"] as? [String: Any])
+    let override = try XCTUnwrap(provider["override"] as? [String: Any])
+
+    XCTAssertEqual(provider["interval"] as? Int, 600)
+    XCTAssertEqual(provider["filter"] as? String, "HK|JP")
+    XCTAssertEqual(provider["exclude-filter"] as? String, "expired")
+    XCTAssertEqual(provider["exclude-type"] as? String, "direct")
+    XCTAssertEqual(override["additional-prefix"] as? String, "[CM] ")
+    XCTAssertEqual(override["udp"] as? Bool, true)
+    XCTAssertNil(provider["header"])
+    XCTAssertNil(provider["proxy"])
+  }
+
   func testURIProviderContentUsesInternalProviderNameWhenProfileNameMatchesGroups() throws {
     let source = "trojan://password@example.com:443?sni=example.com#Trojan%20Node\n"
 
@@ -802,6 +854,51 @@ final class ConfigNormalizerTests: XCTestCase {
 
     XCTAssertEqual(mainGroup["now"] as? String, "Provider Node A")
     XCTAssertNil(autoGroup["now"])
+  }
+
+  func testRuntimeConfigMaterializesAdvancedYAMLWithoutDroppingProviderFields() throws {
+    let source = """
+    proxy-providers:
+      BaseProvider: &baseProvider
+        type: http
+        url: https://example.com/sub.yaml
+        path: ./base.yaml
+        interval: 3600
+        header:
+          User-Agent: clash.meta
+        filter: "HK|JP"
+        exclude-filter: "expired"
+        exclude-type: "direct"
+        override:
+          udp: true
+          additional-prefix: "[Remote] "
+        payload:
+          - { name: Future Node, type: future-proxy, server: future.example, port: 443 }
+      Remote:
+        <<: *baseProvider
+        path: ./remote.yaml
+    proxy-groups:
+      - name: Main
+        type: select
+        use: [Remote]
+    rules:
+      - MATCH,Main
+    """
+
+    let output = try ConfigNormalizer().runtimeConfig(from: source, overrides: .defaultForLaunch(secret: "secret-token"))
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let providers = try XCTUnwrap(yaml["proxy-providers"] as? [String: Any])
+    let remote = try XCTUnwrap(providers["Remote"] as? [String: Any])
+    let header = try XCTUnwrap(remote["header"] as? [String: Any])
+    let override = try XCTUnwrap(remote["override"] as? [String: Any])
+    let payload = try XCTUnwrap(remote["payload"] as? [[String: Any]])
+
+    XCTAssertEqual(remote["filter"] as? String, "HK|JP")
+    XCTAssertEqual(remote["exclude-filter"] as? String, "expired")
+    XCTAssertEqual(remote["exclude-type"] as? String, "direct")
+    XCTAssertEqual(header["User-Agent"] as? String, "clash.meta")
+    XCTAssertEqual(override["udp"] as? Bool, true)
+    XCTAssertEqual(payload.first?["type"] as? String, "future-proxy")
   }
 
   func testRuntimeConfigAppliesTypedRuleOverlayWithoutMutatingSourceRules() throws {

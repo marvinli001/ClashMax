@@ -3,6 +3,7 @@ import Yams
 
 struct RuntimeConfigOptions: Equatable, Sendable {
   var networkExtensionRoutingSettings: NetworkExtensionRoutingSettings?
+  var subscriptionProviderOptions: SubscriptionProviderOptions = .default
 
   static let `default` = RuntimeConfigOptions()
 }
@@ -42,7 +43,10 @@ struct ConfigNormalizer {
       guard let providerContentPath else {
         throw NormalizerError.invalidProfile("Provider subscription content requires a runtime provider file path.")
       }
-      root = providerBackedConfig(providerContentPath: providerContentPath)
+      root = try providerBackedConfig(
+        providerContentPath: providerContentPath,
+        options: options.subscriptionProviderOptions
+      )
       providerContentProxyNames = parsedProviderContentProxyNames(from: source)
     } else {
       root = try loadMapping(from: source)
@@ -394,21 +398,52 @@ struct ConfigNormalizer {
     return root
   }
 
-  private func providerBackedConfig(providerContentPath: String) -> [String: Any] {
+  private func providerBackedConfig(
+    providerContentPath: String,
+    options: SubscriptionProviderOptions
+  ) throws -> [String: Any] {
     let providerName = Self.appManagedProviderName
+    var provider: [String: Any] = [
+      "type": "file",
+      "path": providerContentPath,
+      "interval": options.intervalSeconds,
+      "health-check": [
+        "enable": true,
+        "url": AppConstants.defaultDelayTestURL.absoluteString,
+        "interval": 300,
+        "timeout": 5000,
+        "lazy": true
+      ]
+    ]
+    let filter = options.filter.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !filter.isEmpty {
+      provider["filter"] = filter
+    }
+    let excludeFilter = options.excludeFilter.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !excludeFilter.isEmpty {
+      provider["exclude-filter"] = excludeFilter
+    }
+    let excludeType = options.excludeType.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !excludeType.isEmpty {
+      provider["exclude-type"] = excludeType
+    }
+    let overrideYAML = options.overrideYAML.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !overrideYAML.isEmpty {
+      let loaded: Any?
+      do {
+        loaded = try Yams.load(yaml: overrideYAML)
+      } catch {
+        throw NormalizerError.invalidProfile("Provider override YAML parse error: \(String(describing: error))")
+      }
+      guard let override = loaded as? [String: Any] else {
+        throw NormalizerError.invalidProfile("Provider override must be a YAML mapping.")
+      }
+      provider["override"] = override
+    }
+
     return [
       "proxy-providers": [
-        providerName: [
-          "type": "file",
-          "path": providerContentPath,
-          "health-check": [
-            "enable": true,
-            "url": AppConstants.defaultDelayTestURL.absoluteString,
-            "interval": 300,
-            "timeout": 5000,
-            "lazy": true
-          ]
-        ]
+        providerName: provider
       ],
       "proxy-groups": [
         [
@@ -482,6 +517,14 @@ enum ProfileConfigInspector {
     "https",
     "socks",
     "socks5",
+    "tailscale",
+    "ts",
+    "trusttunnel",
+    "trust-tunnel",
+    "openvpn",
+    "ovpn",
+    "gost",
+    "sudoku",
     "hy"
   ]
 
@@ -518,20 +561,51 @@ enum ProfileConfigInspector {
   }
 
   static func isProxyProviderContent(_ source: String) -> Bool {
-    containsProviderURI(in: source) || decodedBase64ProviderContent(from: source).map(containsProviderURI(in:)) == true
+    isProviderContentText(source)
+      || decodedBase64ProviderContent(from: source).map { isProviderContentText($0) } == true
   }
 
-  private static func containsProviderURI(in source: String) -> Bool {
-    source
-      .components(separatedBy: .newlines)
+  private static func isProviderContentText(_ source: String) -> Bool {
+    containsSupportedProviderURI(in: source) || containsOnlyProviderURIs(in: source)
+  }
+
+  private static func containsSupportedProviderURI(in source: String) -> Bool {
+    nonEmptyLines(in: source)
       .contains { line in
-        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let schemeSeparator = trimmed.firstIndex(of: ":") else {
+        guard let uri = providerURI(in: line) else {
           return false
         }
-        let scheme = String(trimmed[..<schemeSeparator]).lowercased()
-        return supportedURISchemes.contains(scheme) && trimmed[schemeSeparator...].hasPrefix("://")
+        return supportedURISchemes.contains(uri.scheme)
       }
+  }
+
+  private static func containsOnlyProviderURIs(in source: String) -> Bool {
+    let lines = nonEmptyLines(in: source)
+    guard !lines.isEmpty else { return false }
+    return lines.allSatisfy { providerURI(in: $0) != nil }
+  }
+
+  private static func nonEmptyLines(in source: String) -> [String] {
+    source
+      .components(separatedBy: .newlines)
+      .compactMap { line in
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+      }
+  }
+
+  private static func providerURI(in line: String) -> (scheme: String, value: String)? {
+    let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let schemeSeparator = trimmed.firstIndex(of: ":"),
+          trimmed[schemeSeparator...].hasPrefix("://")
+    else {
+      return nil
+    }
+    let scheme = String(trimmed[..<schemeSeparator]).lowercased()
+    guard scheme.range(of: #"^[a-z][a-z0-9+\-.]*$"#, options: .regularExpression) != nil else {
+      return nil
+    }
+    return (scheme, trimmed)
   }
 
   static func decodedBase64ProviderContent(from source: String) -> String? {

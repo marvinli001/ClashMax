@@ -17,11 +17,16 @@ final class SubscriptionFetcherTests: XCTestCase {
     let fetcher = SubscriptionFetcher()
     let request = fetcher.request(
       url: URL(string: "https://example.com/sub")!,
-      options: SubscriptionFetchOptions(userAgent: "Clash Verge/2.0.0", timeout: 45)
+      options: SubscriptionFetchOptions(
+        userAgent: "Clash Verge/2.0.0",
+        timeout: 45,
+        customHeaders: ["X-Panel-Token": "secret"]
+      )
     )
 
     XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent"), "Clash Verge/2.0.0")
     XCTAssertEqual(request.timeoutInterval, 45)
+    XCTAssertEqual(request.value(forHTTPHeaderField: "X-Panel-Token"), "secret")
   }
 
   func testSubscriptionFetchSettingsBuildOptionsFromCurrentMixedPort() throws {
@@ -41,6 +46,22 @@ final class SubscriptionFetcherTests: XCTestCase {
     XCTAssertEqual(options.localProxyPort, 8899)
     XCTAssertTrue(options.allowsInsecureTLS)
     XCTAssertEqual(options.retryOrder, [.direct, .localClashProxy])
+  }
+
+  func testSubscriptionProviderOptionsCustomizeHeadersAndFetchProxy() throws {
+    let base = SubscriptionFetchOptions(retryOrder: [.direct, .localClashProxy, .systemProxy])
+    let providerOptions = SubscriptionProviderOptions(
+      requestHeaders: [
+        SubscriptionRequestHeader(name: " X-Token ", value: " secret "),
+        SubscriptionRequestHeader(name: " ", value: "ignored")
+      ],
+      fetchProxy: .localClashProxy
+    )
+
+    let options = providerOptions.fetchOptions(from: base)
+
+    XCTAssertEqual(options.retryOrder, [.localClashProxy])
+    XCTAssertEqual(options.customHeaders, ["X-Token": "secret"])
   }
 
   func testResolverAcceptsAdditionalClashDeepLinkSchemes() throws {

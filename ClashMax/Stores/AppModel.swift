@@ -403,6 +403,10 @@ final class AppModel: ObservableObject {
     get { runtimeData.proxyProviders }
     set { runtimeData.proxyProviders = newValue }
   }
+  var ruleProviders: [RuleProvider] {
+    get { runtimeData.ruleProviders }
+    set { runtimeData.ruleProviders = newValue }
+  }
   var rules: [String] {
     get { runtimeData.rules }
     set { runtimeData.rules = newValue }
@@ -449,6 +453,8 @@ final class AppModel: ObservableObject {
     set { proxyPreview.previewSelections = newValue }
   }
   var providerHealthChecksInFlight: Set<ProxyProvider.ID> { runtimeData.providerHealthChecksInFlight }
+  var proxyProviderUpdatesInFlight: Set<ProxyProvider.ID> { runtimeData.proxyProviderUpdatesInFlight }
+  var ruleProviderUpdatesInFlight: Set<RuleProvider.ID> { runtimeData.ruleProviderUpdatesInFlight }
   var closingConnectionIDs: Set<ConnectionSnapshot.ID> { runtimeData.closingConnectionIDs }
   var closingAllConnections: Bool {
     get { runtimeData.closingAllConnections }
@@ -493,6 +499,14 @@ final class AppModel: ObservableObject {
   private var delayTestTokens: [ProxyNode.ID: UUID] = [:]
   private var providerHealthCheckTasks: [ProxyProvider.ID: Task<Void, Never>] = [:]
   private var providerHealthCheckTokens: [ProxyProvider.ID: UUID] = [:]
+  private var proxyProviderUpdateTasks: [ProxyProvider.ID: Task<Void, Never>] = [:]
+  private var proxyProviderUpdateTokens: [ProxyProvider.ID: UUID] = [:]
+  private var ruleProviderUpdateTasks: [RuleProvider.ID: Task<Void, Never>] = [:]
+  private var ruleProviderUpdateTokens: [RuleProvider.ID: UUID] = [:]
+  private var proxyProviderBatchUpdateTask: Task<Void, Never>?
+  private var proxyProviderBatchUpdateToken: UUID?
+  private var ruleProviderBatchUpdateTask: Task<Void, Never>?
+  private var ruleProviderBatchUpdateToken: UUID?
   private var connectionCloseTasks: [ConnectionSnapshot.ID: Task<Void, Never>] = [:]
   private var connectionCloseTokens: [ConnectionSnapshot.ID: UUID] = [:]
   private var closeAllConnectionsTask: Task<Void, Never>?
@@ -907,7 +921,7 @@ final class AppModel: ObservableObject {
       let updated = try await profileOperations.updateSubscription(
         profile,
         session: session,
-        fetchOptions: subscriptionFetchOptions,
+        fetchOptions: subscriptionFetchOptions(for: profile),
         preflightValidator: subscriptionPreflightValidator()
       )
       await refreshProfilePreviewAndWait()
@@ -938,11 +952,87 @@ final class AppModel: ObservableObject {
         url: resolution.url,
         displayNameHint: resolution.displayNameHint,
         session: session,
-        fetchOptions: subscriptionFetchOptions,
+        fetchOptions: subscriptionFetchOptions(for: profile),
         preflightValidator: subscriptionPreflightValidator()
       )
       await refreshProfilePreviewAndWait()
       loadPreviewSelectionsForActiveProfile()
+      try await reloadActiveRuntimeConfigIfNeeded(
+        for: profile.id,
+        logMessage: "Subscription source updated: Mihomo reloaded"
+      )
+      rescheduleSubscriptionAutoUpdates()
+      return updated
+    } catch {
+      profileOperations.clearMessage()
+      lastError = UserFacingError.message(for: error)
+      return false
+    }
+  }
+
+  @discardableResult
+  func updateSubscriptionProviderOptions(
+    _ profile: Profile,
+    options: SubscriptionProviderOptions
+  ) async -> Bool {
+    lastError = nil
+    profileOperations.clearMessage()
+
+    do {
+      try await profileOperations.updateSubscriptionProviderOptions(
+        profile,
+        options: options,
+        preflightValidator: subscriptionPreflightValidator()
+      )
+      if profile.id == profileStore.activeProfileID {
+        await refreshProfilePreviewAndWait()
+        try await reloadActiveRuntimeConfigIfNeeded(
+          for: profile.id,
+          logMessage: "Subscription provider options updated: Mihomo reloaded"
+        )
+      }
+      rescheduleSubscriptionAutoUpdates()
+      return true
+    } catch {
+      profileOperations.clearMessage()
+      lastError = UserFacingError.message(for: error)
+      return false
+    }
+  }
+
+  @discardableResult
+  func updateSubscriptionSourceAndProviderOptions(
+    _ profile: Profile,
+    urlString: String,
+    options: SubscriptionProviderOptions,
+    session: URLSession = .shared
+  ) async -> Bool {
+    let trimmedURLString = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let resolution = SubscriptionURLResolver.resolve(rawInput: trimmedURLString) else {
+      profileOperations.clearMessage()
+      lastError = "Invalid subscription URL."
+      return false
+    }
+
+    lastError = nil
+    profileOperations.clearMessage()
+
+    do {
+      let updated = try await profileOperations.updateSubscriptionSourceAndProviderOptions(
+        profile,
+        url: resolution.url,
+        displayNameHint: resolution.displayNameHint,
+        options: options,
+        session: session,
+        fetchOptions: options.fetchOptions(from: subscriptionFetchOptions),
+        preflightValidator: subscriptionPreflightValidator()
+      )
+      await refreshProfilePreviewAndWait()
+      loadPreviewSelectionsForActiveProfile()
+      try await reloadActiveRuntimeConfigIfNeeded(
+        for: profile.id,
+        logMessage: "Subscription source and provider options updated: Mihomo reloaded"
+      )
       rescheduleSubscriptionAutoUpdates()
       return updated
     } catch {
@@ -991,7 +1081,7 @@ final class AppModel: ObservableObject {
         let updated = try await profileOperations.updateSubscription(
           profile,
           session: .shared,
-          fetchOptions: subscriptionFetchOptions,
+          fetchOptions: subscriptionFetchOptions(for: profile),
           preflightValidator: subscriptionPreflightValidator()
         )
         if updated {
@@ -1177,12 +1267,39 @@ final class AppModel: ObservableObject {
     runtimeData.setProvider(id, healthCheckInFlight: isRunning)
   }
 
+  private func setProxyProvider(_ id: ProxyProvider.ID, updateInFlight isRunning: Bool) {
+    runtimeData.setProxyProvider(id, updateInFlight: isRunning)
+  }
+
+  private func setRuleProvider(_ id: RuleProvider.ID, updateInFlight isRunning: Bool) {
+    runtimeData.setRuleProvider(id, updateInFlight: isRunning)
+  }
+
   private func setConnection(_ id: ConnectionSnapshot.ID, closing isClosing: Bool) {
     runtimeData.setConnection(id, closing: isClosing)
   }
 
   private var subscriptionFetchOptions: SubscriptionFetchOptions {
     settings.subscriptionFetchSettings.fetchOptions(currentMixedPort: overrides.mixedPort)
+  }
+
+  private func subscriptionFetchOptions(for profile: Profile) -> SubscriptionFetchOptions {
+    profile.subscriptionProviderOptions.fetchOptions(from: subscriptionFetchOptions)
+  }
+
+  private func reloadActiveRuntimeConfigIfNeeded(for profileID: Profile.ID, logMessage: String) async throws {
+    guard profileID == profileStore.activeProfileID, isCoreRunning, let apiClient else {
+      return
+    }
+    let runtimeConfig: URL
+    if proxyRoutingMode == .tun {
+      runtimeConfig = try await materializeTunRuntimeConfig(tunSettings)
+    } else {
+      runtimeConfig = try await materializeNonTunRuntimeConfig()
+    }
+    try await apiClient.reloadConfig(path: runtimeConfig.path, force: true)
+    appendAppLog(level: "info", message: "\(logMessage) \(runtimeConfig.path).")
+    reloadRuntimeData()
   }
 
   private func subscriptionPreflightValidator() -> any SubscriptionProfilePreflightValidating {
@@ -1850,6 +1967,7 @@ final class AppModel: ObservableObject {
       runtimeDataLoading = false
       proxyGroups = []
       proxyProviders = []
+      ruleProviders = []
       rules = []
       connections = []
       refreshProfilePreview()
@@ -1900,6 +2018,14 @@ final class AppModel: ObservableObject {
         }
         guard runtimeReloadToken == token, !Task.isCancelled else { return }
         proxyProviders = refreshedProviders
+        let refreshedRuleProviders: [RuleProvider]
+        do {
+          refreshedRuleProviders = try await apiClient.ruleProviders()
+        } catch {
+          refreshedRuleProviders = []
+        }
+        guard runtimeReloadToken == token, !Task.isCancelled else { return }
+        ruleProviders = refreshedRuleProviders
         proxyGroups = enrichProxyGroupsWithKnownEndpoints(
           runtimeGroups,
           providers: refreshedProviders,
@@ -2205,6 +2331,158 @@ final class AppModel: ObservableObject {
         self.lastError = UserFacingError.message(for: error)
       }
     }
+  }
+
+  func updateProxyProvider(_ provider: ProxyProvider) {
+    guard let apiClient = runtimeAPIClientForProxyAction() else { return }
+    guard !proxyProviderUpdatesInFlight.contains(provider.id),
+          proxyProviderUpdateTasks[provider.id] == nil,
+          proxyProviderUpdateTokens[provider.id] == nil
+    else { return }
+    setProxyProvider(provider.id, updateInFlight: true)
+    let token = UUID()
+    proxyProviderUpdateTokens[provider.id] = token
+    proxyProviderUpdateTasks[provider.id] = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer {
+        if self.proxyProviderUpdateTokens[provider.id] == token {
+          self.proxyProviderUpdateTasks[provider.id] = nil
+          self.proxyProviderUpdateTokens[provider.id] = nil
+          self.setProxyProvider(provider.id, updateInFlight: false)
+        }
+      }
+      do {
+        try await apiClient.updateProxyProvider(named: provider.name)
+        guard self.proxyProviderUpdateTokens[provider.id] == token, !Task.isCancelled else { return }
+        self.reloadRuntimeData()
+      } catch is CancellationError {
+        return
+      } catch {
+        guard self.proxyProviderUpdateTokens[provider.id] == token, !Task.isCancelled else { return }
+        self.lastError = UserFacingError.message(for: error)
+      }
+    }
+  }
+
+  func updateAllProxyProviders() {
+    guard let apiClient = runtimeAPIClientForProxyAction() else { return }
+    guard proxyProviderBatchUpdateTask == nil else { return }
+    let providers = proxyProviders.filter { provider in
+      !proxyProviderUpdatesInFlight.contains(provider.id)
+        && proxyProviderUpdateTasks[provider.id] == nil
+        && proxyProviderUpdateTokens[provider.id] == nil
+    }
+    guard !providers.isEmpty else { return }
+    let token = UUID()
+    proxyProviderBatchUpdateToken = token
+    providers.forEach { setProxyProvider($0.id, updateInFlight: true) }
+    proxyProviderBatchUpdateTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      var failures: [(String, String)] = []
+      defer {
+        if self.proxyProviderBatchUpdateToken == token {
+          self.proxyProviderBatchUpdateTask = nil
+          self.proxyProviderBatchUpdateToken = nil
+          providers.forEach { self.setProxyProvider($0.id, updateInFlight: false) }
+        }
+      }
+      for provider in providers {
+        do {
+          try await apiClient.updateProxyProvider(named: provider.name)
+        } catch is CancellationError {
+          return
+        } catch {
+          failures.append((provider.name, UserFacingError.message(for: error)))
+        }
+      }
+      guard self.proxyProviderBatchUpdateToken == token, !Task.isCancelled else { return }
+      if !failures.isEmpty {
+        self.lastError = Self.providerUpdateFailureSummary(kind: "proxy provider", failures: failures)
+      }
+      self.reloadRuntimeData()
+    }
+  }
+
+  func updateRuleProvider(_ provider: RuleProvider) {
+    guard let apiClient = runtimeAPIClientForProxyAction() else { return }
+    guard !ruleProviderUpdatesInFlight.contains(provider.id),
+          ruleProviderUpdateTasks[provider.id] == nil,
+          ruleProviderUpdateTokens[provider.id] == nil
+    else { return }
+    setRuleProvider(provider.id, updateInFlight: true)
+    let token = UUID()
+    ruleProviderUpdateTokens[provider.id] = token
+    ruleProviderUpdateTasks[provider.id] = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer {
+        if self.ruleProviderUpdateTokens[provider.id] == token {
+          self.ruleProviderUpdateTasks[provider.id] = nil
+          self.ruleProviderUpdateTokens[provider.id] = nil
+          self.setRuleProvider(provider.id, updateInFlight: false)
+        }
+      }
+      do {
+        try await apiClient.updateRuleProvider(named: provider.name)
+        guard self.ruleProviderUpdateTokens[provider.id] == token, !Task.isCancelled else { return }
+        self.reloadRuntimeData()
+      } catch is CancellationError {
+        return
+      } catch {
+        guard self.ruleProviderUpdateTokens[provider.id] == token, !Task.isCancelled else { return }
+        self.lastError = UserFacingError.message(for: error)
+      }
+    }
+  }
+
+  func updateAllRuleProviders() {
+    guard let apiClient = runtimeAPIClientForProxyAction() else { return }
+    guard ruleProviderBatchUpdateTask == nil else { return }
+    let providers = ruleProviders.filter { provider in
+      !ruleProviderUpdatesInFlight.contains(provider.id)
+        && ruleProviderUpdateTasks[provider.id] == nil
+        && ruleProviderUpdateTokens[provider.id] == nil
+    }
+    guard !providers.isEmpty else { return }
+    let token = UUID()
+    ruleProviderBatchUpdateToken = token
+    providers.forEach { setRuleProvider($0.id, updateInFlight: true) }
+    ruleProviderBatchUpdateTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      var failures: [(String, String)] = []
+      defer {
+        if self.ruleProviderBatchUpdateToken == token {
+          self.ruleProviderBatchUpdateTask = nil
+          self.ruleProviderBatchUpdateToken = nil
+          providers.forEach { self.setRuleProvider($0.id, updateInFlight: false) }
+        }
+      }
+      for provider in providers {
+        do {
+          try await apiClient.updateRuleProvider(named: provider.name)
+        } catch is CancellationError {
+          return
+        } catch {
+          failures.append((provider.name, UserFacingError.message(for: error)))
+        }
+      }
+      guard self.ruleProviderBatchUpdateToken == token, !Task.isCancelled else { return }
+      if !failures.isEmpty {
+        self.lastError = Self.providerUpdateFailureSummary(kind: "rule provider", failures: failures)
+      }
+      self.reloadRuntimeData()
+    }
+  }
+
+  private static func providerUpdateFailureSummary(kind: String, failures: [(String, String)]) -> String {
+    let prefix = failures.count == 1
+      ? "Failed to update 1 \(kind)"
+      : "Failed to update \(failures.count) \(kind)s"
+    let details = failures
+      .prefix(3)
+      .map { "\($0.0): \($0.1)" }
+      .joined(separator: "; ")
+    let suffix = failures.count > 3 ? "; ..." : ""
+    return "\(prefix): \(details)\(suffix)"
   }
 
   private func measureDelay(
@@ -3164,6 +3442,26 @@ final class AppModel: ObservableObject {
       setProvider(id, healthCheckInFlight: false)
     }
 
+    proxyProviderUpdateTasks.values.forEach { $0.cancel() }
+    proxyProviderUpdateTasks.removeAll()
+    proxyProviderUpdateTokens.removeAll()
+    proxyProviderBatchUpdateTask?.cancel()
+    proxyProviderBatchUpdateTask = nil
+    proxyProviderBatchUpdateToken = nil
+    for id in proxyProviderUpdatesInFlight {
+      setProxyProvider(id, updateInFlight: false)
+    }
+
+    ruleProviderUpdateTasks.values.forEach { $0.cancel() }
+    ruleProviderUpdateTasks.removeAll()
+    ruleProviderUpdateTokens.removeAll()
+    ruleProviderBatchUpdateTask?.cancel()
+    ruleProviderBatchUpdateTask = nil
+    ruleProviderBatchUpdateToken = nil
+    for id in ruleProviderUpdatesInFlight {
+      setRuleProvider(id, updateInFlight: false)
+    }
+
     connectionCloseTasks.values.forEach { $0.cancel() }
     connectionCloseTasks.removeAll()
     connectionCloseTokens.removeAll()
@@ -3426,6 +3724,8 @@ final class AppModel: ObservableObject {
     options: RuntimeConfigOptions = .default
   ) async throws -> URL {
     let effectiveOverrides = overrides ?? self.overrides
+    var effectiveOptions = options
+    effectiveOptions.subscriptionProviderOptions = profile.subscriptionProviderOptions
     return try await runtimeConfigMaterializer.materialize(
       RuntimeConfigMaterializationRequest(
         profileName: profile.name,
@@ -3434,7 +3734,7 @@ final class AppModel: ObservableObject {
         providerContentURL: paths.runtimeProviderContentURL(for: profile),
         overrides: effectiveOverrides,
         selectionOverrides: selections,
-        options: options
+        options: effectiveOptions
       )
     )
   }

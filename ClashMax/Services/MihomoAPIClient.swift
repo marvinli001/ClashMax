@@ -5,11 +5,14 @@ protocol MihomoAPIControlling: Sendable {
   func updateIPv6(_ enabled: Bool) async throws
   func proxyGroups() async throws -> [ProxyGroup]
   func structuredProxyProviders() async throws -> [ProxyProvider]
+  func ruleProviders() async throws -> [RuleProvider]
   func rules() async throws -> [String]
   func connections() async throws -> [ConnectionSnapshot]
   func selectProxy(group: String, proxy: String) async throws
   func testDelay(proxy: String, testURL: URL, timeout: Int) async throws -> Int
   func healthCheckProvider(named provider: String) async throws
+  func updateProxyProvider(named provider: String) async throws
+  func updateRuleProvider(named provider: String) async throws
   func closeConnection(id: String) async throws
   func closeAllConnections() async throws
   func setTunEnabled(_ enabled: Bool) async throws
@@ -177,7 +180,27 @@ struct MihomoAPIClient: Sendable {
         type: provider["type"] as? String ?? "Provider",
         vehicleType: provider["vehicleType"] as? String,
         updatedAt: Self.date(from: provider["updatedAt"]),
+        subscriptionInfo: Self.providerSubscriptionInfo(from: provider),
         proxies: proxies
+      )
+    }
+    .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+  }
+
+  func ruleProviders() async throws -> [RuleProvider] {
+    let data = try await data(for: request(path: "/providers/rules"))
+    let object = (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+    let providers = object["providers"] as? [String: Any] ?? object
+    return providers.compactMap { name, value in
+      guard let provider = value as? [String: Any] else { return nil }
+      return RuleProvider(
+        name: provider["name"] as? String ?? name,
+        type: provider["type"] as? String ?? "Provider",
+        vehicleType: provider["vehicleType"] as? String,
+        behavior: provider["behavior"] as? String,
+        format: provider["format"] as? String,
+        updatedAt: Self.date(from: provider["updatedAt"]),
+        ruleCount: Self.ruleCount(from: provider)
       )
     }
     .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -221,6 +244,18 @@ struct MihomoAPIClient: Sendable {
 
   func healthCheckProvider(named provider: String) async throws {
     _ = try await data(for: request(path: apiPath("providers", "proxies", provider, "healthcheck")))
+  }
+
+  func updateProxyProvider(named provider: String) async throws {
+    var request = try request(path: apiPath("providers", "proxies", provider))
+    request.httpMethod = "PUT"
+    _ = try await data(for: request)
+  }
+
+  func updateRuleProvider(named provider: String) async throws {
+    var request = try request(path: apiPath("providers", "rules", provider))
+    request.httpMethod = "PUT"
+    _ = try await data(for: request)
   }
 
   func closeConnection(id: String) async throws {
@@ -398,6 +433,8 @@ struct MihomoAPIClient: Sendable {
     switch value {
     case let value as Int:
       return value
+    case let value as NSNumber:
+      return value.intValue
     case let value as String:
       return Int(value.trimmingCharacters(in: .whitespacesAndNewlines))
     case let value as CustomStringConvertible:
@@ -408,8 +445,81 @@ struct MihomoAPIClient: Sendable {
   }
 
   private static func date(from value: Any?) -> Date? {
-    guard let string = value as? String else { return nil }
-    return ISO8601DateFormatter().date(from: string)
+    switch value {
+    case let string as String:
+      if let date = ISO8601DateFormatter().date(from: string) {
+        return date
+      }
+      if let timestamp = Double(string.trimmingCharacters(in: .whitespacesAndNewlines)) {
+        return Date(timeIntervalSince1970: timestamp)
+      }
+      return nil
+    case let value as Double:
+      return Date(timeIntervalSince1970: value)
+    case let value as Int:
+      return Date(timeIntervalSince1970: TimeInterval(value))
+    case let value as NSNumber:
+      return Date(timeIntervalSince1970: value.doubleValue)
+    default:
+      return nil
+    }
+  }
+
+  private static func providerSubscriptionInfo(from provider: [String: Any]) -> ProviderSubscriptionInfo? {
+    guard let info = dictionaryValue(
+      for: ["subscriptionInfo", "subscription-info", "SubscriptionInfo"],
+      in: provider
+    ) else { return nil }
+    let subscription = ProviderSubscriptionInfo(
+      upload: intValue(for: ["upload", "Upload", "up"], in: info),
+      download: intValue(for: ["download", "Download", "down"], in: info),
+      total: intValue(for: ["total", "Total"], in: info),
+      expireAt: dateValue(for: ["expire", "Expire", "expireAt", "expire-at"], in: info)
+    )
+    return subscription.upload == nil
+      && subscription.download == nil
+      && subscription.total == nil
+      && subscription.expireAt == nil
+      ? nil
+      : subscription
+  }
+
+  private static func ruleCount(from provider: [String: Any]) -> Int? {
+    if let count = intValue(for: ["ruleCount", "rule-count", "count"], in: provider) {
+      return count
+    }
+    if let rules = provider["rules"] as? [Any] {
+      return rules.count
+    }
+    if let payload = provider["payload"] as? [Any] {
+      return payload.count
+    }
+    return nil
+  }
+
+  private static func dictionaryValue(for keys: [String], in object: [String: Any]) -> [String: Any]? {
+    for key in keys {
+      if let value = object[key] as? [String: Any] {
+        return value
+      }
+      if let matchingKey = object.keys.first(where: { $0.caseInsensitiveCompare(key) == .orderedSame }),
+         let value = object[matchingKey] as? [String: Any] {
+        return value
+      }
+    }
+    return nil
+  }
+
+  private static func intValue(for keys: [String], in object: [String: Any]) -> Int? {
+    keys.lazy.compactMap { key in
+      int(from: object[key] ?? object.first { $0.key.caseInsensitiveCompare(key) == .orderedSame }?.value)
+    }.first
+  }
+
+  private static func dateValue(for keys: [String], in object: [String: Any]) -> Date? {
+    keys.lazy.compactMap { key in
+      date(from: object[key] ?? object.first { $0.key.caseInsensitiveCompare(key) == .orderedSame }?.value)
+    }.first
   }
 }
 

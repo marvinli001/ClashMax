@@ -4,6 +4,56 @@ import XCTest
 
 @MainActor
 final class CoreRuntimePreflightTests: XCTestCase {
+  func testBundledMihomoAcceptsAdvancedProviderRuntimeMaterialization() async throws {
+    guard let coreURL = Self.bundledCoreURL() else {
+      throw XCTSkip("Bundled Mihomo core is unavailable in Resources/Core.")
+    }
+
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxAdvancedRuntime-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let providerURL = directory.appendingPathComponent("provider.txt")
+    try "ss://YWVzLTEyOC1nY206cGFzc3dvcmQ@127.0.0.1:8388#HK%20Node\n"
+      .write(to: providerURL, atomically: true, encoding: .utf8)
+
+    let source = """
+    proxy-providers:
+      BaseProvider: &baseProvider
+        type: file
+        path: ./provider.txt
+        interval: 3600
+        filter: "HK|JP"
+        exclude-filter: "expired"
+        exclude-type: "direct"
+        override:
+          udp: true
+          additional-prefix: "[Remote] "
+        health-check:
+          enable: false
+      Remote:
+        <<: *baseProvider
+    proxy-groups:
+      - name: Proxy
+        type: select
+        use: [Remote]
+        proxies: [DIRECT]
+    rules:
+      - MATCH,Proxy
+    """
+
+    let runtimeYAML = try ConfigNormalizer().runtimeConfig(
+      from: source,
+      overrides: .defaultForLaunch(secret: "secret-token")
+    )
+    let configURL = directory.appendingPathComponent("runtime.yaml")
+    try runtimeYAML.write(to: configURL, atomically: true, encoding: .utf8)
+
+    let validator = MihomoRuntimeConfigValidator(timeout: 10)
+    try await validator.validate(coreURL: coreURL, configURL: configURL, workDirectory: directory)
+  }
+
   func testGeneratedRuntimeConfigIsValidatedBeforeLaunch() async throws {
     let launcher = FakeProcessLauncher()
     let validator = RecordingRuntimeConfigValidator(result: .failure(AppError.configValidationFailed("bad config")))
@@ -139,6 +189,26 @@ final class CoreRuntimePreflightTests: XCTestCase {
     }
     let didExit = await waitForProcessExit(pid, timeout: 1)
     XCTAssertTrue(didExit)
+  }
+
+  private static func bundledCoreURL() -> URL? {
+    let architecture: String
+    #if arch(arm64)
+      architecture = "arm64"
+    #elseif arch(x86_64)
+      architecture = "amd64"
+    #else
+      return nil
+    #endif
+
+    let repositoryRoot = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+    let coreURL = repositoryRoot
+      .appendingPathComponent("Resources", isDirectory: true)
+      .appendingPathComponent("Core", isDirectory: true)
+      .appendingPathComponent("mihomo-darwin-\(architecture)")
+    return FileManager.default.isExecutableFile(atPath: coreURL.path) ? coreURL : nil
   }
 }
 

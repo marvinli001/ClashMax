@@ -50,11 +50,29 @@ private actor ProfileMutationGate {
 
 @MainActor
 protocol SubscriptionProfilePreflightValidating {
-  func validate(subscriptionSource: String, profileName: String) async throws
+  func validate(
+    subscriptionSource: String,
+    profileName: String,
+    providerOptions: SubscriptionProviderOptions
+  ) async throws
+}
+
+extension SubscriptionProfilePreflightValidating {
+  func validate(subscriptionSource: String, profileName: String) async throws {
+    try await validate(
+      subscriptionSource: subscriptionSource,
+      profileName: profileName,
+      providerOptions: .default
+    )
+  }
 }
 
 struct NoopSubscriptionProfilePreflightValidator: SubscriptionProfilePreflightValidating {
-  func validate(subscriptionSource: String, profileName: String) async throws {}
+  func validate(
+    subscriptionSource: String,
+    profileName: String,
+    providerOptions: SubscriptionProviderOptions
+  ) async throws {}
 }
 
 struct MihomoSubscriptionProfilePreflightValidator: SubscriptionProfilePreflightValidating {
@@ -78,7 +96,11 @@ struct MihomoSubscriptionProfilePreflightValidator: SubscriptionProfilePreflight
     self.materializer = materializer
   }
 
-  func validate(subscriptionSource: String, profileName: String) async throws {
+  func validate(
+    subscriptionSource: String,
+    profileName: String,
+    providerOptions: SubscriptionProviderOptions
+  ) async throws {
     guard try ProfileConfigInspector.format(of: subscriptionSource) == .proxyProviderContent else {
       return
     }
@@ -99,6 +121,8 @@ struct MihomoSubscriptionProfilePreflightValidator: SubscriptionProfilePreflight
 
     var preflightOverrides = overrides
     preflightOverrides.tunEnabled = false
+    var preflightOptions = RuntimeConfigOptions.default
+    preflightOptions.subscriptionProviderOptions = providerOptions
     let runtimeConfigURL = try await materializer.materialize(
       RuntimeConfigMaterializationRequest(
         profileName: profileName,
@@ -106,7 +130,8 @@ struct MihomoSubscriptionProfilePreflightValidator: SubscriptionProfilePreflight
         runtimeConfigURL: runtimeConfigDestinationURL,
         providerContentURL: providerContentURL,
         overrides: preflightOverrides,
-        selectionOverrides: [:]
+        selectionOverrides: [:],
+        options: preflightOptions
       )
     )
     try await runtimeConfigValidator.validate(
@@ -206,7 +231,11 @@ final class ProfileStore: ObservableObject {
         url: resolution.url
       )
       let profileName = trimmedName.isEmpty ? suggestedName : trimmedName
-      try await preflightValidator.validate(subscriptionSource: result.source, profileName: profileName)
+      try await preflightValidator.validate(
+        subscriptionSource: result.source,
+        profileName: profileName,
+        providerOptions: .default
+      )
 
       let id = UUID()
       let destination = paths.profiles.appendingPathComponent("\(id.uuidString).yaml")
@@ -266,7 +295,11 @@ final class ProfileStore: ObservableObject {
       )
       let nextProfiles = await profilesByApplyingSubscriptionDetails(result, sourceURL: resolution.url, for: profile.id)
       let preflightName = nextProfiles.first { $0.id == profile.id }?.name ?? profile.name
-      try await preflightValidator.validate(subscriptionSource: result.source, profileName: preflightName)
+      try await preflightValidator.validate(
+        subscriptionSource: result.source,
+        profileName: preflightName,
+        providerOptions: nextProfiles.first { $0.id == profile.id }?.subscriptionProviderOptions ?? .default
+      )
       do {
         try await diskIO.writeProfileSource(result.source, to: URL(fileURLWithPath: profile.originalConfigPath))
         if rawURL != resolution.url.absoluteString {
@@ -307,7 +340,11 @@ final class ProfileStore: ObservableObject {
       )
       let nextProfiles = await profilesByApplyingSubscriptionDetails(result, sourceURL: resolution.url, for: profile.id)
       let preflightName = nextProfiles.first { $0.id == profile.id }?.name ?? profile.name
-      try await preflightValidator.validate(subscriptionSource: result.source, profileName: preflightName)
+      try await preflightValidator.validate(
+        subscriptionSource: result.source,
+        profileName: preflightName,
+        providerOptions: nextProfiles.first { $0.id == profile.id }?.subscriptionProviderOptions ?? .default
+      )
       do {
         try await diskIO.writeProfileSource(result.source, to: URL(fileURLWithPath: profile.originalConfigPath))
         try await secretIO.save(resolution.url.absoluteString, account: account)
@@ -321,6 +358,62 @@ final class ProfileStore: ObservableObject {
         } else {
           try? await secretIO.delete(account: account)
         }
+        throw error
+      }
+      profiles = nextProfiles
+      subscriptionURLCache[id] = resolution.url.absoluteString
+    }
+  }
+
+  func updateSubscriptionSourceAndProviderOptions(
+    _ profile: Profile,
+    url: URL,
+    displayNameHint: String? = nil,
+    options: SubscriptionProviderOptions,
+    session: URLSession = .shared,
+    fetchOptions: SubscriptionFetchOptions = SubscriptionFetchOptions(),
+    preflightValidator: any SubscriptionProfilePreflightValidating = NoopSubscriptionProfilePreflightValidator()
+  ) async throws {
+    await waitForManifestLoad()
+    try await withMutationLock {
+      guard let index = profiles.firstIndex(where: { $0.id == profile.id }),
+            case let .subscription(id) = profiles[index].source
+      else { return }
+      let currentProfile = profiles[index]
+      let resolution = try Self.resolvedSubscriptionURL(from: url, displayNameHint: displayNameHint)
+      let account = Self.subscriptionAccount(for: id)
+      let previousSource = try? await diskIO.readProfileSource(atPath: currentProfile.originalConfigPath)
+      let previousURL = try await storedSubscriptionURL(for: id)
+      let result = Self.fetchResult(
+        try await fetchSubscription(url: resolution.url, session: session, options: fetchOptions),
+        displayNameHint: resolution.displayNameHint
+      )
+      var nextProfiles = await profilesByApplyingSubscriptionDetails(result, sourceURL: resolution.url, for: profile.id)
+      guard let nextIndex = nextProfiles.firstIndex(where: { $0.id == profile.id }) else { return }
+      nextProfiles[nextIndex].subscriptionProviderOptions = options
+      nextProfiles[nextIndex].updatedAt = Date()
+      let nextProfile = nextProfiles[nextIndex]
+      try await preflightValidator.validate(
+        subscriptionSource: result.source,
+        profileName: nextProfile.name,
+        providerOptions: options
+      )
+      let headerSnapshot = await headerSecretSnapshot(replacing: currentProfile, with: nextProfile)
+      do {
+        try await diskIO.writeProfileSource(result.source, to: URL(fileURLWithPath: currentProfile.originalConfigPath))
+        try await secretIO.save(resolution.url.absoluteString, account: account)
+        try await saveHeaderSecrets(for: nextProfile, replacing: currentProfile)
+        try await saveManifest(profiles: nextProfiles, activeProfileID: activeProfileID)
+      } catch {
+        if let previousSource {
+          try? await diskIO.writeProfileSource(previousSource, to: URL(fileURLWithPath: currentProfile.originalConfigPath))
+        }
+        if let previousURL {
+          try? await secretIO.save(previousURL, account: account)
+        } else {
+          try? await secretIO.delete(account: account)
+        }
+        await restoreHeaderSecrets(headerSnapshot, for: currentProfile)
         throw error
       }
       profiles = nextProfiles
@@ -363,6 +456,38 @@ final class ProfileStore: ObservableObject {
     }
   }
 
+  func updateSubscriptionProviderOptions(
+    _ profile: Profile,
+    options: SubscriptionProviderOptions,
+    preflightValidator: any SubscriptionProfilePreflightValidating = NoopSubscriptionProfilePreflightValidator()
+  ) async throws {
+    await waitForManifestLoad()
+    try await withMutationLock {
+      guard let index = profiles.firstIndex(where: { $0.id == profile.id }),
+            profiles[index].isSubscription
+      else { return }
+      let currentProfile = profiles[index]
+      let source = try await diskIO.readProfileSource(atPath: currentProfile.originalConfigPath)
+      try await preflightValidator.validate(
+        subscriptionSource: source,
+        profileName: currentProfile.name,
+        providerOptions: options
+      )
+      var nextProfiles = profiles
+      nextProfiles[index].subscriptionProviderOptions = options
+      nextProfiles[index].updatedAt = Date()
+      let headerSnapshot = await headerSecretSnapshot(replacing: currentProfile, with: nextProfiles[index])
+      do {
+        try await saveHeaderSecrets(for: nextProfiles[index], replacing: currentProfile)
+        try await saveManifest(profiles: nextProfiles, activeProfileID: activeProfileID)
+      } catch {
+        await restoreHeaderSecrets(headerSnapshot, for: currentProfile)
+        throw error
+      }
+      profiles = nextProfiles
+    }
+  }
+
   func delete(_ profile: Profile) async throws {
     await waitForManifestLoad()
     try await withMutationLock {
@@ -377,6 +502,7 @@ final class ProfileStore: ObservableObject {
       if case let .subscription(id) = current.source {
         subscriptionURLCache.removeValue(forKey: id)
         try? await secretIO.delete(account: Self.subscriptionAccount(for: id))
+        await deleteHeaderSecrets(for: current)
       }
     }
   }
@@ -398,6 +524,10 @@ final class ProfileStore: ObservableObject {
 
   nonisolated private static func subscriptionAccount(for id: UUID) -> String {
     "subscription.\(id.uuidString)"
+  }
+
+  nonisolated private static func subscriptionHeaderAccount(subscriptionID: UUID, headerID: UUID) -> String {
+    "subscription.\(subscriptionID.uuidString).header.\(headerID.uuidString)"
   }
 
   private func fetchSubscription(
@@ -445,9 +575,13 @@ final class ProfileStore: ObservableObject {
         for: Self.subscriptionIDs(in: manifest.profiles),
         account: Self.subscriptionAccount(for:)
       )
-      profiles = manifest.profiles
+      let hydrated = await profilesByHydratingHeaderSecrets(manifest.profiles)
+      profiles = hydrated.profiles
       activeProfileID = manifest.activeProfileID
       subscriptionURLCache = loadedSubscriptionURLs
+      if hydrated.shouldRewriteManifest {
+        try await saveManifest(profiles: hydrated.profiles, activeProfileID: manifest.activeProfileID)
+      }
     } catch {
       return
     }
@@ -482,6 +616,98 @@ final class ProfileStore: ObservableObject {
     }
     subscriptionURLCache[id] = loaded
     return loaded
+  }
+
+  private func profilesByHydratingHeaderSecrets(_ loadedProfiles: [Profile]) async -> (
+    profiles: [Profile],
+    shouldRewriteManifest: Bool
+  ) {
+    var hydratedProfiles = loadedProfiles
+    var shouldRewriteManifest = false
+
+    for profileIndex in hydratedProfiles.indices {
+      guard case let .subscription(subscriptionID) = hydratedProfiles[profileIndex].source else {
+        continue
+      }
+      var headers = hydratedProfiles[profileIndex].subscriptionProviderOptions.requestHeaders
+      for headerIndex in headers.indices {
+        let headerID = headers[headerIndex].id
+        let legacyValue = headers[headerIndex].value
+        let account = Self.subscriptionHeaderAccount(subscriptionID: subscriptionID, headerID: headerID)
+        if let storedValue = try? await secretIO.load(account: account) {
+          headers[headerIndex].value = storedValue
+          if !legacyValue.isEmpty {
+            shouldRewriteManifest = true
+          }
+        } else if !legacyValue.isEmpty {
+          do {
+            try await secretIO.save(legacyValue, account: account)
+            headers[headerIndex].value = legacyValue
+            shouldRewriteManifest = true
+          } catch {
+            headers[headerIndex].value = ""
+          }
+        }
+      }
+      hydratedProfiles[profileIndex].subscriptionProviderOptions.requestHeaders = headers
+    }
+
+    return (hydratedProfiles, shouldRewriteManifest)
+  }
+
+  private func headerSecretSnapshot(replacing currentProfile: Profile, with nextProfile: Profile) async -> [UUID: String?] {
+    guard case let .subscription(subscriptionID) = currentProfile.source else { return [:] }
+    let currentIDs = currentProfile.subscriptionProviderOptions.requestHeaders.map(\.id)
+    let nextIDs = nextProfile.subscriptionProviderOptions.requestHeaders.map(\.id)
+    let headerIDs = Set(currentIDs + nextIDs)
+    var snapshot: [UUID: String?] = [:]
+    for headerID in headerIDs {
+      snapshot[headerID] = try? await secretIO.load(
+        account: Self.subscriptionHeaderAccount(subscriptionID: subscriptionID, headerID: headerID)
+      )
+    }
+    return snapshot
+  }
+
+  private func saveHeaderSecrets(for profile: Profile, replacing previousProfile: Profile?) async throws {
+    guard case let .subscription(subscriptionID) = profile.source else { return }
+    let nextHeaders = profile.subscriptionProviderOptions.requestHeaders
+    let nextHeaderIDs = Set(nextHeaders.map(\.id))
+
+    for header in nextHeaders {
+      try await secretIO.save(
+        header.value,
+        account: Self.subscriptionHeaderAccount(subscriptionID: subscriptionID, headerID: header.id)
+      )
+    }
+
+    let previousHeaderIDs = Set(previousProfile?.subscriptionProviderOptions.requestHeaders.map(\.id) ?? [])
+    for removedHeaderID in previousHeaderIDs.subtracting(nextHeaderIDs) {
+      try await secretIO.delete(
+        account: Self.subscriptionHeaderAccount(subscriptionID: subscriptionID, headerID: removedHeaderID)
+      )
+    }
+  }
+
+  private func restoreHeaderSecrets(_ snapshot: [UUID: String?], for profile: Profile) async {
+    guard case let .subscription(subscriptionID) = profile.source else { return }
+    for (headerID, value) in snapshot {
+      let account = Self.subscriptionHeaderAccount(subscriptionID: subscriptionID, headerID: headerID)
+      if let value {
+        try? await secretIO.save(value, account: account)
+      } else {
+        try? await secretIO.delete(account: account)
+      }
+    }
+  }
+
+  private func deleteHeaderSecrets(for profile: Profile) async {
+    guard case let .subscription(subscriptionID) = profile.source else { return }
+    for header in profile.subscriptionProviderOptions.requestHeaders {
+      try? await secretIO.delete(
+        account: Self.subscriptionHeaderAccount(subscriptionID: subscriptionID, headerID: header.id)
+      )
+    }
   }
 
   private func profilesByApplyingSubscriptionDetails(

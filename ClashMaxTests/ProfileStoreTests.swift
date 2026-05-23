@@ -98,6 +98,28 @@ final class ProfileStoreTests: XCTestCase {
     XCTAssertEqual(changeCount, 0)
   }
 
+  func testProfileDecodesDefaultSubscriptionProviderOptionsFromOldManifest() throws {
+    let id = UUID()
+    let data = Data("""
+    {
+      "id": "\(id.uuidString)",
+      "name": "Remote",
+      "nameIsUserCustomized": true,
+      "source": {
+        "kind": "subscription",
+        "subscriptionID": "\(id.uuidString)"
+      },
+      "originalConfigPath": "/tmp/profile.yaml",
+      "createdAt": 0,
+      "updatedAt": 0
+    }
+    """.utf8)
+
+    let profile = try JSONDecoder().decode(Profile.self, from: data)
+
+    XCTAssertEqual(profile.subscriptionProviderOptions, .default)
+  }
+
   func testSubscriptionURLIsStoredOutsideManifestAndUpdateRefreshesConfig() async throws {
     let fixture = try TemporaryProfileFixture()
     let secrets = InMemorySecretStore()
@@ -319,6 +341,153 @@ final class ProfileStoreTests: XCTestCase {
     XCTAssertEqual(try secrets.load(account: "subscription.\(profile.id.uuidString)"), "https://example.com/old")
     XCTAssertEqual(try String(contentsOfFile: profile.originalConfigPath, encoding: .utf8), originalConfig)
     XCTAssertEqual(store.profiles.first?.name, "Remote")
+  }
+
+  func testSubscriptionProviderOptionsPersistWithoutChangingStoredURL() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let secrets = InMemorySecretStore()
+    let store = ProfileStore(paths: fixture.paths, keychain: secrets)
+    let session = URLSession(configuration: URLProtocolRecorder.configurationReturning("proxies:\n  - name: DIRECT\n    type: direct\n"))
+    let profile = try await store.addSubscription(
+      name: "Remote",
+      url: URL(string: "https://example.com/sub")!,
+      session: session
+    )
+    let header = SubscriptionRequestHeader(name: "X-Token", value: "secret")
+    let options = SubscriptionProviderOptions(
+      intervalSeconds: 900,
+      filter: "HK",
+      requestHeaders: [header],
+      fetchProxy: .systemProxy
+    )
+
+    try await store.updateSubscriptionProviderOptions(profile, options: options)
+
+    XCTAssertEqual(store.profiles.first?.subscriptionProviderOptions, options)
+    XCTAssertEqual(try secrets.load(account: "subscription.\(profile.id.uuidString)"), "https://example.com/sub")
+    XCTAssertEqual(
+      try secrets.load(account: "subscription.\(profile.id.uuidString).header.\(header.id.uuidString)"),
+      "secret"
+    )
+    let manifest = try String(contentsOf: fixture.paths.manifestURL, encoding: .utf8)
+    XCTAssertTrue(manifest.contains(header.id.uuidString))
+    XCTAssertTrue(manifest.contains("X-Token"))
+    XCTAssertFalse(manifest.contains("secret"))
+    let reloaded = ProfileStore(paths: fixture.paths, keychain: secrets)
+    await reloaded.waitForManifestLoad()
+    XCTAssertEqual(reloaded.profiles.first?.subscriptionProviderOptions, options)
+  }
+
+  func testLegacyHeaderValuesAreMigratedOutOfManifestOnLoad() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let secrets = InMemorySecretStore()
+    let profileID = UUID()
+    let headerID = UUID()
+    try """
+    {
+      "activeProfileID": "\(profileID.uuidString)",
+      "profiles": [
+        {
+          "id": "\(profileID.uuidString)",
+          "name": "Remote",
+          "nameIsUserCustomized": true,
+          "source": {
+            "kind": "subscription",
+            "subscriptionID": "\(profileID.uuidString)"
+          },
+          "originalConfigPath": "\(fixture.configURL.path)",
+          "subscriptionProviderOptions": {
+            "requestHeaders": [
+              {
+                "id": "\(headerID.uuidString)",
+                "name": "Authorization",
+                "value": "Bearer legacy"
+              }
+            ]
+          },
+          "createdAt": "2026-01-01T00:00:00Z",
+          "updatedAt": "2026-01-01T00:00:00Z"
+        }
+      ]
+    }
+    """.write(to: fixture.paths.manifestURL, atomically: true, encoding: .utf8)
+
+    let store = ProfileStore(paths: fixture.paths, keychain: secrets)
+    await store.waitForManifestLoad()
+
+    XCTAssertEqual(store.profiles.first?.subscriptionProviderOptions.requestHeaders.first?.value, "Bearer legacy")
+    XCTAssertEqual(
+      try secrets.load(account: "subscription.\(profileID.uuidString).header.\(headerID.uuidString)"),
+      "Bearer legacy"
+    )
+    let manifest = try String(contentsOf: fixture.paths.manifestURL, encoding: .utf8)
+    XCTAssertTrue(manifest.contains("Authorization"))
+    XCTAssertFalse(manifest.contains("Bearer legacy"))
+  }
+
+  func testProviderOptionsPreflightBeforePersistence() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let secrets = InMemorySecretStore()
+    let store = ProfileStore(paths: fixture.paths, keychain: secrets)
+    let providerContent = "trojan://password@example.com:443?sni=example.com#Trojan%20Node\n"
+    let profile = try await store.addSubscription(
+      name: "Remote",
+      url: URL(string: "https://example.com/sub")!,
+      session: URLSession(configuration: URLProtocolRecorder.configurationReturning(providerContent))
+    )
+    let invalidOptions = SubscriptionProviderOptions(overrideYAML: "override: [")
+    let validator = MihomoSubscriptionProfilePreflightValidator(
+      paths: fixture.paths,
+      overrides: .defaultForLaunch(secret: "secret-token"),
+      coreURLProvider: { URL(fileURLWithPath: "/tmp/mihomo") },
+      runtimeConfigValidator: RecordingRuntimeConfigValidator(result: .success(()))
+    )
+
+    await XCTAssertThrowsErrorAsync {
+      try await store.updateSubscriptionProviderOptions(
+        profile,
+        options: invalidOptions,
+        preflightValidator: validator
+      )
+    }
+
+    XCTAssertEqual(store.profiles.first?.subscriptionProviderOptions, .default)
+    let reloaded = ProfileStore(paths: fixture.paths, keychain: secrets)
+    await reloaded.waitForManifestLoad()
+    XCTAssertEqual(reloaded.profiles.first?.subscriptionProviderOptions, .default)
+  }
+
+  func testSubscriptionSourceAndProviderOptionsPersistAsSingleFinalProfile() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let secrets = InMemorySecretStore()
+    let store = ProfileStore(paths: fixture.paths, keychain: secrets)
+    let initialSession = URLSession(configuration: URLProtocolRecorder.configurationReturning("proxies:\n  - name: DIRECT\n    type: direct\n"))
+    let profile = try await store.addSubscription(
+      name: "Remote",
+      url: URL(string: "https://example.com/old")!,
+      session: initialSession
+    )
+    let header = SubscriptionRequestHeader(name: "Authorization", value: "Bearer new")
+    let options = SubscriptionProviderOptions(requestHeaders: [header], fetchProxy: .direct)
+    let recorder = URLProtocolRecorder(responseBody: "proxies:\n  - name: New\n    type: direct\n")
+    let session = URLSession(configuration: recorder.configuration)
+
+    try await store.updateSubscriptionSourceAndProviderOptions(
+      profile,
+      url: URL(string: "https://example.com/new")!,
+      options: options,
+      session: session,
+      fetchOptions: options.fetchOptions(from: SubscriptionFetchOptions())
+    )
+
+    XCTAssertEqual(recorder.lastRequest?.value(forHTTPHeaderField: "Authorization"), "Bearer new")
+    XCTAssertEqual(try secrets.load(account: "subscription.\(profile.id.uuidString)"), "https://example.com/new")
+    XCTAssertEqual(
+      try secrets.load(account: "subscription.\(profile.id.uuidString).header.\(header.id.uuidString)"),
+      "Bearer new"
+    )
+    XCTAssertEqual(store.profiles.first?.subscriptionProviderOptions, options)
+    XCTAssertEqual(try String(contentsOfFile: profile.originalConfigPath, encoding: .utf8), "proxies:\n  - name: New\n    type: direct\n")
   }
 
   func testSubscriptionAcceptsBase64URIProviderContentAndStoresRawSource() async throws {
@@ -544,14 +713,20 @@ final class RecordingSubscriptionPreflightValidator: SubscriptionProfilePrefligh
   private let result: Result<Void, Error>
   private(set) var validatedSources: [String] = []
   private(set) var validatedNames: [String] = []
+  private(set) var validatedProviderOptions: [SubscriptionProviderOptions] = []
 
   init(result: Result<Void, Error> = .success(())) {
     self.result = result
   }
 
-  func validate(subscriptionSource: String, profileName: String) async throws {
+  func validate(
+    subscriptionSource: String,
+    profileName: String,
+    providerOptions: SubscriptionProviderOptions
+  ) async throws {
     validatedSources.append(subscriptionSource)
     validatedNames.append(profileName)
+    validatedProviderOptions.append(providerOptions)
     try result.get()
   }
 }

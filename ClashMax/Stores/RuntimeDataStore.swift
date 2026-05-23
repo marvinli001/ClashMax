@@ -6,12 +6,15 @@ final class RuntimeDataStore: ObservableObject {
 
   @Published var proxyGroups: [ProxyGroup] = []
   @Published var proxyProviders: [ProxyProvider] = []
+  @Published var ruleProviders: [RuleProvider] = []
   @Published var rules: [String] = []
   @Published var connections: [ConnectionSnapshot] = []
   @Published private(set) var logs: [LogEntry] = []
   @Published var trafficSample: TrafficSample = .zero
   @Published var trafficHistory: [TrafficSample] = []
   @Published private(set) var providerHealthChecksInFlight: Set<ProxyProvider.ID> = []
+  @Published private(set) var proxyProviderUpdatesInFlight: Set<ProxyProvider.ID> = []
+  @Published private(set) var ruleProviderUpdatesInFlight: Set<RuleProvider.ID> = []
   @Published private(set) var closingConnectionIDs: Set<ConnectionSnapshot.ID> = []
   @Published var closingAllConnections = false
 
@@ -35,6 +38,26 @@ final class RuntimeDataStore: ObservableObject {
       ids.remove(id)
     }
     providerHealthChecksInFlight = ids
+  }
+
+  func setProxyProvider(_ id: ProxyProvider.ID, updateInFlight isRunning: Bool) {
+    var ids = proxyProviderUpdatesInFlight
+    if isRunning {
+      ids.insert(id)
+    } else {
+      ids.remove(id)
+    }
+    proxyProviderUpdatesInFlight = ids
+  }
+
+  func setRuleProvider(_ id: RuleProvider.ID, updateInFlight isRunning: Bool) {
+    var ids = ruleProviderUpdatesInFlight
+    if isRunning {
+      ids.insert(id)
+    } else {
+      ids.remove(id)
+    }
+    ruleProviderUpdatesInFlight = ids
   }
 
   func setConnection(_ id: ConnectionSnapshot.ID, closing isClosing: Bool) {
@@ -89,11 +112,14 @@ final class RuntimeDataStore: ObservableObject {
     flushPendingLogs()
     proxyGroups = []
     proxyProviders = []
+    ruleProviders = []
     rules = []
     replaceConnections([])
     closingConnectionIDs = []
     closingAllConnections = false
     providerHealthChecksInFlight = []
+    proxyProviderUpdatesInFlight = []
+    ruleProviderUpdatesInFlight = []
     trafficSample = .zero
     trafficHistory = []
   }

@@ -154,6 +154,75 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(model.profileOperationMessage, "Updated subscription Remote.")
   }
 
+  func testUpdatingSubscriptionSourceAndProviderOptionsReloadsRunningRuntimeOnceWithFinalProfile() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let secrets = InMemorySecretStore()
+    let store = ProfileStore(paths: paths, keychain: secrets)
+    let oldSource = """
+    proxies:
+      - { name: Old Node, type: direct }
+    proxy-groups:
+      - { name: Proxy, type: select, proxies: [Old Node, DIRECT] }
+    rules:
+      - MATCH,Proxy
+    """
+    let profile = try await store.addSubscription(
+      name: "Remote",
+      url: URL(string: "https://example.com/old")!,
+      session: URLSession(configuration: URLProtocolRecorder.configurationReturning(oldSource))
+    )
+    let controller = CoreProcessController(
+      launcher: FakeProcessLauncher(),
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      apiClient: client,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    try await controller.startUserMode(
+      coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+      configURL: URL(fileURLWithPath: profile.originalConfigPath),
+      workDirectory: paths.runtime,
+      api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+    )
+
+    let header = SubscriptionRequestHeader(name: "X-Panel-Token", value: "secret")
+    let options = SubscriptionProviderOptions(requestHeaders: [header], fetchProxy: .direct)
+    let newSource = """
+    proxies:
+      - { name: New Node, type: direct }
+    proxy-groups:
+      - { name: Proxy, type: select, proxies: [New Node, DIRECT] }
+    rules:
+      - MATCH,Proxy
+    """
+    let recorder = URLProtocolRecorder(responseBody: newSource)
+    let didUpdate = await model.updateSubscriptionSourceAndProviderOptions(
+      profile,
+      urlString: "https://example.com/new",
+      options: options,
+      session: URLSession(configuration: recorder.configuration)
+    )
+
+    XCTAssertTrue(didUpdate)
+    XCTAssertEqual(recorder.lastRequest?.value(forHTTPHeaderField: "X-Panel-Token"), "secret")
+    XCTAssertEqual(try secrets.load(account: "subscription.\(profile.id.uuidString)"), "https://example.com/new")
+    XCTAssertEqual(store.profiles.first?.subscriptionProviderOptions, options)
+    let reloadPaths = await client.reloadRequestPaths()
+    XCTAssertEqual(reloadPaths.count, 1)
+    let runtimePath = try XCTUnwrap(reloadPaths.first)
+    let runtimeConfig = try String(contentsOfFile: runtimePath, encoding: .utf8)
+    XCTAssertTrue(runtimeConfig.contains("New Node"))
+    XCTAssertFalse(runtimeConfig.contains("Old Node"))
+  }
+
   func testProxyGroupsUnavailableMessageExplainsMissingProfileGroupsBeforeStart() async throws {
     let paths = try Self.makeRuntimePaths()
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
@@ -1589,7 +1658,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
   }
 
   func testProviderSummaryRequiresDeveloperMode() {
-    XCTAssertFalse(ProxyPageVisibilityPolicy.showsProviderSummary(developerMode: false, providerCount: 3))
+    XCTAssertTrue(ProxyPageVisibilityPolicy.showsProviderSummary(developerMode: false, providerCount: 3))
     XCTAssertFalse(ProxyPageVisibilityPolicy.showsProviderSummary(developerMode: true, providerCount: 0))
     XCTAssertTrue(ProxyPageVisibilityPolicy.showsProviderSummary(developerMode: true, providerCount: 3))
   }
@@ -2201,6 +2270,15 @@ final class DashboardRuntimeStateTests: XCTestCase {
       updatedAt: Date(timeIntervalSince1970: 1_700_000_000),
       proxies: [ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true)]
     )
+    let ruleProvider = RuleProvider(
+      name: "RemoteRules",
+      type: "http",
+      vehicleType: "HTTP",
+      behavior: "domain",
+      format: "yaml",
+      updatedAt: Date(timeIntervalSince1970: 1_700_000_000),
+      ruleCount: 12
+    )
     let connection = ConnectionSnapshot(
       id: "conn-1",
       network: "tcp",
@@ -2221,6 +2299,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         )
       ],
       proxyProvidersResponse: [provider],
+      ruleProvidersResponse: [ruleProvider],
       connectionsResponse: [connection],
       testDelayResult: 73
     )
@@ -2235,11 +2314,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.reloadRuntimeData()
 
-    for _ in 0..<20 where model.proxyProviders.isEmpty || model.connections.isEmpty {
+    for _ in 0..<20 where model.proxyProviders.isEmpty || model.ruleProviders.isEmpty || model.connections.isEmpty {
       await Task.yield()
     }
 
     XCTAssertEqual(model.proxyProviders, [provider])
+    XCTAssertEqual(model.ruleProviders, [ruleProvider])
     XCTAssertEqual(model.connections, [connection])
   }
 
@@ -2715,6 +2795,141 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     let healthCheckProviders = await client.healthCheckProviders()
     XCTAssertEqual(healthCheckProviders, ["Remote"])
+  }
+
+  func testProviderUpdatesUseRuntimeAPIAndReload() async throws {
+    let proxyProvider = ProxyProvider(name: "Remote/sub", type: "http", vehicleType: "HTTP", updatedAt: nil, proxies: [])
+    let ruleProvider = RuleProvider(
+      name: "Rules/sub",
+      type: "http",
+      vehicleType: "HTTP",
+      behavior: "domain",
+      format: "yaml",
+      updatedAt: nil,
+      ruleCount: 3
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [],
+      proxyProvidersResponse: [proxyProvider],
+      ruleProvidersResponse: [ruleProvider],
+      testDelayResult: 73
+    )
+    let model = try await makeRunningRuntimeModel(client: client)
+    model.proxyProviders = [proxyProvider]
+    model.ruleProviders = [ruleProvider]
+
+    model.updateProxyProvider(proxyProvider)
+    model.updateRuleProvider(ruleProvider)
+
+    for _ in 0..<80 {
+      let proxyUpdates = await client.updatedProxyProviders()
+      let ruleUpdates = await client.updatedRuleProviders()
+      if proxyUpdates == ["Remote/sub"] && ruleUpdates == ["Rules/sub"] {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let updatedProxyProviders = await client.updatedProxyProviders()
+    let updatedRuleProviders = await client.updatedRuleProviders()
+    let proxyGroupsRequestCount = await client.proxyGroupsRequestCount()
+    XCTAssertEqual(updatedProxyProviders, ["Remote/sub"])
+    XCTAssertEqual(updatedRuleProviders, ["Rules/sub"])
+    XCTAssertTrue(model.proxyProviderUpdatesInFlight.isEmpty)
+    XCTAssertTrue(model.ruleProviderUpdatesInFlight.isEmpty)
+    XCTAssertGreaterThanOrEqual(proxyGroupsRequestCount, 1)
+  }
+
+  func testUpdateAllProvidersSkipsDuplicateBatchWhileRunning() async throws {
+    let first = ProxyProvider(name: "Remote A", type: "http", vehicleType: "HTTP", updatedAt: nil, proxies: [])
+    let second = ProxyProvider(name: "Remote B", type: "http", vehicleType: "HTTP", updatedAt: nil, proxies: [])
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [],
+      proxyProvidersResponse: [first, second],
+      testDelayResult: 73
+    )
+    let model = try await makeRunningRuntimeModel(client: client)
+    model.proxyProviders = [first, second]
+
+    model.updateAllProxyProviders()
+    model.updateAllProxyProviders()
+
+    for _ in 0..<80 where await client.updatedProxyProviders().count < 2 {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let updatedProxyProviders = await client.updatedProxyProviders()
+    XCTAssertEqual(updatedProxyProviders, ["Remote A", "Remote B"])
+    XCTAssertTrue(model.proxyProviderUpdatesInFlight.isEmpty)
+  }
+
+  func testUpdateAllProvidersContinuesAfterPartialFailures() async throws {
+    let firstProxyProvider = ProxyProvider(name: "Remote A", type: "http", vehicleType: "HTTP", updatedAt: nil, proxies: [])
+    let secondProxyProvider = ProxyProvider(name: "Remote B", type: "http", vehicleType: "HTTP", updatedAt: nil, proxies: [])
+    let firstRuleProvider = RuleProvider(
+      name: "Rules A",
+      type: "http",
+      vehicleType: "HTTP",
+      behavior: "domain",
+      format: "yaml",
+      updatedAt: nil,
+      ruleCount: nil
+    )
+    let secondRuleProvider = RuleProvider(
+      name: "Rules B",
+      type: "http",
+      vehicleType: "HTTP",
+      behavior: "classical",
+      format: "text",
+      updatedAt: nil,
+      ruleCount: nil
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [],
+      proxyProvidersResponse: [firstProxyProvider, secondProxyProvider],
+      ruleProvidersResponse: [firstRuleProvider, secondRuleProvider],
+      testDelayResult: 73,
+      proxyProviderUpdateFailures: ["Remote A": "proxy update refused"],
+      ruleProviderUpdateFailures: ["Rules A": "rule update refused"]
+    )
+    let model = try await makeRunningRuntimeModel(client: client)
+    model.proxyProviders = [firstProxyProvider, secondProxyProvider]
+    model.ruleProviders = [firstRuleProvider, secondRuleProvider]
+
+    model.updateAllProxyProviders()
+
+    for _ in 0..<80 {
+      let updates = await client.updatedProxyProviders()
+      if updates.count == 2 && model.lastError?.contains("Remote A: proxy update refused") == true {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let updatedProxyProviders = await client.updatedProxyProviders()
+    XCTAssertEqual(updatedProxyProviders, ["Remote A", "Remote B"])
+    XCTAssertTrue(model.proxyProviderUpdatesInFlight.isEmpty)
+    XCTAssertEqual(model.lastError, "Failed to update 1 proxy provider: Remote A: proxy update refused")
+
+    model.lastError = nil
+    model.updateAllRuleProviders()
+
+    for _ in 0..<80 {
+      let updates = await client.updatedRuleProviders()
+      if updates.count == 2 && model.lastError?.contains("Rules A: rule update refused") == true {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let updatedRuleProviders = await client.updatedRuleProviders()
+    XCTAssertEqual(updatedRuleProviders, ["Rules A", "Rules B"])
+    XCTAssertTrue(model.ruleProviderUpdatesInFlight.isEmpty)
+    XCTAssertEqual(model.lastError, "Failed to update 1 rule provider: Rules A: rule update refused")
   }
 
   func testClosingConnectionIgnoresDuplicateConnectionWhileRunning() async throws {
@@ -5803,6 +6018,7 @@ private actor RecordingPublicIPInfoFetcher: PublicIPInfoFetching {
 private actor RecordingMihomoController: MihomoAPIControlling {
   private let proxyGroupsResponses: [[ProxyGroup]]
   private let proxyProvidersResponse: [ProxyProvider]
+  private let ruleProvidersResponse: [RuleProvider]
   private let connectionsResponse: [ConnectionSnapshot]
   private let testDelayResults: [Int]
   private let modeUpdateDelayNanoseconds: UInt64
@@ -5813,6 +6029,8 @@ private actor RecordingMihomoController: MihomoAPIControlling {
   private let closeConnectionDelayNanoseconds: UInt64
   private let healthCheckFailureMessage: String?
   private let closeConnectionFailureMessage: String?
+  private let proxyProviderUpdateFailures: [String: String]
+  private let ruleProviderUpdateFailures: [String: String]
   private let reloadFailureMessage: String?
   private let restartFailureMessage: String?
   private let setTunEnabledFailureMessage: String?
@@ -5824,6 +6042,8 @@ private actor RecordingMihomoController: MihomoAPIControlling {
   private var proxyGroupsRequests = 0
   private var delayRequests: [String] = []
   private var healthCheckRequests: [String] = []
+  private var proxyProviderUpdateRequests: [String] = []
+  private var ruleProviderUpdateRequests: [String] = []
   private var closedConnections: [String] = []
   private var closedAllRequestCount = 0
   private var reloadRequests: [(path: String, force: Bool)] = []
@@ -5834,6 +6054,7 @@ private actor RecordingMihomoController: MihomoAPIControlling {
   init(
     proxyGroupsResponse: [ProxyGroup],
     proxyProvidersResponse: [ProxyProvider] = [],
+    ruleProvidersResponse: [RuleProvider] = [],
     connectionsResponse: [ConnectionSnapshot] = [],
     testDelayResult: Int,
     modeUpdateDelayNanoseconds: UInt64 = 0,
@@ -5844,6 +6065,8 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     closeConnectionDelayNanoseconds: UInt64 = 0,
     healthCheckFailureMessage: String? = nil,
     closeConnectionFailureMessage: String? = nil,
+    proxyProviderUpdateFailures: [String: String] = [:],
+    ruleProviderUpdateFailures: [String: String] = [:],
     reloadFailureMessage: String? = nil,
     restartFailureMessage: String? = nil,
     setTunEnabledFailureMessage: String? = nil,
@@ -5853,6 +6076,7 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     self.init(
       proxyGroupsResponses: [proxyGroupsResponse],
       proxyProvidersResponse: proxyProvidersResponse,
+      ruleProvidersResponse: ruleProvidersResponse,
       connectionsResponse: connectionsResponse,
       testDelayResults: [testDelayResult],
       modeUpdateDelayNanoseconds: modeUpdateDelayNanoseconds,
@@ -5863,6 +6087,8 @@ private actor RecordingMihomoController: MihomoAPIControlling {
       closeConnectionDelayNanoseconds: closeConnectionDelayNanoseconds,
       healthCheckFailureMessage: healthCheckFailureMessage,
       closeConnectionFailureMessage: closeConnectionFailureMessage,
+      proxyProviderUpdateFailures: proxyProviderUpdateFailures,
+      ruleProviderUpdateFailures: ruleProviderUpdateFailures,
       reloadFailureMessage: reloadFailureMessage,
       restartFailureMessage: restartFailureMessage,
       setTunEnabledFailureMessage: setTunEnabledFailureMessage,
@@ -5874,6 +6100,7 @@ private actor RecordingMihomoController: MihomoAPIControlling {
   init(
     proxyGroupsResponse: [ProxyGroup],
     proxyProvidersResponse: [ProxyProvider] = [],
+    ruleProvidersResponse: [RuleProvider] = [],
     connectionsResponse: [ConnectionSnapshot] = [],
     testDelayResults: [Int],
     modeUpdateDelayNanoseconds: UInt64 = 0,
@@ -5884,6 +6111,8 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     closeConnectionDelayNanoseconds: UInt64 = 0,
     healthCheckFailureMessage: String? = nil,
     closeConnectionFailureMessage: String? = nil,
+    proxyProviderUpdateFailures: [String: String] = [:],
+    ruleProviderUpdateFailures: [String: String] = [:],
     reloadFailureMessage: String? = nil,
     restartFailureMessage: String? = nil,
     setTunEnabledFailureMessage: String? = nil,
@@ -5893,6 +6122,7 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     self.init(
       proxyGroupsResponses: [proxyGroupsResponse],
       proxyProvidersResponse: proxyProvidersResponse,
+      ruleProvidersResponse: ruleProvidersResponse,
       connectionsResponse: connectionsResponse,
       testDelayResults: testDelayResults,
       modeUpdateDelayNanoseconds: modeUpdateDelayNanoseconds,
@@ -5903,6 +6133,8 @@ private actor RecordingMihomoController: MihomoAPIControlling {
       closeConnectionDelayNanoseconds: closeConnectionDelayNanoseconds,
       healthCheckFailureMessage: healthCheckFailureMessage,
       closeConnectionFailureMessage: closeConnectionFailureMessage,
+      proxyProviderUpdateFailures: proxyProviderUpdateFailures,
+      ruleProviderUpdateFailures: ruleProviderUpdateFailures,
       reloadFailureMessage: reloadFailureMessage,
       restartFailureMessage: restartFailureMessage,
       setTunEnabledFailureMessage: setTunEnabledFailureMessage,
@@ -5914,6 +6146,7 @@ private actor RecordingMihomoController: MihomoAPIControlling {
   init(
     proxyGroupsResponses: [[ProxyGroup]],
     proxyProvidersResponse: [ProxyProvider] = [],
+    ruleProvidersResponse: [RuleProvider] = [],
     connectionsResponse: [ConnectionSnapshot] = [],
     testDelayResults: [Int],
     modeUpdateDelayNanoseconds: UInt64 = 0,
@@ -5924,6 +6157,8 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     closeConnectionDelayNanoseconds: UInt64 = 0,
     healthCheckFailureMessage: String? = nil,
     closeConnectionFailureMessage: String? = nil,
+    proxyProviderUpdateFailures: [String: String] = [:],
+    ruleProviderUpdateFailures: [String: String] = [:],
     reloadFailureMessage: String? = nil,
     restartFailureMessage: String? = nil,
     setTunEnabledFailureMessage: String? = nil,
@@ -5932,6 +6167,7 @@ private actor RecordingMihomoController: MihomoAPIControlling {
   ) {
     self.proxyGroupsResponses = proxyGroupsResponses
     self.proxyProvidersResponse = proxyProvidersResponse
+    self.ruleProvidersResponse = ruleProvidersResponse
     self.connectionsResponse = connectionsResponse
     self.testDelayResults = testDelayResults
     self.modeUpdateDelayNanoseconds = modeUpdateDelayNanoseconds
@@ -5942,6 +6178,8 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     self.closeConnectionDelayNanoseconds = closeConnectionDelayNanoseconds
     self.healthCheckFailureMessage = healthCheckFailureMessage
     self.closeConnectionFailureMessage = closeConnectionFailureMessage
+    self.proxyProviderUpdateFailures = proxyProviderUpdateFailures
+    self.ruleProviderUpdateFailures = ruleProviderUpdateFailures
     self.reloadFailureMessage = reloadFailureMessage
     self.restartFailureMessage = restartFailureMessage
     self.setTunEnabledFailureMessage = setTunEnabledFailureMessage
@@ -5968,6 +6206,10 @@ private actor RecordingMihomoController: MihomoAPIControlling {
 
   func structuredProxyProviders() async throws -> [ProxyProvider] {
     proxyProvidersResponse
+  }
+
+  func ruleProviders() async throws -> [RuleProvider] {
+    ruleProvidersResponse
   }
 
   func rules() async throws -> [String] {
@@ -5998,6 +6240,20 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     try await sleepIfNeeded(healthCheckDelayNanoseconds, ignoringCancellation: ignoreHealthCheckCancellation)
     if let healthCheckFailureMessage {
       throw AppError.helperResponse(healthCheckFailureMessage)
+    }
+  }
+
+  func updateProxyProvider(named provider: String) async throws {
+    proxyProviderUpdateRequests.append(provider)
+    if let failure = proxyProviderUpdateFailures[provider] {
+      throw AppError.helperResponse(failure)
+    }
+  }
+
+  func updateRuleProvider(named provider: String) async throws {
+    ruleProviderUpdateRequests.append(provider)
+    if let failure = ruleProviderUpdateFailures[provider] {
+      throw AppError.helperResponse(failure)
     }
   }
 
@@ -6072,6 +6328,14 @@ private actor RecordingMihomoController: MihomoAPIControlling {
 
   func healthCheckProviders() -> [String] {
     healthCheckRequests
+  }
+
+  func updatedProxyProviders() -> [String] {
+    proxyProviderUpdateRequests
+  }
+
+  func updatedRuleProviders() -> [String] {
+    ruleProviderUpdateRequests
   }
 
   func closedConnectionIDs() -> [String] {

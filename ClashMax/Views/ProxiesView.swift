@@ -318,7 +318,7 @@ private struct ProxyNodeGridAnimationState: Equatable {
 
 enum ProxyPageVisibilityPolicy {
   static func showsProviderSummary(developerMode: Bool, providerCount: Int) -> Bool {
-    developerMode && providerCount > 0
+    providerCount > 0
   }
 
   static func showsLoadingSkeleton(
@@ -389,7 +389,21 @@ private struct ProxyProviderList: View {
   let providers: [ProxyProvider]
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 6) {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(spacing: 10) {
+        Label("Proxy Providers", systemImage: "shippingbox")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.secondary)
+        Spacer()
+        Button {
+          appModel.updateAllProxyProviders()
+        } label: {
+          Label("Update All", systemImage: "arrow.clockwise")
+            .labelStyle(.titleAndIcon)
+        }
+        .controlSize(.small)
+        .disabled(!appModel.canControlRuntimeProxies || providers.isEmpty || allUpdatesInFlight)
+      }
       ForEach(providers) { provider in
         HStack(spacing: 10) {
           VStack(alignment: .leading, spacing: 2) {
@@ -400,13 +414,38 @@ private struct ProxyProviderList: View {
               .font(.caption)
               .foregroundStyle(.secondary)
               .lineLimit(1)
+            if let usage = provider.subscriptionInfo?.usageSummary {
+              Text(usage)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
           }
           Spacer(minLength: 12)
+          if let expireAt = provider.subscriptionInfo?.expireAt {
+            Text(expireAt, style: .date)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
           if let updatedAt = provider.updatedAt {
             Text(updatedAt, style: .date)
               .font(.caption)
               .foregroundStyle(.secondary)
           }
+          Button {
+            appModel.updateProxyProvider(provider)
+          } label: {
+            if runtimeData.proxyProviderUpdatesInFlight.contains(provider.id) {
+              Image(systemName: "clock.arrow.circlepath")
+            } else {
+              Image(systemName: "arrow.clockwise")
+            }
+          }
+          .buttonStyle(.borderless)
+          .disabled(!appModel.canControlRuntimeProxies || runtimeData.proxyProviderUpdatesInFlight.contains(provider.id))
+          .help("Update provider")
+          .accessibilityLabel("Update provider \(provider.name)")
+
           Button {
             appModel.healthCheckProvider(provider)
           } label: {
@@ -431,6 +470,10 @@ private struct ProxyProviderList: View {
       RoundedRectangle(cornerRadius: 8, style: .continuous)
         .strokeBorder(ProxySurface.border, lineWidth: 1)
     }
+  }
+
+  private var allUpdatesInFlight: Bool {
+    !providers.isEmpty && providers.allSatisfy { runtimeData.proxyProviderUpdatesInFlight.contains($0.id) }
   }
 
   private func providerSubtitle(_ provider: ProxyProvider) -> String {

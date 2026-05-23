@@ -118,6 +118,39 @@ final class ProfileOperationsStore: ObservableObject {
     return true
   }
 
+  @discardableResult
+  func updateSubscriptionSourceAndProviderOptions(
+    _ profile: Profile,
+    url: URL,
+    displayNameHint: String? = nil,
+    options: SubscriptionProviderOptions,
+    session: URLSession = .shared,
+    fetchOptions: SubscriptionFetchOptions = SubscriptionFetchOptions(),
+    preflightValidator: any SubscriptionProfilePreflightValidating = NoopSubscriptionProfilePreflightValidator()
+  ) async throws -> Bool {
+    guard profile.isSubscription else {
+      throw AppError.invalidProfileConfig("Only subscription profiles can update their source URL.")
+    }
+    guard !updatingProfileIDs.contains(profile.id) else { return false }
+
+    setProfile(profile.id, updating: true)
+    message = nil
+    defer { setProfile(profile.id, updating: false) }
+
+    try await profileStore.updateSubscriptionSourceAndProviderOptions(
+      profile,
+      url: url,
+      displayNameHint: displayNameHint,
+      options: options,
+      session: session,
+      fetchOptions: fetchOptions,
+      preflightValidator: preflightValidator
+    )
+    let name = profileStore.profiles.first { $0.id == profile.id }?.name ?? profile.name
+    message = "Updated subscription source and provider options for \(name)."
+    return true
+  }
+
   func renameActiveProfile(to name: String) async throws {
     guard let profile = profileStore.activeProfile else { return }
     try await renameProfile(profile, to: name)
@@ -137,6 +170,22 @@ final class ProfileOperationsStore: ObservableObject {
     if let name = profileStore.profiles.first(where: { $0.id == profile.id })?.name {
       message = "Restored subscription name to \(name)."
     }
+  }
+
+  func updateSubscriptionProviderOptions(
+    _ profile: Profile,
+    options: SubscriptionProviderOptions,
+    preflightValidator: any SubscriptionProfilePreflightValidating = NoopSubscriptionProfilePreflightValidator()
+  ) async throws {
+    guard profile.isSubscription else {
+      throw AppError.invalidProfileConfig("Only subscription profiles can update provider options.")
+    }
+    try await profileStore.updateSubscriptionProviderOptions(
+      profile,
+      options: options,
+      preflightValidator: preflightValidator
+    )
+    message = "Updated provider options for \(profile.name)."
   }
 
   func deleteActiveProfile() async throws {

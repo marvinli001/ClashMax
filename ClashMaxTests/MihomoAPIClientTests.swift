@@ -191,6 +191,12 @@ final class MihomoAPIClientTests: XCTestCase {
           "type": "Proxy",
           "vehicleType": "HTTP",
           "updatedAt": "2026-05-05T09:30:00Z",
+          "subscriptionInfo": {
+            "upload": 1024,
+            "download": 2048,
+            "total": 4096,
+            "expire": 1770000000
+          },
           "proxies": [
             { "name": "Japan", "type": "Vless" },
             { "name": "DIRECT", "type": "Direct" }
@@ -210,12 +216,75 @@ final class MihomoAPIClientTests: XCTestCase {
         type: "Proxy",
         vehicleType: "HTTP",
         updatedAt: ISO8601DateFormatter().date(from: "2026-05-05T09:30:00Z"),
+        subscriptionInfo: ProviderSubscriptionInfo(
+          upload: 1024,
+          download: 2048,
+          total: 4096,
+          expireAt: Date(timeIntervalSince1970: 1770000000)
+        ),
         proxies: [
           ProxyNode(name: "Japan", type: "Vless", delay: nil, isSelectable: true),
           ProxyNode(name: "DIRECT", type: "Direct", delay: nil, isSelectable: true)
         ]
       )
     ])
+  }
+
+  func testRuleProvidersAreDecodedIntoStructuredRows() async throws {
+    let recorder = URLProtocolRecorder(responseBody: """
+    {
+      "providers": {
+        "rules/remote": {
+          "name": "rules/remote",
+          "type": "Rule",
+          "vehicleType": "HTTP",
+          "behavior": "domain",
+          "format": "yaml",
+          "updatedAt": "2026-05-05T09:30:00Z",
+          "ruleCount": 42
+        }
+      }
+    }
+    """)
+    let session = URLSession(configuration: recorder.configuration)
+    let client = MihomoAPIClient(baseURL: URL(string: "http://127.0.0.1:9097")!, secret: "abc", session: session)
+
+    let providers = try await client.ruleProviders()
+
+    XCTAssertEqual(providers, [
+      RuleProvider(
+        name: "rules/remote",
+        type: "Rule",
+        vehicleType: "HTTP",
+        behavior: "domain",
+        format: "yaml",
+        updatedAt: ISO8601DateFormatter().date(from: "2026-05-05T09:30:00Z"),
+        ruleCount: 42
+      )
+    ])
+  }
+
+  func testProviderUpdateRequestsUseAuthenticatedPutRequests() async throws {
+    let recorder = URLProtocolRecorder()
+    let session = URLSession(configuration: recorder.configuration)
+    let client = MihomoAPIClient(baseURL: URL(string: "http://127.0.0.1:9097")!, secret: "abc", session: session)
+
+    try await client.updateProxyProvider(named: "remote/sub")
+    var request = try XCTUnwrap(recorder.lastRequest)
+    XCTAssertEqual(request.httpMethod, "PUT")
+    XCTAssertEqual(
+      URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.percentEncodedPath,
+      "/providers/proxies/remote%2Fsub"
+    )
+    XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer abc")
+
+    try await client.updateRuleProvider(named: "rules/sub")
+    request = try XCTUnwrap(recorder.lastRequest)
+    XCTAssertEqual(request.httpMethod, "PUT")
+    XCTAssertEqual(
+      URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.percentEncodedPath,
+      "/providers/rules/rules%2Fsub"
+    )
   }
 
   func testConnectionCloseAndReloadRequestsUseAuthenticatedControlEndpoints() async throws {

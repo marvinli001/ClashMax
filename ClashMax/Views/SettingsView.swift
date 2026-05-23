@@ -189,16 +189,15 @@ struct SettingsView: View {
             "Request Timeout",
             description: "Network timeout used for each subscription fetch attempt."
           ) {
-            Stepper(
-              settings.subscriptionFetchSettings.timeoutDescription,
+            NumberStepperField(
+              accessibilityLabel: "Request Timeout",
               value: Binding(
                 get: { settings.subscriptionFetchSettings.timeoutSeconds },
                 set: { settings.subscriptionFetchSettings.timeoutSeconds = $0 }
               ),
-              in: SubscriptionFetchSettings.minimumTimeoutSeconds...SubscriptionFetchSettings.maximumTimeoutSeconds,
+              range: SubscriptionFetchSettings.minimumTimeoutSeconds...SubscriptionFetchSettings.maximumTimeoutSeconds,
               step: 5
             )
-            .frame(width: 120, alignment: .trailing)
           }
           SettingsToggleRow(
             "Use Local Clash Proxy",
@@ -1330,40 +1329,57 @@ private struct PortControl: View {
   let title: String
   var description: String?
   @Binding var value: Int
-  @State private var draft = ""
 
   var body: some View {
     SettingsControlRow(title, description: description) {
-      HStack(spacing: 8) {
-        TextField("", text: $draft)
-          .textFieldStyle(.roundedBorder)
-          .multilineTextAlignment(.trailing)
-          .monospacedDigit()
-          .frame(width: 82)
-          .onSubmit(commitDraft)
-          .onChange(of: draft) { _, newValue in
-            updateValueIfValid(newValue)
-          }
-          .onAppear(perform: syncDraft)
-          .onChange(of: value) { _, _ in
-            syncDraft()
-          }
+      NumberStepperField(
+        accessibilityLabel: title,
+        value: $value,
+        range: Self.portRange
+      )
+    }
+  }
+}
 
-        Stepper("", value: clampedValue, in: Self.portRange)
-          .labelsHidden()
-      }
+private struct NumberStepperField: View {
+  let accessibilityLabel: String
+  @Binding var value: Int
+  let range: ClosedRange<Int>
+  var step = 1
+  var fieldWidth: CGFloat = 82
+  @State private var draft = ""
+
+  var body: some View {
+    HStack(spacing: 8) {
+      TextField("", text: $draft)
+        .textFieldStyle(.roundedBorder)
+        .multilineTextAlignment(.trailing)
+        .monospacedDigit()
+        .frame(width: fieldWidth)
+        .accessibilityLabel(localizedSettingsText(accessibilityLabel))
+        .onSubmit(commitDraft)
+        .onChange(of: draft) { _, newValue in
+          updateValueIfValid(newValue)
+        }
+        .onAppear(perform: syncDraft)
+        .onChange(of: value) { _, _ in
+          syncDraft()
+        }
+
+      Stepper(localizedSettingsText(accessibilityLabel), value: clampedValue, in: range, step: step)
+        .labelsHidden()
     }
   }
 
   private var clampedValue: Binding<Int> {
     Binding(
-      get: { value },
-      set: { newValue in value = Self.clamped(newValue) }
+      get: { clamped(value) },
+      set: { newValue in value = clamped(newValue) }
     )
   }
 
   private func updateValueIfValid(_ text: String) {
-    guard let parsed = Int(text), Self.portRange.contains(parsed) else { return }
+    guard let parsed = Int(text), range.contains(parsed) else { return }
     value = parsed
   }
 
@@ -1372,18 +1388,18 @@ private struct PortControl: View {
       syncDraft()
       return
     }
-    value = Self.clamped(parsed)
+    value = clamped(parsed)
     syncDraft()
   }
 
   private func syncDraft() {
-    let current = "\(value)"
+    let current = "\(clamped(value))"
     if draft != current {
       draft = current
     }
   }
 
-  private static func clamped(_ value: Int) -> Int {
-    min(max(value, portRange.lowerBound), portRange.upperBound)
+  private func clamped(_ value: Int) -> Int {
+    min(max(value, range.lowerBound), range.upperBound)
   }
 }

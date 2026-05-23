@@ -121,6 +121,9 @@ struct SubscriptionFetcher {
     if let authorization = target.authorization {
       request.setValue(authorization, forHTTPHeaderField: "Authorization")
     }
+    for (name, value) in options.customHeaders {
+      request.setValue(value, forHTTPHeaderField: name)
+    }
     return request
   }
 

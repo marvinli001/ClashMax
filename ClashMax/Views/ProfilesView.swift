@@ -8,6 +8,7 @@ struct ProfilesView: View {
   @State private var profileBeingEdited: Profile?
   @State private var editProfileName = ""
   @State private var editSubscriptionURL = ""
+  @State private var editProviderOptions = SubscriptionProviderOptions.default
   @State private var profilePendingDeletion: Profile?
 
   var body: some View {
@@ -75,6 +76,7 @@ struct ProfilesView: View {
         profile: currentProfile(matching: profile) ?? profile,
         name: $editProfileName,
         subscriptionURL: $editSubscriptionURL,
+        providerOptions: $editProviderOptions,
         onCancel: closeEditSheet,
         onResetRemoteName: {
           resetRemoteName(profile)
@@ -204,6 +206,7 @@ struct ProfilesView: View {
   private func beginEditing(_ profile: Profile) {
     editProfileName = profile.name
     editSubscriptionURL = profileStore.subscriptionURLString(for: profile) ?? ""
+    editProviderOptions = profile.subscriptionProviderOptions
     profileBeingEdited = profile
   }
 
@@ -211,6 +214,7 @@ struct ProfilesView: View {
     profileBeingEdited = nil
     editProfileName = ""
     editSubscriptionURL = ""
+    editProviderOptions = .default
   }
 
   private func currentProfile(matching profile: Profile) -> Profile? {
@@ -222,29 +226,33 @@ struct ProfilesView: View {
     guard !trimmedName.isEmpty else { return }
     let trimmedURL = editSubscriptionURL.trimmingCharacters(in: .whitespacesAndNewlines)
     let originalURL = profileStore.subscriptionURLString(for: profile)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let nextProviderOptions = editProviderOptions
 
-    if profile.isSubscription, trimmedURL != originalURL {
-      Task { @MainActor in
-        let didUpdate = await appModel.updateSubscriptionSource(profile, urlString: trimmedURL)
-        if didUpdate {
-          if let updated = currentProfile(matching: profile), updated.name != trimmedName {
-            guard await appModel.renameProfileAsync(updated, to: trimmedName) else { return }
-          }
-          closeEditSheet()
-        }
-      }
-      return
-    }
+    Task { @MainActor in
+      var workingProfile = currentProfile(matching: profile) ?? profile
+      let providerOptionsChanged = workingProfile.subscriptionProviderOptions != nextProviderOptions
+      let subscriptionURLChanged = workingProfile.isSubscription && trimmedURL != originalURL
 
-    if let updated = currentProfile(matching: profile), updated.name != trimmedName {
-      Task { @MainActor in
-        if await appModel.renameProfileAsync(updated, to: trimmedName) {
-          closeEditSheet()
-        }
+      if workingProfile.isSubscription, providerOptionsChanged, subscriptionURLChanged {
+        guard await appModel.updateSubscriptionSourceAndProviderOptions(
+          workingProfile,
+          urlString: trimmedURL,
+          options: nextProviderOptions
+        ) else { return }
+        workingProfile = currentProfile(matching: workingProfile) ?? workingProfile
+      } else if workingProfile.isSubscription, providerOptionsChanged {
+        guard await appModel.updateSubscriptionProviderOptions(workingProfile, options: nextProviderOptions) else { return }
+        workingProfile = currentProfile(matching: workingProfile) ?? workingProfile
+      } else if subscriptionURLChanged {
+        guard await appModel.updateSubscriptionSource(workingProfile, urlString: trimmedURL) else { return }
+        workingProfile = currentProfile(matching: workingProfile) ?? workingProfile
       }
-      return
+
+      if workingProfile.name != trimmedName {
+        guard await appModel.renameProfileAsync(workingProfile, to: trimmedName) else { return }
+      }
+      closeEditSheet()
     }
-    closeEditSheet()
   }
 
   private func resetRemoteName(_ profile: Profile) {
@@ -429,6 +437,7 @@ private struct ProfileEditSheet: View {
   let profile: Profile
   @Binding var name: String
   @Binding var subscriptionURL: String
+  @Binding var providerOptions: SubscriptionProviderOptions
   let onCancel: () -> Void
   let onResetRemoteName: () -> Void
   let onSave: () -> Void
@@ -477,6 +486,8 @@ private struct ProfileEditSheet: View {
             Label("Restore Remote Name", systemImage: "arrow.counterclockwise")
           }
           .disabled(!profile.nameIsUserCustomized)
+
+          SubscriptionProviderOptionsEditor(options: $providerOptions)
         } else {
           LabeledContent("Source") {
             Text(profile.source.displayName)
@@ -505,5 +516,92 @@ private struct ProfileEditSheet: View {
 
   private var canSave: Bool {
     !trimmedName.isEmpty && (!profile.isSubscription || !trimmedSubscriptionURL.isEmpty)
+  }
+}
+
+private struct SubscriptionProviderOptionsEditor: View {
+  @Binding var options: SubscriptionProviderOptions
+
+  var body: some View {
+    Section("Provider Options") {
+      Stepper(
+        value: intervalBinding,
+        in: SubscriptionProviderOptions.minimumIntervalSeconds...SubscriptionProviderOptions.maximumIntervalSeconds,
+        step: 60
+      ) {
+        Text("Provider Interval: \(options.intervalSeconds)s")
+      }
+
+      Picker("Fetch Proxy", selection: $options.fetchProxy) {
+        ForEach(SubscriptionProviderFetchProxy.allCases) { proxy in
+          Text(proxy.displayName).tag(proxy)
+        }
+      }
+
+      TextField("Filter", text: $options.filter)
+      TextField("Exclude Filter", text: $options.excludeFilter)
+      TextField("Exclude Type", text: $options.excludeType)
+
+      VStack(alignment: .leading, spacing: 6) {
+        Text("Provider Override YAML")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        TextEditor(text: $options.overrideYAML)
+          .font(.system(.caption, design: .monospaced))
+          .frame(minHeight: 72)
+          .overlay {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+              .strokeBorder(.quaternary, lineWidth: 1)
+          }
+      }
+
+      VStack(alignment: .leading, spacing: 8) {
+        HStack {
+          Text("Custom Headers")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+          Spacer()
+          Button {
+            options.requestHeaders.append(SubscriptionRequestHeader())
+          } label: {
+            Image(systemName: "plus")
+          }
+          .buttonStyle(.borderless)
+          .help("Add custom header")
+        }
+
+        if options.requestHeaders.isEmpty {
+          Text("Empty")
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+        } else {
+          ForEach($options.requestHeaders) { $header in
+            HStack(spacing: 8) {
+              TextField("Header", text: $header.name)
+                .textFieldStyle(.roundedBorder)
+              SecureField("Value", text: $header.value)
+                .textFieldStyle(.roundedBorder)
+              Button {
+                options.requestHeaders.removeAll { $0.id == header.id }
+              } label: {
+                Image(systemName: "trash")
+              }
+              .buttonStyle(.borderless)
+              .help("Remove header")
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private var intervalBinding: Binding<Int> {
+    Binding(
+      get: { options.intervalSeconds },
+      set: { options.intervalSeconds = min(
+        max($0, SubscriptionProviderOptions.minimumIntervalSeconds),
+        SubscriptionProviderOptions.maximumIntervalSeconds
+      ) }
+    )
   }
 }
