@@ -141,30 +141,35 @@ struct RunningDashboardView: View {
 
 private struct RunningHeaderCard: View {
   @EnvironmentObject private var appModel: AppModel
+  @EnvironmentObject private var runtimeData: RuntimeDataStore
   let state: DashboardRuntimeState
   let namespace: Namespace.ID
   let reduceMotion: Bool
   let availableWidth: CGFloat
 
   var body: some View {
-    Group {
-      if availableWidth >= 820 {
-        HStack(spacing: 16) {
-          headerVisual
-          statusBlock
-          Spacer(minLength: 12)
-          runControls
-        }
-      } else {
-        VStack(alignment: .leading, spacing: 14) {
-          HStack(spacing: 14) {
+    VStack(alignment: .leading, spacing: 14) {
+      Group {
+        if availableWidth >= 820 {
+          HStack(spacing: 16) {
             headerVisual
             statusBlock
+            Spacer(minLength: 12)
+            runControls
           }
-          runControls
-            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+          VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 14) {
+              headerVisual
+              statusBlock
+            }
+            runControls
+              .frame(maxWidth: .infinity, alignment: .leading)
+          }
         }
       }
+
+      runtimeInfoPanel
     }
     .padding(16)
     .dashboardCard(interactive: true)
@@ -256,8 +261,87 @@ private struct RunningHeaderCard: View {
     }
   }
 
+  private var runtimeInfoPanel: some View {
+    ViewThatFits(in: .horizontal) {
+      HStack(spacing: 10) {
+        runtimeInfoItems
+      }
+
+      LazyVGrid(
+        columns: [
+          GridItem(.flexible(minimum: 120), spacing: 8),
+          GridItem(.flexible(minimum: 120), spacing: 8)
+        ],
+        alignment: .leading,
+        spacing: 8
+      ) {
+        runtimeInfoItems
+      }
+    }
+    .padding(10)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .dashboardInsetSurface()
+  }
+
+  @ViewBuilder
+  private var runtimeInfoItems: some View {
+    DashboardMiniInfoItem(
+      title: "Groups",
+      value: "\(runtimeData.proxyGroups.count)",
+      symbolName: "point.3.connected.trianglepath.dotted",
+      tint: .cyan
+    )
+    DashboardMiniInfoItem(
+      title: "Connections",
+      value: "\(runtimeData.connections.count)",
+      symbolName: "network",
+      tint: .orange
+    )
+    DashboardMiniInfoItem(
+      title: "Rules",
+      value: "\(runtimeData.rules.count)",
+      symbolName: "list.bullet.rectangle",
+      tint: .green
+    )
+    DashboardMiniInfoItem(
+      title: "Controller",
+      value: "\(appModel.overrides.externalControllerHost):\(appModel.overrides.externalControllerPort)",
+      symbolName: "lock.shield",
+      tint: .purple
+    )
+  }
+
   private var statusTitle: String {
     state.isStarting ? "Starting Runtime" : appModel.statusSummary
+  }
+}
+
+private struct DashboardMiniInfoItem: View {
+  let title: String
+  let value: String
+  let symbolName: String
+  let tint: Color
+
+  var body: some View {
+    HStack(spacing: 8) {
+      Image(systemName: symbolName)
+        .font(.system(size: 12, weight: .semibold))
+        .foregroundStyle(tint)
+        .frame(width: 22, height: 22)
+        .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+
+      VStack(alignment: .leading, spacing: 1) {
+        Text(title)
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+        Text(value)
+          .font(.caption.weight(.semibold))
+          .lineLimit(1)
+          .minimumScaleFactor(0.7)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 }
 
@@ -421,11 +505,7 @@ private struct CurrentProxyRuntimeCard: View {
     }
     .padding(12)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .stroke(Color(nsColor: .separatorColor).opacity(0.22), lineWidth: 1)
-    }
+    .dashboardInsetSurface()
   }
 
   private func groupControl(groups: [ProxyGroup]) -> some View {
@@ -1142,7 +1222,39 @@ private struct StatusFactTile: View {
   }
 }
 
+private struct DashboardInsetSurfaceModifier: ViewModifier {
+  @Environment(\.colorScheme) private var colorScheme
+
+  func body(content: Content) -> some View {
+    let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+    content
+      .background {
+        if colorScheme == .dark {
+          ZStack {
+            shape.fill(.thinMaterial)
+            shape.fill(Color.primary.opacity(0.035))
+          }
+        } else {
+          ZStack {
+            shape.fill(Color(nsColor: .textBackgroundColor).opacity(0.86))
+            shape.fill(Color(nsColor: .controlBackgroundColor).opacity(0.12))
+          }
+        }
+      }
+      .overlay {
+        shape.stroke(
+          Color(nsColor: .separatorColor).opacity(colorScheme == .dark ? 0.30 : 0.28),
+          lineWidth: 1
+        )
+      }
+  }
+}
+
 private extension View {
+  func dashboardInsetSurface() -> some View {
+    modifier(DashboardInsetSurfaceModifier())
+  }
+
   func statusFactSurface() -> some View {
     let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
     return background {
@@ -1263,6 +1375,12 @@ private struct StatusRuleOverlayCard: View {
           tint: .orange,
           isProminent: true
         )
+        StatusFactTile(
+          title: "Disabled",
+          value: "\(appModel.ruleOverlaySettings.disabledRuleMatchers.count)",
+          tint: .red,
+          isProminent: true
+        )
       }
 
       StatusFactGrid(minimumColumnWidth: 132) {
@@ -1273,6 +1391,9 @@ private struct StatusRuleOverlayCard: View {
         }
         ForEach(Array((appModel.ruleOverlaySettings.prependRules + appModel.ruleOverlaySettings.appendRules).prefix(4))) { rule in
           StatusFactTile(title: rule.kind.displayName, value: rule.runtimeRule, valueLineLimit: 2)
+        }
+        ForEach(Array(appModel.ruleOverlaySettings.disabledRuleMatchers.prefix(4))) { matcher in
+          StatusFactTile(title: "Disable \(matcher.mode.displayName)", value: matcher.normalizedPattern, valueLineLimit: 2)
         }
       }
     }

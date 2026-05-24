@@ -331,7 +331,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(delayRequestCount, 0)
   }
 
-  func testPreviewRuntimeRequestStartsWhenProfilePreviewBecomesAvailable() async throws {
+  func testPreviewRuntimeWarmupStartsWhenProfilePreviewBecomesAvailable() async throws {
     let paths = try Self.makeRuntimePaths()
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
     try Self.writeProxyConfig(named: "Japan", to: configURL)
@@ -360,7 +360,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
     model.profilePreviewGroups = []
 
-    model.enterPreviewRuntime()
+    model.warmPreviewRuntimeOnLaunch()
     model.profilePreviewGroups = [group]
 
     for _ in 0..<500 where launcher.launchCount < 1 || !model.previewRuntimeActive {
@@ -372,6 +372,72 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(model.previewRuntimeActive)
     XCTAssertFalse(model.isRunning)
     XCTAssertTrue(model.canControlRuntimeProxies)
+    XCTAssertEqual(model.runtimeOwner, .preview)
+
+    let runtimeConfigPath = try XCTUnwrap(launcher.launchedConfigPaths.first)
+    let runtimeConfig = try String(contentsOfFile: runtimeConfigPath, encoding: .utf8)
+    let yaml = try XCTUnwrap(Yams.load(yaml: runtimeConfig) as? [String: Any])
+    XCTAssertEqual(yaml["mixed-port"] as? Int, 17_890)
+    XCTAssertEqual(yaml["external-controller"] as? String, "127.0.0.1:19097")
+    XCTAssertEqual(yaml["allow-lan"] as? Bool, false)
+    XCTAssertEqual(yaml["mode"] as? String, "direct")
+    XCTAssertNil(yaml["external-controller-cors"])
+    let tun = try XCTUnwrap(yaml["tun"] as? [String: Any])
+    XCTAssertEqual(tun["enable"] as? Bool, false)
+  }
+
+  func testPreviewRuntimeFallsBackToProfilePreviewGroupsWhenRuntimeGroupsAreUnavailable() async throws {
+    let previewGroup = ProxyGroup(
+      name: "Proxy",
+      type: "select",
+      selected: "Japan",
+      nodes: [ProxyNode(name: "Japan", type: "direct", delay: nil, isSelectable: true)]
+    )
+    let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
+    let model = try await makeRunningRuntimeModel(client: client)
+    model.previewRuntimeActive = true
+    model.proxyGroups = []
+    model.profilePreviewGroups = [previewGroup]
+
+    XCTAssertTrue(model.isCoreRunning)
+    XCTAssertFalse(model.isRunning)
+    XCTAssertEqual(model.visibleProxyGroups.map(\.name), ["Proxy"])
+    XCTAssertEqual(model.visibleProxyGroups.first?.nodes.map(\.name), ["Japan"])
+  }
+
+  func testPreviewRuntimeWarmupIsIdempotent() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let launcher = CountingProcessLauncher()
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    await model.waitForProfilePreviewRefresh()
+
+    model.warmPreviewRuntimeOnLaunch()
+
+    for _ in 0..<500 where launcher.launchCount < 1 || !model.previewRuntimeActive {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    model.warmPreviewRuntimeOnLaunch()
+    try? await Task.sleep(nanoseconds: 120_000_000)
+
+    XCTAssertEqual(launcher.launchCount, 1)
+    XCTAssertTrue(model.previewRuntimeActive)
   }
 
   func testStartCancelsPendingPreviewRuntimeRequestBeforeItCanLaunch() async throws {
@@ -403,7 +469,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
     model.profilePreviewGroups = [group]
 
-    model.enterPreviewRuntime()
+    model.warmPreviewRuntimeOnLaunch()
     model.start()
 
     for _ in 0..<300 where !model.isRunning {
@@ -416,6 +482,140 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(model.isRunning)
     XCTAssertFalse(model.previewRuntimeActive)
     XCTAssertEqual(model.runtimeOwner, .user)
+  }
+
+  func testStartStopsActivePreviewRuntimeBeforeStartingUserRuntime() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let launcher = CountingProcessLauncher()
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    await model.waitForProfilePreviewRefresh()
+    model.warmPreviewRuntimeOnLaunch()
+    for _ in 0..<500 where launcher.launchCount < 1 || !model.previewRuntimeActive {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    model.start()
+
+    for _ in 0..<500 where !model.isRunning || model.runtimeOwner != .user {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(launcher.launchCount, 2)
+    XCTAssertTrue(model.isRunning)
+    XCTAssertFalse(model.previewRuntimeActive)
+    XCTAssertEqual(model.runtimeOwner, .user)
+  }
+
+  func testStopRestartsPreviewRuntimeWhenWarmupWasRequested() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let launcher = CountingProcessLauncher()
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    await model.waitForProfilePreviewRefresh()
+    model.warmPreviewRuntimeOnLaunch()
+    for _ in 0..<500 where launcher.launchCount < 1 || !model.previewRuntimeActive {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    model.start()
+    for _ in 0..<500 where !model.isRunning || model.runtimeOwner != .user {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    model.stop()
+
+    for _ in 0..<700 where launcher.launchCount < 3 || !model.previewRuntimeActive || model.runtimeOwner != .preview {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(launcher.launchCount, 3)
+    XCTAssertFalse(model.isRunning)
+    XCTAssertTrue(model.previewRuntimeActive)
+    XCTAssertEqual(model.runtimeOwner, .preview)
+  }
+
+  func testSelectingProfileRestartsActivePreviewRuntimeForNewProfile() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let firstConfigURL = paths.appSupport.appendingPathComponent("first.yaml")
+    let secondConfigURL = paths.appSupport.appendingPathComponent("second.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: firstConfigURL)
+    try Self.writeProxyConfig(named: "Singapore", to: secondConfigURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    let firstProfile = try await store.importLocalConfig(from: firstConfigURL)
+    let secondProfile = try await store.importLocalConfig(from: secondConfigURL)
+    let launcher = CountingProcessLauncher()
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    let didSelectFirstProfile = await model.selectProfileAsync(firstProfile)
+    XCTAssertTrue(didSelectFirstProfile)
+    model.warmPreviewRuntimeOnLaunch()
+    for _ in 0..<500 where launcher.launchCount < 1 || !model.previewRuntimeActive {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let didSelectSecondProfile = await model.selectProfileAsync(secondProfile)
+    XCTAssertTrue(didSelectSecondProfile)
+
+    for _ in 0..<700 where launcher.launchCount < 2 || !model.previewRuntimeActive || model.runtimeOwner != .preview {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(launcher.launchCount, 2)
+    XCTAssertTrue(model.previewRuntimeActive)
+    let runtimeConfigPath = try XCTUnwrap(launcher.launchedConfigPaths.last)
+    let runtimeConfig = try String(contentsOfFile: runtimeConfigPath, encoding: .utf8)
+    XCTAssertTrue(runtimeConfig.contains("Singapore"))
+    XCTAssertFalse(runtimeConfig.contains("Japan"))
   }
 
   func testPreviewRuntimeAllowsDelayTestingWhileMainProxySwitchIsOff() async throws {
@@ -693,6 +893,9 @@ final class DashboardRuntimeStateTests: XCTestCase {
       ],
       appendRules: [
         ManagedRuleOverlayRule(kind: .match, policy: "Proxy")
+      ],
+      disabledRuleMatchers: [
+        ManagedRuleDisableMatcher(mode: .contains, pattern: "ads.example")
       ]
     )
 
@@ -1614,12 +1817,19 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
   func testProxyDelayDisplayLabelsAndTones() {
     let noDelay = ProxyDelayDisplay(delay: nil)
-    XCTAssertEqual(noDelay.label, "No delay")
+    XCTAssertEqual(noDelay.label, "Unknown")
     XCTAssertEqual(noDelay.tone, .unavailable)
 
     let fast = ProxyDelayDisplay(delay: 100)
     XCTAssertEqual(fast.label, "100 ms")
     XCTAssertEqual(fast.tone, .fast)
+
+    XCTAssertEqual(ProxyDelayDisplay(state: .testing).label, "Testing")
+    XCTAssertEqual(ProxyDelayDisplay(state: .testing).tone, .testing)
+    XCTAssertEqual(ProxyDelayDisplay(state: .timeout).label, "Timeout")
+    XCTAssertEqual(ProxyDelayDisplay(state: .timeout).tone, .timeout)
+    XCTAssertEqual(ProxyDelayDisplay(state: .error("failed")).label, "Error")
+    XCTAssertEqual(ProxyDelayDisplay(state: .error("failed")).tone, .error)
 
     XCTAssertEqual(ProxyDelayDisplay(delay: 101).tone, .good)
     XCTAssertEqual(ProxyDelayDisplay(delay: 150).tone, .good)
@@ -1628,17 +1838,87 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(ProxyDelayDisplay(delay: 251).tone, .slow)
   }
 
-  func testProxyPreviewNoticeRequiresDeveloperMode() {
-    XCTAssertNil(ProxyPreviewNoticeKind.resolve(
-      developerMode: false,
-      previewRuntimeActive: true,
-      isShowingProxyPreview: false
-    ))
-    XCTAssertNil(ProxyPreviewNoticeKind.resolve(
-      developerMode: false,
-      previewRuntimeActive: false,
-      isShowingProxyPreview: true
-    ))
+  func testProxySearchQuerySupportsCaseSensitiveWholeWordAndRegexTokens() {
+    let japanNode = ProxyNode(
+      name: "JP Tokyo",
+      type: "vless",
+      delay: 83,
+      isSelectable: true,
+      providerName: "Remote"
+    )
+    let japaneseNode = ProxyNode(
+      name: "Japanese Relay",
+      type: "vless",
+      delay: 120,
+      isSelectable: true,
+      providerName: "Remote"
+    )
+    let group = ProxyGroup(name: "Proxy", type: "select", selected: "JP Tokyo", nodes: [japanNode, japaneseNode])
+
+    XCTAssertTrue(ProxySearchQuery(rawValue: "jp").matches(group: group, node: japanNode))
+    XCTAssertFalse(ProxySearchQuery(rawValue: "case=true jp").matches(group: group, node: japanNode))
+    XCTAssertTrue(ProxySearchQuery(rawValue: "case=true JP").matches(group: group, node: japanNode))
+    XCTAssertFalse(ProxySearchQuery(rawValue: "word=true Japan").matches(group: group, node: japaneseNode))
+    XCTAssertTrue(ProxySearchQuery(rawValue: "word=true Japanese").matches(group: group, node: japaneseNode))
+    XCTAssertTrue(ProxySearchQuery(rawValue: "case=true regex=.*JP").matches(group: group, node: japanNode))
+    XCTAssertFalse(ProxySearchQuery(rawValue: "case=true regex=.*jp").matches(group: group, node: japanNode))
+  }
+
+  func testProxyGroupSearchFilterNarrowsGroupsAndNodes() {
+    let fastNode = ProxyNode(
+      name: "JP Tokyo",
+      type: "vless",
+      delay: 83,
+      isSelectable: true,
+      providerName: "Remote"
+    )
+    let slowNode = ProxyNode(
+      name: "US Relay",
+      type: "trojan",
+      delay: 260,
+      isSelectable: true,
+      providerName: "Backup"
+    )
+    let proxyGroup = ProxyGroup(name: "Proxy", type: "select", selected: "JP Tokyo", nodes: [fastNode, slowNode])
+    let fallbackGroup = ProxyGroup(
+      name: "Fallback",
+      type: "select",
+      selected: nil,
+      nodes: [ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: true)]
+    )
+
+    let providerFiltered = ProxyGroupSearchFilter.filteredGroups(
+      from: [proxyGroup, fallbackGroup],
+      searchQuery: ProxySearchQuery(rawValue: "provider=Remote delay<100")
+    )
+    XCTAssertEqual(providerFiltered.map(\.name), ["Proxy"])
+    XCTAssertEqual(providerFiltered.first?.nodes.map(\.name), ["JP Tokyo"])
+
+    let groupFiltered = ProxyGroupSearchFilter.filteredGroups(
+      from: [proxyGroup, fallbackGroup],
+      searchQuery: ProxySearchQuery(rawValue: "fallback")
+    )
+    XCTAssertEqual(groupFiltered.map(\.name), ["Fallback"])
+    XCTAssertEqual(groupFiltered.first?.nodes.map(\.name), ["DIRECT"])
+  }
+
+  func testProxyPreviewNoticeShowsOutsideDeveloperMode() {
+    XCTAssertEqual(
+      ProxyPreviewNoticeKind.resolve(
+        developerMode: false,
+        previewRuntimeActive: true,
+        isShowingProxyPreview: false
+      ),
+      .previewRuntime
+    )
+    XCTAssertEqual(
+      ProxyPreviewNoticeKind.resolve(
+        developerMode: false,
+        previewRuntimeActive: false,
+        isShowingProxyPreview: true
+      ),
+      .offlinePreview
+    )
     XCTAssertEqual(
       ProxyPreviewNoticeKind.resolve(
         developerMode: true,
@@ -1657,8 +1937,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
   }
 
-  func testProviderSummaryShowsWhenProvidersExist() {
-    XCTAssertTrue(ProxyPageVisibilityPolicy.showsProviderSummary(developerMode: false, providerCount: 3))
+  func testProviderSummaryRequiresDeveloperModeAndProviders() {
+    XCTAssertFalse(ProxyPageVisibilityPolicy.showsProviderSummary(developerMode: false, providerCount: 3))
     XCTAssertFalse(ProxyPageVisibilityPolicy.showsProviderSummary(developerMode: true, providerCount: 0))
     XCTAssertTrue(ProxyPageVisibilityPolicy.showsProviderSummary(developerMode: true, providerCount: 3))
   }
@@ -2668,6 +2948,66 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(model.previewSelections["Proxy"], "Singapore")
   }
 
+  func testSelectingProxyCanCloseConnectionsUsingPreviousNodeChain() async throws {
+    let group = ProxyGroup(
+      name: "Proxy",
+      type: "select",
+      selected: "Japan",
+      nodes: [
+        ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
+        ProxyNode(name: "Singapore", type: "vless", delay: nil, isSelectable: true)
+      ]
+    )
+    let staleConnection = ConnectionSnapshot(
+      id: "stale",
+      network: "tcp",
+      host: "old.example",
+      upload: 0,
+      download: 0,
+      chain: ["Proxy", "Japan"],
+      rule: nil,
+      startedAt: nil
+    )
+    let currentConnection = ConnectionSnapshot(
+      id: "current",
+      network: "tcp",
+      host: "new.example",
+      upload: 0,
+      download: 0,
+      chain: ["Proxy", "Singapore"],
+      rule: nil,
+      startedAt: nil
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [
+        ProxyGroup(name: "Proxy", type: "select", selected: "Singapore", nodes: group.nodes)
+      ],
+      connectionsResponse: [currentConnection],
+      testDelayResult: 73
+    )
+    let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [group])
+    model.connections = [staleConnection, currentConnection]
+
+    model.selectProxy(group: group, node: group.nodes[1], closeOldConnections: true)
+
+    for _ in 0..<80 {
+      let selectedProxyRequests = await client.selectedProxyRequests()
+      let closedConnectionIDs = await client.closedConnectionIDs()
+      if selectedProxyRequests == ["Proxy:Singapore"], closedConnectionIDs == ["stale"] {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let selectedProxyRequests = await client.selectedProxyRequests()
+    let closedConnectionIDs = await client.closedConnectionIDs()
+    XCTAssertEqual(selectedProxyRequests, ["Proxy:Singapore"])
+    XCTAssertEqual(closedConnectionIDs, ["stale"])
+    XCTAssertFalse(model.connections.contains(where: { $0.id == "stale" }))
+    XCTAssertTrue(model.connections.contains(where: { $0.id == "current" }))
+  }
+
   func testSelectingAutomaticProxyGroupDoesNotCallRuntimeAPI() async throws {
     let group = ProxyGroup(
       name: "Auto",
@@ -2719,6 +3059,35 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     let selectedProxyRequests = await client.selectedProxyRequests()
     XCTAssertEqual(selectedProxyRequests, ["Proxy:DIRECT"])
+  }
+
+  func testSelectingProxyInPreviewRuntimeRollsBackOnAPIError() async throws {
+    let group = ProxyGroup(
+      name: "Proxy",
+      type: "select",
+      selected: "Japan",
+      nodes: [
+        ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
+        ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: true)
+      ]
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [group],
+      testDelayResult: 73,
+      selectProxyFailureMessage: "switch refused"
+    )
+    let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [group])
+    model.previewRuntimeActive = true
+
+    model.selectProxy(group: group, node: group.nodes[1])
+
+    for _ in 0..<40 where model.lastError == nil {
+      await Task.yield()
+    }
+
+    XCTAssertEqual(model.proxyGroups.first?.selected, "Japan")
+    XCTAssertEqual(model.previewSelections["Proxy"], "Japan")
+    XCTAssertEqual(model.lastError, "switch refused")
   }
 
   func testSelectingProxyInRuntimePersistsSelectionAfterSuccessfulAPIRequest() async throws {
@@ -2777,6 +3146,171 @@ final class DashboardRuntimeStateTests: XCTestCase {
     try? await Task.sleep(nanoseconds: 180_000_000)
 
     XCTAssertEqual(model.proxyGroups.first?.nodes.first?.delay, 73)
+  }
+
+  func testDelayTestingKeepsLatestResultForSameNodeWithDifferentURLs() async throws {
+    let group = ProxyGroup(
+      name: "Proxy",
+      type: "select",
+      selected: "Japan",
+      nodes: [ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true)]
+    )
+    let slowURL = try XCTUnwrap(URL(string: "https://slow.example.com/delay"))
+    let fastURL = try XCTUnwrap(URL(string: "https://fast.example.com/delay"))
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [group],
+      testDelayResults: [111, 73],
+      testDelayDelaysNanoseconds: [120_000_000, 10_000_000]
+    )
+    let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [group])
+
+    model.testDelay(in: group, for: group.nodes[0], testURL: slowURL)
+    for _ in 0..<40 where await client.delayRequestCount() == 0 {
+      await Task.yield()
+    }
+    model.testDelay(in: group, for: group.nodes[0], testURL: fastURL)
+
+    try? await Task.sleep(nanoseconds: 180_000_000)
+
+    let delayRequestURLs = await client.delayRequestURLs()
+    XCTAssertEqual(delayRequestURLs, [slowURL, fastURL])
+    XCTAssertEqual(model.proxyGroups.first?.nodes.first?.delay, 73)
+  }
+
+  func testDelayTestingUsesGroupAwareKeysForDuplicateNodeNames() async throws {
+    let groupA = ProxyGroup(
+      name: "Proxy A",
+      type: "select",
+      selected: "Shared",
+      nodes: [ProxyNode(name: "Shared", type: "vless", delay: nil, isSelectable: true)]
+    )
+    let groupB = ProxyGroup(
+      name: "Proxy B",
+      type: "select",
+      selected: "Shared",
+      nodes: [ProxyNode(name: "Shared", type: "vless", delay: nil, isSelectable: true)]
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [groupA, groupB],
+      testDelayResults: [101, 202]
+    )
+    let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [groupA, groupB])
+
+    model.testDelay(in: groupA, for: groupA.nodes[0])
+    model.testDelay(in: groupB, for: groupB.nodes[0])
+
+    for _ in 0..<50 where await client.delayRequestCount() < 2 {
+      await Task.yield()
+    }
+    for _ in 0..<50 where model.proxyGroups.compactMap({ $0.nodes.first?.delay }).count < 2 {
+      await Task.yield()
+    }
+
+    let duplicateNameDelayRequestCount = await client.delayRequestCount()
+    XCTAssertEqual(duplicateNameDelayRequestCount, 2)
+    XCTAssertEqual(model.proxyGroups.first(where: { $0.name == "Proxy A" })?.nodes.first?.delay, 101)
+    XCTAssertEqual(model.proxyGroups.first(where: { $0.name == "Proxy B" })?.nodes.first?.delay, 202)
+  }
+
+  func testCustomDelayURLStateSurvivesRuntimeReload() async throws {
+    let group = ProxyGroup(
+      name: "Proxy",
+      type: "select",
+      selected: "Japan",
+      nodes: [ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true)]
+    )
+    let customURL = try XCTUnwrap(URL(string: "https://example.com/custom-delay"))
+    let client = RecordingMihomoController(
+      proxyGroupsResponses: [[group], [group]],
+      testDelayResults: [73]
+    )
+    let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [group])
+
+    model.testDelay(in: group, for: group.nodes[0], testURL: customURL)
+
+    for _ in 0..<80 {
+      let requestCount = await client.proxyGroupsRequestCount()
+      if requestCount > 0, !model.runtimeDataLoading {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let delayRequestURLs = await client.delayRequestURLs()
+    XCTAssertEqual(delayRequestURLs, [customURL])
+    XCTAssertEqual(model.proxyGroups.first?.nodes.first?.delay, 73)
+    XCTAssertEqual(model.proxyGroups.first?.nodes.first?.resolvedDelayState, .measured(73))
+  }
+
+  func testGroupDelayTestingRunsSelectableNodesInGroup() async throws {
+    let group = ProxyGroup(
+      name: "Proxy",
+      type: "select",
+      selected: "Japan",
+      nodes: [
+        ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
+        ProxyNode(name: "Singapore", type: "vless", delay: nil, isSelectable: true),
+        ProxyNode(name: "Provider: remote", type: "provider", delay: nil, isSelectable: false)
+      ]
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [group],
+      testDelayResults: [73, 88]
+    )
+    let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [group])
+
+    model.testDelay(in: group)
+
+    for _ in 0..<50 where await client.delayRequestCount() < 2 {
+      await Task.yield()
+    }
+
+    let groupDelayRequestCount = await client.delayRequestCount()
+    XCTAssertEqual(groupDelayRequestCount, 2)
+    XCTAssertEqual(model.proxyGroups.first?.nodes[0].delay, 73)
+    XCTAssertEqual(model.proxyGroups.first?.nodes[1].delay, 88)
+    XCTAssertNil(model.proxyGroups.first?.nodes[2].delay)
+  }
+
+  func testDelayCacheTTLStopsPreservingExpiredDelayAcrossReloads() async throws {
+    let group = ProxyGroup(
+      name: "Proxy",
+      type: "select",
+      selected: "Japan",
+      nodes: [ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true)]
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponses: [[group], [group], [group], [group]],
+      testDelayResults: [73]
+    )
+    let model = try await makeRunningRuntimeModel(
+      client: client,
+      initialProxyGroups: [group],
+      delayStateCacheTTL: 0.01
+    )
+
+    model.testDelay(in: group, for: group.nodes[0])
+    for _ in 0..<80 where model.proxyGroups.first?.nodes.first?.delay != 73 {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    XCTAssertEqual(model.proxyGroups.first?.nodes.first?.delay, 73)
+
+    try? await Task.sleep(nanoseconds: 25_000_000)
+    let requestCountBeforeReload = await client.proxyGroupsRequestCount()
+    model.reloadRuntimeData()
+    for _ in 0..<80 {
+      let requestCount = await client.proxyGroupsRequestCount()
+      if requestCount > requestCountBeforeReload, !model.runtimeDataLoading {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertNil(model.proxyGroups.first?.nodes.first?.delay)
+    XCTAssertEqual(model.proxyGroups.first?.nodes.first?.resolvedDelayState, .unknown)
   }
 
   func testProviderHealthCheckIgnoresDuplicateProviderWhileRunning() async throws {
@@ -5807,7 +6341,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
   private func makeRunningRuntimeModel(
     client: any MihomoAPIControlling,
-    initialProxyGroups: [ProxyGroup] = []
+    initialProxyGroups: [ProxyGroup] = [],
+    delayStateCacheTTL: TimeInterval = 600
   ) async throws -> AppModel {
     let paths = try Self.makeRuntimePaths()
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
@@ -5826,7 +6361,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
       profileStore: store,
       coreController: controller,
       apiClient: client,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: try Self.makeIsolatedDefaults(),
+      delayStateCacheTTL: delayStateCacheTTL
     )
     model.proxyGroups = initialProxyGroups
 
@@ -6024,6 +6560,7 @@ private actor RecordingMihomoController: MihomoAPIControlling {
   private let modeUpdateDelayNanoseconds: UInt64
   private let proxyGroupsDelayNanoseconds: UInt64
   private let selectProxyDelaysNanoseconds: [UInt64]
+  private let selectProxyFailureMessage: String?
   private let testDelayDelaysNanoseconds: [UInt64]
   private let healthCheckDelayNanoseconds: UInt64
   private let closeConnectionDelayNanoseconds: UInt64
@@ -6041,6 +6578,7 @@ private actor RecordingMihomoController: MihomoAPIControlling {
   private var proxySelectionAttempts = 0
   private var proxyGroupsRequests = 0
   private var delayRequests: [String] = []
+  private var delayRequestURLValues: [URL] = []
   private var healthCheckRequests: [String] = []
   private var proxyProviderUpdateRequests: [String] = []
   private var ruleProviderUpdateRequests: [String] = []
@@ -6060,6 +6598,7 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     modeUpdateDelayNanoseconds: UInt64 = 0,
     proxyGroupsDelayNanoseconds: UInt64 = 0,
     selectProxyDelaysNanoseconds: [UInt64] = [],
+    selectProxyFailureMessage: String? = nil,
     testDelayDelaysNanoseconds: [UInt64] = [],
     healthCheckDelayNanoseconds: UInt64 = 0,
     closeConnectionDelayNanoseconds: UInt64 = 0,
@@ -6082,6 +6621,7 @@ private actor RecordingMihomoController: MihomoAPIControlling {
       modeUpdateDelayNanoseconds: modeUpdateDelayNanoseconds,
       proxyGroupsDelayNanoseconds: proxyGroupsDelayNanoseconds,
       selectProxyDelaysNanoseconds: selectProxyDelaysNanoseconds,
+      selectProxyFailureMessage: selectProxyFailureMessage,
       testDelayDelaysNanoseconds: testDelayDelaysNanoseconds,
       healthCheckDelayNanoseconds: healthCheckDelayNanoseconds,
       closeConnectionDelayNanoseconds: closeConnectionDelayNanoseconds,
@@ -6106,6 +6646,7 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     modeUpdateDelayNanoseconds: UInt64 = 0,
     proxyGroupsDelayNanoseconds: UInt64 = 0,
     selectProxyDelaysNanoseconds: [UInt64] = [],
+    selectProxyFailureMessage: String? = nil,
     testDelayDelaysNanoseconds: [UInt64] = [],
     healthCheckDelayNanoseconds: UInt64 = 0,
     closeConnectionDelayNanoseconds: UInt64 = 0,
@@ -6128,6 +6669,7 @@ private actor RecordingMihomoController: MihomoAPIControlling {
       modeUpdateDelayNanoseconds: modeUpdateDelayNanoseconds,
       proxyGroupsDelayNanoseconds: proxyGroupsDelayNanoseconds,
       selectProxyDelaysNanoseconds: selectProxyDelaysNanoseconds,
+      selectProxyFailureMessage: selectProxyFailureMessage,
       testDelayDelaysNanoseconds: testDelayDelaysNanoseconds,
       healthCheckDelayNanoseconds: healthCheckDelayNanoseconds,
       closeConnectionDelayNanoseconds: closeConnectionDelayNanoseconds,
@@ -6152,6 +6694,7 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     modeUpdateDelayNanoseconds: UInt64 = 0,
     proxyGroupsDelayNanoseconds: UInt64 = 0,
     selectProxyDelaysNanoseconds: [UInt64] = [],
+    selectProxyFailureMessage: String? = nil,
     testDelayDelaysNanoseconds: [UInt64] = [],
     healthCheckDelayNanoseconds: UInt64 = 0,
     closeConnectionDelayNanoseconds: UInt64 = 0,
@@ -6173,6 +6716,7 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     self.modeUpdateDelayNanoseconds = modeUpdateDelayNanoseconds
     self.proxyGroupsDelayNanoseconds = proxyGroupsDelayNanoseconds
     self.selectProxyDelaysNanoseconds = selectProxyDelaysNanoseconds
+    self.selectProxyFailureMessage = selectProxyFailureMessage
     self.testDelayDelaysNanoseconds = testDelayDelaysNanoseconds
     self.healthCheckDelayNanoseconds = healthCheckDelayNanoseconds
     self.closeConnectionDelayNanoseconds = closeConnectionDelayNanoseconds
@@ -6212,7 +6756,7 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     ruleProvidersResponse
   }
 
-  func rules() async throws -> [String] {
+  func rules() async throws -> [RuntimeRule] {
     []
   }
 
@@ -6224,12 +6768,16 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     let index = proxySelectionAttempts
     proxySelectionAttempts += 1
     try await sleepIfNeeded(delay(at: index, in: selectProxyDelaysNanoseconds))
+    if let selectProxyFailureMessage {
+      throw AppError.helperResponse(selectProxyFailureMessage)
+    }
     proxySelections.append("\(group):\(proxy)")
   }
 
   func testDelay(proxy: String, testURL: URL, timeout: Int) async throws -> Int {
     let index = delayRequests.count
     delayRequests.append(proxy)
+    delayRequestURLValues.append(testURL)
     try await sleepIfNeeded(delay(at: index, in: testDelayDelaysNanoseconds))
     let resultIndex = min(index, max(testDelayResults.count - 1, 0))
     return testDelayResults[resultIndex]
@@ -6304,6 +6852,10 @@ private actor RecordingMihomoController: MihomoAPIControlling {
 
   func delayRequestCount() -> Int {
     delayRequests.count
+  }
+
+  func delayRequestURLs() -> [URL] {
+    delayRequestURLValues
   }
 
   func updatedModes() -> [RunMode] {

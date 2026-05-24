@@ -223,8 +223,8 @@ final class MihomoAPIClientTests: XCTestCase {
           expireAt: Date(timeIntervalSince1970: 1770000000)
         ),
         proxies: [
-          ProxyNode(name: "Japan", type: "Vless", delay: nil, isSelectable: true),
-          ProxyNode(name: "DIRECT", type: "Direct", delay: nil, isSelectable: true)
+          ProxyNode(name: "Japan", type: "Vless", delay: nil, isSelectable: true, providerName: "remote"),
+          ProxyNode(name: "DIRECT", type: "Direct", delay: nil, isSelectable: true, providerName: "remote")
         ]
       )
     ])
@@ -261,6 +261,33 @@ final class MihomoAPIClientTests: XCTestCase {
         updatedAt: ISO8601DateFormatter().date(from: "2026-05-05T09:30:00Z"),
         ruleCount: 42
       )
+    ])
+  }
+
+  func testRulesAreDecodedIntoStructuredRows() async throws {
+    let recorder = URLProtocolRecorder(responseBody: """
+    {
+      "rules": [
+        { "type": "DOMAIN-SUFFIX", "payload": "example.com", "proxy": "DIRECT", "provider": "local" },
+        { "type": "MATCH", "payload": "", "proxy": "Proxy" }
+      ]
+    }
+    """)
+    let session = URLSession(configuration: recorder.configuration)
+    let client = MihomoAPIClient(baseURL: URL(string: "http://127.0.0.1:9097")!, secret: "abc", session: session)
+
+    let rules = try await client.rules()
+
+    XCTAssertEqual(rules, [
+      RuntimeRule(
+        index: 1,
+        type: "DOMAIN-SUFFIX",
+        payload: "example.com",
+        policy: "DIRECT",
+        providerName: "local",
+        raw: "DOMAIN-SUFFIX,example.com,DIRECT"
+      ),
+      RuntimeRule(index: 2, type: "MATCH", payload: "", policy: "Proxy", raw: "MATCH,Proxy")
     ])
   }
 

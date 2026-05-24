@@ -764,6 +764,32 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertNil(provider["proxy"])
   }
 
+  func testURIProviderContentCanCustomizeGeneratedGroupsAndFinalPolicy() throws {
+    let source = "trojan://password@example.com:443?sni=example.com#Trojan%20Node\n"
+    var options = RuntimeConfigOptions.default
+    options.subscriptionProviderOptions = SubscriptionProviderOptions(
+      primaryGroupName: "Manual",
+      autoGroupName: "Latency",
+      finalRulePolicy: "Manual"
+    )
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: source,
+      providerContentPath: "/tmp/provider.txt",
+      overrides: .defaultForLaunch(secret: "secret-token"),
+      options: options
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let groups = try XCTUnwrap(yaml["proxy-groups"] as? [[String: Any]])
+    let manualGroup = try XCTUnwrap(groups.first(where: { ($0["name"] as? String) == "Manual" }))
+    let latencyGroup = try XCTUnwrap(groups.first(where: { ($0["name"] as? String) == "Latency" }))
+
+    XCTAssertEqual(manualGroup["type"] as? String, "select")
+    XCTAssertEqual(manualGroup["proxies"] as? [String], ["Latency", "DIRECT"])
+    XCTAssertEqual(latencyGroup["type"] as? String, "url-test")
+    XCTAssertEqual(yaml["rules"] as? [String], ["MATCH,Manual"])
+  }
+
   func testURIProviderContentUsesInternalProviderNameWhenProfileNameMatchesGroups() throws {
     let source = "trojan://password@example.com:443?sni=example.com#Trojan%20Node\n"
 
@@ -942,6 +968,180 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertFalse(source.contains("corp.example"))
   }
 
+  func testRuntimeConfigCanDisableProfileRulesBeforeAddingManagedRules() throws {
+    let source = """
+    proxies:
+      - name: Direct
+        type: direct
+    proxy-groups:
+      - name: Proxy
+        type: select
+        proxies: [Direct, DIRECT]
+    rules:
+      - DOMAIN-SUFFIX,ads.example,REJECT
+      - DOMAIN-SUFFIX,corp.example,Proxy
+      - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
+      - MATCH,DIRECT
+    """
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.ruleOverlay = RuleOverlaySettings(
+      enabled: true,
+      prependRules: [
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "trusted.example", policy: "DIRECT")
+      ],
+      appendRules: [
+        ManagedRuleOverlayRule(kind: .match, policy: "Proxy")
+      ],
+      disabledRuleMatchers: [
+        ManagedRuleDisableMatcher(mode: .contains, pattern: "ads.example"),
+        ManagedRuleDisableMatcher(mode: .exact, pattern: "MATCH,DIRECT"),
+        ManagedRuleDisableMatcher(mode: .regex, pattern: #"IP-CIDR,10\."#)
+      ]
+    )
+
+    let output = try ConfigNormalizer().runtimeConfig(from: source, overrides: overrides)
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+
+    XCTAssertEqual(
+      yaml["rules"] as? [String],
+      [
+        "DOMAIN-SUFFIX,trusted.example,DIRECT",
+        "DOMAIN-SUFFIX,corp.example,Proxy",
+        "MATCH,Proxy"
+      ]
+    )
+    XCTAssertTrue(source.contains("DOMAIN-SUFFIX,ads.example,REJECT"))
+  }
+
+  func testRuntimeConfigCombinesGlobalAndProfileRuleOverlays() throws {
+    let source = """
+    proxies:
+      - name: Direct
+        type: direct
+    proxy-groups:
+      - name: Proxy
+        type: select
+        proxies: [Direct, DIRECT]
+    rules:
+      - DOMAIN-SUFFIX,ads.example,REJECT
+      - DOMAIN-SUFFIX,corp.example,Proxy
+      - MATCH,DIRECT
+    """
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.ruleOverlay = RuleOverlaySettings(
+      enabled: true,
+      prependRules: [
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "global.example", policy: "DIRECT")
+      ],
+      appendRules: [
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "global-after.example", policy: "Proxy")
+      ],
+      disabledRuleMatchers: [
+        ManagedRuleDisableMatcher(mode: .contains, pattern: "ads.example")
+      ]
+    )
+    var options = RuntimeConfigOptions.default
+    options.subscriptionProviderOptions = SubscriptionProviderOptions(
+      ruleOverlay: RuleOverlaySettings(
+        enabled: true,
+        prependRules: [
+          ManagedRuleOverlayRule(kind: .domainSuffix, value: "profile.example", policy: "DIRECT")
+        ],
+        appendRules: [
+          ManagedRuleOverlayRule(kind: .match, policy: "Proxy")
+        ],
+        disabledRuleMatchers: [
+          ManagedRuleDisableMatcher(mode: .exact, pattern: "MATCH,DIRECT")
+        ]
+      )
+    )
+
+    let output = try ConfigNormalizer().runtimeConfig(from: source, overrides: overrides, options: options)
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+
+    XCTAssertEqual(
+      yaml["rules"] as? [String],
+      [
+        "DOMAIN-SUFFIX,global.example,DIRECT",
+        "DOMAIN-SUFFIX,profile.example,DIRECT",
+        "DOMAIN-SUFFIX,corp.example,Proxy",
+        "MATCH,Proxy",
+        "DOMAIN-SUFFIX,global-after.example,Proxy"
+      ]
+    )
+  }
+
+  func testRuntimeConfigAppliesSubscriptionRuntimeMergeBeforeAppOverrides() throws {
+    let source = """
+    proxies:
+      - name: Direct
+        type: direct
+    proxy-groups:
+      - name: Proxy
+        type: select
+        proxies: [Direct, DIRECT]
+    rules:
+      - MATCH,DIRECT
+    tun:
+      enable: false
+      auto-redirect: true
+    """
+    var options = RuntimeConfigOptions.default
+    options.subscriptionProviderOptions = SubscriptionProviderOptions(
+      runtimeMergeYAML: """
+      external-controller: 0.0.0.0:9999
+      secret: leaked
+      proxies:
+        - name: Runtime Proxy
+          type: http
+          server: runtime.example
+          port: 8080
+      proxy-groups:
+        - name: Runtime Select
+          type: select
+          proxies: [Runtime Proxy, DIRECT]
+      rules:
+        - DOMAIN-SUFFIX,merge.example,Runtime Select
+      tun:
+        auto-redirect: true
+      """
+    )
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: source,
+      overrides: .defaultForLaunch(secret: "secret-token"),
+      options: options
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let proxies = try XCTUnwrap(yaml["proxies"] as? [[String: Any]])
+    let groups = try XCTUnwrap(yaml["proxy-groups"] as? [[String: Any]])
+    let tun = try XCTUnwrap(yaml["tun"] as? [String: Any])
+
+    XCTAssertEqual(yaml["external-controller"] as? String, "127.0.0.1:9097")
+    XCTAssertEqual(yaml["secret"] as? String, "secret-token")
+    XCTAssertTrue(proxies.contains { $0["name"] as? String == "Direct" })
+    XCTAssertTrue(proxies.contains { $0["name"] as? String == "Runtime Proxy" })
+    XCTAssertTrue(groups.contains { $0["name"] as? String == "Proxy" })
+    XCTAssertTrue(groups.contains { $0["name"] as? String == "Runtime Select" })
+    XCTAssertEqual(yaml["rules"] as? [String], ["MATCH,DIRECT", "DOMAIN-SUFFIX,merge.example,Runtime Select"])
+    XCTAssertNil(tun["auto-redirect"])
+  }
+
+  func testRuntimeConfigRejectsInvalidSubscriptionRuntimeMerge() throws {
+    var options = RuntimeConfigOptions.default
+    options.subscriptionProviderOptions = SubscriptionProviderOptions(runtimeMergeYAML: "proxies: [")
+
+    XCTAssertThrowsError(
+      try ConfigNormalizer().runtimeConfig(
+        from: "proxies: []\nproxy-groups: []\nrules: []\n",
+        overrides: .defaultForLaunch(secret: "secret-token"),
+        options: options
+      )
+    ) { error in
+      XCTAssertTrue(String(describing: error).contains("Runtime merge YAML parse error"))
+    }
+  }
+
   func testRuntimeConfigRejectsInvalidRuleOverlay() throws {
     var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
     overrides.ruleOverlay = RuleOverlaySettings(
@@ -958,6 +1158,25 @@ final class ConfigNormalizerTests: XCTestCase {
       )
     ) { error in
       XCTAssertEqual(String(describing: error), "Rule value cannot contain commas or line breaks.")
+    }
+  }
+
+  func testRuntimeConfigRejectsInvalidDisabledRuleMatcher() throws {
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.ruleOverlay = RuleOverlaySettings(
+      enabled: true,
+      disabledRuleMatchers: [
+        ManagedRuleDisableMatcher(mode: .regex, pattern: "[")
+      ]
+    )
+
+    XCTAssertThrowsError(
+      try ConfigNormalizer().runtimeConfig(
+        from: "proxies: []\nproxy-groups: []\nrules: []\n",
+        overrides: overrides
+      )
+    ) { error in
+      XCTAssertEqual(String(describing: error), "Disabled rule regex is invalid.")
     }
   }
 
@@ -984,6 +1203,36 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(groups.first?.nodes[1].serverPort, 23006)
     XCTAssertEqual(groups.first?.nodes[2].serverHost, "example.net")
     XCTAssertEqual(groups.first?.nodes[2].serverPort, 443)
+  }
+
+  func testPreviewGroupsExpandInlineProviderPayloads() throws {
+    let source = """
+    proxy-providers:
+      Remote:
+        type: file
+        path: ./remote.yaml
+        payload:
+          - { name: Provider Node A, type: hysteria2, server: a.example, port: 443, udp: true, tfo: "true" }
+          - { name: Provider Node B, type: vless, server: b.example, port: 8443, xudp: true }
+    proxy-groups:
+      - name: Main
+        type: select
+        use: [Remote]
+    rules:
+      - MATCH,Main
+    """
+
+    let groups = try ProfilePreviewBuilder().groups(from: source, profileName: "Remote")
+
+    XCTAssertEqual(groups.map(\.name), ["Main"])
+    XCTAssertEqual(groups.first?.nodes.map(\.name), ["Provider Node A", "Provider Node B"])
+    XCTAssertEqual(groups.first?.nodes.map(\.providerName), ["Remote", "Remote"])
+    XCTAssertEqual(groups.first?.nodes.first?.type, "hysteria2")
+    XCTAssertEqual(groups.first?.nodes.first?.serverHost, "a.example")
+    XCTAssertEqual(groups.first?.nodes.first?.serverPort, 443)
+    XCTAssertEqual(groups.first?.nodes.first?.udpSupported, true)
+    XCTAssertEqual(groups.first?.nodes.first?.tfoSupported, true)
+    XCTAssertEqual(groups.first?.nodes.last?.xudpSupported, true)
   }
 
   func testPreviewGroupsExtractBase64URIProviderContent() throws {

@@ -521,6 +521,7 @@ private struct ProfileEditSheet: View {
 
 private struct SubscriptionProviderOptionsEditor: View {
   @Binding var options: SubscriptionProviderOptions
+  @State private var isRuleOverlayPresented = false
 
   var body: some View {
     Section("Provider Options") {
@@ -541,6 +542,30 @@ private struct SubscriptionProviderOptionsEditor: View {
       TextField("Filter", text: $options.filter)
       TextField("Exclude Filter", text: $options.excludeFilter)
       TextField("Exclude Type", text: $options.excludeType)
+      TextField("Generated Select Group", text: $options.primaryGroupName)
+      TextField("Generated URL-Test Group", text: $options.autoGroupName)
+      TextField("Final MATCH Policy", text: $options.finalRulePolicy)
+
+      HStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 2) {
+          Text("Profile Rule Overlay")
+          Text(options.ruleOverlay.summary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
+        Spacer()
+        Button {
+          isRuleOverlayPresented = true
+        } label: {
+          Label("Edit", systemImage: "slider.horizontal.3")
+        }
+        .popover(isPresented: $isRuleOverlayPresented, arrowEdge: .bottom) {
+          RuleOverlaySettingsPopover(settings: $options.ruleOverlay)
+            .padding(16)
+            .frame(width: 420)
+        }
+      }
 
       VStack(alignment: .leading, spacing: 6) {
         Text("Provider Override YAML")
@@ -553,6 +578,20 @@ private struct SubscriptionProviderOptionsEditor: View {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
               .strokeBorder(.quaternary, lineWidth: 1)
           }
+      }
+
+      VStack(alignment: .leading, spacing: 6) {
+        Text("Runtime Merge YAML")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        TextEditor(text: $options.runtimeMergeYAML)
+          .font(.system(.caption, design: .monospaced))
+          .frame(minHeight: 88)
+          .overlay {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+              .strokeBorder(.quaternary, lineWidth: 1)
+          }
+          .help("Merged into runtime config before app-managed launch settings.")
       }
 
       VStack(alignment: .leading, spacing: 8) {

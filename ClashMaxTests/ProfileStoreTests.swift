@@ -354,11 +354,28 @@ final class ProfileStoreTests: XCTestCase {
       session: session
     )
     let header = SubscriptionRequestHeader(name: "X-Token", value: "secret")
+    let runtimeMergeYAML = """
+    proxies:
+      - name: Secret Runtime Node
+        type: trojan
+        server: secret.example
+        password: hidden-password
+    """
     let options = SubscriptionProviderOptions(
       intervalSeconds: 900,
       filter: "HK",
+      runtimeMergeYAML: runtimeMergeYAML,
       requestHeaders: [header],
-      fetchProxy: .systemProxy
+      fetchProxy: .systemProxy,
+      ruleOverlay: RuleOverlaySettings(
+        enabled: true,
+        prependRules: [
+          ManagedRuleOverlayRule(kind: .domainSuffix, value: "corp.example", policy: "DIRECT")
+        ],
+        disabledRuleMatchers: [
+          ManagedRuleDisableMatcher(mode: .contains, pattern: "ads.example")
+        ]
+      )
     )
 
     try await store.updateSubscriptionProviderOptions(profile, options: options)
@@ -369,10 +386,17 @@ final class ProfileStoreTests: XCTestCase {
       try secrets.load(account: "subscription.\(profile.id.uuidString).header.\(header.id.uuidString)"),
       "secret"
     )
+    XCTAssertEqual(
+      try secrets.load(account: "subscription.\(profile.id.uuidString).runtimeMergeYAML"),
+      runtimeMergeYAML
+    )
     let manifest = try String(contentsOf: fixture.paths.manifestURL, encoding: .utf8)
     XCTAssertTrue(manifest.contains(header.id.uuidString))
     XCTAssertTrue(manifest.contains("X-Token"))
+    XCTAssertTrue(manifest.contains("runtimeMergeYAMLEnabled"))
     XCTAssertFalse(manifest.contains("secret"))
+    XCTAssertFalse(manifest.contains("hidden-password"))
+    XCTAssertFalse(manifest.contains("Secret Runtime Node"))
     let reloaded = ProfileStore(paths: fixture.paths, keychain: secrets)
     await reloaded.waitForManifestLoad()
     XCTAssertEqual(reloaded.profiles.first?.subscriptionProviderOptions, options)
@@ -397,6 +421,7 @@ final class ProfileStoreTests: XCTestCase {
           },
           "originalConfigPath": "\(fixture.configURL.path)",
           "subscriptionProviderOptions": {
+            "runtimeMergeYAML": "proxies:\\n  - name: Legacy Runtime Node\\n    type: trojan\\n    password: legacy-secret\\n",
             "requestHeaders": [
               {
                 "id": "\(headerID.uuidString)",
@@ -417,12 +442,51 @@ final class ProfileStoreTests: XCTestCase {
 
     XCTAssertEqual(store.profiles.first?.subscriptionProviderOptions.requestHeaders.first?.value, "Bearer legacy")
     XCTAssertEqual(
+      store.profiles.first?.subscriptionProviderOptions.runtimeMergeYAML,
+      "proxies:\n  - name: Legacy Runtime Node\n    type: trojan\n    password: legacy-secret\n"
+    )
+    XCTAssertEqual(
       try secrets.load(account: "subscription.\(profileID.uuidString).header.\(headerID.uuidString)"),
       "Bearer legacy"
+    )
+    XCTAssertEqual(
+      try secrets.load(account: "subscription.\(profileID.uuidString).runtimeMergeYAML"),
+      "proxies:\n  - name: Legacy Runtime Node\n    type: trojan\n    password: legacy-secret\n"
     )
     let manifest = try String(contentsOf: fixture.paths.manifestURL, encoding: .utf8)
     XCTAssertTrue(manifest.contains("Authorization"))
     XCTAssertFalse(manifest.contains("Bearer legacy"))
+    XCTAssertFalse(manifest.contains("legacy-secret"))
+  }
+
+  func testSubscriptionProviderOptionsRuntimeMergeSecretFailureRestoresPreviousValue() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let secrets = InMemorySecretStore()
+    let store = ProfileStore(paths: fixture.paths, keychain: secrets)
+    let session = URLSession(configuration: URLProtocolRecorder.configurationReturning("proxies:\n  - name: DIRECT\n    type: direct\n"))
+    let profile = try await store.addSubscription(
+      name: "Remote",
+      url: URL(string: "https://example.com/sub")!,
+      session: session
+    )
+    let initialOptions = SubscriptionProviderOptions(runtimeMergeYAML: "rules:\n  - MATCH,DIRECT\n")
+    try await store.updateSubscriptionProviderOptions(profile, options: initialOptions)
+
+    let rejectedRuntimeMergeYAML = "rules:\n  - MATCH,Proxy\n"
+    secrets.rejectSaving(rejectedRuntimeMergeYAML)
+
+    await XCTAssertThrowsErrorAsync {
+      try await store.updateSubscriptionProviderOptions(
+        profile,
+        options: SubscriptionProviderOptions(runtimeMergeYAML: rejectedRuntimeMergeYAML)
+      )
+    }
+
+    XCTAssertEqual(store.profiles.first?.subscriptionProviderOptions, initialOptions)
+    XCTAssertEqual(
+      try secrets.load(account: "subscription.\(profile.id.uuidString).runtimeMergeYAML"),
+      initialOptions.runtimeMergeYAML
+    )
   }
 
   func testProviderOptionsPreflightBeforePersistence() async throws {

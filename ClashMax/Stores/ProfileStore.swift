@@ -101,7 +101,8 @@ struct MihomoSubscriptionProfilePreflightValidator: SubscriptionProfilePreflight
     profileName: String,
     providerOptions: SubscriptionProviderOptions
   ) async throws {
-    guard try ProfileConfigInspector.format(of: subscriptionSource) == .proxyProviderContent else {
+    let format = try ProfileConfigInspector.format(of: subscriptionSource)
+    guard format == .proxyProviderContent || providerOptions.requiresRuntimeConfigPreflight else {
       return
     }
 
@@ -144,6 +145,11 @@ struct MihomoSubscriptionProfilePreflightValidator: SubscriptionProfilePreflight
 
 @MainActor
 final class ProfileStore: ObservableObject {
+  private struct ProviderOptionSecretSnapshot: Sendable {
+    var headers: [UUID: String?]
+    var runtimeMergeYAML: String?
+  }
+
   @Published private(set) var profiles: [Profile] = []
   @Published private(set) var activeProfileID: Profile.ID?
   @Published private(set) var subscriptionURLCache: [Profile.ID: String] = [:]
@@ -398,11 +404,11 @@ final class ProfileStore: ObservableObject {
         profileName: nextProfile.name,
         providerOptions: options
       )
-      let headerSnapshot = await headerSecretSnapshot(replacing: currentProfile, with: nextProfile)
+      let secretSnapshot = await providerOptionSecretSnapshot(replacing: currentProfile, with: nextProfile)
       do {
         try await diskIO.writeProfileSource(result.source, to: URL(fileURLWithPath: currentProfile.originalConfigPath))
         try await secretIO.save(resolution.url.absoluteString, account: account)
-        try await saveHeaderSecrets(for: nextProfile, replacing: currentProfile)
+        try await saveProviderOptionSecrets(for: nextProfile, replacing: currentProfile)
         try await saveManifest(profiles: nextProfiles, activeProfileID: activeProfileID)
       } catch {
         if let previousSource {
@@ -413,7 +419,7 @@ final class ProfileStore: ObservableObject {
         } else {
           try? await secretIO.delete(account: account)
         }
-        await restoreHeaderSecrets(headerSnapshot, for: currentProfile)
+        await restoreProviderOptionSecrets(secretSnapshot, for: currentProfile)
         throw error
       }
       profiles = nextProfiles
@@ -476,12 +482,12 @@ final class ProfileStore: ObservableObject {
       var nextProfiles = profiles
       nextProfiles[index].subscriptionProviderOptions = options
       nextProfiles[index].updatedAt = Date()
-      let headerSnapshot = await headerSecretSnapshot(replacing: currentProfile, with: nextProfiles[index])
+      let secretSnapshot = await providerOptionSecretSnapshot(replacing: currentProfile, with: nextProfiles[index])
       do {
-        try await saveHeaderSecrets(for: nextProfiles[index], replacing: currentProfile)
+        try await saveProviderOptionSecrets(for: nextProfiles[index], replacing: currentProfile)
         try await saveManifest(profiles: nextProfiles, activeProfileID: activeProfileID)
       } catch {
-        await restoreHeaderSecrets(headerSnapshot, for: currentProfile)
+        await restoreProviderOptionSecrets(secretSnapshot, for: currentProfile)
         throw error
       }
       profiles = nextProfiles
@@ -502,7 +508,7 @@ final class ProfileStore: ObservableObject {
       if case let .subscription(id) = current.source {
         subscriptionURLCache.removeValue(forKey: id)
         try? await secretIO.delete(account: Self.subscriptionAccount(for: id))
-        await deleteHeaderSecrets(for: current)
+        await deleteProviderOptionSecrets(for: current)
       }
     }
   }
@@ -528,6 +534,10 @@ final class ProfileStore: ObservableObject {
 
   nonisolated private static func subscriptionHeaderAccount(subscriptionID: UUID, headerID: UUID) -> String {
     "subscription.\(subscriptionID.uuidString).header.\(headerID.uuidString)"
+  }
+
+  nonisolated private static func subscriptionRuntimeMergeAccount(subscriptionID: UUID) -> String {
+    "subscription.\(subscriptionID.uuidString).runtimeMergeYAML"
   }
 
   private func fetchSubscription(
@@ -629,7 +639,8 @@ final class ProfileStore: ObservableObject {
       guard case let .subscription(subscriptionID) = hydratedProfiles[profileIndex].source else {
         continue
       }
-      var headers = hydratedProfiles[profileIndex].subscriptionProviderOptions.requestHeaders
+      var providerOptions = hydratedProfiles[profileIndex].subscriptionProviderOptions
+      var headers = providerOptions.requestHeaders
       for headerIndex in headers.indices {
         let headerID = headers[headerIndex].id
         let legacyValue = headers[headerIndex].value
@@ -649,10 +660,39 @@ final class ProfileStore: ObservableObject {
           }
         }
       }
-      hydratedProfiles[profileIndex].subscriptionProviderOptions.requestHeaders = headers
+      providerOptions.requestHeaders = headers
+
+      let legacyRuntimeMergeYAML = providerOptions.runtimeMergeYAML
+      let runtimeMergeAccount = Self.subscriptionRuntimeMergeAccount(subscriptionID: subscriptionID)
+      if let storedRuntimeMergeYAML = try? await secretIO.load(account: runtimeMergeAccount) {
+        providerOptions.runtimeMergeYAML = storedRuntimeMergeYAML
+        if !legacyRuntimeMergeYAML.isEmpty {
+          shouldRewriteManifest = true
+        }
+      } else if !legacyRuntimeMergeYAML.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        do {
+          try await secretIO.save(legacyRuntimeMergeYAML, account: runtimeMergeAccount)
+          providerOptions.runtimeMergeYAML = legacyRuntimeMergeYAML
+          shouldRewriteManifest = true
+        } catch {
+          providerOptions.runtimeMergeYAML = ""
+        }
+      }
+
+      hydratedProfiles[profileIndex].subscriptionProviderOptions = providerOptions
     }
 
     return (hydratedProfiles, shouldRewriteManifest)
+  }
+
+  private func providerOptionSecretSnapshot(
+    replacing currentProfile: Profile,
+    with nextProfile: Profile
+  ) async -> ProviderOptionSecretSnapshot {
+    ProviderOptionSecretSnapshot(
+      headers: await headerSecretSnapshot(replacing: currentProfile, with: nextProfile),
+      runtimeMergeYAML: await runtimeMergeSecretSnapshot(for: currentProfile)
+    )
   }
 
   private func headerSecretSnapshot(replacing currentProfile: Profile, with nextProfile: Profile) async -> [UUID: String?] {
@@ -667,6 +707,16 @@ final class ProfileStore: ObservableObject {
       )
     }
     return snapshot
+  }
+
+  private func runtimeMergeSecretSnapshot(for profile: Profile) async -> String? {
+    guard case let .subscription(subscriptionID) = profile.source else { return nil }
+    return try? await secretIO.load(account: Self.subscriptionRuntimeMergeAccount(subscriptionID: subscriptionID))
+  }
+
+  private func saveProviderOptionSecrets(for profile: Profile, replacing previousProfile: Profile?) async throws {
+    try await saveHeaderSecrets(for: profile, replacing: previousProfile)
+    try await saveRuntimeMergeSecret(for: profile)
   }
 
   private func saveHeaderSecrets(for profile: Profile, replacing previousProfile: Profile?) async throws {
@@ -689,6 +739,22 @@ final class ProfileStore: ObservableObject {
     }
   }
 
+  private func saveRuntimeMergeSecret(for profile: Profile) async throws {
+    guard case let .subscription(subscriptionID) = profile.source else { return }
+    let account = Self.subscriptionRuntimeMergeAccount(subscriptionID: subscriptionID)
+    let runtimeMergeYAML = profile.subscriptionProviderOptions.runtimeMergeYAML
+    if runtimeMergeYAML.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      try await secretIO.delete(account: account)
+    } else {
+      try await secretIO.save(runtimeMergeYAML, account: account)
+    }
+  }
+
+  private func restoreProviderOptionSecrets(_ snapshot: ProviderOptionSecretSnapshot, for profile: Profile) async {
+    await restoreHeaderSecrets(snapshot.headers, for: profile)
+    await restoreRuntimeMergeSecret(snapshot.runtimeMergeYAML, for: profile)
+  }
+
   private func restoreHeaderSecrets(_ snapshot: [UUID: String?], for profile: Profile) async {
     guard case let .subscription(subscriptionID) = profile.source else { return }
     for (headerID, value) in snapshot {
@@ -701,6 +767,21 @@ final class ProfileStore: ObservableObject {
     }
   }
 
+  private func restoreRuntimeMergeSecret(_ value: String?, for profile: Profile) async {
+    guard case let .subscription(subscriptionID) = profile.source else { return }
+    let account = Self.subscriptionRuntimeMergeAccount(subscriptionID: subscriptionID)
+    if let value {
+      try? await secretIO.save(value, account: account)
+    } else {
+      try? await secretIO.delete(account: account)
+    }
+  }
+
+  private func deleteProviderOptionSecrets(for profile: Profile) async {
+    await deleteHeaderSecrets(for: profile)
+    await deleteRuntimeMergeSecret(for: profile)
+  }
+
   private func deleteHeaderSecrets(for profile: Profile) async {
     guard case let .subscription(subscriptionID) = profile.source else { return }
     for header in profile.subscriptionProviderOptions.requestHeaders {
@@ -708,6 +789,11 @@ final class ProfileStore: ObservableObject {
         account: Self.subscriptionHeaderAccount(subscriptionID: subscriptionID, headerID: header.id)
       )
     }
+  }
+
+  private func deleteRuntimeMergeSecret(for profile: Profile) async {
+    guard case let .subscription(subscriptionID) = profile.source else { return }
+    try? await secretIO.delete(account: Self.subscriptionRuntimeMergeAccount(subscriptionID: subscriptionID))
   }
 
   private func profilesByApplyingSubscriptionDetails(

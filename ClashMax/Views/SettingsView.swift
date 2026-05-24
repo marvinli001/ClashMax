@@ -571,13 +571,15 @@ struct SettingsView: View {
   }
 }
 
-private struct RuleOverlaySettingsPopover: View {
+struct RuleOverlaySettingsPopover: View {
   @Binding var settings: RuleOverlaySettings
   @State private var position = RuleOverlayPosition.prepend
   @State private var kind = ManagedRuleOverlayRule.Kind.domainSuffix
   @State private var value = ""
   @State private var policy = "DIRECT"
   @State private var noResolve = false
+  @State private var disabledRuleMode = RuleDisableMatchMode.contains
+  @State private var disabledRulePattern = ""
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
@@ -631,15 +633,52 @@ private struct RuleOverlaySettingsPopover: View {
         }
       }
 
+      VStack(alignment: .leading, spacing: 10) {
+        Text("Disable Profile Rule")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+
+        Picker("Match", selection: $disabledRuleMode) {
+          ForEach(RuleDisableMatchMode.allCases) { mode in
+            Text(mode.displayName).tag(mode)
+          }
+        }
+        .pickerStyle(.segmented)
+
+        TextField("Rule pattern", text: $disabledRulePattern)
+          .textFieldStyle(.roundedBorder)
+
+        HStack {
+          if let error = draftDisabledRuleMatcher.validationError {
+            Label(error, systemImage: "exclamationmark.triangle.fill")
+              .font(.caption)
+              .foregroundStyle(.red)
+              .lineLimit(2)
+          }
+          Spacer()
+          Button {
+            addDisabledRuleMatcher()
+          } label: {
+            Label("Disable Rule", systemImage: "nosign")
+          }
+          .disabled(!settings.enabled || draftDisabledRuleMatcher.validationError != nil)
+        }
+      }
+
       Divider()
 
       RuleOverlayRuleList(title: "Before Profile Rules", rules: $settings.prependRules)
+      RuleDisableMatcherList(matchers: $settings.disabledRuleMatchers)
       RuleOverlayRuleList(title: "After Profile Rules", rules: $settings.appendRules)
     }
   }
 
   private var draftRule: ManagedRuleOverlayRule {
     ManagedRuleOverlayRule(kind: kind, value: value, policy: policy, noResolve: noResolve)
+  }
+
+  private var draftDisabledRuleMatcher: ManagedRuleDisableMatcher {
+    ManagedRuleDisableMatcher(mode: disabledRuleMode, pattern: disabledRulePattern)
   }
 
   private func addRule() {
@@ -655,6 +694,13 @@ private struct RuleOverlaySettingsPopover: View {
     if !kind.allowsNoResolve {
       noResolve = false
     }
+  }
+
+  private func addDisabledRuleMatcher() {
+    let matcher = draftDisabledRuleMatcher
+    guard matcher.validationError == nil else { return }
+    settings.disabledRuleMatchers.append(matcher)
+    disabledRulePattern = ""
   }
 }
 
@@ -697,6 +743,26 @@ private struct RuleOverlayRuleList: View {
               .truncationMode(.middle)
             Spacer()
             Button {
+              moveRule(from: index, by: -1)
+            } label: {
+              Image(systemName: "arrow.up")
+                .frame(width: 20, height: 20)
+            }
+            .buttonStyle(.borderless)
+            .disabled(index == 0)
+            .help("Move rule up")
+
+            Button {
+              moveRule(from: index, by: 1)
+            } label: {
+              Image(systemName: "arrow.down")
+                .frame(width: 20, height: 20)
+            }
+            .buttonStyle(.borderless)
+            .disabled(index >= rules.count - 1)
+            .help("Move rule down")
+
+            Button {
               rules.remove(at: index)
             } label: {
               Image(systemName: "trash")
@@ -712,6 +778,78 @@ private struct RuleOverlayRuleList: View {
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private func moveRule(from index: Int, by offset: Int) {
+    let destination = index + offset
+    guard rules.indices.contains(index), rules.indices.contains(destination) else { return }
+    rules.swapAt(index, destination)
+  }
+}
+
+private struct RuleDisableMatcherList: View {
+  @Binding var matchers: [ManagedRuleDisableMatcher]
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text("Disabled Profile Rules")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+
+      if matchers.isEmpty {
+        Text("Empty")
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+      } else {
+        ForEach(Array(matchers.enumerated()), id: \.element.id) { index, matcher in
+          HStack(spacing: 8) {
+            Text("\(matcher.mode.displayName): \(matcher.normalizedPattern)")
+              .font(.system(.caption, design: .monospaced))
+              .lineLimit(1)
+              .truncationMode(.middle)
+            Spacer()
+            Button {
+              moveMatcher(from: index, by: -1)
+            } label: {
+              Image(systemName: "arrow.up")
+                .frame(width: 20, height: 20)
+            }
+            .buttonStyle(.borderless)
+            .disabled(index == 0)
+            .help("Move disabled rule matcher up")
+
+            Button {
+              moveMatcher(from: index, by: 1)
+            } label: {
+              Image(systemName: "arrow.down")
+                .frame(width: 20, height: 20)
+            }
+            .buttonStyle(.borderless)
+            .disabled(index >= matchers.count - 1)
+            .help("Move disabled rule matcher down")
+
+            Button {
+              matchers.remove(at: index)
+            } label: {
+              Image(systemName: "trash")
+                .frame(width: 20, height: 20)
+            }
+            .buttonStyle(.borderless)
+            .help("Remove disabled rule matcher")
+          }
+          .padding(.horizontal, 8)
+          .padding(.vertical, 6)
+          .background(.quaternary, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private func moveMatcher(from index: Int, by offset: Int) {
+    let destination = index + offset
+    guard matchers.indices.contains(index), matchers.indices.contains(destination) else { return }
+    matchers.swapAt(index, destination)
   }
 }
 

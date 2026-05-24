@@ -7,7 +7,7 @@ final class RuntimeDataStore: ObservableObject {
   @Published var proxyGroups: [ProxyGroup] = []
   @Published var proxyProviders: [ProxyProvider] = []
   @Published var ruleProviders: [RuleProvider] = []
-  @Published var rules: [String] = []
+  @Published var rules: [RuntimeRule] = []
   @Published var connections: [ConnectionSnapshot] = []
   @Published private(set) var logs: [LogEntry] = []
   @Published var trafficSample: TrafficSample = .zero

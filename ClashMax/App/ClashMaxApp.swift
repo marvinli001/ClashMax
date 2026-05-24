@@ -24,6 +24,7 @@ struct ClashMaxApp: App {
         .onAppear {
           appDelegate.appModel = appModel
           appModel.warmTunHelperRegistrationOnLaunch()
+          appModel.warmPreviewRuntimeOnLaunch()
         }
         .onOpenURL { url in
           AppDelegate.showMainWindow()
@@ -57,10 +58,12 @@ struct ClashMaxApp: App {
         .onAppear {
           appDelegate.appModel = appModel
           appModel.warmTunHelperRegistrationOnLaunch()
+          appModel.warmPreviewRuntimeOnLaunch()
         }
     } label: {
-      MenuBarStatusLabel(appModel: appModel, runtimeData: appModel.runtimeData)
+      MenuBarStatusLabel(appModel: appModel)
     }
+    .menuBarExtraStyle(.window)
 
     Settings {
       SettingsView(bundledCoreInfo: bundledCoreInfo)
@@ -76,6 +79,7 @@ struct ClashMaxApp: App {
         .onAppear {
           appDelegate.appModel = appModel
           appModel.warmTunHelperRegistrationOnLaunch()
+          appModel.warmPreviewRuntimeOnLaunch()
         }
     }
   }
@@ -83,13 +87,18 @@ struct ClashMaxApp: App {
 
 private struct MenuBarStatusLabel: View {
   @ObservedObject var appModel: AppModel
-  @ObservedObject var runtimeData: RuntimeDataStore
 
   var body: some View {
-    HStack(spacing: 4) {
-      Image(systemName: appModel.isRunning ? "shield.lefthalf.filled" : "shield")
-      Text(runtimeData.trafficSample.shortLabel)
-    }
+    let runtime = MenuBarRuntimePresentation(appModel: appModel)
+
+    Image("ClashMaxMenuBarLogo")
+      .renderingMode(.template)
+      .resizable()
+      .scaledToFit()
+      .frame(width: 16, height: 16)
+      .foregroundStyle(runtime.tint)
+      .accessibilityLabel(Text("ClashMax \(runtime.title)"))
+      .help(runtime.detail ?? runtime.title)
   }
 }
 

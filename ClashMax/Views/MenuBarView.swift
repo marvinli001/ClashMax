@@ -1,82 +1,494 @@
 import SwiftUI
 
+enum MenuBarPanelLayout {
+  static let width: CGFloat = 312
+  static let padding: CGFloat = 9
+  static let controlWidth: CGFloat = 108
+  static let statusCornerRadius: CGFloat = 8
+  static let trafficChartHeight: CGFloat = 52
+  static let plannedWidthRange: ClosedRange<CGFloat> = 300 ... 330
+}
+
 struct MenuBarView: View {
   @EnvironmentObject private var appModel: AppModel
   @EnvironmentObject private var runtimeData: RuntimeDataStore
   @EnvironmentObject private var appUpdateController: AppUpdateController
 
   var body: some View {
-    Button(canStopRuntime ? "Stop Core" : "Start Core") {
-      if canStopRuntime {
-        appModel.stop()
-      } else {
-        appModel.start()
-      }
-    }
+    let runtime = MenuBarRuntimePresentation(appModel: appModel)
 
-    Picker("Mode", selection: Binding(
-      get: { appModel.overrides.mode },
-      set: { appModel.requestMode($0) }
-    )) {
-      ForEach(RunMode.allCases) { mode in
-        Text(mode.displayName).tag(mode)
-      }
-    }
+    VStack(alignment: .leading, spacing: 8) {
+      MenuBarHeader(
+        runtime: runtime,
+        profileName: activeProfileName,
+        ownerName: appModel.runtimeOwner.menuBarDisplayName
+      )
 
-    Picker("Profile", selection: Binding<Profile.ID?>(
-      get: { appModel.profileStore.activeProfileID },
-      set: { id in
-        if let id, let profile = appModel.profileStore.profiles.first(where: { $0.id == id }) {
-          appModel.selectProfile(profile)
+      VStack(spacing: 6) {
+        Button {
+          runRuntime()
+        } label: {
+          Label(primaryActionTitle, systemImage: primaryActionSymbol)
+            .font(.system(.callout, design: .rounded).weight(.semibold))
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .buttonBorderShape(.roundedRectangle)
+        .controlSize(.regular)
+        .disabled(primaryActionDisabled)
+        .help(runtime.detail ?? primaryActionTitle)
+
+        MenuBarStatusMessage(runtime: runtime)
+      }
+
+      Divider()
+
+      if runtime.showsTraffic {
+        MenuBarTrafficSection(
+          sample: runtimeData.trafficSample,
+          history: runtimeData.trafficHistory
+        )
+
+        Divider()
+      }
+
+      VStack(spacing: 7) {
+        MenuBarControlRow(title: String(localized: "Run Mode"), systemImage: "slider.horizontal.3") {
+          Picker("Run Mode", selection: Binding(
+            get: { appModel.overrides.mode },
+            set: { appModel.requestMode($0) }
+          )) {
+            ForEach(RunMode.allCases) { mode in
+              Label(mode.displayName, systemImage: mode.menuBarSymbolName)
+                .tag(mode)
+            }
+          }
+          .menuBarPopupPickerStyle()
+        }
+
+        MenuBarControlRow(title: String(localized: "Profile"), systemImage: "rectangle.stack") {
+          Picker("Profile", selection: Binding<Profile.ID?>(
+            get: { appModel.profileStore.activeProfileID },
+            set: { id in
+              guard let id,
+                    let profile = appModel.profileStore.profiles.first(where: { $0.id == id })
+              else { return }
+              appModel.selectProfile(profile)
+            }
+          )) {
+            Label("No Profile", systemImage: "rectangle.stack")
+              .tag(Profile.ID?.none)
+
+            ForEach(appModel.profileStore.profiles) { profile in
+              Label(profile.name, systemImage: profile.menuBarSymbolName)
+                .tag(Profile.ID?.some(profile.id))
+            }
+          }
+          .menuBarPopupPickerStyle(disabled: appModel.profileStore.profiles.isEmpty)
+        }
+
+        MenuBarControlRow(title: String(localized: "Proxy Routing"), systemImage: appModel.proxyRoutingMode.symbolName) {
+          Picker("Proxy Routing", selection: Binding(
+            get: { appModel.proxyRoutingMode },
+            set: { appModel.requestProxyRoutingMode($0) }
+          )) {
+            ForEach(ProxyRoutingMode.allCases) { mode in
+              Label(mode.displayName, systemImage: mode.symbolName)
+                .tag(mode)
+            }
+          }
+          .menuBarPopupPickerStyle()
+        }
+
+        MenuBarControlRow(title: systemProxyToggleTitle, systemImage: "network.badge.shield.half.filled") {
+          Toggle("", isOn: Binding(
+            get: { appModel.systemProxyEnabled },
+            set: { appModel.setSystemProxyEnabled($0) }
+          ))
+          .labelsHidden()
+          .toggleStyle(.switch)
+        }
+        .disabled(appModel.proxyRoutingMode != .systemProxy)
+        .help(
+          appModel.proxyRoutingMode == .systemProxy
+            ? String(localized: "System Proxy")
+            : String(localized: "System Proxy requires System Proxy routing.")
+        )
+      }
+
+      Divider()
+
+      VStack(spacing: 5) {
+        HStack(spacing: 5) {
+          Button {
+            appModel.updateActiveSubscription()
+          } label: {
+            Label("Update Subscription", systemImage: "arrow.triangle.2.circlepath")
+              .frame(maxWidth: .infinity)
+          }
+          .disabled(!(appModel.profileStore.activeProfile?.isSubscription ?? false))
+
+          CheckForUpdatesButton(updateController: appUpdateController, fillsWidth: true)
+        }
+
+        HStack(spacing: 5) {
+          Button {
+            AppDelegate.showMainWindow()
+          } label: {
+            Label("Open Main Window", systemImage: "macwindow")
+              .frame(maxWidth: .infinity)
+          }
+
+          Button {
+            NSApp.terminate(nil)
+          } label: {
+            Label("Quit", systemImage: "power")
+              .frame(maxWidth: .infinity)
+          }
         }
       }
-    )) {
-      Text("No Profile").tag(Profile.ID?.none)
-      ForEach(appModel.profileStore.profiles) { profile in
-        Text(profile.name).tag(Profile.ID?.some(profile.id))
+      .buttonStyle(.bordered)
+      .controlSize(.small)
+      .font(.caption)
+    }
+    .padding(MenuBarPanelLayout.padding)
+    .frame(width: MenuBarPanelLayout.width)
+    .background(.regularMaterial)
+  }
+
+  private var activeProfileName: String {
+    appModel.profileStore.activeProfile?.name ?? String(localized: "No Profile")
+  }
+
+  private var primaryActionDisabled: Bool {
+    if appModel.canStopRuntime { return false }
+    if appModel.dashboardRuntimeState.isStarting { return true }
+    return appModel.readinessIssue != nil
+  }
+
+  private var primaryActionTitle: String {
+    appModel.canStopRuntime ? String(localized: "Stop Core") : String(localized: "Start Core")
+  }
+
+  private var primaryActionSymbol: String {
+    appModel.canStopRuntime ? "stop.fill" : "play.fill"
+  }
+
+  private var systemProxyToggleTitle: String {
+    appModel.systemProxyEnabled
+      ? String(localized: "Disable System Proxy")
+      : String(localized: "Enable System Proxy")
+  }
+
+  private func runRuntime() {
+    guard !primaryActionDisabled else { return }
+    if appModel.canStopRuntime {
+      appModel.stop()
+    } else {
+      appModel.start()
+    }
+  }
+}
+
+struct MenuBarRuntimePresentation {
+  let title: String
+  let detail: String?
+  let symbolName: String
+  let tint: Color
+  let showsTraffic: Bool
+
+  @MainActor
+  init(appModel: AppModel) {
+    self.init(
+      previewRuntimeActive: appModel.previewRuntimeActive,
+      dashboardRuntimeState: appModel.dashboardRuntimeState,
+      runtimeOwner: appModel.runtimeOwner,
+      tunnelCoreRunning: appModel.tunnelCoreRunning,
+      isRunning: appModel.isRunning,
+      hasActiveProfile: appModel.profileStore.activeProfile != nil,
+      missingBundledCore: appModel.readinessIssue == AppError.missingBundledCore.description,
+      readinessIssue: appModel.readinessIssue
+    )
+  }
+
+  init(
+    previewRuntimeActive: Bool = false,
+    dashboardRuntimeState: DashboardRuntimeState,
+    runtimeOwner: RuntimeOwner,
+    tunnelCoreRunning: Bool = false,
+    isRunning: Bool = false,
+    hasActiveProfile: Bool = true,
+    missingBundledCore: Bool = false,
+    readinessIssue: String? = nil
+  ) {
+    if previewRuntimeActive {
+      title = String(localized: "Preview")
+      detail = String(localized: "Preview runtime is active.")
+      symbolName = "eye"
+      tint = .blue
+      showsTraffic = false
+      return
+    }
+
+    switch dashboardRuntimeState {
+    case let .crashed(message):
+      title = String(localized: "Crashed")
+      detail = message
+      symbolName = "xmark.octagon.fill"
+      tint = .red
+      showsTraffic = false
+      return
+    case .starting:
+      title = String(localized: "Starting")
+      detail = String(localized: "Core is starting.")
+      symbolName = "arrow.triangle.2.circlepath"
+      tint = .orange
+      showsTraffic = false
+      return
+    default:
+      break
+    }
+
+    if runtimeOwner == .networkExtension {
+      title = String(localized: "Running NE")
+      detail = String(localized: "Network Extension owns transparent proxy routing.")
+      symbolName = "network"
+      tint = .green
+      showsTraffic = true
+    } else if tunnelCoreRunning || runtimeOwner == .tunnel {
+      title = String(localized: "Running TUN")
+      detail = String(localized: "TUN helper owns VPN-style routing.")
+      symbolName = "point.topleft.down.curvedto.point.bottomright.up"
+      tint = .green
+      showsTraffic = true
+    } else if isRunning || dashboardRuntimeState.isRunning {
+      title = String(localized: "Running")
+      detail = String(localized: "User-mode core is running.")
+      symbolName = "shield.lefthalf.filled"
+      tint = .green
+      showsTraffic = true
+    } else if !hasActiveProfile {
+      title = String(localized: "No Profile")
+      detail = String(localized: "Select a profile to start ClashMax.")
+      symbolName = "doc.badge.plus"
+      tint = .secondary
+      showsTraffic = false
+    } else if missingBundledCore {
+      title = String(localized: "No Core")
+      detail = String(localized: "Bundled Mihomo core is unavailable.")
+      symbolName = "externaldrive.badge.xmark"
+      tint = .red
+      showsTraffic = false
+    } else if let readinessIssue {
+      title = String(localized: "Needs Setup")
+      detail = readinessIssue
+      symbolName = "exclamationmark.triangle.fill"
+      tint = .orange
+      showsTraffic = false
+    } else {
+      title = String(localized: "Stopped")
+      detail = String(localized: "Profile and core are ready.")
+      symbolName = "shield"
+      tint = .secondary
+      showsTraffic = false
+    }
+  }
+}
+
+struct MenuBarHeader: View {
+  let runtime: MenuBarRuntimePresentation
+  let profileName: String
+  let ownerName: String
+
+  var body: some View {
+    HStack(spacing: 8) {
+      ZStack {
+        Circle()
+          .fill(runtime.tint.opacity(0.16))
+        Image("ClashMaxMonoLogo")
+          .renderingMode(.template)
+          .resizable()
+          .scaledToFit()
+          .frame(width: 15, height: 15)
+          .foregroundStyle(runtime.tint)
+      }
+      .frame(width: 26, height: 26)
+
+      VStack(alignment: .leading, spacing: 2) {
+        Text("ClashMax")
+          .font(.headline)
+          .lineLimit(1)
+
+        Text(profileName)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+
+        Text(String(format: String(localized: "Owner: %@"), ownerName))
+          .font(.caption2)
+          .foregroundStyle(.tertiary)
+          .lineLimit(1)
+      }
+
+      Spacer(minLength: 6)
+
+      Text(runtime.title)
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(runtime.tint)
+        .lineLimit(1)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(runtime.tint.opacity(0.12), in: Capsule())
+    }
+  }
+}
+
+struct MenuBarStatusMessage: View {
+  let runtime: MenuBarRuntimePresentation
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 3) {
+      Text(runtime.title)
+        .font(.subheadline.weight(.semibold))
+        .lineLimit(1)
+
+      if let detail = runtime.detail, !detail.isEmpty {
+        Text(detail)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(2)
+          .fixedSize(horizontal: false, vertical: true)
       }
     }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(7)
+    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: MenuBarPanelLayout.statusCornerRadius, style: .continuous))
+  }
+}
 
-    Picker("Proxy", selection: Binding(
-      get: { appModel.proxyRoutingMode },
-      set: { appModel.requestProxyRoutingMode($0) }
-    )) {
-      ForEach(ProxyRoutingMode.allCases) { mode in
-        Text(mode.displayName).tag(mode)
-      }
+struct MenuBarInfoRow: View {
+  let title: String
+  let value: String
+  let systemImage: String
+
+  var body: some View {
+    HStack(spacing: 6) {
+      Image(systemName: systemImage)
+        .foregroundStyle(.secondary)
+        .frame(width: 15)
+
+      Text(title)
+        .foregroundStyle(.secondary)
+
+      Spacer(minLength: 6)
+
+      Text(value)
+        .fontWeight(.medium)
+        .lineLimit(1)
+        .truncationMode(.middle)
     }
+    .font(.caption)
+  }
+}
 
-    Divider()
+struct MenuBarTrafficSection: View {
+  let sample: TrafficSample
+  let history: [TrafficSample]
 
-    Text(appModel.statusSummary)
-    Text("Owner: \(appModel.runtimeOwner.rawValue)")
-    Text(appModel.profileStore.activeProfile?.name ?? "No Profile")
-    Text(runtimeData.trafficSample.shortLabel)
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      MenuBarInfoRow(
+        title: String(localized: "Traffic"),
+        value: valueLabel,
+        systemImage: "arrow.up.arrow.down"
+      )
 
-    Button(appModel.systemProxyEnabled ? "Disable System Proxy" : "Enable System Proxy") {
-      appModel.setSystemProxyEnabled(!appModel.systemProxyEnabled)
-    }
-    .disabled(appModel.proxyRoutingMode != .systemProxy)
-
-    Button("Update Subscription") {
-      appModel.updateActiveSubscription()
-    }
-    .disabled(!(appModel.profileStore.activeProfile?.isSubscription ?? false))
-
-    CheckForUpdatesButton(updateController: appUpdateController)
-
-    Button("Open Window") {
-      AppDelegate.showMainWindow()
-    }
-
-    Divider()
-
-    Button("Quit") {
-      NSApp.terminate(nil)
+      TrafficSparkline(
+        samples: chartSamples,
+        inset: 4,
+        downloadLineWidth: 1.8,
+        uploadLineWidth: 1.6,
+        baselineOpacity: 0.16
+      )
+      .frame(height: MenuBarPanelLayout.trafficChartHeight)
+      .accessibilityLabel(Text("Traffic"))
+      .accessibilityValue(Text(valueLabel))
     }
   }
 
-  private var canStopRuntime: Bool {
-    appModel.canStopRuntime
+  private var valueLabel: String {
+    history.isEmpty ? String(localized: "Waiting for runtime data") : sample.shortLabel
+  }
+
+  private var chartSamples: [TrafficSample] {
+    history.isEmpty ? Self.emptyChartSamples : history
+  }
+
+  private static let emptyChartSamples = Array(repeating: TrafficSample.zero, count: 6)
+}
+
+struct MenuBarControlRow<Control: View>: View {
+  let title: String
+  let systemImage: String
+  @ViewBuilder var control: Control
+
+  var body: some View {
+    HStack(spacing: 6) {
+      Label(title, systemImage: systemImage)
+        .font(.callout)
+        .lineLimit(1)
+
+      Spacer(minLength: 6)
+
+      control
+        .controlSize(.small)
+    }
+  }
+}
+
+private extension RuntimeOwner {
+  var menuBarDisplayName: String {
+    switch self {
+    case .stopped:
+      String(localized: "Stopped")
+    case .user:
+      String(localized: "User Mode")
+    case .tunnel:
+      String(localized: "TUN Helper")
+    case .networkExtension:
+      String(localized: "NE Proxy")
+    case .preview:
+      String(localized: "Preview")
+    }
+  }
+}
+
+private extension RunMode {
+  var menuBarSymbolName: String {
+    switch self {
+    case .rule:
+      "list.bullet.rectangle"
+    case .global:
+      "globe"
+    case .direct:
+      "arrow.right.circle"
+    }
+  }
+}
+
+private extension Profile {
+  var menuBarSymbolName: String {
+    isSubscription ? "arrow.triangle.2.circlepath.circle" : "doc.text"
+  }
+}
+
+private extension View {
+  func menuBarPopupPickerStyle(disabled: Bool = false) -> some View {
+    labelsHidden()
+      .pickerStyle(.menu)
+      .controlSize(.small)
+      .frame(width: MenuBarPanelLayout.controlWidth)
+      .fixedSize(horizontal: true, vertical: false)
+      .disabled(disabled)
   }
 }

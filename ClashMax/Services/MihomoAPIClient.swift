@@ -6,7 +6,7 @@ protocol MihomoAPIControlling: Sendable {
   func proxyGroups() async throws -> [ProxyGroup]
   func structuredProxyProviders() async throws -> [ProxyProvider]
   func ruleProviders() async throws -> [RuleProvider]
-  func rules() async throws -> [String]
+  func rules() async throws -> [RuntimeRule]
   func connections() async throws -> [ConnectionSnapshot]
   func selectProxy(group: String, proxy: String) async throws
   func testDelay(proxy: String, testURL: URL, timeout: Int) async throws -> Int
@@ -140,13 +140,17 @@ struct MihomoAPIClient: Sendable {
       guard !all.isEmpty else { return nil }
       let history = item["history"] as? [[String: Any]] ?? []
       let nodes = all.map { proxyName in
-        ProxyNode(
+        let proxyDetail = proxyDetails[proxyName] ?? [:]
+        return ProxyNode(
           name: proxyName,
           type: proxyTypes[proxyName] ?? "proxy",
           delay: Self.delay(for: proxyName, history: history),
           isSelectable: true,
           serverHost: proxyEndpoints[proxyName]?.host,
-          serverPort: proxyEndpoints[proxyName]?.port
+          serverPort: proxyEndpoints[proxyName]?.port,
+          udpSupported: Self.bool(from: proxyDetail["udp"]),
+          tfoSupported: Self.bool(from: proxyDetail["tfo"]),
+          xudpSupported: Self.bool(from: proxyDetail["xudp"])
         )
       }
       return ProxyGroup(name: name, type: type, selected: item["now"] as? String, nodes: nodes)
@@ -164,6 +168,7 @@ struct MihomoAPIClient: Sendable {
     let providers = object["providers"] as? [String: Any] ?? object
     return providers.compactMap { name, value in
       guard let provider = value as? [String: Any] else { return nil }
+      let providerName = provider["name"] as? String ?? name
       let proxies = (provider["proxies"] as? [[String: Any]] ?? []).compactMap { proxy -> ProxyNode? in
         guard let name = proxy["name"] as? String else { return nil }
         return ProxyNode(
@@ -172,11 +177,15 @@ struct MihomoAPIClient: Sendable {
           delay: nil,
           isSelectable: true,
           serverHost: proxy["server"] as? String,
-          serverPort: Self.int(from: proxy["port"])
+          serverPort: Self.int(from: proxy["port"]),
+          providerName: providerName,
+          udpSupported: Self.bool(from: proxy["udp"]),
+          tfoSupported: Self.bool(from: proxy["tfo"]),
+          xudpSupported: Self.bool(from: proxy["xudp"])
         )
       }
       return ProxyProvider(
-        name: provider["name"] as? String ?? name,
+        name: providerName,
         type: provider["type"] as? String ?? "Provider",
         vehicleType: provider["vehicleType"] as? String,
         updatedAt: Self.date(from: provider["updatedAt"]),
@@ -206,14 +215,22 @@ struct MihomoAPIClient: Sendable {
     .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
   }
 
-  func rules() async throws -> [String] {
+  func rules() async throws -> [RuntimeRule] {
     let data = try await data(for: request(path: "/rules"))
     let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
     let rules = object?["rules"] as? [[String: Any]] ?? []
-    return rules.map { rule in
-      [rule["type"], rule["payload"], rule["proxy"]]
-        .compactMap { $0 as? String }
-        .joined(separator: ",")
+    return rules.enumerated().map { index, rule in
+      let type = rule["type"] as? String ?? ""
+      let payload = rule["payload"] as? String ?? ""
+      let policy = (rule["proxy"] as? String) ?? (rule["policy"] as? String) ?? ""
+      return RuntimeRule(
+        index: index + 1,
+        type: type,
+        payload: payload,
+        policy: policy,
+        providerName: rule["provider"] as? String,
+        raw: [type, payload, policy].filter { !$0.isEmpty }.joined(separator: ",")
+      )
     }
   }
 
@@ -439,6 +456,26 @@ struct MihomoAPIClient: Sendable {
       return Int(value.trimmingCharacters(in: .whitespacesAndNewlines))
     case let value as CustomStringConvertible:
       return Int(String(describing: value))
+    default:
+      return nil
+    }
+  }
+
+  private static func bool(from value: Any?) -> Bool? {
+    switch value {
+    case let value as Bool:
+      return value
+    case let value as NSNumber:
+      return value.boolValue
+    case let value as String:
+      let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+      if ["true", "yes", "1"].contains(normalized) {
+        return true
+      }
+      if ["false", "no", "0"].contains(normalized) {
+        return false
+      }
+      return nil
     default:
       return nil
     }

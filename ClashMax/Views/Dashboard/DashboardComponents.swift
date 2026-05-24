@@ -434,6 +434,7 @@ private struct TunSettingsPopover: View {
   @State private var fallbackGeoSiteDraft = ""
   @State private var fallbackIPCIDRDraft = ""
   @State private var fallbackDomainDraft = ""
+  @State private var isRuntimeDNSOverlayExpanded = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
@@ -443,211 +444,219 @@ private struct TunSettingsPopover: View {
         Button("Reset Defaults", action: onReset)
       }
 
-      Form {
-        Picker("TUN Stack", selection: $settings.stack) {
-          ForEach(TunStack.allCases) { stack in
-            Text(stack.displayName).tag(stack)
+      ScrollView(.vertical) {
+        VStack(alignment: .leading, spacing: 16) {
+          Form {
+            Picker("TUN Stack", selection: $settings.stack) {
+              ForEach(TunStack.allCases) { stack in
+                Text(stack.displayName).tag(stack)
+              }
+            }
+            .pickerStyle(.segmented)
+
+            TextField("Device", text: $settings.device)
+            Toggle("Auto Route", isOn: $settings.autoRoute)
+            Toggle("Strict Route", isOn: $settings.strictRoute)
+            Toggle("Auto Detect Interface", isOn: $settings.autoDetectInterface)
+            LabeledContent("MTU") {
+              CompactIntegerStepperField(value: $settings.mtu, range: 576...9_000, step: 10)
+            }
+            Toggle("Fake IP DNS", isOn: $settings.dnsFakeIPEnabled)
+            TextField("Fake IP Range", text: $settings.fakeIPRange)
+              .disabled(!settings.dnsFakeIPEnabled)
+            Toggle("System DNS Override", isOn: $settings.systemDNSOverrideEnabled)
           }
-        }
-        .pickerStyle(.segmented)
 
-        TextField("Device", text: $settings.device)
-        Toggle("Auto Route", isOn: $settings.autoRoute)
-        Toggle("Strict Route", isOn: $settings.strictRoute)
-        Toggle("Auto Detect Interface", isOn: $settings.autoDetectInterface)
-        LabeledContent("MTU") {
-          CompactIntegerStepperField(value: $settings.mtu, range: 576...9_000, step: 10)
-        }
-        Toggle("Fake IP DNS", isOn: $settings.dnsFakeIPEnabled)
-        TextField("Fake IP Range", text: $settings.fakeIPRange)
-          .disabled(!settings.dnsFakeIPEnabled)
-        Toggle("System DNS Override", isOn: $settings.systemDNSOverrideEnabled)
-      }
+          VStack(alignment: .leading, spacing: 6) {
+            Picker("DNS Preset", selection: dnsPresetSelection) {
+              ForEach(TunDNSSettings.presets) { preset in
+                Text(preset.title).tag(preset.id)
+              }
+              Text("Custom").tag(Self.customDNSPresetID)
+            }
+            .pickerStyle(.menu)
 
-      VStack(alignment: .leading, spacing: 6) {
-        Picker("DNS Preset", selection: dnsPresetSelection) {
-          ForEach(TunDNSSettings.presets) { preset in
-            Text(preset.title).tag(preset.id)
+            Text(dnsPresetDescription)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .lineLimit(2)
+              .fixedSize(horizontal: false, vertical: true)
           }
-          Text("Custom").tag(Self.customDNSPresetID)
-        }
-        .pickerStyle(.menu)
-
-        Text(dnsPresetDescription)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .lineLimit(2)
-          .fixedSize(horizontal: false, vertical: true)
-      }
-
-      EditableStringList(
-        title: "DNS Hijack",
-        placeholder: "any:53",
-        values: $settings.dnsHijack,
-        draft: $dnsDraft,
-        validator: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !$0.contains(" ") },
-        normalizer: TunDNSSettings.normalizedList
-      )
-
-      EditableStringList(
-        title: "Route Exclude Address",
-        placeholder: "192.168.0.0/16",
-        values: $settings.routeExcludeAddresses,
-        draft: $routeDraft,
-        validator: TunSettings.isValidRouteExcludeCIDR,
-        normalizer: TunSettings.normalizedRouteExcludeCIDRs
-      )
-
-      EditableStringList(
-        title: "System DNS Servers",
-        placeholder: "114.114.114.114",
-        values: $settings.systemDNSServers,
-        draft: $systemDNSDraft,
-        validator: NetworkExtensionRoutingSettings.isValidDNSServer,
-        normalizer: NetworkExtensionRoutingSettings.normalizedDNSServers
-      )
-      .disabled(!settings.systemDNSOverrideEnabled)
-
-      DisclosureGroup("Runtime DNS Overlay") {
-        VStack(alignment: .leading, spacing: 12) {
-          OptionalBoolPicker(title: "Prefer HTTP/3", value: $settings.dns.preferH3)
-          OptionalBoolPicker(title: "Use Hosts", value: $settings.dns.useHosts)
-          OptionalBoolPicker(title: "Use System Hosts", value: $settings.dns.useSystemHosts)
-          OptionalBoolPicker(title: "Respect Rules", value: $settings.dns.respectRules)
 
           EditableStringList(
-            title: "Fake IP Filter",
-            placeholder: "*.lan",
-            values: $settings.dns.fakeIPFilter,
-            draft: $fakeIPFilterDraft,
-            validator: TunDNSSettings.isValidPattern,
+            title: "DNS Hijack",
+            placeholder: "any:53",
+            values: $settings.dnsHijack,
+            draft: $dnsDraft,
+            validator: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !$0.contains(" ") },
             normalizer: TunDNSSettings.normalizedList
           )
 
           EditableStringList(
-            title: "Default Nameserver",
-            placeholder: "223.5.5.5",
-            values: $settings.dns.defaultNameserver,
-            draft: $defaultNameserverDraft,
-            validator: TunDNSSettings.isValidDefaultNameserverResolver,
-            normalizer: TunDNSSettings.normalizedList
+            title: "Route Exclude Address",
+            placeholder: "192.168.0.0/16",
+            values: $settings.routeExcludeAddresses,
+            draft: $routeDraft,
+            validator: TunSettings.isValidRouteExcludeCIDR,
+            normalizer: TunSettings.normalizedRouteExcludeCIDRs
           )
 
           EditableStringList(
-            title: "Nameserver",
-            placeholder: "https://dns.alidns.com/dns-query",
-            values: $settings.dns.nameserver,
-            draft: $nameserverDraft,
-            validator: TunDNSSettings.isValidResolver,
-            normalizer: TunDNSSettings.normalizedList
+            title: "System DNS Servers",
+            placeholder: "114.114.114.114",
+            values: $settings.systemDNSServers,
+            draft: $systemDNSDraft,
+            validator: NetworkExtensionRoutingSettings.isValidDNSServer,
+            normalizer: NetworkExtensionRoutingSettings.normalizedDNSServers
           )
+          .disabled(!settings.systemDNSOverrideEnabled)
 
-          EditableStringList(
-            title: "Fallback",
-            placeholder: "https://dns.google/dns-query",
-            values: $settings.dns.fallback,
-            draft: $fallbackDraft,
-            validator: TunDNSSettings.isValidResolver,
-            normalizer: TunDNSSettings.normalizedList
-          )
-
-          EditableStringList(
-            title: "Proxy Server Nameserver",
-            placeholder: "119.29.29.29",
-            values: $settings.dns.proxyServerNameserver,
-            draft: $proxyServerNameserverDraft,
-            validator: TunDNSSettings.isValidResolver,
-            normalizer: TunDNSSettings.normalizedList
-          )
-
-          EditableStringList(
-            title: "Direct Nameserver",
-            placeholder: "223.5.5.5",
-            values: $settings.dns.directNameserver,
-            draft: $directNameserverDraft,
-            validator: TunDNSSettings.isValidResolver,
-            normalizer: TunDNSSettings.normalizedList
-          )
-
-          OptionalBoolPicker(
-            title: "Direct Nameserver Follows Policy",
-            value: $settings.dns.directNameserverFollowPolicy
-          )
-
-          EditableKeyValueList(
-            title: "Nameserver Policy",
-            keyPlaceholder: "geosite:cn",
-            valuePlaceholder: "223.5.5.5",
-            values: $settings.dns.nameserverPolicy,
-            keyDraft: $policyKeyDraft,
-            valueDraft: $policyValueDraft,
-            keyValidator: TunDNSSettings.isValidPattern,
-            valueValidator: TunDNSSettings.isValidResolver,
-            normalizer: TunDNSSettings.normalizedMap
-          )
-
-          EditableKeyValueList(
-            title: "Proxy Server Nameserver Policy",
-            keyPlaceholder: "www.yournode.com",
-            valuePlaceholder: "114.114.114.114",
-            values: $settings.dns.proxyServerNameserverPolicy,
-            keyDraft: $proxyPolicyKeyDraft,
-            valueDraft: $proxyPolicyValueDraft,
-            keyValidator: TunDNSSettings.isValidPattern,
-            valueValidator: TunDNSSettings.isValidResolver,
-            normalizer: TunDNSSettings.normalizedMap
-          )
-
-          EditableKeyValueList(
-            title: "Hosts",
-            keyPlaceholder: "router.lan",
-            valuePlaceholder: "192.168.1.1",
-            values: $settings.dns.hosts,
-            keyDraft: $hostKeyDraft,
-            valueDraft: $hostValueDraft,
-            keyValidator: TunDNSSettings.isValidPattern,
-            valueValidator: TunDNSSettings.isValidHostValue,
-            normalizer: TunDNSSettings.normalizedMap
-          )
-
-          DisclosureGroup("Fallback Filter") {
+          DisclosureGroup("Runtime DNS Overlay", isExpanded: $isRuntimeDNSOverlayExpanded) {
             VStack(alignment: .leading, spacing: 12) {
-              OptionalBoolPicker(title: "GeoIP", value: $settings.dns.fallbackFilter.geoIP)
-              TextField("GeoIP Code", text: fallbackGeoIPCode)
-                .textFieldStyle(.roundedBorder)
+              OptionalBoolPicker(title: "Prefer HTTP/3", value: $settings.dns.preferH3)
+              OptionalBoolPicker(title: "Use Hosts", value: $settings.dns.useHosts)
+              OptionalBoolPicker(title: "Use System Hosts", value: $settings.dns.useSystemHosts)
+              OptionalBoolPicker(title: "Respect Rules", value: $settings.dns.respectRules)
 
               EditableStringList(
-                title: "Geosite",
-                placeholder: "gfw",
-                values: $settings.dns.fallbackFilter.geoSite,
-                draft: $fallbackGeoSiteDraft,
+                title: "Fake IP Filter",
+                placeholder: "*.lan",
+                values: $settings.dns.fakeIPFilter,
+                draft: $fakeIPFilterDraft,
                 validator: TunDNSSettings.isValidPattern,
                 normalizer: TunDNSSettings.normalizedList
               )
 
               EditableStringList(
-                title: "IP CIDR",
-                placeholder: "240.0.0.0/4",
-                values: $settings.dns.fallbackFilter.ipCIDR,
-                draft: $fallbackIPCIDRDraft,
-                validator: TunSettings.isValidRouteExcludeCIDR,
-                normalizer: NetworkExtensionRoutingSettings.normalizedRouteExcludeCIDRs
+                title: "Default Nameserver",
+                placeholder: "223.5.5.5",
+                values: $settings.dns.defaultNameserver,
+                draft: $defaultNameserverDraft,
+                validator: TunDNSSettings.isValidDefaultNameserverResolver,
+                normalizer: TunDNSSettings.normalizedList
               )
 
               EditableStringList(
-                title: "Domain",
-                placeholder: "+.google.com",
-                values: $settings.dns.fallbackFilter.domain,
-                draft: $fallbackDomainDraft,
-                validator: TunDNSSettings.isValidPattern,
+                title: "Nameserver",
+                placeholder: "https://dns.alidns.com/dns-query",
+                values: $settings.dns.nameserver,
+                draft: $nameserverDraft,
+                validator: TunDNSSettings.isValidResolver,
                 normalizer: TunDNSSettings.normalizedList
               )
+
+              EditableStringList(
+                title: "Fallback",
+                placeholder: "https://dns.google/dns-query",
+                values: $settings.dns.fallback,
+                draft: $fallbackDraft,
+                validator: TunDNSSettings.isValidResolver,
+                normalizer: TunDNSSettings.normalizedList
+              )
+
+              EditableStringList(
+                title: "Proxy Server Nameserver",
+                placeholder: "119.29.29.29",
+                values: $settings.dns.proxyServerNameserver,
+                draft: $proxyServerNameserverDraft,
+                validator: TunDNSSettings.isValidResolver,
+                normalizer: TunDNSSettings.normalizedList
+              )
+
+              EditableStringList(
+                title: "Direct Nameserver",
+                placeholder: "223.5.5.5",
+                values: $settings.dns.directNameserver,
+                draft: $directNameserverDraft,
+                validator: TunDNSSettings.isValidResolver,
+                normalizer: TunDNSSettings.normalizedList
+              )
+
+              OptionalBoolPicker(
+                title: "Direct Nameserver Follows Policy",
+                value: $settings.dns.directNameserverFollowPolicy
+              )
+
+              EditableKeyValueList(
+                title: "Nameserver Policy",
+                keyPlaceholder: "geosite:cn",
+                valuePlaceholder: "223.5.5.5",
+                values: $settings.dns.nameserverPolicy,
+                keyDraft: $policyKeyDraft,
+                valueDraft: $policyValueDraft,
+                keyValidator: TunDNSSettings.isValidPattern,
+                valueValidator: TunDNSSettings.isValidResolver,
+                normalizer: TunDNSSettings.normalizedMap
+              )
+
+              EditableKeyValueList(
+                title: "Proxy Server Nameserver Policy",
+                keyPlaceholder: "www.yournode.com",
+                valuePlaceholder: "114.114.114.114",
+                values: $settings.dns.proxyServerNameserverPolicy,
+                keyDraft: $proxyPolicyKeyDraft,
+                valueDraft: $proxyPolicyValueDraft,
+                keyValidator: TunDNSSettings.isValidPattern,
+                valueValidator: TunDNSSettings.isValidResolver,
+                normalizer: TunDNSSettings.normalizedMap
+              )
+
+              EditableKeyValueList(
+                title: "Hosts",
+                keyPlaceholder: "router.lan",
+                valuePlaceholder: "192.168.1.1",
+                values: $settings.dns.hosts,
+                keyDraft: $hostKeyDraft,
+                valueDraft: $hostValueDraft,
+                keyValidator: TunDNSSettings.isValidPattern,
+                valueValidator: TunDNSSettings.isValidHostValue,
+                normalizer: TunDNSSettings.normalizedMap
+              )
+
+              DisclosureGroup("Fallback Filter") {
+                VStack(alignment: .leading, spacing: 12) {
+                  OptionalBoolPicker(title: "GeoIP", value: $settings.dns.fallbackFilter.geoIP)
+                  TextField("GeoIP Code", text: fallbackGeoIPCode)
+                    .textFieldStyle(.roundedBorder)
+
+                  EditableStringList(
+                    title: "Geosite",
+                    placeholder: "gfw",
+                    values: $settings.dns.fallbackFilter.geoSite,
+                    draft: $fallbackGeoSiteDraft,
+                    validator: TunDNSSettings.isValidPattern,
+                    normalizer: TunDNSSettings.normalizedList
+                  )
+
+                  EditableStringList(
+                    title: "IP CIDR",
+                    placeholder: "240.0.0.0/4",
+                    values: $settings.dns.fallbackFilter.ipCIDR,
+                    draft: $fallbackIPCIDRDraft,
+                    validator: TunSettings.isValidRouteExcludeCIDR,
+                    normalizer: NetworkExtensionRoutingSettings.normalizedRouteExcludeCIDRs
+                  )
+
+                  EditableStringList(
+                    title: "Domain",
+                    placeholder: "+.google.com",
+                    values: $settings.dns.fallbackFilter.domain,
+                    draft: $fallbackDomainDraft,
+                    validator: TunDNSSettings.isValidPattern,
+                    normalizer: TunDNSSettings.normalizedList
+                  )
+                }
+                .padding(.top, 8)
+              }
             }
             .padding(.top, 8)
           }
         }
-        .padding(.top, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
       }
+      .frame(maxHeight: isRuntimeDNSOverlayExpanded ? Self.expandedScrollableContentMaxHeight : nil)
+      .scrollDisabled(!isRuntimeDNSOverlayExpanded)
+      .scrollIndicators(isRuntimeDNSOverlayExpanded ? .automatic : .hidden)
 
       if let error = error ?? settings.validationError {
         Label(error, systemImage: "exclamationmark.triangle.fill")
@@ -671,6 +680,7 @@ private struct TunSettingsPopover: View {
   }
 
   private static let customDNSPresetID = "custom"
+  private static let expandedScrollableContentMaxHeight: CGFloat = 560
 
   private var dnsPresetSelection: Binding<String> {
     Binding(
@@ -1214,22 +1224,25 @@ func dashboardDurationString(from start: Date?, now: Date = Date()) -> String {
   return String(format: "%d:%02d", minutes, seconds)
 }
 
-struct DashboardTrafficSparkline: View {
+struct TrafficSparkline: View {
   let samples: [TrafficSample]
+  var inset: CGFloat = 8
+  var downloadLineWidth: CGFloat = 2.4
+  var uploadLineWidth: CGFloat = 2
+  var baselineOpacity = 0.18
 
   var body: some View {
     Canvas { context, size in
-      let inset: CGFloat = 8
       let plot = CGRect(x: inset, y: inset, width: size.width - inset * 2, height: size.height - inset * 2)
       let maxValue = max(samples.map { max($0.upload, $0.download) }.max() ?? 1, 1)
 
       var baseline = Path()
       baseline.move(to: CGPoint(x: plot.minX, y: plot.maxY))
       baseline.addLine(to: CGPoint(x: plot.maxX, y: plot.maxY))
-      context.stroke(baseline, with: .color(.secondary.opacity(0.18)), lineWidth: 1)
+      context.stroke(baseline, with: .color(.secondary.opacity(baselineOpacity)), lineWidth: 1)
 
-      context.stroke(path(for: samples.map(\.download), maxValue: maxValue, in: plot), with: .color(.cyan), lineWidth: 2.4)
-      context.stroke(path(for: samples.map(\.upload), maxValue: maxValue, in: plot), with: .color(.indigo), lineWidth: 2)
+      context.stroke(path(for: samples.map(\.download), maxValue: maxValue, in: plot), with: .color(.cyan), lineWidth: downloadLineWidth)
+      context.stroke(path(for: samples.map(\.upload), maxValue: maxValue, in: plot), with: .color(.indigo), lineWidth: uploadLineWidth)
     }
   }
 
@@ -1249,5 +1262,13 @@ struct DashboardTrafficSparkline: View {
     }
 
     return path
+  }
+}
+
+struct DashboardTrafficSparkline: View {
+  let samples: [TrafficSample]
+
+  var body: some View {
+    TrafficSparkline(samples: samples)
   }
 }

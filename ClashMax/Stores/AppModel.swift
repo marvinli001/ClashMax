@@ -407,7 +407,7 @@ final class AppModel: ObservableObject {
     get { runtimeData.ruleProviders }
     set { runtimeData.ruleProviders = newValue }
   }
-  var rules: [String] {
+  var rules: [RuntimeRule] {
     get { runtimeData.rules }
     set { runtimeData.rules = newValue }
   }
@@ -482,6 +482,7 @@ final class AppModel: ObservableObject {
   private var startTask: Task<Void, Never>?
   private var previewTask: Task<Void, Never>?
   private var previewRuntimeRequested = false
+  private var previewRuntimeOverrides: RuntimeOverrides?
   private var stopTask: Task<RuntimeStopResult, Never>?
   private var stopTaskID: UUID?
   private var stopTaskPurpose: RuntimeStopPurpose?
@@ -489,14 +490,16 @@ final class AppModel: ObservableObject {
   private var pendingRoutingModeTask: Task<Void, Never>?
   private var tunHelperPreparationTask: Task<Void, Never>?
   private var didWarmTunHelperRegistrationOnLaunch = false
+  private var didWarmPreviewRuntimeOnLaunch = false
   private var modeUpdateTask: Task<Void, Never>?
   private var modeUpdateToken: UUID?
   private var ipv6UpdateTask: Task<Void, Never>?
   private var ipv6UpdateToken: UUID?
   private var proxySelectionTasks: [ProxyGroup.ID: Task<Void, Never>] = [:]
   private var proxySelectionTokens: [ProxyGroup.ID: UUID] = [:]
-  private var delayTestTasks: [ProxyNode.ID: Task<Void, Never>] = [:]
-  private var delayTestTokens: [ProxyNode.ID: UUID] = [:]
+  private var delayTestTasks: [ProxyNodeKey: Task<Void, Never>] = [:]
+  private var delayTestTokens: [ProxyNodeKey: UUID] = [:]
+  private var delayStateCache: [ProxyNodeKey: ProxyDelayCacheEntry] = [:]
   private var providerHealthCheckTasks: [ProxyProvider.ID: Task<Void, Never>] = [:]
   private var providerHealthCheckTokens: [ProxyProvider.ID: UUID] = [:]
   private var proxyProviderUpdateTasks: [ProxyProvider.ID: Task<Void, Never>] = [:]
@@ -521,9 +524,12 @@ final class AppModel: ObservableObject {
   private var tunDiagnosticsTask: Task<Void, Never>?
   private var publishedNetworkExtensionDiagnosticEventIDs: Set<String> = []
   private var storeCancellables: Set<AnyCancellable> = []
+  private let delayStateCacheTTL: TimeInterval
   static let publicIPRefreshInterval: TimeInterval = 300
   static let silentStartDefaultsKey = PersistedSettingsStore.silentStartDefaultsKey
   static let startWallClockSeconds: TimeInterval = 22
+  private static let previewRuntimeMixedPort = 17_890
+  private static let previewRuntimeControllerPort = 19_097
   private static let tunHelperApprovalPollingAttempts = 8
   private static let tunHelperApprovalPollingIntervalNanoseconds: UInt64 = 1_000_000_000
   private static let tunControllerCleanupTimeoutSeconds: TimeInterval = 2
@@ -562,9 +568,11 @@ final class AppModel: ObservableObject {
     apiClient: (any MihomoAPIControlling)? = nil,
     pingTester: any PingTesting = SystemPingTester(),
     publicIPInfoClient: any PublicIPInfoFetching = PublicIPInfoClient(),
-    defaults: UserDefaults = .standard
+    defaults: UserDefaults = .standard,
+    delayStateCacheTTL: TimeInterval = 600
   ) {
     self.paths = paths
+    self.delayStateCacheTTL = delayStateCacheTTL
     self.profileStore = profileStore ?? ProfileStore(paths: paths)
     self.proxyPreview = ProxyPreviewStore(defaults: defaults)
     self.profileCoordinator = ProfileCoordinator(profileStore: self.profileStore, proxyPreview: self.proxyPreview)
@@ -771,6 +779,9 @@ final class AppModel: ObservableObject {
   }
 
   var visibleProxyGroups: [ProxyGroup] {
+    if previewRuntimeActive && proxyGroups.isEmpty && !profilePreviewGroups.isEmpty {
+      return mergedPreviewSelections(into: profilePreviewGroups)
+    }
     if isCoreRunning {
       return mergedPreviewSelections(into: proxyGroups)
     }
@@ -794,16 +805,17 @@ final class AppModel: ObservableObject {
   }
 
   func runtimeDiagnosticsReport(now: Date = Date()) -> RuntimeDiagnosticsReport {
-    RuntimeDiagnosticsReport(
+    let diagnosticOverrides = previewRuntimeActive ? (previewRuntimeOverrides ?? overrides) : overrides
+    return RuntimeDiagnosticsReport(
       generatedAt: now,
       statusSummary: statusSummary,
       profileName: profileStore.activeProfile?.name ?? "No Profile",
       runtimeOwner: runtimeOwner,
       routingMode: proxyRoutingMode,
-      runMode: overrides.mode,
-      controllerHost: overrides.externalControllerHost,
-      controllerPort: overrides.externalControllerPort,
-      controllerSecret: overrides.secret,
+      runMode: diagnosticOverrides.mode,
+      controllerHost: diagnosticOverrides.externalControllerHost,
+      controllerPort: diagnosticOverrides.externalControllerPort,
+      controllerSecret: diagnosticOverrides.secret,
       coreStatus: coreDiagnosticsStatus,
       systemProxyEnabled: systemProxyEnabled,
       tunEnabled: tunEnabled,
@@ -880,6 +892,7 @@ final class AppModel: ObservableObject {
       guard let self else { return }
       do {
         _ = try await profileCoordinator.importLocalProfile(from: url)
+        restartPreviewRuntimeIfNeeded(reason: "profile import")
         lastError = nil
       } catch {
         profileCoordinator.clearMessage()
@@ -911,6 +924,7 @@ final class AppModel: ObservableObject {
       ) != nil else {
         return false
       }
+      restartPreviewRuntimeIfNeeded(reason: "subscription import")
       return true
     } catch {
       profileCoordinator.clearMessage()
@@ -949,6 +963,9 @@ final class AppModel: ObservableObject {
         fetchOptions: subscriptionFetchOptions(for: profile),
         preflightValidator: subscriptionPreflightValidator()
       )
+      if updated, profile.id == profileStore.activeProfileID {
+        restartPreviewRuntimeIfNeeded(reason: "subscription update")
+      }
       return updated
     } catch {
       profileCoordinator.clearMessage()
@@ -1093,6 +1110,7 @@ final class AppModel: ObservableObject {
       guard let self else { return }
       do {
         try await profileCoordinator.deleteActiveProfile()
+        restartPreviewRuntimeIfNeeded(reason: "active profile deletion")
         lastError = nil
       } catch {
         profileCoordinator.clearMessage()
@@ -1111,6 +1129,7 @@ final class AppModel: ObservableObject {
   func deleteProfileAsync(_ profile: Profile) async -> Bool {
     do {
       try await profileCoordinator.deleteProfile(profile)
+      restartPreviewRuntimeIfNeeded(reason: "profile deletion")
       lastError = nil
       return true
     } catch {
@@ -1130,6 +1149,7 @@ final class AppModel: ObservableObject {
   func selectProfileAsync(_ profile: Profile) async -> Bool {
     do {
       guard try await profileCoordinator.selectProfile(profile) else { return false }
+      restartPreviewRuntimeIfNeeded(reason: "profile selection")
       lastError = nil
       return true
     } catch {
@@ -1164,9 +1184,18 @@ final class AppModel: ObservableObject {
   }
 
   private func reloadActiveRuntimeConfigIfNeeded(for profileID: Profile.ID, logMessage: String) async throws {
-    guard profileID == profileStore.activeProfileID, isCoreRunning, let apiClient else {
+    guard profileID == profileStore.activeProfileID, let apiClient else {
       return
     }
+    if previewRuntimeActive {
+      do {
+        try await reloadPreviewRuntimeConfig(apiClient: apiClient, logMessage: logMessage)
+      } catch {
+        appendAppLog(level: "debug", message: "Preview runtime reload unavailable: \(UserFacingError.message(for: error))")
+      }
+      return
+    }
+    guard isCoreRunning else { return }
     let runtimeConfig: URL
     if proxyRoutingMode == .tun {
       runtimeConfig = try await materializeTunRuntimeConfig(tunSettings)
@@ -1546,6 +1575,52 @@ final class AppModel: ObservableObject {
     )
   }
 
+  private func makePreviewRuntimeOverrides(secret: String = UUID().uuidString.replacingOccurrences(of: "-", with: "")) -> RuntimeOverrides {
+    var previewOverrides = overrides
+    previewOverrides.mixedPort = Self.previewRuntimeMixedPort
+    previewOverrides.externalControllerHost = "127.0.0.1"
+    previewOverrides.externalControllerPort = Self.previewRuntimeControllerPort
+    previewOverrides.secret = secret
+    previewOverrides.allowLan = false
+    previewOverrides.mode = .direct
+    previewOverrides.tunEnabled = false
+    previewOverrides.externalControllerCORS = ExternalControllerCORSSettings(
+      enabled: false,
+      allowPrivateNetwork: false,
+      allowedOrigins: []
+    )
+    return previewOverrides
+  }
+
+  private func materializePreviewRuntimeConfig(
+    for profile: Profile,
+    overrides previewOverrides: RuntimeOverrides
+  ) async throws -> URL {
+    try await generateRuntimeConfig(
+      for: profile,
+      overrides: previewOverrides,
+      selections: previewSelections
+    )
+  }
+
+  private func reloadPreviewRuntimeConfig(
+    apiClient: any MihomoAPIControlling,
+    logMessage: String
+  ) async throws {
+    let profile = try requireActiveProfile()
+    guard let previewOverrides = previewRuntimeOverrides else {
+      appendAppLog(level: "debug", message: "\(logMessage) preview runtime reload skipped because preview settings are unavailable.")
+      return
+    }
+    let runtimeConfig = try await materializePreviewRuntimeConfig(
+      for: profile,
+      overrides: previewOverrides
+    )
+    try await apiClient.reloadConfig(path: runtimeConfig.path, force: true)
+    appendAppLog(level: "debug", message: "\(logMessage) preview runtime reloaded \(runtimeConfig.path).")
+    reloadRuntimeData()
+  }
+
   func requestMode(_ mode: RunMode) {
     pendingModeTask?.cancel()
     pendingModeTask = nil
@@ -1596,6 +1671,13 @@ final class AppModel: ObservableObject {
         }
       }
     }
+  }
+
+  func warmPreviewRuntimeOnLaunch() {
+    guard !didWarmPreviewRuntimeOnLaunch else { return }
+    didWarmPreviewRuntimeOnLaunch = true
+    previewRuntimeRequested = true
+    schedulePreviewRuntimeStartIfReady()
   }
 
   func refreshHelperRegistrationStatus() {
@@ -1882,7 +1964,7 @@ final class AppModel: ObservableObject {
         }
       }
       do {
-        let knownDelays = proxyDelayMap(from: proxyGroups)
+        let knownDelayStates = proxyDelayStateMap(from: proxyGroups)
         let cachedRuntimeGroups = proxyGroups
         let runtimeGroups = try await apiClient.proxyGroups()
         guard runtimeReloadToken == token, !Task.isCancelled else { return }
@@ -1906,7 +1988,7 @@ final class AppModel: ObservableObject {
           runtimeGroups,
           providers: refreshedProviders,
           cachedRuntimeGroups: cachedRuntimeGroups
-        ).preservingKnownDelays(knownDelays)
+        ).preservingKnownDelayStates(knownDelayStates, profileID: profileStore.activeProfileID)
         rules = try await apiClient.rules()
         guard runtimeReloadToken == token, !Task.isCancelled else { return }
         connections = try await apiClient.connections()
@@ -2093,7 +2175,7 @@ final class AppModel: ObservableObject {
     }
   }
 
-  func selectProxy(group: ProxyGroup, node: ProxyNode) {
+  func selectProxy(group: ProxyGroup, node: ProxyNode, closeOldConnections: Bool = false) {
     guard node.isSelectable else {
       lastError = "\(node.name) cannot be selected from the runtime."
       return
@@ -2102,6 +2184,7 @@ final class AppModel: ObservableObject {
       lastError = "\(group.name) is managed automatically by Mihomo."
       return
     }
+    let previousSelection = group.selected
     if isCoreRunning, let apiClient {
       let groupID = group.id
       if previewRuntimeActive {
@@ -2127,12 +2210,20 @@ final class AppModel: ObservableObject {
             persistSelectedProxy(groupName: group.name, nodeName: node.name)
           }
           applySelectedProxy(groupName: group.name, nodeName: node.name)
+          closeOldConnectionsIfNeeded(
+            enabled: closeOldConnections,
+            previousSelection: previousSelection,
+            newSelection: node.name
+          )
           lastError = nil
           reloadRuntimeData()
         } catch is CancellationError {
           return
         } catch {
           guard proxySelectionTokens[groupID] == token else { return }
+          if previewRuntimeActive {
+            restoreSelectedProxy(groupName: group.name, nodeName: previousSelection)
+          }
           lastError = UserFacingError.message(for: error)
         }
       }
@@ -2146,33 +2237,84 @@ final class AppModel: ObservableObject {
   }
 
   func testDelay(for node: ProxyNode) {
+    if let group = visibleProxyGroups.first(where: { group in
+      group.nodes.contains { $0.id == node.id || $0.name == node.name }
+    }) {
+      testDelay(in: group, for: node)
+      return
+    }
+
+    let fallbackGroup = ProxyGroup(name: "", type: "select", selected: nil, nodes: [node])
+    testDelay(in: fallbackGroup, for: node)
+  }
+
+  func testDelay(in group: ProxyGroup, testURL: URL? = nil) {
+    let selectableNodes = group.nodes.filter(\.isSelectable)
+    guard !selectableNodes.isEmpty else {
+      lastError = "\(group.name) has no selectable nodes to test."
+      return
+    }
+    for node in selectableNodes {
+      testDelay(in: group, for: node, testURL: testURL, reloadAfterCompletion: false)
+    }
+  }
+
+  func testDelayForAllProxyGroups(testURL: URL? = nil) {
+    let groups = visibleProxyGroups.filter { group in
+      group.nodes.contains(where: \.isSelectable)
+    }
+    guard !groups.isEmpty else {
+      lastError = "No selectable proxy groups to test."
+      return
+    }
+    for group in groups {
+      testDelay(in: group, testURL: testURL)
+    }
+  }
+
+  func testDelay(in group: ProxyGroup, for node: ProxyNode, testURL: URL? = nil) {
+    testDelay(in: group, for: node, testURL: testURL, reloadAfterCompletion: true)
+  }
+
+  private func testDelay(
+    in group: ProxyGroup,
+    for node: ProxyNode,
+    testURL: URL?,
+    reloadAfterCompletion: Bool
+  ) {
     guard node.isSelectable else {
       lastError = "\(node.name) cannot be tested from the runtime."
       return
     }
     guard let apiClient = runtimeAPIClientForProxyAction() else { return }
     let settings = delayTestSettings
-    let nodeID = node.id
-    delayTestTasks[nodeID]?.cancel()
+    let effectiveTestURL = testURL ?? AppConstants.defaultDelayTestURL
+    let nodeKey = proxyNodeKey(group: group, node: node, testURL: effectiveTestURL)
+    let taskKey = proxyDelayTaskKey(group: group, node: node)
+    delayTestTasks[taskKey]?.cancel()
     let token = UUID()
-    delayTestTokens[nodeID] = token
-    delayTestTasks[nodeID] = Task { @MainActor [weak self] in
+    delayTestTokens[taskKey] = token
+    applyDelayState(.testing, to: nodeKey)
+    delayTestTasks[taskKey] = Task { @MainActor [weak self] in
       guard let self else { return }
       defer {
-        if delayTestTokens[nodeID] == token {
-          delayTestTasks[nodeID] = nil
-          delayTestTokens[nodeID] = nil
+        if delayTestTokens[taskKey] == token {
+          delayTestTasks[taskKey] = nil
+          delayTestTokens[taskKey] = nil
         }
       }
       do {
-        let delay = try await measureDelay(for: node, apiClient: apiClient, settings: settings)
-        guard delayTestTokens[nodeID] == token, !Task.isCancelled else { return }
-        applyDelay(delay, to: node.name)
-        reloadRuntimeData()
+        let delay = try await measureDelay(for: node, apiClient: apiClient, settings: settings, testURL: effectiveTestURL)
+        guard delayTestTokens[taskKey] == token, !Task.isCancelled else { return }
+        applyDelayState(.measured(delay), to: nodeKey)
+        if reloadAfterCompletion {
+          reloadRuntimeData()
+        }
       } catch is CancellationError {
         return
       } catch {
-        guard delayTestTokens[nodeID] == token else { return }
+        guard delayTestTokens[taskKey] == token else { return }
+        applyDelayState(delayState(for: error), to: nodeKey)
         lastError = UserFacingError.message(for: error)
       }
     }
@@ -2364,7 +2506,8 @@ final class AppModel: ObservableObject {
   private func measureDelay(
     for node: ProxyNode,
     apiClient: any MihomoAPIControlling,
-    settings: DelayTestSettings
+    settings: DelayTestSettings,
+    testURL: URL
   ) async throws -> Int {
     let attempts = settings.unifiedDelay ? 2 : 1
     var lastDelay: Int?
@@ -2372,7 +2515,7 @@ final class AppModel: ObservableObject {
 
     for _ in 0..<attempts {
       do {
-        lastDelay = try await measureDelayOnce(for: node, apiClient: apiClient, settings: settings)
+        lastDelay = try await measureDelayOnce(for: node, apiClient: apiClient, settings: settings, testURL: testURL)
         lastError = nil
       } catch {
         lastError = error
@@ -2391,13 +2534,14 @@ final class AppModel: ObservableObject {
   private func measureDelayOnce(
     for node: ProxyNode,
     apiClient: any MihomoAPIControlling,
-    settings: DelayTestSettings
+    settings: DelayTestSettings,
+    testURL: URL
   ) async throws -> Int {
     switch settings.mode {
     case .mihomoURL:
       return try await apiClient.testDelay(
         proxy: node.name,
-        testURL: AppConstants.defaultDelayTestURL,
+        testURL: testURL,
         timeout: settings.normalizedTimeoutMilliseconds
       )
     case .nativePing:
@@ -3135,6 +3279,38 @@ final class AppModel: ObservableObject {
     }
   }
 
+  private func restartPreviewRuntimeIfNeeded(reason: String) {
+    guard previewRuntimeRequested, !isRunning, !startInFlight else { return }
+    cancelPendingPreviewRuntimeStart()
+    previewTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      if self.previewRuntimeActive {
+        let result = await self.leavePreviewRuntimeResult(cancelsPendingStart: false)
+        guard result.succeeded else {
+          self.previewTask = nil
+          if let message = result.userFacingMessage {
+            self.appendAppLog(level: "debug", message: "Preview runtime restart skipped after \(reason): \(message)")
+          }
+          return
+        }
+      }
+      guard !Task.isCancelled else {
+        self.previewTask = nil
+        return
+      }
+      try? await Task.sleep(nanoseconds: 50_000_000)
+      guard !Task.isCancelled else {
+        self.previewTask = nil
+        return
+      }
+      guard self.canStartPreviewRuntime() else {
+        self.previewTask = nil
+        return
+      }
+      await self.startPreviewRuntime()
+    }
+  }
+
   private func canStartPreviewRuntime(profilePreviewGroups groups: [ProxyGroup]? = nil) -> Bool {
     previewRuntimeRequested
       && !startInFlight
@@ -3154,10 +3330,15 @@ final class AppModel: ObservableObject {
     _ = await leavePreviewRuntimeResult()
   }
 
-  private func leavePreviewRuntimeResult() async -> RuntimeStopResult {
+  private func leavePreviewRuntimeResult(cancelsPendingStart: Bool = true) async -> RuntimeStopResult {
     var result = RuntimeStopResult()
-    cancelPendingPreviewRuntimeStart()
-    guard previewRuntimeActive else { return result }
+    if cancelsPendingStart {
+      cancelPendingPreviewRuntimeStart()
+    }
+    guard previewRuntimeActive else {
+      previewRuntimeOverrides = nil
+      return result
+    }
     cancelRuntimeActionTasks()
     stopTunDiagnostics(clear: true)
     runtimeData.flushPendingLogs()
@@ -3180,6 +3361,7 @@ final class AppModel: ObservableObject {
     proxyGroups = []
     proxyProviders = []
     previewRuntimeActive = false
+    previewRuntimeOverrides = nil
     runtimeOwner = .stopped
     return result
   }
@@ -3188,18 +3370,13 @@ final class AppModel: ObservableObject {
     defer { previewTask = nil }
     do {
       let profile = try requireActiveProfile()
-      let baseOverrides = overrides
-      var quietOverrides = baseOverrides
-      quietOverrides.secret = UUID().uuidString.replacingOccurrences(of: "-", with: "")
-      quietOverrides.tunEnabled = false
-      quietOverrides.mode = .direct
-      quietOverrides.allowLan = false
-      let runtimeConfig = try await generateRuntimeConfig(
+      let previewOverrides = makePreviewRuntimeOverrides()
+      let runtimeConfig = try await materializePreviewRuntimeConfig(
         for: profile,
-        overrides: quietOverrides,
-        selections: previewSelections
+        overrides: previewOverrides
       )
-      let client = MihomoAPIClient(baseURL: try quietOverrides.endpoint.baseURL, secret: quietOverrides.secret)
+      let client = MihomoAPIClient(baseURL: try previewOverrides.endpoint.baseURL, secret: previewOverrides.secret)
+      previewRuntimeOverrides = previewOverrides
       previewRuntimeActive = true
       runtimeOwner = .preview
       try Task.checkCancellation()
@@ -3207,25 +3384,29 @@ final class AppModel: ObservableObject {
         coreURL: try bundledCoreURL(),
         configURL: runtimeConfig,
         workDirectory: paths.runtime,
-        api: quietOverrides.endpoint
+        api: previewOverrides.endpoint,
+        proxyPort: previewOverrides.mixedPort
       )
       try Task.checkCancellation()
       apiClient = client
       try Task.checkCancellation()
       do {
-        let knownDelays = proxyDelayMap(from: proxyGroups)
+        let knownDelayStates = proxyDelayStateMap(from: proxyGroups)
         let cachedRuntimeGroups = proxyGroups
         let runtimeGroups = try await client.proxyGroups()
+        let providers = (try? await client.structuredProxyProviders()) ?? []
+        proxyProviders = providers
         proxyGroups = enrichProxyGroupsWithKnownEndpoints(
           runtimeGroups,
-          providers: proxyProviders,
+          providers: providers,
           cachedRuntimeGroups: cachedRuntimeGroups
-        ).preservingKnownDelays(knownDelays)
+        ).preservingKnownDelayStates(knownDelayStates, profileID: profileStore.activeProfileID)
       } catch {
         // Best-effort initial fetch; UI still shows YAML preview if this fails.
       }
     } catch is CancellationError {
       previewRuntimeActive = false
+      previewRuntimeOverrides = nil
       let stopResult = await coreController.stop()
       if let error = stopResult.error {
         appendAppLog(level: "error", message: UserFacingError.message(for: error))
@@ -3234,6 +3415,7 @@ final class AppModel: ObservableObject {
       runtimeOwner = .stopped
     } catch {
       previewRuntimeActive = false
+      previewRuntimeOverrides = nil
       let stopResult = await coreController.stop()
       if let stopError = stopResult.error {
         appendAppLog(level: "error", message: UserFacingError.message(for: stopError))
@@ -3419,6 +3601,7 @@ final class AppModel: ObservableObject {
     await updateTunHelperStatusDetail()
     sessionStartedAt = nil
     previewRuntimeActive = false
+    previewRuntimeOverrides = nil
     runtimeOwner = .stopped
     networkExtensionCoreCrashMessage = nil
     await refreshProfilePreviewAndWait()
@@ -3468,7 +3651,7 @@ final class AppModel: ObservableObject {
     return apiClient
   }
 
-  private func applySelectedProxy(groupName: String, nodeName: String) {
+  private func applySelectedProxy(groupName: String, nodeName: String?) {
     updateProxyGroupCollections { groups in
       guard let index = groups.firstIndex(where: { $0.name == groupName }) else { return }
       groups[index].selected = nodeName
@@ -3480,15 +3663,102 @@ final class AppModel: ObservableObject {
     saveCurrentPreviewSelections()
   }
 
-  private func applyDelay(_ delay: Int, to nodeName: String) {
-    guard delay >= 0 else { return }
+  private func restoreSelectedProxy(groupName: String, nodeName: String?) {
+    if let nodeName {
+      previewSelections[groupName] = nodeName
+    } else {
+      previewSelections.removeValue(forKey: groupName)
+    }
+    saveCurrentPreviewSelections()
+    applySelectedProxy(groupName: groupName, nodeName: nodeName)
+  }
+
+  private func closeOldConnectionsIfNeeded(enabled: Bool, previousSelection: String?, newSelection: String) {
+    guard enabled,
+          let previousSelection,
+          previousSelection != newSelection
+    else { return }
+    let staleConnections = connections.filter { connection in
+      connection.chain.contains(previousSelection)
+    }
+    for connection in staleConnections {
+      closeConnection(connection)
+    }
+  }
+
+  private func applyDelayState(_ state: ProxyDelayState, to nodeKey: ProxyNodeKey) {
+    recordDelayState(state, for: nodeKey)
     updateProxyGroupCollections { groups in
       for groupIndex in groups.indices {
-        for nodeIndex in groups[groupIndex].nodes.indices where groups[groupIndex].nodes[nodeIndex].name == nodeName {
-          groups[groupIndex].nodes[nodeIndex].delay = delay
+        guard groups[groupIndex].name == nodeKey.groupName else { continue }
+        for nodeIndex in groups[groupIndex].nodes.indices where nodeMatches(
+          groups[groupIndex].nodes[nodeIndex],
+          key: nodeKey
+        ) {
+          groups[groupIndex].nodes[nodeIndex].delayState = state
+          if case let .measured(delay) = state, delay >= 0 {
+            groups[groupIndex].nodes[nodeIndex].delay = delay
+          } else if state == .timeout || isErrorDelayState(state) {
+            groups[groupIndex].nodes[nodeIndex].delay = nil
+          }
         }
       }
     }
+  }
+
+  private func nodeMatches(_ node: ProxyNode, key: ProxyNodeKey) -> Bool {
+    guard node.name == key.nodeName else { return false }
+    guard let providerName = key.providerName else { return true }
+    return node.providerName == providerName
+  }
+
+  private func isErrorDelayState(_ state: ProxyDelayState) -> Bool {
+    if case .error = state {
+      return true
+    }
+    return false
+  }
+
+  private func recordDelayState(_ state: ProxyDelayState, for key: ProxyNodeKey, now: Date = Date()) {
+    if state == .unknown {
+      delayStateCache.removeValue(forKey: key)
+    } else {
+      delayStateCache[key] = ProxyDelayCacheEntry(state: state, recordedAt: now)
+    }
+    pruneExpiredDelayStates(now: now)
+  }
+
+  private func pruneExpiredDelayStates(now: Date = Date()) {
+    guard delayStateCacheTTL > 0 else {
+      delayStateCache.removeAll()
+      return
+    }
+    delayStateCache = delayStateCache.filter { _, entry in
+      now.timeIntervalSince(entry.recordedAt) <= delayStateCacheTTL
+    }
+  }
+
+  private func delayState(for error: Error) -> ProxyDelayState {
+    let message = UserFacingError.message(for: error)
+    let normalized = message.lowercased()
+    if normalized.contains("timeout") || normalized.contains("timed out") {
+      return .timeout
+    }
+    return .error(message)
+  }
+
+  private func proxyNodeKey(group: ProxyGroup, node: ProxyNode, testURL: URL = AppConstants.defaultDelayTestURL) -> ProxyNodeKey {
+    ProxyNodeKey(
+      profileID: profileStore.activeProfileID,
+      groupName: group.name,
+      nodeName: node.name,
+      providerName: node.providerName,
+      testURL: testURL
+    )
+  }
+
+  private func proxyDelayTaskKey(group: ProxyGroup, node: ProxyNode) -> ProxyNodeKey {
+    proxyNodeKey(group: group, node: node)
   }
 
   private func updateRuntimeProxyGroups(_ update: (inout [ProxyGroup]) -> Void) {
@@ -3516,18 +3786,37 @@ final class AppModel: ObservableObject {
     runtimeData.replaceConnections(remaining)
   }
 
-  private func proxyDelayMap(from groups: [ProxyGroup]) -> [String: Int] {
-    groups.reduce(into: [String: Int]()) { result, group in
+  private func proxyDelayStateMap(from groups: [ProxyGroup]) -> [ProxyNodeKey: ProxyDelayState] {
+    pruneExpiredDelayStates()
+    return groups.reduce(into: [ProxyNodeKey: ProxyDelayState]()) { result, group in
       for node in group.nodes {
-        if let delay = node.delay {
-          result[node.name] = delay
+        let key = proxyNodeKey(group: group, node: node)
+        if let entry = latestDelayCacheEntry(matching: key) {
+          result[key] = entry.state
         }
       }
     }
   }
 
+  private func latestDelayCacheEntry(matching key: ProxyNodeKey) -> ProxyDelayCacheEntry? {
+    delayStateCache
+      .filter { cachedKey, _ in
+        cachedKey.matchesNodeIdentity(of: key)
+      }
+      .max { lhs, rhs in
+        lhs.value.recordedAt < rhs.value.recordedAt
+      }?
+      .value
+  }
+
   private func nativePingHost(for node: ProxyNode) -> String? {
     if let endpoint = proxyEndpoint(from: node) {
+      return endpoint.host
+    }
+    if let providerName = node.providerName,
+       let provider = proxyProviders.first(where: { $0.name == providerName }),
+       let providerNode = provider.proxies.first(where: { $0.name == node.name }),
+       let endpoint = proxyEndpoint(from: providerNode) {
       return endpoint.host
     }
     let endpointMaps = [
@@ -3543,6 +3832,7 @@ final class AppModel: ObservableObject {
     providers: [ProxyProvider],
     cachedRuntimeGroups: [ProxyGroup]
   ) -> [ProxyGroup] {
+    let providerNames = proxyProviderNameMap(from: providers)
     let endpointMaps = [
       proxyEndpointMap(from: providers),
       proxyEndpointMap(from: profilePreviewGroups),
@@ -3553,14 +3843,42 @@ final class AppModel: ObservableObject {
       group.nodes = group.nodes.map { node in
         guard proxyEndpoint(from: node) == nil,
               let endpoint = endpointMaps.lazy.compactMap({ $0[node.name] }).first
-        else { return node }
+        else {
+          if node.providerName == nil, let providerName = providerNames[node.name] {
+            var node = node
+            node.providerName = providerName
+            return node
+          }
+          return node
+        }
         var node = node
         node.serverHost = endpoint.host
         node.serverPort = endpoint.port
+        if node.providerName == nil {
+          node.providerName = providerNames[node.name]
+        }
         return node
       }
       return group
     }
+  }
+
+  private func proxyProviderNameMap(from providers: [ProxyProvider]) -> [String: String] {
+    var providerNames: [String: String] = [:]
+    var ambiguousNames = Set<String>()
+    for provider in providers {
+      for node in provider.proxies {
+        if let existing = providerNames[node.name], existing != provider.name {
+          ambiguousNames.insert(node.name)
+        } else {
+          providerNames[node.name] = provider.name
+        }
+      }
+    }
+    for name in ambiguousNames {
+      providerNames[name] = nil
+    }
+    return providerNames
   }
 
   private func proxyEndpointMap(from providers: [ProxyProvider]) -> [String: ProxyNodeEndpoint] {
@@ -3799,18 +4117,41 @@ extension UTType {
 }
 
 private extension Array where Element == ProxyGroup {
-  func preservingKnownDelays(_ knownDelays: [String: Int]) -> [ProxyGroup] {
+  func preservingKnownDelayStates(_ knownStates: [ProxyNodeKey: ProxyDelayState], profileID: Profile.ID?) -> [ProxyGroup] {
     map { group in
       var group = group
       group.nodes = group.nodes.map { node in
-        guard node.delay == nil, let delay = knownDelays[node.name] else {
+        let key = ProxyNodeKey(
+          profileID: profileID,
+          groupName: group.name,
+          nodeName: node.name,
+          providerName: node.providerName
+        )
+        guard let state = knownStates[key] else {
           return node
         }
         var node = node
-        node.delay = delay
+        node.delayState = state
+        if let delay = state.measuredDelay, node.delay == nil {
+          node.delay = delay
+        }
         return node
       }
       return group
     }
+  }
+}
+
+private struct ProxyDelayCacheEntry {
+  var state: ProxyDelayState
+  var recordedAt: Date
+}
+
+private extension ProxyNodeKey {
+  func matchesNodeIdentity(of other: ProxyNodeKey) -> Bool {
+    profileID == other.profileID
+      && groupName == other.groupName
+      && nodeName == other.nodeName
+      && providerName == other.providerName
   }
 }

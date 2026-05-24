@@ -58,7 +58,12 @@ final class CoreRuntimePreflightTests: XCTestCase {
     let launcher = FakeProcessLauncher()
     let validator = RecordingRuntimeConfigValidator(result: .failure(AppError.configValidationFailed("bad config")))
     let reaper = RecordingCoreProcessReaper()
-    let controller = CoreProcessController(launcher: launcher, validator: validator, reaper: reaper)
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: validator,
+      reaper: reaper,
+      portChecker: EmptyRuntimePortChecker()
+    )
 
     await XCTAssertThrowsErrorAsync {
       try await controller.startUserMode(
@@ -83,7 +88,8 @@ final class CoreRuntimePreflightTests: XCTestCase {
       launcher: launcher,
       validator: RecordingRuntimeConfigValidator(result: .success(())),
       readinessProbe: readiness,
-      reaper: reaper
+      reaper: reaper,
+      portChecker: EmptyRuntimePortChecker()
     )
 
     try await controller.startUserMode(
@@ -209,6 +215,12 @@ final class CoreRuntimePreflightTests: XCTestCase {
       .appendingPathComponent("Core", isDirectory: true)
       .appendingPathComponent("mihomo-darwin-\(architecture)")
     return FileManager.default.isExecutableFile(atPath: coreURL.path) ? coreURL : nil
+  }
+}
+
+private struct EmptyRuntimePortChecker: RuntimePortChecking {
+  func listeners(on ports: [Int]) async -> [PortListener] {
+    []
   }
 }
 

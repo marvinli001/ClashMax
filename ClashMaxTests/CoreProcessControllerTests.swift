@@ -10,7 +10,8 @@ final class CoreProcessControllerTests: XCTestCase {
       launcher: launcher,
       validator: RecordingRuntimeConfigValidator(result: .success(())),
       readinessProbe: RecordingCoreReadinessProbe(),
-      reaper: RecordingCoreProcessReaper()
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: FakePortChecker(listeners: [])
     )
 
     try await controller.startUserMode(
@@ -201,7 +202,8 @@ final class CoreProcessControllerTests: XCTestCase {
       launcher: launcher,
       validator: RecordingRuntimeConfigValidator(result: .success(())),
       readinessProbe: RecordingCoreReadinessProbe(),
-      reaper: RecordingCoreProcessReaper()
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: FakePortChecker(listeners: [])
     )
 
     let api = CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")

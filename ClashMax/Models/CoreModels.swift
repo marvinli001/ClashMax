@@ -11,6 +11,12 @@ private extension KeyedDecodingContainer {
   }
 }
 
+private extension String {
+  var nilIfEmpty: String? {
+    isEmpty ? nil : self
+  }
+}
+
 enum ProfileSource: Codable, Equatable, Sendable {
   case localFile(originalPath: String?)
   case subscription(id: UUID)
@@ -122,8 +128,13 @@ struct SubscriptionProviderOptions: Codable, Equatable, Sendable {
   var excludeFilter: String
   var excludeType: String
   var overrideYAML: String
+  var runtimeMergeYAML: String
   var requestHeaders: [SubscriptionRequestHeader]
   var fetchProxy: SubscriptionProviderFetchProxy
+  var primaryGroupName: String
+  var autoGroupName: String
+  var finalRulePolicy: String
+  var ruleOverlay: RuleOverlaySettings
 
   private enum CodingKeys: String, CodingKey {
     case intervalSeconds
@@ -131,8 +142,14 @@ struct SubscriptionProviderOptions: Codable, Equatable, Sendable {
     case excludeFilter
     case excludeType
     case overrideYAML
+    case runtimeMergeYAML
+    case runtimeMergeYAMLEnabled
     case requestHeaders
     case fetchProxy
+    case primaryGroupName
+    case autoGroupName
+    case finalRulePolicy
+    case ruleOverlay
   }
 
   init(
@@ -141,16 +158,26 @@ struct SubscriptionProviderOptions: Codable, Equatable, Sendable {
     excludeFilter: String = "",
     excludeType: String = "",
     overrideYAML: String = "",
+    runtimeMergeYAML: String = "",
     requestHeaders: [SubscriptionRequestHeader] = [],
-    fetchProxy: SubscriptionProviderFetchProxy = .defaultOrder
+    fetchProxy: SubscriptionProviderFetchProxy = .defaultOrder,
+    primaryGroupName: String = "Proxy",
+    autoGroupName: String = "Auto",
+    finalRulePolicy: String = "Proxy",
+    ruleOverlay: RuleOverlaySettings = .disabled
   ) {
     self.intervalSeconds = min(max(intervalSeconds, Self.minimumIntervalSeconds), Self.maximumIntervalSeconds)
     self.filter = filter
     self.excludeFilter = excludeFilter
     self.excludeType = excludeType
     self.overrideYAML = overrideYAML
+    self.runtimeMergeYAML = runtimeMergeYAML
     self.requestHeaders = requestHeaders
     self.fetchProxy = fetchProxy
+    self.primaryGroupName = primaryGroupName
+    self.autoGroupName = autoGroupName
+    self.finalRulePolicy = finalRulePolicy
+    self.ruleOverlay = ruleOverlay
   }
 
   static let `default` = SubscriptionProviderOptions()
@@ -164,13 +191,36 @@ struct SubscriptionProviderOptions: Codable, Equatable, Sendable {
       excludeFilter: container.decodeDefault(String.self, forKey: .excludeFilter, default: defaults.excludeFilter),
       excludeType: container.decodeDefault(String.self, forKey: .excludeType, default: defaults.excludeType),
       overrideYAML: container.decodeDefault(String.self, forKey: .overrideYAML, default: defaults.overrideYAML),
+      runtimeMergeYAML: container.decodeDefault(String.self, forKey: .runtimeMergeYAML, default: defaults.runtimeMergeYAML),
       requestHeaders: container.decodeDefault(
         [SubscriptionRequestHeader].self,
         forKey: .requestHeaders,
         default: defaults.requestHeaders
       ),
-      fetchProxy: container.decodeDefault(SubscriptionProviderFetchProxy.self, forKey: .fetchProxy, default: defaults.fetchProxy)
+      fetchProxy: container.decodeDefault(SubscriptionProviderFetchProxy.self, forKey: .fetchProxy, default: defaults.fetchProxy),
+      primaryGroupName: container.decodeDefault(String.self, forKey: .primaryGroupName, default: defaults.primaryGroupName),
+      autoGroupName: container.decodeDefault(String.self, forKey: .autoGroupName, default: defaults.autoGroupName),
+      finalRulePolicy: container.decodeDefault(String.self, forKey: .finalRulePolicy, default: defaults.finalRulePolicy),
+      ruleOverlay: container.decodeDefault(RuleOverlaySettings.self, forKey: .ruleOverlay, default: defaults.ruleOverlay)
     )
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(intervalSeconds, forKey: .intervalSeconds)
+    try container.encode(filter, forKey: .filter)
+    try container.encode(excludeFilter, forKey: .excludeFilter)
+    try container.encode(excludeType, forKey: .excludeType)
+    try container.encode(overrideYAML, forKey: .overrideYAML)
+    if hasRuntimeMergeYAML {
+      try container.encode(true, forKey: .runtimeMergeYAMLEnabled)
+    }
+    try container.encode(requestHeaders, forKey: .requestHeaders)
+    try container.encode(fetchProxy, forKey: .fetchProxy)
+    try container.encode(primaryGroupName, forKey: .primaryGroupName)
+    try container.encode(autoGroupName, forKey: .autoGroupName)
+    try container.encode(finalRulePolicy, forKey: .finalRulePolicy)
+    try container.encode(ruleOverlay, forKey: .ruleOverlay)
   }
 
   var normalizedHeaders: [String: String] {
@@ -179,6 +229,14 @@ struct SubscriptionProviderOptions: Codable, Equatable, Sendable {
       guard !name.isEmpty else { return }
       result[name] = header.normalizedValue
     }
+  }
+
+  var hasRuntimeMergeYAML: Bool {
+    !runtimeMergeYAML.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
+  var requiresRuntimeConfigPreflight: Bool {
+    hasRuntimeMergeYAML || ruleOverlay.hasRuntimeOverlay
   }
 }
 
@@ -376,6 +434,55 @@ struct DelayTestSettings: Codable, Equatable, Sendable {
 
   var normalizedTimeoutMilliseconds: Int {
     min(max(timeoutMilliseconds, 1_000), 30_000)
+  }
+}
+
+struct ProxyNodeKey: Identifiable, Hashable, Codable, Sendable {
+  var profileID: String?
+  var groupName: String
+  var nodeName: String
+  var providerName: String?
+  var testURL: String
+
+  init(
+    profileID: UUID?,
+    groupName: String,
+    nodeName: String,
+    providerName: String? = nil,
+    testURL: URL = AppConstants.defaultDelayTestURL
+  ) {
+    self.profileID = profileID?.uuidString
+    self.groupName = groupName
+    self.nodeName = nodeName
+    self.providerName = providerName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    self.testURL = testURL.absoluteString
+  }
+
+  var id: String {
+    [
+      profileID,
+      groupName,
+      providerName,
+      nodeName,
+      testURL
+    ]
+    .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty }
+    .joined(separator: "::")
+  }
+}
+
+enum ProxyDelayState: Codable, Equatable, Sendable {
+  case unknown
+  case testing
+  case measured(Int)
+  case timeout
+  case error(String)
+
+  var measuredDelay: Int? {
+    if case let .measured(delay) = self {
+      return delay
+    }
+    return nil
   }
 }
 
@@ -674,36 +781,141 @@ struct ManagedRuleOverlayRule: Codable, Equatable, Identifiable, Sendable {
   }
 }
 
+enum RuleDisableMatchMode: String, CaseIterable, Codable, Identifiable, Sendable {
+  case contains
+  case exact
+  case regex
+
+  var id: String { rawValue }
+
+  var displayName: String {
+    switch self {
+    case .contains:
+      return String(localized: "Contains")
+    case .exact:
+      return String(localized: "Exact")
+    case .regex:
+      return String(localized: "Regex")
+    }
+  }
+}
+
+struct ManagedRuleDisableMatcher: Codable, Equatable, Identifiable, Sendable {
+  var id: UUID
+  var mode: RuleDisableMatchMode
+  var pattern: String
+
+  private enum CodingKeys: String, CodingKey {
+    case id
+    case mode
+    case pattern
+  }
+
+  init(id: UUID = UUID(), mode: RuleDisableMatchMode = .contains, pattern: String = "") {
+    self.id = id
+    self.mode = mode
+    self.pattern = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    self.init(
+      id: container.decodeDefault(UUID.self, forKey: .id, default: UUID()),
+      mode: container.decodeDefault(RuleDisableMatchMode.self, forKey: .mode, default: .contains),
+      pattern: container.decodeDefault(String.self, forKey: .pattern, default: "")
+    )
+  }
+
+  var normalizedPattern: String {
+    pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  var validationError: String? {
+    let pattern = normalizedPattern
+    if pattern.isEmpty {
+      return "Disabled rule pattern cannot be empty."
+    }
+    if pattern.contains(where: \.isNewline) {
+      return "Disabled rule pattern cannot contain line breaks."
+    }
+    if mode == .regex, (try? NSRegularExpression(pattern: pattern)) == nil {
+      return "Disabled rule regex is invalid."
+    }
+    return nil
+  }
+
+  func matches(_ rule: String) -> Bool {
+    guard validationError == nil else { return false }
+    let rule = rule.trimmingCharacters(in: .whitespacesAndNewlines)
+    let pattern = normalizedPattern
+    switch mode {
+    case .contains:
+      return rule.range(of: pattern, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+    case .exact:
+      return rule.compare(pattern, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+    case .regex:
+      guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+        return false
+      }
+      let range = NSRange(rule.startIndex..<rule.endIndex, in: rule)
+      return regex.firstMatch(in: rule, range: range) != nil
+    }
+  }
+}
+
 struct RuleOverlaySettings: Codable, Equatable, Sendable {
   var enabled: Bool
   var prependRules: [ManagedRuleOverlayRule]
   var appendRules: [ManagedRuleOverlayRule]
+  var disabledRuleMatchers: [ManagedRuleDisableMatcher]
 
   private enum CodingKeys: String, CodingKey {
     case enabled
     case prependRules
     case appendRules
+    case disabledRuleMatchers
   }
 
   init(
     enabled: Bool = false,
     prependRules: [ManagedRuleOverlayRule] = [],
-    appendRules: [ManagedRuleOverlayRule] = []
+    appendRules: [ManagedRuleOverlayRule] = [],
+    disabledRuleMatchers: [ManagedRuleDisableMatcher] = []
   ) {
     self.enabled = enabled
     self.prependRules = prependRules
     self.appendRules = appendRules
+    self.disabledRuleMatchers = disabledRuleMatchers
   }
 
   static let disabled = RuleOverlaySettings()
 
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    self.init(
+      enabled: container.decodeDefault(Bool.self, forKey: .enabled, default: false),
+      prependRules: container.decodeDefault([ManagedRuleOverlayRule].self, forKey: .prependRules, default: []),
+      appendRules: container.decodeDefault([ManagedRuleOverlayRule].self, forKey: .appendRules, default: []),
+      disabledRuleMatchers: container.decodeDefault(
+        [ManagedRuleDisableMatcher].self,
+        forKey: .disabledRuleMatchers,
+        default: []
+      )
+    )
+  }
+
   var hasRuntimeOverlay: Bool {
-    enabled && (!prependRules.isEmpty || !appendRules.isEmpty)
+    enabled && (!prependRules.isEmpty || !appendRules.isEmpty || !disabledRuleMatchers.isEmpty)
   }
 
   var validationError: String? {
     for rule in prependRules + appendRules {
       if let error = rule.validationError {
+        return error
+      }
+    }
+    for matcher in disabledRuleMatchers {
+      if let error = matcher.validationError {
         return error
       }
     }
@@ -724,15 +936,46 @@ struct RuleOverlaySettings: Codable, Equatable, Sendable {
     }
   }
 
+  var runtimeDisabledRuleMatchers: [ManagedRuleDisableMatcher] {
+    guard enabled else { return [] }
+    return disabledRuleMatchers.filter { $0.validationError == nil }
+  }
+
+  func disablesRule(_ rule: String) -> Bool {
+    runtimeDisabledRuleMatchers.contains { $0.matches(rule) }
+  }
+
   var summary: String {
     guard enabled else {
       return String(localized: "Disabled")
     }
     let count = prependRules.count + appendRules.count
-    if count == 0 {
+    let disabledCount = disabledRuleMatchers.count
+    if count == 0, disabledCount == 0 {
       return String(localized: "Enabled, no rules")
     }
+    if disabledCount > 0 {
+      return String(
+        format: String(localized: "%lld added, %lld disabled"),
+        Int64(count),
+        Int64(disabledCount)
+      )
+    }
     return String(format: String(localized: "%lld managed rules"), Int64(count))
+  }
+}
+
+extension RuleOverlaySettings {
+  func combined(withProfileOverlay profileOverlay: RuleOverlaySettings) -> RuleOverlaySettings {
+    let globalActive = enabled
+    let profileActive = profileOverlay.enabled
+    return RuleOverlaySettings(
+      enabled: globalActive || profileActive,
+      prependRules: (globalActive ? prependRules : []) + (profileActive ? profileOverlay.prependRules : []),
+      appendRules: (profileActive ? profileOverlay.appendRules : []) + (globalActive ? appendRules : []),
+      disabledRuleMatchers: (globalActive ? disabledRuleMatchers : [])
+        + (profileActive ? profileOverlay.disabledRuleMatchers : [])
+    )
   }
 }
 
@@ -1840,13 +2083,114 @@ enum CoreStatus: Equatable, Sendable {
 }
 
 struct ProxyNode: Identifiable, Codable, Equatable, Sendable {
-  var id: String { name }
+  var id: String {
+    [
+      providerName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+      name
+    ]
+    .compactMap { $0 }
+    .joined(separator: "::")
+  }
   var name: String
   var type: String
   var delay: Int?
   var isSelectable: Bool
   var serverHost: String?
   var serverPort: Int?
+  var providerName: String?
+  var udpSupported: Bool?
+  var tfoSupported: Bool?
+  var xudpSupported: Bool?
+  var delayState: ProxyDelayState
+
+  private enum CodingKeys: String, CodingKey {
+    case name
+    case type
+    case delay
+    case isSelectable
+    case serverHost
+    case serverPort
+    case providerName
+    case udpSupported
+    case tfoSupported
+    case xudpSupported
+    case delayState
+  }
+
+  init(
+    name: String,
+    type: String,
+    delay: Int?,
+    isSelectable: Bool,
+    serverHost: String? = nil,
+    serverPort: Int? = nil,
+    providerName: String? = nil,
+    udpSupported: Bool? = nil,
+    tfoSupported: Bool? = nil,
+    xudpSupported: Bool? = nil,
+    delayState: ProxyDelayState? = nil
+  ) {
+    self.name = name
+    self.type = type
+    self.delay = delay
+    self.isSelectable = isSelectable
+    self.serverHost = serverHost
+    self.serverPort = serverPort
+    self.providerName = providerName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    self.udpSupported = udpSupported
+    self.tfoSupported = tfoSupported
+    self.xudpSupported = xudpSupported
+    self.delayState = delayState ?? delay.map(ProxyDelayState.measured) ?? .unknown
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    let delay = try container.decodeIfPresent(Int.self, forKey: .delay)
+    self.init(
+      name: try container.decode(String.self, forKey: .name),
+      type: try container.decode(String.self, forKey: .type),
+      delay: delay,
+      isSelectable: try container.decode(Bool.self, forKey: .isSelectable),
+      serverHost: try container.decodeIfPresent(String.self, forKey: .serverHost),
+      serverPort: try container.decodeIfPresent(Int.self, forKey: .serverPort),
+      providerName: try container.decodeIfPresent(String.self, forKey: .providerName),
+      udpSupported: try container.decodeIfPresent(Bool.self, forKey: .udpSupported),
+      tfoSupported: try container.decodeIfPresent(Bool.self, forKey: .tfoSupported),
+      xudpSupported: try container.decodeIfPresent(Bool.self, forKey: .xudpSupported),
+      delayState: try container.decodeIfPresent(ProxyDelayState.self, forKey: .delayState)
+    )
+  }
+
+  var resolvedDelayState: ProxyDelayState {
+    if case .unknown = delayState, let delay {
+      return .measured(delay)
+    }
+    return delayState
+  }
+
+  var endpointSummary: String? {
+    guard let host = serverHost?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty else {
+      return nil
+    }
+    if let serverPort {
+      return "\(host):\(serverPort)"
+    }
+    return host
+  }
+
+  var capabilityLabels: [String] {
+    var labels: [String] = []
+    if udpSupported == true {
+      labels.append("UDP")
+    }
+    if tfoSupported == true {
+      labels.append("TFO")
+    }
+    if xudpSupported == true {
+      labels.append("XUDP")
+    }
+    return labels
+  }
 }
 
 struct ProxyGroup: Identifiable, Codable, Equatable, Sendable {
@@ -1871,6 +2215,35 @@ struct ConnectionSnapshot: Identifiable, Codable, Equatable, Sendable {
   var chain: [String]
   var rule: String?
   var startedAt: Date?
+}
+
+struct RuntimeRule: Identifiable, Codable, Equatable, Sendable {
+  var index: Int
+  var type: String
+  var payload: String
+  var policy: String
+  var providerName: String?
+  var raw: String
+
+  var id: String {
+    "\(index):\(type):\(payload):\(policy)"
+  }
+
+  init(
+    index: Int,
+    type: String,
+    payload: String,
+    policy: String,
+    providerName: String? = nil,
+    raw: String? = nil
+  ) {
+    self.index = index
+    self.type = type
+    self.payload = payload
+    self.policy = policy
+    self.providerName = providerName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    self.raw = raw ?? [type, payload, policy].filter { !$0.isEmpty }.joined(separator: ",")
+  }
 }
 
 struct TrafficSample: Codable, Equatable, Sendable {

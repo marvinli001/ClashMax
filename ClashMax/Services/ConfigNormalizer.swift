@@ -53,6 +53,12 @@ struct ConfigNormalizer {
       providerContentProxyNames = nil
     }
 
+    let runtimeMergeYAML = options.subscriptionProviderOptions.runtimeMergeYAML
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    if !runtimeMergeYAML.isEmpty {
+      root = try runtimeMergedRoot(base: root, mergeYAML: runtimeMergeYAML)
+    }
+
     root["mixed-port"] = overrides.mixedPort
     root["external-controller"] = "\(overrides.externalControllerHost):\(overrides.externalControllerPort)"
     root["secret"] = overrides.secret
@@ -137,11 +143,14 @@ struct ConfigNormalizer {
     }
     root["tun"] = tun
 
-    if overrides.ruleOverlay.hasRuntimeOverlay {
-      if let validationError = overrides.ruleOverlay.validationError {
+    let ruleOverlay = overrides.ruleOverlay.combined(
+      withProfileOverlay: options.subscriptionProviderOptions.ruleOverlay
+    )
+    if ruleOverlay.hasRuntimeOverlay {
+      if let validationError = ruleOverlay.validationError {
         throw NormalizerError.invalidProfile(validationError)
       }
-      root["rules"] = mergedRules(existing: root["rules"], overlay: overrides.ruleOverlay)
+      root["rules"] = mergedRules(existing: root["rules"], overlay: ruleOverlay)
     }
 
     if !selectionOverrides.isEmpty,
@@ -166,9 +175,48 @@ struct ConfigNormalizer {
   }
 
   private func mergedRules(existing: Any?, overlay: RuleOverlaySettings) -> [String] {
-    overlay.runtimePrependRules
-      + normalizedRuleList(from: existing)
+    let profileRules = normalizedRuleList(from: existing).filter { !overlay.disablesRule($0) }
+    return overlay.runtimePrependRules
+      + profileRules
       + overlay.runtimeAppendRules
+  }
+
+  private func runtimeMergedRoot(base: [String: Any], mergeYAML: String) throws -> [String: Any] {
+    let loaded: Any?
+    do {
+      loaded = try Yams.load(yaml: mergeYAML)
+    } catch {
+      throw NormalizerError.invalidProfile("Runtime merge YAML parse error: \(String(describing: error))")
+    }
+
+    guard let overlay = loaded as? [String: Any] else {
+      throw NormalizerError.invalidProfile("Runtime merge YAML must be a YAML mapping.")
+    }
+    return mergedRuntimeMapping(base: base, overlay: overlay)
+  }
+
+  private func mergedRuntimeMapping(base: [String: Any], overlay: [String: Any]) -> [String: Any] {
+    var merged = base
+    for (key, overlayValue) in overlay {
+      guard let baseValue = merged[key] else {
+        merged[key] = overlayValue
+        continue
+      }
+      merged[key] = mergedRuntimeValue(base: baseValue, overlay: overlayValue)
+    }
+    return merged
+  }
+
+  private func mergedRuntimeValue(base: Any, overlay: Any) -> Any {
+    if let baseMap = base as? [String: Any],
+       let overlayMap = overlay as? [String: Any] {
+      return mergedRuntimeMapping(base: baseMap, overlay: overlayMap)
+    }
+    if let baseList = base as? [Any],
+       let overlayList = overlay as? [Any] {
+      return baseList + overlayList
+    }
+    return overlay
   }
 
   private func applyTunDNSOverlay(_ overlay: TunDNSSettings, to dns: inout [String: Any]) {
@@ -403,6 +451,13 @@ struct ConfigNormalizer {
     options: SubscriptionProviderOptions
   ) throws -> [String: Any] {
     let providerName = Self.appManagedProviderName
+    let primaryGroupName = options.primaryGroupName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      ? "Proxy"
+      : options.primaryGroupName.trimmingCharacters(in: .whitespacesAndNewlines)
+    let autoGroupName = options.autoGroupName.trimmingCharacters(in: .whitespacesAndNewlines)
+    let finalRulePolicy = options.finalRulePolicy.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      ? primaryGroupName
+      : options.finalRulePolicy.trimmingCharacters(in: .whitespacesAndNewlines)
     var provider: [String: Any] = [
       "type": "file",
       "path": providerContentPath,
@@ -441,27 +496,31 @@ struct ConfigNormalizer {
       provider["override"] = override
     }
 
+    var proxyGroups: [[String: Any]] = [
+      [
+        "name": primaryGroupName,
+        "type": "select",
+        "use": [providerName],
+        "proxies": ([autoGroupName.isEmpty ? nil : autoGroupName, "DIRECT"] as [String?]).compactMap { $0 }
+      ]
+    ]
+    if !autoGroupName.isEmpty {
+      proxyGroups.append([
+        "name": autoGroupName,
+        "type": "url-test",
+        "use": [providerName],
+        "url": AppConstants.defaultDelayTestURL.absoluteString,
+        "interval": 300,
+        "lazy": true
+      ])
+    }
+
     return [
       "proxy-providers": [
         providerName: provider
       ],
-      "proxy-groups": [
-        [
-          "name": "Proxy",
-          "type": "select",
-          "use": [providerName],
-          "proxies": ["Auto", "DIRECT"]
-        ],
-        [
-          "name": "Auto",
-          "type": "url-test",
-          "use": [providerName],
-          "url": AppConstants.defaultDelayTestURL.absoluteString,
-          "interval": 300,
-          "lazy": true
-        ]
-      ],
-      "rules": ["MATCH,Proxy"]
+      "proxy-groups": proxyGroups,
+      "rules": ["MATCH,\(finalRulePolicy)"]
     ]
   }
 }
@@ -650,14 +709,11 @@ struct ProfilePreviewBuilder {
 
   private func clashConfigGroups(from root: [String: Any]) -> [ProxyGroup] {
     let proxyEntries = dictionaryArray(root["proxies"])
-    let proxyTypes = proxyEntries.reduce(into: [String: String]()) { result, proxy in
-      guard let name = string(proxy["name"]) else { return }
-      result[name] = string(proxy["type"]) ?? "proxy"
+    let proxyNodes = proxyEntries.reduce(into: [String: ProxyNode]()) { result, proxy in
+      guard let node = proxyNode(from: proxy) else { return }
+      result[node.name] = node
     }
-    let proxyEndpoints = proxyEntries.reduce(into: [String: ProxyEndpoint]()) { result, proxy in
-      guard let name = string(proxy["name"]) else { return }
-      result[name] = ProxyEndpoint(host: string(proxy["server"]), port: int(proxy["port"]))
-    }
+    let providerNodes = providerPayloadNodes(from: root["proxy-providers"])
     let groupEntries = dictionaryArray(root["proxy-groups"])
     let groupTypes = groupEntries.reduce(into: [String: String]()) { result, group in
       guard let name = string(group["name"]) else { return }
@@ -668,14 +724,33 @@ struct ProfilePreviewBuilder {
       guard let name = string(group["name"]) else { return nil }
       let groupType = string(group["type"]) ?? "Unknown"
       var nodes = stringArray(group["proxies"]).map { proxyName in
-        ProxyNode(
-          name: proxyName,
-          type: proxyTypes[proxyName] ?? groupTypes[proxyName] ?? builtInProxyType(for: proxyName) ?? "proxy",
-          delay: nil,
-          isSelectable: true,
-          serverHost: proxyEndpoints[proxyName]?.host,
-          serverPort: proxyEndpoints[proxyName]?.port
-        )
+        proxyNodes[proxyName]
+          ?? ProxyNode(
+            name: proxyName,
+            type: groupTypes[proxyName] ?? builtInProxyType(for: proxyName) ?? "proxy",
+            delay: nil,
+            isSelectable: true
+          )
+      }
+
+      let usedProviderNodes = stringArray(group["use"]).flatMap { providerName in
+        if let nodes = providerNodes[providerName], !nodes.isEmpty {
+          return nodes
+        }
+        return [
+          ProxyNode(
+            name: "Provider: \(providerName)",
+            type: "provider",
+            delay: nil,
+            isSelectable: false,
+            providerName: providerName
+          )
+        ]
+      }
+      if nodes.isEmpty {
+        nodes = usedProviderNodes
+      } else {
+        nodes.append(contentsOf: usedProviderNodes)
       }
 
       if nodes.isEmpty {
@@ -691,6 +766,35 @@ struct ProfilePreviewBuilder {
         nodes: nodes
       )
     }
+  }
+
+  private func providerPayloadNodes(from value: Any?) -> [String: [ProxyNode]] {
+    guard let providers = value as? [String: Any] else { return [:] }
+    return providers.reduce(into: [String: [ProxyNode]]()) { result, entry in
+      guard let provider = entry.value as? [String: Any] else { return }
+      let nodes = dictionaryArray(provider["payload"]).compactMap { proxyNode(from: $0, providerName: entry.key) }
+      if !nodes.isEmpty {
+        result[entry.key] = nodes
+      }
+    }
+  }
+
+  private func proxyNode(from proxy: [String: Any], providerName: String? = nil) -> ProxyNode? {
+    guard let name = string(proxy["name"])?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else {
+      return nil
+    }
+    return ProxyNode(
+      name: name,
+      type: string(proxy["type"]) ?? "proxy",
+      delay: nil,
+      isSelectable: true,
+      serverHost: string(proxy["server"]),
+      serverPort: int(proxy["port"]),
+      providerName: providerName,
+      udpSupported: bool(proxy["udp"]),
+      tfoSupported: bool(proxy["tfo"]),
+      xudpSupported: bool(proxy["xudp"])
+    )
   }
 
   private func providerContentGroups(from source: String) -> [ProxyGroup] {
@@ -847,6 +951,26 @@ struct ProfilePreviewBuilder {
       return Int(value.trimmingCharacters(in: .whitespacesAndNewlines))
     case let value as CustomStringConvertible:
       return Int(String(describing: value))
+    default:
+      return nil
+    }
+  }
+
+  private func bool(_ value: Any?) -> Bool? {
+    switch value {
+    case let value as Bool:
+      return value
+    case let value as String:
+      switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+      case "true", "yes", "1":
+        return true
+      case "false", "no", "0":
+        return false
+      default:
+        return nil
+      }
+    case let value as CustomStringConvertible:
+      return bool(String(describing: value))
     default:
       return nil
     }

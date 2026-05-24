@@ -7,20 +7,33 @@ struct ProxiesView: View {
   @State private var searchText = ""
   @State private var sortOrder: ProxyNodeSort = .name
   @State private var expandedGroupIDs: Set<String>?
+  @State private var selectedGroupID: ProxyGroup.ID?
+  @State private var viewMode: ProxyPageViewMode = .groupDetail
+  @State private var nodePresentation: ProxyNodePresentation = .grid
+  @State private var showsNodeDetails = true
+  @State private var closesOldConnectionsAfterSwitch = false
+  @State private var customDelayTestURLByGroup: [ProxyGroup.ID: String] = [:]
 
   var body: some View {
-    let unfilteredGroups = appModel.visibleProxyGroups
-    let groups = filteredGroups(from: unfilteredGroups)
-    let searchQuery = normalizedSearchQuery
+    let runtimeGroups = appModel.visibleProxyGroups
+    let unfilteredGroups = ResolvedProxyCatalog(
+      groups: runtimeGroups,
+      providers: runtimeData.proxyProviders
+    ).groups
+    let searchQuery = ProxySearchQuery(rawValue: searchText)
+    let groups = ProxyGroupSearchFilter.filteredGroups(
+      from: sortedGroups(from: unfilteredGroups),
+      searchQuery: searchQuery
+    )
     let visibleExpandedGroupIDs = ProxyGroupExpansionPolicy.resolvedExpansion(
       current: expandedGroupIDs,
       groups: groups,
-      searchQuery: searchQuery
+      searchQuery: searchQuery.rawValue
     )
     let listAnimationState = ProxyGroupListAnimationState(
       groups: groups,
       expandedGroupIDs: visibleExpandedGroupIDs,
-      searchQuery: searchQuery,
+      searchQuery: searchQuery.rawValue,
       sortOrder: sortOrder
     )
     let isStarting = appModel.dashboardRuntimeState.isStarting
@@ -35,6 +48,7 @@ struct ProxiesView: View {
       title: "Proxies",
       subtitle: subtitle(for: groups)
     ) {
+      testAllButton
       if !appModel.isRunning, appModel.profileStore.activeProfile != nil {
         Button {
           appModel.start()
@@ -67,61 +81,30 @@ struct ProxiesView: View {
         )
       } else {
         VStack(alignment: .leading, spacing: 10) {
-          proxyControls
-
-          if let notice = ProxyPreviewNoticeKind.resolve(
-            developerMode: appModel.developerMode,
-            previewRuntimeActive: appModel.previewRuntimeActive,
-            isShowingProxyPreview: appModel.isShowingProxyPreview
-          ) {
-            ProxyPreviewNotice(icon: notice.icon, message: notice.message)
-          }
-
-          if ProxyPageVisibilityPolicy.showsProviderSummary(
-            developerMode: appModel.developerMode,
-            providerCount: runtimeData.proxyProviders.count
-          ) {
-            ProxyProviderList(providers: runtimeData.proxyProviders)
-          }
-
-          ScrollView {
-            LazyVStack(alignment: .leading, spacing: 10) {
-              ForEach(groups) { group in
-                ProxyGroupCard(
-                  group: group,
-                  showsDeveloperDetails: appModel.developerMode,
-                  isExpanded: visibleExpandedGroupIDs.contains(group.id),
-                  isSearchActive: !searchQuery.isEmpty
-                ) {
-                  toggleExpansion(for: group, visibleGroups: groups)
-                }
-              }
-            }
-            .padding(.vertical, 2)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-            .animation(ProxyInteractionAnimation.list(reduceMotion: reduceMotion), value: listAnimationState)
-          }
-          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+          proxyWorkspace(
+            groups: groups,
+            searchQuery: searchQuery,
+            visibleExpandedGroupIDs: visibleExpandedGroupIDs,
+            listAnimationState: listAnimationState
+          )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       }
     }
     .onAppear {
-      appModel.enterPreviewRuntime()
-    }
-    .onDisappear {
-      Task { @MainActor in
-        await appModel.leavePreviewRuntime()
-      }
+      selectDefaultGroupIfNeeded(from: groups)
     }
     .onChange(of: appModel.visibleProxyGroups.map(\.id) + runtimeData.proxyGroups.map(\.id)) { _, _ in
-      appModel.enterPreviewRuntime()
+      selectDefaultGroupIfNeeded(from: groups)
       withAnimation(ProxyInteractionAnimation.list(reduceMotion: reduceMotion)) {
         expandedGroupIDs = ProxyGroupExpansionPolicy.retainedExpansion(
           current: expandedGroupIDs,
-          groups: appModel.visibleProxyGroups
+          groups: groups
         )
       }
+    }
+    .onChange(of: groups.map(\.id)) { _, _ in
+      selectDefaultGroupIfNeeded(from: groups)
     }
   }
 
@@ -157,35 +140,147 @@ struct ProxiesView: View {
     return localizedProxiesCount("%lld groups", count)
   }
 
-  private func emptyStateTitle(unfilteredGroups: [ProxyGroup], searchQuery: String) -> String {
-    if !searchQuery.isEmpty, !unfilteredGroups.isEmpty {
-      return String(localized: "No matching proxies")
+  private func proxyWorkspace(
+    groups: [ProxyGroup],
+    searchQuery: ProxySearchQuery,
+    visibleExpandedGroupIDs: Set<String>,
+    listAnimationState: ProxyGroupListAnimationState
+  ) -> some View {
+    ProxyWorkspaceSurface {
+      proxyWorkspaceControls
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+
+      if let notice = ProxyPreviewNoticeKind.resolve(
+        developerMode: appModel.developerMode,
+        previewRuntimeActive: appModel.previewRuntimeActive,
+        isShowingProxyPreview: appModel.isShowingProxyPreview
+      ) {
+        Divider()
+        ProxyPreviewNotice(icon: notice.icon, message: notice.message)
+      }
+
+      if ProxyPageVisibilityPolicy.showsProviderSummary(
+        developerMode: appModel.developerMode,
+        providerCount: runtimeData.proxyProviders.count
+      ) {
+        Divider()
+        ProxyProviderList(providers: runtimeData.proxyProviders)
+          .padding(10)
+      }
+
+      Divider()
+
+      if viewMode == .allGroups {
+        ScrollView {
+          LazyVStack(alignment: .leading, spacing: 10) {
+            ForEach(groups) { group in
+              ProxyGroupCard(
+                group: group,
+                showsDeveloperDetails: appModel.developerMode || showsNodeDetails,
+                closesOldConnectionsAfterSwitch: closesOldConnectionsAfterSwitch,
+                isExpanded: visibleExpandedGroupIDs.contains(group.id),
+                isSearchActive: !searchQuery.isEmpty
+              ) {
+                toggleExpansion(for: group, visibleGroups: groups, searchQuery: searchQuery)
+              }
+            }
+          }
+          .padding(10)
+          .frame(maxWidth: .infinity, alignment: .topLeading)
+          .animation(ProxyInteractionAnimation.list(reduceMotion: reduceMotion), value: listAnimationState)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      } else {
+        ProxyGroupSplitView(
+          groups: groups,
+          selectedGroupID: $selectedGroupID,
+          nodePresentation: nodePresentation,
+          showsNodeDetails: showsNodeDetails,
+          closesOldConnectionsAfterSwitch: closesOldConnectionsAfterSwitch,
+          customDelayTestURLText: customDelayTestURLBinding(for: selectedGroupID)
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      }
     }
-    return String(localized: "No proxy groups")
   }
 
-  private func emptyStateMessage(unfilteredGroups: [ProxyGroup], searchQuery: String) -> String {
-    if !searchQuery.isEmpty, !unfilteredGroups.isEmpty {
-      return String(localized: "No proxy groups match the current search.")
-    }
-    return appModel.proxyGroupsUnavailableMessage
-  }
-
-  private var proxyControls: some View {
+  private var proxyWorkspaceControls: some View {
     ViewThatFits(in: .horizontal) {
       HStack(spacing: 10) {
-        TextField("Search", text: $searchText)
-          .textFieldStyle(.roundedBorder)
-          .frame(minWidth: 180, idealWidth: 260, maxWidth: 320)
-        sortPicker
+        searchField
+        proxyWorkspaceControlStrip
+        Spacer(minLength: 0)
       }
 
       VStack(alignment: .leading, spacing: 8) {
-        TextField("Search", text: $searchText)
-          .textFieldStyle(.roundedBorder)
-        sortPicker
+        searchField
+        HStack(spacing: 10) {
+          viewModePicker
+          sortPicker
+          nodePresentationPicker
+        }
+        HStack(spacing: 10) {
+          nodeDetailsButton
+          closeOldConnectionsToggle
+        }
       }
     }
+  }
+
+  private var searchField: some View {
+    TextField("Search", text: $searchText)
+      .textFieldStyle(.roundedBorder)
+      .frame(minWidth: 180, idealWidth: 260, maxWidth: 340)
+  }
+
+  private var proxyWorkspaceControlStrip: some View {
+    HStack(spacing: 10) {
+      viewModePicker
+      sortPicker
+      nodePresentationPicker
+      nodeDetailsButton
+      closeOldConnectionsToggle
+    }
+    .fixedSize(horizontal: true, vertical: false)
+  }
+
+  private var testAllButton: some View {
+    Button {
+      appModel.testDelayForAllProxyGroups()
+    } label: {
+      Label("Test All", systemImage: "waveform.path.ecg")
+    }
+    .disabled(!appModel.canControlRuntimeProxies || appModel.visibleProxyGroups.isEmpty)
+    .help("Test delay for every selectable node")
+  }
+
+  private var nodeDetailsButton: some View {
+    Button {
+      showsNodeDetails.toggle()
+    } label: {
+      Image(systemName: showsNodeDetails ? "list.bullet.rectangle.portrait.fill" : "list.bullet.rectangle.portrait")
+    }
+    .buttonStyle(.borderless)
+    .help(showsNodeDetails ? "Hide node details" : "Show node details")
+  }
+
+  private var closeOldConnectionsToggle: some View {
+    Toggle(isOn: $closesOldConnectionsAfterSwitch) {
+      Label("Close Old", systemImage: "xmark.circle")
+    }
+    .toggleStyle(.checkbox)
+    .help("After switching nodes, close active connections whose chain contains the previous selected node.")
+  }
+
+  private var viewModePicker: some View {
+    Picker("View", selection: $viewMode) {
+      ForEach(ProxyPageViewMode.allCases) { mode in
+        Text(mode.displayName).tag(mode)
+      }
+    }
+    .pickerStyle(.segmented)
+    .frame(width: 190)
   }
 
   private var sortPicker: some View {
@@ -198,24 +293,38 @@ struct ProxiesView: View {
     .frame(width: 260)
   }
 
-  private var normalizedSearchQuery: String {
-    searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+  private var nodePresentationPicker: some View {
+    Picker("Layout", selection: $nodePresentation) {
+      ForEach(ProxyNodePresentation.allCases) { presentation in
+        Image(systemName: presentation.systemImage).tag(presentation)
+      }
+    }
+    .pickerStyle(.segmented)
+    .frame(width: 88)
+    .fixedSize(horizontal: true, vertical: false)
+    .help("Switch node layout")
   }
 
-  private func filteredGroups(from groups: [ProxyGroup]) -> [ProxyGroup] {
-    let query = normalizedSearchQuery.lowercased()
-    return groups.compactMap { group in
+  private func sortedGroups(from groups: [ProxyGroup]) -> [ProxyGroup] {
+    groups.map { group in
       var group = group
-      let nodes = sortedNodes(group.nodes)
-      if query.isEmpty || group.name.lowercased().contains(query) {
-        group.nodes = nodes
-        return group
-      }
-      group.nodes = nodes.filter { node in
-        node.name.lowercased().contains(query) || node.type.lowercased().contains(query)
-      }
-      return group.nodes.isEmpty ? nil : group
+      group.nodes = sortedNodes(group.nodes)
+      return group
     }
+  }
+
+  private func emptyStateTitle(unfilteredGroups: [ProxyGroup], searchQuery: ProxySearchQuery) -> String {
+    if !searchQuery.isEmpty, !unfilteredGroups.isEmpty {
+      return String(localized: "No matching proxies")
+    }
+    return String(localized: "No proxy groups")
+  }
+
+  private func emptyStateMessage(unfilteredGroups: [ProxyGroup], searchQuery: ProxySearchQuery) -> String {
+    if !searchQuery.isEmpty, !unfilteredGroups.isEmpty {
+      return String(localized: "No proxy groups match the current search.")
+    }
+    return appModel.proxyGroupsUnavailableMessage
   }
 
   private func sortedNodes(_ nodes: [ProxyNode]) -> [ProxyNode] {
@@ -224,8 +333,8 @@ struct ProxiesView: View {
       return nodes.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     case .delay:
       return nodes.sorted {
-        let first = $0.delay ?? Int.max
-        let second = $1.delay ?? Int.max
+        let first = $0.resolvedDelayState.measuredDelay ?? Int.max
+        let second = $1.resolvedDelayState.measuredDelay ?? Int.max
         if first == second {
           return $0.name.localizedStandardCompare($1.name) == .orderedAscending
         }
@@ -242,12 +351,36 @@ struct ProxiesView: View {
     }
   }
 
-  private func toggleExpansion(for group: ProxyGroup, visibleGroups: [ProxyGroup]) {
-    guard normalizedSearchQuery.isEmpty else { return }
+  private func selectDefaultGroupIfNeeded(from groups: [ProxyGroup]) {
+    guard !groups.isEmpty else {
+      selectedGroupID = nil
+      return
+    }
+    if let selectedGroupID, groups.contains(where: { $0.id == selectedGroupID }) {
+      return
+    }
+    selectedGroupID = groups.first(where: { $0.selected != nil })?.id ?? groups.first?.id
+  }
+
+  private func customDelayTestURLBinding(for groupID: ProxyGroup.ID?) -> Binding<String> {
+    Binding(
+      get: {
+        guard let groupID else { return "" }
+        return customDelayTestURLByGroup[groupID] ?? ""
+      },
+      set: { value in
+        guard let groupID else { return }
+        customDelayTestURLByGroup[groupID] = value
+      }
+    )
+  }
+
+  private func toggleExpansion(for group: ProxyGroup, visibleGroups: [ProxyGroup], searchQuery: ProxySearchQuery) {
+    guard searchQuery.isEmpty else { return }
     let currentExpansion = ProxyGroupExpansionPolicy.resolvedExpansion(
       current: expandedGroupIDs,
       groups: visibleGroups,
-      searchQuery: normalizedSearchQuery
+      searchQuery: searchQuery.rawValue
     )
     withAnimation(ProxyInteractionAnimation.expansion(reduceMotion: reduceMotion)) {
       expandedGroupIDs = ProxyGroupExpansionPolicy.toggled(groupID: group.id, in: currentExpansion)
@@ -267,6 +400,34 @@ private enum ProxyNodeSort: String, CaseIterable, Equatable, Identifiable {
     case .name: String(localized: "Name")
     case .delay: String(localized: "Delay")
     case .type: String(localized: "Type")
+    }
+  }
+}
+
+private enum ProxyPageViewMode: String, CaseIterable, Equatable, Identifiable {
+  case groupDetail
+  case allGroups
+
+  var id: String { rawValue }
+
+  var displayName: String {
+    switch self {
+    case .groupDetail: String(localized: "Split")
+    case .allGroups: String(localized: "All Groups")
+    }
+  }
+}
+
+private enum ProxyNodePresentation: String, CaseIterable, Equatable, Identifiable {
+  case grid
+  case list
+
+  var id: String { rawValue }
+
+  var systemImage: String {
+    switch self {
+    case .grid: "square.grid.2x2"
+    case .list: "list.bullet"
     }
   }
 }
@@ -318,7 +479,7 @@ private struct ProxyNodeGridAnimationState: Equatable {
 
 enum ProxyPageVisibilityPolicy {
   static func showsProviderSummary(developerMode: Bool, providerCount: Int) -> Bool {
-    providerCount > 0
+    developerMode && providerCount > 0
   }
 
   static func showsLoadingSkeleton(
@@ -383,9 +544,539 @@ enum ProxyGroupExpansionPolicy {
   }
 }
 
+private struct ResolvedProxyCatalog {
+  var groups: [ProxyGroup]
+
+  init(groups: [ProxyGroup], providers: [ProxyProvider]) {
+    let providerNodes = Dictionary(uniqueKeysWithValues: providers.map { provider in
+      (provider.name, provider.proxies.map { node -> ProxyNode in
+        var node = node
+        node.providerName = provider.name
+        return node
+      })
+    })
+
+    self.groups = groups.map { group in
+      var group = group
+      var expandedNodes: [ProxyNode] = []
+      for node in group.nodes {
+        if node.type.caseInsensitiveCompare("provider") == .orderedSame,
+           let providerName = Self.providerName(from: node),
+           let nodes = providerNodes[providerName],
+           !nodes.isEmpty {
+          expandedNodes.append(contentsOf: nodes.map { providerNode in
+            var providerNode = providerNode
+            providerNode.isSelectable = group.allowsManualProxySelection
+            return providerNode
+          })
+        } else {
+          expandedNodes.append(node)
+        }
+      }
+      group.nodes = Self.deduplicated(expandedNodes)
+      return group
+    }
+  }
+
+  private static func providerName(from node: ProxyNode) -> String? {
+    if let providerName = node.providerName?.trimmingCharacters(in: .whitespacesAndNewlines), !providerName.isEmpty {
+      return providerName
+    }
+    let prefix = "Provider:"
+    guard node.name.hasPrefix(prefix) else { return nil }
+    return String(node.name.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private static func deduplicated(_ nodes: [ProxyNode]) -> [ProxyNode] {
+    var seen = Set<String>()
+    var result: [ProxyNode] = []
+    for node in nodes {
+      guard seen.insert(node.id).inserted else { continue }
+      result.append(node)
+    }
+    return result
+  }
+}
+
+struct ProxyGroupSearchFilter {
+  static func filteredGroups(from groups: [ProxyGroup], searchQuery: ProxySearchQuery) -> [ProxyGroup] {
+    guard !searchQuery.isEmpty else { return groups }
+    return groups.compactMap { group in
+      var group = group
+      group.nodes = group.nodes.filter { node in
+        searchQuery.matches(group: group, node: node)
+      }
+      return group.nodes.isEmpty ? nil : group
+    }
+  }
+}
+
+struct ProxySearchQuery {
+  let rawValue: String
+  private let terms: [String]
+  private let isCaseSensitive: Bool
+  private let isWholeWord: Bool
+
+  init(rawValue: String) {
+    self.rawValue = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    var parsedTerms: [String] = []
+    var parsedCaseSensitive = false
+    var parsedWholeWord = false
+    for term in self.rawValue.split(whereSeparator: \.isWhitespace).map(String.init) {
+      switch term.lowercased() {
+      case "case=true", "case=yes", "case=on", "case-sensitive=true", "cs=true":
+        parsedCaseSensitive = true
+      case "word=true", "word=yes", "word=on", "whole=true", "whole-word=true":
+        parsedWholeWord = true
+      default:
+        parsedTerms.append(term)
+      }
+    }
+    self.terms = parsedTerms
+    self.isCaseSensitive = parsedCaseSensitive
+    self.isWholeWord = parsedWholeWord
+  }
+
+  var isEmpty: Bool {
+    terms.isEmpty
+  }
+
+  func matches(group: ProxyGroup, node: ProxyNode) -> Bool {
+    terms.allSatisfy { term in
+      matches(term: term, group: group, node: node)
+    }
+  }
+
+  private func matches(term: String, group: ProxyGroup, node: ProxyNode) -> Bool {
+    let normalized = term.lowercased()
+    if normalized.hasPrefix("type=") {
+      return contains(node.type, value(after: "type=", in: term))
+    }
+    if normalized.hasPrefix("provider=") {
+      return contains(node.providerName ?? "", value(after: "provider=", in: term))
+    }
+    if normalized.hasPrefix("selected=") {
+      let wantsSelected = value(after: "selected=", in: term).lowercased() == "true"
+      return (group.selected == node.name) == wantsSelected
+    }
+    if normalized.hasPrefix("delay=") {
+      return delayEquals(value(after: "delay=", in: term), state: node.resolvedDelayState)
+    }
+    if let comparison = delayComparison(from: term) {
+      return matchesDelayComparison(comparison, state: node.resolvedDelayState)
+    }
+    if normalized.hasPrefix("regex=") {
+      return matchesRegex(value(after: "regex=", in: term), group: group, node: node)
+    }
+    if term.hasPrefix("/"), term.hasSuffix("/"), term.count > 2 {
+      let pattern = String(term.dropFirst().dropLast())
+      return matchesRegex(pattern, group: group, node: node)
+    }
+    return contains(searchableText(group: group, node: node), term)
+  }
+
+  private func contains(_ text: String, _ query: String) -> Bool {
+    guard !query.isEmpty else { return true }
+    if isWholeWord {
+      return matchesWholeWord(query, in: text)
+    }
+    if isCaseSensitive {
+      return text.contains(query)
+    }
+    return text.localizedCaseInsensitiveContains(query)
+  }
+
+  private func searchableText(group: ProxyGroup, node: ProxyNode) -> String {
+    [
+      group.name,
+      group.type,
+      group.selected,
+      node.name,
+      node.type,
+      node.providerName,
+      node.endpointSummary
+    ]
+    .compactMap { $0 }
+    .joined(separator: " ")
+  }
+
+  private func value(after prefix: String, in term: String) -> String {
+    String(term.dropFirst(prefix.count))
+  }
+
+  private func delayEquals(_ value: String, state: ProxyDelayState) -> Bool {
+    switch value.lowercased() {
+    case "unknown":
+      return state == .unknown
+    case "testing":
+      return state == .testing
+    case "timeout":
+      return state == .timeout
+    case "error":
+      if case .error = state { return true }
+      return false
+    default:
+      guard let expected = Int(value), let delay = state.measuredDelay else { return false }
+      return delay == expected
+    }
+  }
+
+  private func delayComparison(from term: String) -> (operatorText: String, value: Int)? {
+    let operators = ["<=", ">=", "<", ">"]
+    for operatorText in operators {
+      let prefix = "delay\(operatorText)"
+      guard term.lowercased().hasPrefix(prefix),
+            let value = Int(String(term.dropFirst(prefix.count)))
+      else { continue }
+      return (operatorText, value)
+    }
+    return nil
+  }
+
+  private func matchesDelayComparison(_ comparison: (operatorText: String, value: Int), state: ProxyDelayState) -> Bool {
+    guard let delay = state.measuredDelay else { return false }
+    switch comparison.operatorText {
+    case "<": return delay < comparison.value
+    case "<=": return delay <= comparison.value
+    case ">": return delay > comparison.value
+    case ">=": return delay >= comparison.value
+    default: return false
+    }
+  }
+
+  private func matchesRegex(_ pattern: String, group: ProxyGroup, node: ProxyNode) -> Bool {
+    let text = searchableText(group: group, node: node)
+    let options: NSRegularExpression.Options = isCaseSensitive ? [] : [.caseInsensitive]
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else {
+      return false
+    }
+    return regex.firstMatch(
+      in: text,
+      range: NSRange(text.startIndex..<text.endIndex, in: text)
+    ) != nil
+  }
+
+  private func matchesWholeWord(_ query: String, in text: String) -> Bool {
+    let escaped = NSRegularExpression.escapedPattern(for: query)
+    let pattern = #"\b"# + escaped + #"\b"#
+    let options: NSRegularExpression.Options = isCaseSensitive ? [] : [.caseInsensitive]
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else {
+      return false
+    }
+    return regex.firstMatch(
+      in: text,
+      range: NSRange(text.startIndex..<text.endIndex, in: text)
+    ) != nil
+  }
+}
+
+private struct ProxyWorkspaceSurface<Content: View>: View {
+  @Environment(\.colorScheme) private var colorScheme
+  let content: Content
+
+  init(@ViewBuilder content: () -> Content) {
+    self.content = content()
+  }
+
+  var body: some View {
+    let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+    VStack(alignment: .leading, spacing: 0) {
+      content
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    .background {
+      if colorScheme == .dark {
+        ZStack {
+          shape.fill(.regularMaterial)
+          shape.fill(ProxySurface.group(for: colorScheme))
+        }
+      } else {
+        shape.fill(ProxySurface.group(for: colorScheme))
+      }
+    }
+    .clipShape(shape)
+    .overlay {
+      shape.strokeBorder(ProxySurface.border(for: colorScheme), lineWidth: 1)
+    }
+  }
+}
+
+private struct ProxyGroupSplitView: View {
+  @Binding var selectedGroupID: ProxyGroup.ID?
+  let groups: [ProxyGroup]
+  let nodePresentation: ProxyNodePresentation
+  let showsNodeDetails: Bool
+  let closesOldConnectionsAfterSwitch: Bool
+  @Binding var customDelayTestURLText: String
+
+  init(
+    groups: [ProxyGroup],
+    selectedGroupID: Binding<ProxyGroup.ID?>,
+    nodePresentation: ProxyNodePresentation,
+    showsNodeDetails: Bool,
+    closesOldConnectionsAfterSwitch: Bool,
+    customDelayTestURLText: Binding<String>
+  ) {
+    self.groups = groups
+    self._selectedGroupID = selectedGroupID
+    self.nodePresentation = nodePresentation
+    self.showsNodeDetails = showsNodeDetails
+    self.closesOldConnectionsAfterSwitch = closesOldConnectionsAfterSwitch
+    self._customDelayTestURLText = customDelayTestURLText
+  }
+
+  var body: some View {
+    HStack(spacing: 0) {
+      ProxyGroupNavigator(groups: groups, selectedGroupID: $selectedGroupID)
+        .frame(minWidth: 220, idealWidth: 260, maxWidth: 300)
+
+      Divider()
+
+      if let selectedGroup {
+        ProxyGroupDetailPane(
+          group: selectedGroup,
+          nodePresentation: nodePresentation,
+          showsNodeDetails: showsNodeDetails,
+          closesOldConnectionsAfterSwitch: closesOldConnectionsAfterSwitch,
+          customDelayTestURLText: $customDelayTestURLText
+        )
+      } else {
+        CenteredUnavailableState(
+          title: "No group selected",
+          systemImage: "point.3.connected.trianglepath.dotted",
+          message: "Select a proxy group to inspect nodes."
+        )
+      }
+    }
+  }
+
+  private var selectedGroup: ProxyGroup? {
+    if let selectedGroupID,
+       let group = groups.first(where: { $0.id == selectedGroupID }) {
+      return group
+    }
+    return groups.first
+  }
+}
+
+private struct ProxyGroupNavigator: View {
+  @Environment(\.colorScheme) private var colorScheme
+  let groups: [ProxyGroup]
+  @Binding var selectedGroupID: ProxyGroup.ID?
+
+  var body: some View {
+    ScrollView {
+      LazyVStack(alignment: .leading, spacing: 3) {
+        ForEach(groups) { group in
+          Button {
+            selectedGroupID = group.id
+          } label: {
+            ProxyGroupNavigatorRow(group: group, isSelected: isSelected(group))
+          }
+          .buttonStyle(.plain)
+          .help("Show \(group.name)")
+          .accessibilityLabel(group.name)
+        }
+      }
+      .padding(8)
+      .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+    .background(ProxySurface.navigator(for: colorScheme))
+  }
+
+  private func isSelected(_ group: ProxyGroup) -> Bool {
+    if let selectedGroupID {
+      return group.id == selectedGroupID
+    }
+    return group.id == groups.first?.id
+  }
+}
+
+private struct ProxyGroupNavigatorRow: View {
+  let group: ProxyGroup
+  let isSelected: Bool
+
+  var body: some View {
+    HStack(spacing: 9) {
+      Image(systemName: group.allowsManualProxySelection ? "point.3.connected.trianglepath.dotted" : "gearshape.2")
+        .foregroundStyle(iconStyle)
+        .frame(width: 16)
+
+      VStack(alignment: .leading, spacing: 2) {
+        Text(group.name)
+          .foregroundStyle(isSelected ? .white : .primary)
+          .lineLimit(1)
+        Text(subtitle)
+          .font(.caption)
+          .foregroundStyle(isSelected ? .white.opacity(0.82) : .secondary)
+          .lineLimit(1)
+      }
+    }
+    .padding(.horizontal, 10)
+    .padding(.vertical, 7)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+    .background {
+      RoundedRectangle(cornerRadius: 7, style: .continuous)
+        .fill(isSelected ? Color.accentColor : .clear)
+    }
+  }
+
+  private var subtitle: String {
+    let selected = group.selected ?? "No selection"
+    let best = group.nodes.compactMap { $0.resolvedDelayState.measuredDelay }.min()
+    if let best {
+      return "\(group.nodes.count) nodes - \(selected) - best \(best) ms"
+    }
+    return "\(group.nodes.count) nodes - \(selected)"
+  }
+
+  private var iconStyle: Color {
+    if isSelected {
+      return .white
+    }
+    return group.allowsManualProxySelection ? .cyan : .secondary
+  }
+}
+
+private struct ProxyGroupDetailPane: View {
+  @EnvironmentObject private var appModel: AppModel
+  @State private var scrollToSelectedRequest = 0
+  let group: ProxyGroup
+  let nodePresentation: ProxyNodePresentation
+  let showsNodeDetails: Bool
+  let closesOldConnectionsAfterSwitch: Bool
+  @Binding var customDelayTestURLText: String
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      detailToolbar
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+      Divider()
+      ScrollViewReader { proxy in
+        ScrollView {
+          if nodePresentation == .grid {
+            LazyVGrid(
+              columns: [GridItem(.adaptive(minimum: 210, maximum: 320), spacing: 10, alignment: .topLeading)],
+              alignment: .leading,
+              spacing: 10
+            ) {
+              nodeCards
+            }
+            .padding(10)
+          } else {
+            LazyVStack(alignment: .leading, spacing: 8) {
+              nodeCards
+            }
+            .padding(10)
+          }
+        }
+        .onChange(of: scrollToSelectedRequest) { _, _ in
+          if let selectedNodeID {
+            withAnimation(.snappy(duration: 0.22)) {
+              proxy.scrollTo(selectedNodeID, anchor: .center)
+            }
+          }
+        }
+      }
+    }
+  }
+
+  @ViewBuilder
+  private var nodeCards: some View {
+    ForEach(group.nodes) { node in
+      ProxyNodeCard(
+        group: group,
+        node: node,
+        customDelayTestURL: parsedCustomDelayTestURL,
+        showsDetails: showsNodeDetails,
+        closesOldConnectionsAfterSwitch: closesOldConnectionsAfterSwitch
+      )
+      .id(node.id)
+    }
+  }
+
+  private var detailToolbar: some View {
+    ViewThatFits(in: .horizontal) {
+      HStack(spacing: 10) {
+        groupSummary
+        Spacer(minLength: 12)
+        customDelayURLField
+        detailActions
+      }
+
+      VStack(alignment: .leading, spacing: 8) {
+        groupSummary
+        HStack(spacing: 10) {
+          customDelayURLField
+          detailActions
+        }
+      }
+    }
+  }
+
+  private var groupSummary: some View {
+    VStack(alignment: .leading, spacing: 3) {
+      HStack(spacing: 8) {
+        Text(group.name)
+          .font(.callout.weight(.semibold))
+          .lineLimit(1)
+        ProxyTypeBadge(text: group.type)
+      }
+      Text("\(group.nodes.count) nodes")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+  }
+
+  private var customDelayURLField: some View {
+    TextField("Custom delay URL", text: $customDelayTestURLText)
+      .textFieldStyle(.roundedBorder)
+      .frame(minWidth: 180, idealWidth: 250, maxWidth: 320)
+      .help("Optional URL for this group's Mihomo delay test")
+  }
+
+  private var detailActions: some View {
+    HStack(spacing: 8) {
+      Button {
+        scrollToSelectedRequest += 1
+      } label: {
+        Image(systemName: "scope")
+      }
+      .disabled(selectedNodeID == nil)
+      .help("Locate selected node")
+
+      Button {
+        appModel.testDelay(in: group, testURL: parsedCustomDelayTestURL)
+      } label: {
+        Label("Test Group", systemImage: "waveform.path.ecg")
+          .labelStyle(.titleAndIcon)
+      }
+      .disabled(!appModel.canControlRuntimeProxies || !group.nodes.contains(where: \.isSelectable))
+      .help("Test delay for this group")
+    }
+  }
+
+  private var selectedNodeID: ProxyNode.ID? {
+    group.nodes.first(where: { $0.name == group.selected })?.id
+  }
+
+  private var parsedCustomDelayTestURL: URL? {
+    let trimmed = customDelayTestURLText.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty,
+          let url = URL(string: trimmed),
+          let scheme = url.scheme?.lowercased(),
+          ["http", "https"].contains(scheme)
+    else { return nil }
+    return url
+  }
+}
+
 private struct ProxyProviderList: View {
   @EnvironmentObject private var appModel: AppModel
   @EnvironmentObject private var runtimeData: RuntimeDataStore
+  @Environment(\.colorScheme) private var colorScheme
   let providers: [ProxyProvider]
 
   var body: some View {
@@ -465,10 +1156,10 @@ private struct ProxyProviderList: View {
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
-    .background(ProxySurface.secondary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .background(ProxySurface.secondary(for: colorScheme), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     .overlay {
       RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .strokeBorder(ProxySurface.border, lineWidth: 1)
+        .strokeBorder(ProxySurface.border(for: colorScheme), lineWidth: 1)
     }
   }
 
@@ -484,8 +1175,10 @@ private struct ProxyProviderList: View {
 
 private struct ProxyGroupCard: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.colorScheme) private var colorScheme
   let group: ProxyGroup
   let showsDeveloperDetails: Bool
+  let closesOldConnectionsAfterSwitch: Bool
   let isExpanded: Bool
   let isSearchActive: Bool
   let onToggle: () -> Void
@@ -507,10 +1200,10 @@ private struct ProxyGroupCard: View {
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(ProxySurface.group, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .background(ProxySurface.group(for: colorScheme), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     .overlay {
       RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .strokeBorder(ProxySurface.border, lineWidth: 1)
+        .strokeBorder(ProxySurface.border(for: colorScheme), lineWidth: 1)
     }
   }
 
@@ -524,7 +1217,13 @@ private struct ProxyGroupCard: View {
         spacing: 10
       ) {
         ForEach(group.nodes) { node in
-          ProxyNodeCard(group: group, node: node)
+          ProxyNodeCard(
+            group: group,
+            node: node,
+            customDelayTestURL: nil,
+            showsDetails: showsDeveloperDetails,
+            closesOldConnectionsAfterSwitch: closesOldConnectionsAfterSwitch
+          )
             .transition(ProxyInteractionAnimation.nodeTransition(reduceMotion: reduceMotion))
         }
       }
@@ -619,7 +1318,7 @@ private struct ProxyGroupCard: View {
   private var selectedDelayLabel: some View {
     Group {
       if let selectedNode = group.nodes.first(where: { $0.name == group.selected }) {
-        let delayDisplay = ProxyDelayDisplay(delay: selectedNode.delay)
+        let delayDisplay = ProxyDelayDisplay(state: selectedNode.resolvedDelayState)
         Text(delayDisplay.label)
           .foregroundStyle(delayDisplay.tone.color)
       } else {
@@ -634,22 +1333,31 @@ private struct ProxyGroupCard: View {
 private struct ProxyNodeCard: View {
   @EnvironmentObject private var appModel: AppModel
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.colorScheme) private var colorScheme
   @GestureState private var isPressing = false
   let group: ProxyGroup
   let node: ProxyNode
+  let customDelayTestURL: URL?
+  let showsDetails: Bool
+  let closesOldConnectionsAfterSwitch: Bool
 
   var body: some View {
     let canSelect = group.allowsManualProxySelection
       && node.isSelectable
       && (appModel.canControlRuntimeProxies || appModel.canSelectProxyOffline)
     let canTest = node.isSelectable && appModel.canControlRuntimeProxies
-    let delayDisplay = ProxyDelayDisplay(delay: node.delay)
+    let delayDisplay = ProxyDelayDisplay(state: node.resolvedDelayState)
     let isSelected = group.selected == node.name
 
     ZStack(alignment: .topTrailing) {
       Button {
+        guard canSelect else { return }
         withAnimation(ProxyInteractionAnimation.selection(reduceMotion: reduceMotion)) {
-          appModel.selectProxy(group: group, node: node)
+          appModel.selectProxy(
+            group: group,
+            node: node,
+            closeOldConnections: closesOldConnectionsAfterSwitch
+          )
         }
       } label: {
         VStack(alignment: .leading, spacing: 8) {
@@ -671,10 +1379,20 @@ private struct ProxyNodeCard: View {
 
           HStack(spacing: 8) {
             ProxyTypeBadge(text: node.type, isSelectable: node.isSelectable)
+            if let providerName = node.providerName {
+              ProxyTypeBadge(text: providerName, isSelectable: node.isSelectable)
+            }
+            ForEach(node.capabilityLabels, id: \.self) { label in
+              ProxyTypeBadge(text: label, isSelectable: node.isSelectable)
+            }
             Spacer(minLength: 8)
-            Text(delayDisplay.label)
-              .font(.caption.monospacedDigit())
-              .foregroundStyle(delayDisplay.tone.color)
+            DelayChip(display: delayDisplay)
+          }
+
+          if showsDetails, let endpoint = node.endpointSummary {
+            Label(endpoint, systemImage: "network")
+              .font(.caption)
+              .foregroundStyle(.secondary)
               .lineLimit(1)
           }
         }
@@ -684,15 +1402,13 @@ private struct ProxyNodeCard: View {
         .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
       }
       .buttonStyle(.plain)
-      .disabled(!canSelect)
+      .allowsHitTesting(canSelect)
       .help(selectionHelp(canSelect: canSelect))
 
       Button {
-        appModel.testDelay(for: node)
+        appModel.testDelay(in: group, for: node, testURL: customDelayTestURL)
       } label: {
-        Image(systemName: "dot.radiowaves.left.and.right")
-          .font(.system(size: 13, weight: .medium))
-          .frame(width: 20, height: 20)
+        DelayActionIcon(state: node.resolvedDelayState)
       }
       .buttonStyle(.borderless)
       .controlSize(.small)
@@ -706,14 +1422,14 @@ private struct ProxyNodeCard: View {
     .scaleEffect(nodeScale(canSelect: canSelect))
     .background {
       RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .fill(ProxySurface.node)
+        .fill(ProxySurface.node(for: colorScheme))
       RoundedRectangle(cornerRadius: 8, style: .continuous)
         .fill(nodeInteractionTint(isSelected: isSelected, canSelect: canSelect))
     }
     .overlay {
       RoundedRectangle(cornerRadius: 8, style: .continuous)
         .strokeBorder(
-          nodeBorder(isSelected: isSelected, canSelect: canSelect),
+          nodeBorder(isSelected: isSelected, canSelect: canSelect, colorScheme: colorScheme),
           lineWidth: isSelected || (isPressing && canSelect) ? 1.2 : 1
         )
     }
@@ -747,14 +1463,14 @@ private struct ProxyNodeCard: View {
     return .clear
   }
 
-  private func nodeBorder(isSelected: Bool, canSelect: Bool) -> Color {
+  private func nodeBorder(isSelected: Bool, canSelect: Bool, colorScheme: ColorScheme) -> Color {
     if isSelected {
       return .green.opacity(0.75)
     }
     if canSelect, isPressing {
       return Color.accentColor.opacity(0.35)
     }
-    return ProxySurface.border
+    return ProxySurface.border(for: colorScheme)
   }
 
   private func pressGesture(isEnabled: Bool) -> some Gesture {
@@ -766,20 +1482,24 @@ private struct ProxyNodeCard: View {
 }
 
 private enum ProxySurface {
-  static var group: Color {
-    Color(nsColor: .controlBackgroundColor)
+  static func group(for colorScheme: ColorScheme) -> Color {
+    colorScheme == .dark ? Color.primary.opacity(0.032) : Color(nsColor: .textBackgroundColor)
   }
 
-  static var node: Color {
-    Color(nsColor: .textBackgroundColor)
+  static func navigator(for colorScheme: ColorScheme) -> Color {
+    colorScheme == .dark ? Color.primary.opacity(0.024) : Color(nsColor: .textBackgroundColor)
   }
 
-  static var secondary: Color {
-    Color(nsColor: .controlBackgroundColor)
+  static func node(for colorScheme: ColorScheme) -> Color {
+    colorScheme == .dark ? Color.primary.opacity(0.045) : Color(nsColor: .textBackgroundColor)
   }
 
-  static var border: Color {
-    Color(nsColor: .separatorColor).opacity(0.55)
+  static func secondary(for colorScheme: ColorScheme) -> Color {
+    colorScheme == .dark ? Color.primary.opacity(0.040) : Color(nsColor: .controlBackgroundColor)
+  }
+
+  static func border(for colorScheme: ColorScheme) -> Color {
+    Color(nsColor: .separatorColor).opacity(colorScheme == .dark ? 0.34 : 0.55)
   }
 }
 
@@ -857,23 +1577,39 @@ struct ProxyDelayDisplay: Equatable {
   let tone: ProxyDelayTone
 
   init(delay: Int?) {
-    guard let delay else {
-      label = "No delay"
-      tone = .unavailable
-      return
-    }
+    self.init(state: delay.map(ProxyDelayState.measured) ?? .unknown)
+  }
 
-    label = "\(delay) ms"
-    tone = ProxyDelayTone(delay: delay)
+  init(state: ProxyDelayState) {
+    switch state {
+    case .unknown:
+      label = "Unknown"
+      tone = .unavailable
+    case .testing:
+      label = "Testing"
+      tone = .testing
+    case let .measured(delay):
+      label = "\(delay) ms"
+      tone = ProxyDelayTone(delay: delay)
+    case .timeout:
+      label = "Timeout"
+      tone = .timeout
+    case .error:
+      label = "Error"
+      tone = .error
+    }
   }
 }
 
 enum ProxyDelayTone: Equatable {
   case unavailable
+  case testing
   case fast
   case good
   case moderate
   case slow
+  case timeout
+  case error
 
   init(delay: Int) {
     switch delay {
@@ -892,6 +1628,8 @@ enum ProxyDelayTone: Equatable {
     switch self {
     case .unavailable:
       return .secondary
+    case .testing:
+      return .cyan
     case .fast:
       return .green
     case .good:
@@ -900,7 +1638,42 @@ enum ProxyDelayTone: Equatable {
       return .yellow
     case .slow:
       return .red
+    case .timeout:
+      return .orange
+    case .error:
+      return .red
     }
+  }
+}
+
+private struct DelayChip: View {
+  let display: ProxyDelayDisplay
+
+  var body: some View {
+    Text(display.label)
+      .font(.caption.monospacedDigit())
+      .foregroundStyle(display.tone.color)
+      .lineLimit(1)
+      .padding(.horizontal, 7)
+      .padding(.vertical, 3)
+      .background(display.tone.color.opacity(0.10), in: Capsule())
+  }
+}
+
+private struct DelayActionIcon: View {
+  let state: ProxyDelayState
+
+  var body: some View {
+    Group {
+      if state == .testing {
+        ProgressView()
+          .controlSize(.small)
+      } else {
+        Image(systemName: "dot.radiowaves.left.and.right")
+          .font(.system(size: 13, weight: .medium))
+      }
+    }
+    .frame(width: 20, height: 20)
   }
 }
 
@@ -909,11 +1682,10 @@ enum ProxyPreviewNoticeKind: Equatable {
   case offlinePreview
 
   static func resolve(
-    developerMode: Bool,
+    developerMode _: Bool,
     previewRuntimeActive: Bool,
     isShowingProxyPreview: Bool
   ) -> ProxyPreviewNoticeKind? {
-    guard developerMode else { return nil }
     if previewRuntimeActive { return .previewRuntime }
     if isShowingProxyPreview { return .offlinePreview }
     return nil
@@ -961,10 +1733,5 @@ private struct ProxyPreviewNotice: View {
       .padding(.horizontal, 12)
       .padding(.vertical, 8)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .background(ProxySurface.secondary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-      .overlay {
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .strokeBorder(ProxySurface.border, lineWidth: 1)
-      }
   }
 }
