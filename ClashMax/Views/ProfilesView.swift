@@ -655,44 +655,58 @@ private struct ProfileEditSheet: View {
           .lineLimit(1)
       }
 
-      Form {
-        TextField("Name", text: $name)
-          .focused($isNameFocused)
-          .onSubmit {
-            if canSave {
-              onSave()
-            }
-          }
-
-        if profile.isSubscription {
-          TextField("Subscription URL", text: $subscriptionURL)
-            .textFieldStyle(.roundedBorder)
-            .onSubmit {
-              if canSave {
-                onSave()
+      ScrollView {
+        VStack(alignment: .leading, spacing: 18) {
+          ProfileEditRow("Name") {
+            TextField("Name", text: $name)
+              .textFieldStyle(.roundedBorder)
+              .focused($isNameFocused)
+              .onSubmit {
+                if canSave {
+                  onSave()
+                }
               }
+          }
+
+          if profile.isSubscription {
+            ProfileEditRow("Subscription URL") {
+              TextField("Subscription URL", text: $subscriptionURL)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit {
+                  if canSave {
+                    onSave()
+                  }
+                }
             }
 
-          Button {
-            onResetRemoteName()
-          } label: {
-            Label("Restore Remote Name", systemImage: "arrow.counterclockwise")
-          }
-          .disabled(!profile.nameIsUserCustomized)
+            ProfileEditContentRow {
+              Button {
+                onResetRemoteName()
+              } label: {
+                Label("Restore Remote Name", systemImage: "arrow.counterclockwise")
+              }
+              .disabled(!profile.nameIsUserCustomized)
+            }
 
-          SubscriptionUpdatePolicyEditor(policy: $updatePolicy)
+            SubscriptionUpdatePolicyEditor(policy: $updatePolicy)
 
-          SubscriptionProviderOptionsEditor(
-            options: $providerOptions,
-            validationError: $providerOptionsValidationError
-          )
-        } else {
-          LabeledContent("Source") {
-            Text(profile.source.displayName)
-              .foregroundStyle(.secondary)
+            SubscriptionProviderOptionsEditor(
+              options: $providerOptions,
+              validationError: $providerOptionsValidationError
+            )
+          } else {
+            ProfileEditRow("Source") {
+              Text(profile.source.displayName)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
           }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
       }
+      .frame(maxHeight: 560)
+      .scrollIndicators(.visible)
 
       Divider()
 
@@ -706,7 +720,7 @@ private struct ProfileEditSheet: View {
       }
     }
     .padding(20)
-    .frame(width: 460)
+    .frame(width: 560)
     .onAppear {
       isNameFocused = true
     }
@@ -719,33 +733,175 @@ private struct ProfileEditSheet: View {
   }
 }
 
+private enum ProfileEditLayout {
+  static let labelWidth: CGFloat = 166
+  static let rowSpacing: CGFloat = 12
+}
+
+private struct ProfileEditSection<Content: View>: View {
+  let title: LocalizedStringKey
+  @ViewBuilder let content: Content
+
+  init(_ title: LocalizedStringKey, @ViewBuilder content: () -> Content) {
+    self.title = title
+    self.content = content()
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text(title)
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+
+      VStack(alignment: .leading, spacing: 9) {
+        content
+      }
+    }
+  }
+}
+
+private struct ProfileEditRow<Content: View>: View {
+  let title: LocalizedStringKey
+  @ViewBuilder let content: Content
+
+  init(_ title: LocalizedStringKey, @ViewBuilder content: () -> Content) {
+    self.title = title
+    self.content = content()
+  }
+
+  var body: some View {
+    HStack(alignment: .firstTextBaseline, spacing: ProfileEditLayout.rowSpacing) {
+      Text(title)
+        .font(.callout.weight(.medium))
+        .foregroundStyle(.secondary)
+        .multilineTextAlignment(.trailing)
+        .lineLimit(2)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: ProfileEditLayout.labelWidth, alignment: .trailing)
+
+      content
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+  }
+}
+
+private struct ProfileEditContentRow<Content: View>: View {
+  @ViewBuilder let content: Content
+
+  init(@ViewBuilder content: () -> Content) {
+    self.content = content()
+  }
+
+  var body: some View {
+    HStack(alignment: .firstTextBaseline, spacing: ProfileEditLayout.rowSpacing) {
+      Spacer()
+        .frame(width: ProfileEditLayout.labelWidth)
+
+      content
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+  }
+}
+
+private struct ProfileEditFootnote: View {
+  let content: Text
+
+  init(_ text: LocalizedStringKey) {
+    content = Text(text)
+  }
+
+  init(verbatim text: String) {
+    content = Text(verbatim: text)
+  }
+
+  var body: some View {
+    ProfileEditContentRow {
+      content
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .lineLimit(3)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+  }
+}
+
+private struct ProfileEditDisclosureGroup<Content: View>: View {
+  let title: LocalizedStringKey
+  @Binding var isExpanded: Bool
+  @ViewBuilder let content: Content
+
+  init(_ title: LocalizedStringKey, isExpanded: Binding<Bool>, @ViewBuilder content: () -> Content) {
+    self.title = title
+    _isExpanded = isExpanded
+    self.content = content()
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Button {
+        withAnimation(.easeInOut(duration: 0.16)) {
+          isExpanded.toggle()
+        }
+      } label: {
+        HStack(spacing: 5) {
+          Image(systemName: "chevron.right")
+            .font(.caption.weight(.semibold))
+            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+            .frame(width: 10)
+
+          Text(title)
+            .font(.callout.weight(.medium))
+            .lineLimit(1)
+
+          Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityValue(isExpanded ? Text("Expanded") : Text("Collapsed"))
+
+      if isExpanded {
+        content
+          .transition(.opacity)
+      }
+    }
+  }
+}
+
 private struct SubscriptionUpdatePolicyEditor: View {
   @Binding var policy: SubscriptionUpdatePolicy
   @State private var intervalDraft = ""
 
   var body: some View {
-    Section("Subscription Updates") {
-      Toggle("Automatic Updates", isOn: $policy.automaticUpdatesEnabled)
-      Toggle("Use Remote Interval", isOn: $policy.prefersRemoteInterval)
-        .disabled(!policy.automaticUpdatesEnabled || policy.intervalOverrideMinutes != nil)
-      HStack {
-        Text("Override Interval")
-        Spacer()
-        TextField("Default", text: $intervalDraft)
-          .textFieldStyle(.roundedBorder)
-          .frame(width: 72)
-          .multilineTextAlignment(.trailing)
-          .monospacedDigit()
-          .onSubmit {
-            commitInterval()
-          }
-          .onChange(of: intervalDraft) { _, _ in commitInterval(allowEmpty: true) }
-        Text("minutes")
-          .foregroundStyle(.secondary)
+    ProfileEditSection("Subscription Updates") {
+      ProfileEditContentRow {
+        Toggle("Automatic Updates", isOn: $policy.automaticUpdatesEnabled)
       }
-      Text("Leave empty to use the remote profile-update-interval or the global default.")
-        .font(.caption)
-        .foregroundStyle(.secondary)
+
+      ProfileEditContentRow {
+        Toggle("Use Remote Interval", isOn: $policy.prefersRemoteInterval)
+          .disabled(!policy.automaticUpdatesEnabled || policy.intervalOverrideMinutes != nil)
+      }
+
+      ProfileEditRow("Override Interval") {
+        HStack(spacing: 8) {
+          TextField("Default", text: $intervalDraft)
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 72)
+            .multilineTextAlignment(.trailing)
+            .monospacedDigit()
+            .onSubmit {
+              commitInterval()
+            }
+            .onChange(of: intervalDraft) { _, _ in commitInterval(allowEmpty: true) }
+          Text("minutes")
+            .foregroundStyle(.secondary)
+        }
+      }
+
+      ProfileEditFootnote("Leave empty to use the remote profile-update-interval or the global default.")
     }
     .onAppear {
       intervalDraft = policy.intervalOverrideMinutes.map(String.init) ?? ""
@@ -775,18 +931,20 @@ private struct SubscriptionProviderOptionsEditor: View {
   @State private var showsAdvancedOptions = false
 
   var body: some View {
-    Section("Provider Options") {
-      Picker("Generated Template", selection: $options.generatedTemplate) {
-        ForEach(SubscriptionTemplateKind.allCases) { template in
-          Text(template.displayName).tag(template)
+    ProfileEditSection("Provider Options") {
+      ProfileEditRow("Generated Template") {
+        Picker("Generated Template", selection: $options.generatedTemplate) {
+          ForEach(SubscriptionTemplateKind.allCases) { template in
+            Text(template.displayName).tag(template)
+          }
         }
+        .labelsHidden()
+        .frame(maxWidth: 180)
       }
-      Text(options.generatedTemplate.description)
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .lineLimit(2)
 
-      LabeledContent("Provider Interval") {
+      ProfileEditFootnote(verbatim: options.generatedTemplate.description)
+
+      ProfileEditRow("Provider Interval") {
         VStack(alignment: .trailing, spacing: 4) {
           ProfileNumberStepperField(
             accessibilityLabel: "Provider Interval",
@@ -806,56 +964,74 @@ private struct SubscriptionProviderOptionsEditor: View {
         }
       }
 
-      Picker("Fetch Proxy", selection: $options.fetchProxy) {
-        ForEach(SubscriptionProviderFetchProxy.allCases) { proxy in
-          Text(proxy.displayName).tag(proxy)
+      ProfileEditRow("Fetch Proxy") {
+        Picker("Fetch Proxy", selection: $options.fetchProxy) {
+          ForEach(SubscriptionProviderFetchProxy.allCases) { proxy in
+            Text(proxy.displayName).tag(proxy)
+          }
         }
+        .labelsHidden()
+        .frame(maxWidth: 180)
       }
 
-      TextField("Generated Select Group", text: $options.primaryGroupName)
-      TextField("Generated URL-Test Group", text: $options.autoGroupName)
+      ProfileEditRow("Generated Select Group") {
+        TextField("Generated Select Group", text: $options.primaryGroupName)
+          .textFieldStyle(.roundedBorder)
+      }
 
-      HStack(spacing: 10) {
-        VStack(alignment: .leading, spacing: 2) {
-          Text("Profile Rule Overlay")
+      ProfileEditRow("Generated URL-Test Group") {
+        TextField("Generated URL-Test Group", text: $options.autoGroupName)
+          .textFieldStyle(.roundedBorder)
+      }
+
+      ProfileEditRow("Profile Rule Overlay") {
+        HStack(spacing: 10) {
           Text(options.ruleOverlay.summary)
             .font(.caption)
             .foregroundStyle(.secondary)
             .lineLimit(1)
-        }
-        Spacer()
-        Button {
-          isRuleOverlayPresented = true
-        } label: {
-          Label("Edit", systemImage: "slider.horizontal.3")
-        }
-        .popover(isPresented: $isRuleOverlayPresented, arrowEdge: .bottom) {
-          RuleOverlaySettingsPopover(settings: $options.ruleOverlay)
-            .padding(16)
-            .frame(width: 420)
+          Spacer(minLength: 8)
+          Button {
+            isRuleOverlayPresented = true
+          } label: {
+            Image(systemName: "slider.horizontal.3")
           }
+          .accessibilityLabel("Edit")
+          .help("Edit")
+          .popover(isPresented: $isRuleOverlayPresented, arrowEdge: .bottom) {
+            RuleOverlaySettingsPopover(settings: $options.ruleOverlay)
+              .padding(16)
+              .frame(width: 420)
+          }
+        }
       }
 
-      DisclosureGroup("Advanced YAML and Filters", isExpanded: $showsAdvancedOptions) {
-        VStack(alignment: .leading, spacing: 10) {
-          TextField("Filter", text: $options.filter)
-          TextField("Exclude Filter", text: $options.excludeFilter)
-          TextField("Exclude Type", text: $options.excludeType)
-          TextField("Final MATCH Policy", text: $options.finalRulePolicy)
+      ProfileEditContentRow {
+        ProfileEditDisclosureGroup("Advanced YAML and Filters", isExpanded: $showsAdvancedOptions) {
+          VStack(alignment: .leading, spacing: 10) {
+            TextField("Filter", text: $options.filter)
+              .textFieldStyle(.roundedBorder)
+            TextField("Exclude Filter", text: $options.excludeFilter)
+              .textFieldStyle(.roundedBorder)
+            TextField("Exclude Type", text: $options.excludeType)
+              .textFieldStyle(.roundedBorder)
+            TextField("Final MATCH Policy", text: $options.finalRulePolicy)
+              .textFieldStyle(.roundedBorder)
 
-          yamlEditor("Provider Override YAML", text: $options.overrideYAML, minHeight: 72)
-          yamlEditor("Runtime Merge YAML", text: $options.runtimeMergeYAML, minHeight: 88)
-            .help("Merged into runtime config before app-managed launch settings.")
+            yamlEditor("Provider Override YAML", text: $options.overrideYAML, minHeight: 72)
+            yamlEditor("Runtime Merge YAML", text: $options.runtimeMergeYAML, minHeight: 88)
+              .help("Merged into runtime config before app-managed launch settings.")
 
-          customHeadersEditor
+            customHeadersEditor
 
-          HStack {
-            Spacer()
-            Button {
-              options = .default
-              validateAdvancedYAML()
-            } label: {
-              Label("Restore Defaults", systemImage: "arrow.uturn.backward")
+            HStack {
+              Spacer()
+              Button {
+                options = .default
+                validateAdvancedYAML()
+              } label: {
+                Label("Restore Defaults", systemImage: "arrow.uturn.backward")
+              }
             }
           }
         }

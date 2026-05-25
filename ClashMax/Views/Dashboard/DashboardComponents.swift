@@ -435,6 +435,7 @@ private struct TunSettingsPopover: View {
   @State private var fallbackIPCIDRDraft = ""
   @State private var fallbackDomainDraft = ""
   @State private var isRuntimeDNSOverlayExpanded = false
+  @State private var isFallbackFilterExpanded = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
@@ -511,7 +512,7 @@ private struct TunSettingsPopover: View {
           )
           .disabled(!settings.systemDNSOverrideEnabled)
 
-          DisclosureGroup("Runtime DNS Overlay", isExpanded: $isRuntimeDNSOverlayExpanded) {
+          TunSettingsDisclosureGroup("Runtime DNS Overlay", isExpanded: $isRuntimeDNSOverlayExpanded) {
             VStack(alignment: .leading, spacing: 12) {
               OptionalBoolPicker(title: "Prefer HTTP/3", value: $settings.dns.preferH3)
               OptionalBoolPicker(title: "Use Hosts", value: $settings.dns.useHosts)
@@ -613,7 +614,7 @@ private struct TunSettingsPopover: View {
                 normalizer: TunDNSSettings.normalizedMap
               )
 
-              DisclosureGroup("Fallback Filter") {
+              TunSettingsDisclosureGroup("Fallback Filter", isExpanded: $isFallbackFilterExpanded) {
                 VStack(alignment: .leading, spacing: 12) {
                   OptionalBoolPicker(title: "GeoIP", value: $settings.dns.fallbackFilter.geoIP)
                   TextField("GeoIP Code", text: fallbackGeoIPCode)
@@ -697,6 +698,50 @@ private struct TunSettingsPopover: View {
   private var dnsPresetDescription: String {
     TunDNSSettings.presets.first { $0.settings == settings.dns }?.description
       ?? String(localized: "Custom app-managed DNS overlay.")
+  }
+}
+
+private struct TunSettingsDisclosureGroup<Content: View>: View {
+  let title: LocalizedStringKey
+  @Binding var isExpanded: Bool
+  @ViewBuilder let content: Content
+
+  init(_ title: LocalizedStringKey, isExpanded: Binding<Bool>, @ViewBuilder content: () -> Content) {
+    self.title = title
+    _isExpanded = isExpanded
+    self.content = content()
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Button {
+        withAnimation(.easeInOut(duration: 0.16)) {
+          isExpanded.toggle()
+        }
+      } label: {
+        HStack(spacing: 5) {
+          Image(systemName: "chevron.right")
+            .font(.caption.weight(.semibold))
+            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+            .frame(width: 10)
+
+          Text(title)
+            .font(.callout.weight(.medium))
+            .lineLimit(1)
+
+          Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityValue(isExpanded ? Text("Expanded") : Text("Collapsed"))
+
+      if isExpanded {
+        content
+          .transition(.opacity)
+      }
+    }
   }
 }
 

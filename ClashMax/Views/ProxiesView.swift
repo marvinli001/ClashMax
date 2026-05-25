@@ -215,14 +215,9 @@ struct ProxiesView: View {
 
       VStack(alignment: .leading, spacing: 8) {
         searchField
-        HStack(spacing: 10) {
-          viewModePicker
-          sortPicker
-          nodePresentationPicker
-        }
-        HStack(spacing: 10) {
-          nodeDetailsButton
-          closeOldConnectionsToggle
+        ViewThatFits(in: .horizontal) {
+          proxyWorkspaceControlStrip
+          splitProxyWorkspaceControlStrip
         }
       }
     }
@@ -243,6 +238,20 @@ struct ProxiesView: View {
       closeOldConnectionsToggle
     }
     .fixedSize(horizontal: true, vertical: false)
+  }
+
+  private var splitProxyWorkspaceControlStrip: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(spacing: 10) {
+        viewModePicker
+        sortPicker
+        nodePresentationPicker
+      }
+      HStack(spacing: 10) {
+        nodeDetailsButton
+        closeOldConnectionsToggle
+      }
+    }
   }
 
   private var testAllButton: some View {
@@ -270,6 +279,7 @@ struct ProxiesView: View {
       Label("Close Old", systemImage: "xmark.circle")
     }
     .toggleStyle(.checkbox)
+    .fixedSize(horizontal: true, vertical: false)
     .help("After switching nodes, close active connections whose chain contains the previous selected node.")
   }
 
@@ -828,7 +838,7 @@ private struct ProxyGroupSplitView: View {
   var body: some View {
     HStack(spacing: 0) {
       ProxyGroupNavigator(groups: groups, selectedGroupID: $selectedGroupID)
-        .frame(minWidth: 220, idealWidth: 260, maxWidth: 300)
+        .frame(minWidth: 180, idealWidth: 208, maxWidth: 240)
 
       Divider()
 

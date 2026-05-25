@@ -908,6 +908,16 @@ private struct ExternalDashboardProfilesPopover: View {
 
 struct RuleOverlaySettingsPopover: View {
   @Binding var settings: RuleOverlaySettings
+
+  var body: some View {
+    RuleOverlaySettingsEditor(settings: $settings)
+  }
+}
+
+struct RuleOverlaySettingsEditor: View {
+  @Binding var settings: RuleOverlaySettings
+  let showsHeader: Bool
+  let showsEnableToggle: Bool
   @State private var position = RuleOverlayPosition.prepend
   @State private var kind = ManagedRuleOverlayRule.Kind.domainSuffix
   @State private var value = ""
@@ -916,13 +926,68 @@ struct RuleOverlaySettingsPopover: View {
   @State private var disabledRuleMode = RuleDisableMatchMode.contains
   @State private var disabledRulePattern = ""
 
+  init(
+    settings: Binding<RuleOverlaySettings>,
+    showsHeader: Bool = true,
+    showsEnableToggle: Bool = true
+  ) {
+    self._settings = settings
+    self.showsHeader = showsHeader
+    self.showsEnableToggle = showsEnableToggle
+  }
+
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
-      popoverHeader("Rule Overlay", systemImage: "list.bullet.rectangle")
+      if showsHeader {
+        popoverHeader("Rule Overlay", systemImage: "list.bullet.rectangle")
+      }
 
-      Toggle("Enable Rule Overlay", isOn: $settings.enabled)
-        .toggleStyle(.switch)
+      if showsEnableToggle {
+        Toggle("Enable Rule Overlay", isOn: $settings.enabled)
+          .toggleStyle(.switch)
+      }
 
+      ViewThatFits(in: .horizontal) {
+        HStack(alignment: .top, spacing: 12) {
+          ruleInputSection
+            .frame(minWidth: 260, maxWidth: .infinity, alignment: .topLeading)
+          disabledRuleInputSection
+            .frame(minWidth: 260, maxWidth: .infinity, alignment: .topLeading)
+        }
+
+        VStack(alignment: .leading, spacing: 12) {
+          ruleInputSection
+          disabledRuleInputSection
+        }
+      }
+
+      Divider()
+
+      ruleListsSection
+    }
+  }
+
+  private var ruleListsSection: some View {
+    ViewThatFits(in: .horizontal) {
+      HStack(alignment: .top, spacing: 12) {
+        RuleOverlayRuleList(title: "Before Profile Rules", rules: $settings.prependRules)
+          .frame(minWidth: 180, maxWidth: .infinity, alignment: .topLeading)
+        RuleDisableMatcherList(matchers: $settings.disabledRuleMatchers)
+          .frame(minWidth: 180, maxWidth: .infinity, alignment: .topLeading)
+        RuleOverlayRuleList(title: "After Profile Rules", rules: $settings.appendRules)
+          .frame(minWidth: 180, maxWidth: .infinity, alignment: .topLeading)
+      }
+
+      VStack(alignment: .leading, spacing: 12) {
+        RuleOverlayRuleList(title: "Before Profile Rules", rules: $settings.prependRules)
+        RuleDisableMatcherList(matchers: $settings.disabledRuleMatchers)
+        RuleOverlayRuleList(title: "After Profile Rules", rules: $settings.appendRules)
+      }
+    }
+  }
+
+  private var ruleInputSection: some View {
+    RuleOverlayEditorSection(title: "Add Rule", systemImage: "plus.circle") {
       VStack(alignment: .leading, spacing: 10) {
         Picker("Position", selection: $position) {
           ForEach(RuleOverlayPosition.allCases) { position in
@@ -967,12 +1032,12 @@ struct RuleOverlaySettingsPopover: View {
           .disabled(!settings.enabled || draftRule.validationError != nil)
         }
       }
+    }
+  }
 
+  private var disabledRuleInputSection: some View {
+    RuleOverlayEditorSection(title: "Disable Profile Rule", systemImage: "nosign") {
       VStack(alignment: .leading, spacing: 10) {
-        Text("Disable Profile Rule")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-
         Picker("Match", selection: $disabledRuleMode) {
           ForEach(RuleDisableMatchMode.allCases) { mode in
             Text(mode.displayName).tag(mode)
@@ -999,12 +1064,6 @@ struct RuleOverlaySettingsPopover: View {
           .disabled(!settings.enabled || draftDisabledRuleMatcher.validationError != nil)
         }
       }
-
-      Divider()
-
-      RuleOverlayRuleList(title: "Before Profile Rules", rules: $settings.prependRules)
-      RuleDisableMatcherList(matchers: $settings.disabledRuleMatchers)
-      RuleOverlayRuleList(title: "After Profile Rules", rules: $settings.appendRules)
     }
   }
 
@@ -1051,6 +1110,37 @@ private enum RuleOverlayPosition: String, CaseIterable, Identifiable {
       return String(localized: "Before profile")
     case .append:
       return String(localized: "After profile")
+    }
+  }
+}
+
+private struct RuleOverlayEditorSection<Content: View>: View {
+  @Environment(\.colorScheme) private var colorScheme
+  let title: String
+  let systemImage: String
+  let content: Content
+
+  init(title: String, systemImage: String, @ViewBuilder content: () -> Content) {
+    self.title = title
+    self.systemImage = systemImage
+    self.content = content()
+  }
+
+  var body: some View {
+    let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+    VStack(alignment: .leading, spacing: 10) {
+      Label(LocalizedStringKey(title), systemImage: systemImage)
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+
+      content
+    }
+    .padding(10)
+    .frame(maxWidth: .infinity, alignment: .topLeading)
+    .background(RuleOverlaySurface.section(for: colorScheme), in: shape)
+    .overlay {
+      shape.strokeBorder(RuleOverlaySurface.border(for: colorScheme).opacity(0.72), lineWidth: 1)
     }
   }
 }
@@ -1108,7 +1198,7 @@ private struct RuleOverlayRuleList: View {
           }
           .padding(.horizontal, 8)
           .padding(.vertical, 6)
-          .background(.quaternary, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+          .ruleOverlayListRow()
         }
       }
     }
@@ -1174,7 +1264,7 @@ private struct RuleDisableMatcherList: View {
           }
           .padding(.horizontal, 8)
           .padding(.vertical, 6)
-          .background(.quaternary, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+          .ruleOverlayListRow()
         }
       }
     }
@@ -1185,6 +1275,39 @@ private struct RuleDisableMatcherList: View {
     let destination = index + offset
     guard matchers.indices.contains(index), matchers.indices.contains(destination) else { return }
     matchers.swapAt(index, destination)
+  }
+}
+
+private struct RuleOverlayListRowModifier: ViewModifier {
+  @Environment(\.colorScheme) private var colorScheme
+
+  func body(content: Content) -> some View {
+    let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
+    content
+      .background(RuleOverlaySurface.row(for: colorScheme), in: shape)
+      .overlay {
+        shape.strokeBorder(RuleOverlaySurface.border(for: colorScheme).opacity(0.52), lineWidth: 1)
+      }
+  }
+}
+
+private extension View {
+  func ruleOverlayListRow() -> some View {
+    modifier(RuleOverlayListRowModifier())
+  }
+}
+
+private enum RuleOverlaySurface {
+  static func section(for colorScheme: ColorScheme) -> Color {
+    colorScheme == .dark ? Color.primary.opacity(0.035) : Color(nsColor: .controlBackgroundColor)
+  }
+
+  static func row(for colorScheme: ColorScheme) -> Color {
+    colorScheme == .dark ? Color.primary.opacity(0.045) : Color(nsColor: .textBackgroundColor)
+  }
+
+  static func border(for colorScheme: ColorScheme) -> Color {
+    Color(nsColor: .separatorColor).opacity(colorScheme == .dark ? 0.32 : 0.50)
   }
 }
 
