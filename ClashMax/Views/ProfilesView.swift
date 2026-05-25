@@ -442,6 +442,7 @@ private struct ProfileEditSheet: View {
   let onResetRemoteName: () -> Void
   let onSave: () -> Void
   @FocusState private var isNameFocused: Bool
+  @State private var providerOptionsValidationError: String?
 
   private var trimmedName: String {
     name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -487,7 +488,10 @@ private struct ProfileEditSheet: View {
           }
           .disabled(!profile.nameIsUserCustomized)
 
-          SubscriptionProviderOptionsEditor(options: $providerOptions)
+          SubscriptionProviderOptionsEditor(
+            options: $providerOptions,
+            validationError: $providerOptionsValidationError
+          )
         } else {
           LabeledContent("Source") {
             Text(profile.source.displayName)
@@ -515,22 +519,37 @@ private struct ProfileEditSheet: View {
   }
 
   private var canSave: Bool {
-    !trimmedName.isEmpty && (!profile.isSubscription || !trimmedSubscriptionURL.isEmpty)
+    guard !trimmedName.isEmpty else { return false }
+    guard profile.isSubscription else { return true }
+    return !trimmedSubscriptionURL.isEmpty && providerOptionsValidationError == nil
   }
 }
 
 private struct SubscriptionProviderOptionsEditor: View {
   @Binding var options: SubscriptionProviderOptions
+  @Binding var validationError: String?
   @State private var isRuleOverlayPresented = false
 
   var body: some View {
     Section("Provider Options") {
-      Stepper(
-        value: intervalBinding,
-        in: SubscriptionProviderOptions.minimumIntervalSeconds...SubscriptionProviderOptions.maximumIntervalSeconds,
-        step: 60
-      ) {
-        Text("Provider Interval: \(options.intervalSeconds)s")
+      LabeledContent("Provider Interval") {
+        VStack(alignment: .trailing, spacing: 4) {
+          ProfileNumberStepperField(
+            accessibilityLabel: "Provider Interval",
+            value: intervalBinding,
+            validationError: $validationError,
+            range: SubscriptionProviderOptions.minimumIntervalSeconds...SubscriptionProviderOptions.maximumIntervalSeconds,
+            step: 60,
+            fieldWidth: 58
+          )
+
+          if let validationError {
+            Label(validationError, systemImage: "exclamationmark.triangle.fill")
+              .font(.caption)
+              .foregroundStyle(.red)
+              .lineLimit(2)
+          }
+        }
       }
 
       Picker("Fetch Proxy", selection: $options.fetchProxy) {
@@ -642,5 +661,95 @@ private struct SubscriptionProviderOptionsEditor: View {
         SubscriptionProviderOptions.maximumIntervalSeconds
       ) }
     )
+  }
+}
+
+private struct ProfileNumberStepperField: View {
+  let accessibilityLabel: String
+  @Binding var value: Int
+  @Binding var validationError: String?
+  let range: ClosedRange<Int>
+  var step = 1
+  var fieldWidth: CGFloat = 82
+  @State private var draft = ""
+  @FocusState private var isFocused: Bool
+
+  var body: some View {
+    HStack(spacing: 8) {
+      TextField("", text: $draft)
+        .textFieldStyle(.roundedBorder)
+        .multilineTextAlignment(.trailing)
+        .monospacedDigit()
+        .frame(width: fieldWidth)
+        .accessibilityLabel(localizedProfilesText(accessibilityLabel))
+        .focused($isFocused)
+        .onSubmit(commitDraft)
+        .onChange(of: draft) { _, newValue in
+          updateValidation(for: newValue)
+          updateValueIfValid(newValue)
+        }
+        .onAppear {
+          let current = syncDraft()
+          updateValidation(for: current)
+        }
+        .onChange(of: value) { _, _ in
+          _ = syncDraft()
+        }
+        .onChange(of: isFocused) { _, focused in
+          if !focused {
+            commitDraft()
+          }
+        }
+
+      Stepper(localizedProfilesText(accessibilityLabel), value: clampedValue, in: range, step: step)
+        .labelsHidden()
+    }
+  }
+
+  private var clampedValue: Binding<Int> {
+    Binding(
+      get: { clamped(value) },
+      set: { value = clamped($0) }
+    )
+  }
+
+  private func updateValueIfValid(_ text: String) {
+    guard let parsed = parsedDraft(text), range.contains(parsed) else { return }
+    value = parsed
+  }
+
+  private func commitDraft() {
+    guard let parsed = parsedDraft(draft) else {
+      let current = syncDraft()
+      updateValidation(for: current)
+      return
+    }
+    value = clamped(parsed)
+    let current = syncDraft()
+    updateValidation(for: current)
+  }
+
+  private func syncDraft() -> String {
+    let current = "\(clamped(value))"
+    if draft != current {
+      draft = current
+    }
+    return current
+  }
+
+  private func clamped(_ value: Int) -> Int {
+    min(max(value, range.lowerBound), range.upperBound)
+  }
+
+  private func updateValidation(for text: String) {
+    guard let parsed = parsedDraft(text), range.contains(parsed) else {
+      validationError = "Enter \(range.lowerBound)-\(range.upperBound) seconds."
+      return
+    }
+    validationError = nil
+  }
+
+  private func parsedDraft(_ text: String) -> Int? {
+    Int(text.trimmingCharacters(in: .whitespacesAndNewlines))
   }
 }

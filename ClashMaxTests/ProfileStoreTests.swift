@@ -669,6 +669,45 @@ final class ProfileStoreTests: XCTestCase {
     )
   }
 
+  func testSubscriptionUpdateAcceptsValidYamlWithTextHTMLContentType() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let secrets = InMemorySecretStore()
+    let store = ProfileStore(paths: fixture.paths, keychain: secrets)
+    let initialSession = URLSession(configuration: URLProtocolRecorder.configurationReturning("proxies:\n  - name: DIRECT\n    type: direct\n"))
+    let profile = try await store.addSubscription(
+      name: "Remote",
+      url: URL(string: "https://example.com/sub")!,
+      session: initialSession
+    )
+    let updatedSource = """
+    mixed-port: 7890
+    proxy-groups:
+      - name: Proxy
+        type: select
+        proxies: [DIRECT]
+    proxies:
+      - name: DIRECT
+        type: direct
+    rules:
+      - MATCH,DIRECT
+    """
+    let updateRecorder = URLProtocolRecorder(
+      responseBody: updatedSource,
+      responseHeaders: [
+        "Content-Type": "text/html; charset=UTF-8",
+        "subscription-userinfo": "upload=4; download=5; total=6"
+      ]
+    )
+
+    try await store.updateSubscription(
+      profile,
+      session: URLSession(configuration: updateRecorder.configuration)
+    )
+
+    XCTAssertEqual(try String(contentsOfFile: profile.originalConfigPath, encoding: .utf8), updatedSource)
+    XCTAssertEqual(store.profiles.first?.subscriptionMetadata?.traffic?.download, 5)
+  }
+
   func testSubscriptionUpdateAcceptsURIProviderContent() async throws {
     let fixture = try TemporaryProfileFixture()
     let secrets = InMemorySecretStore()

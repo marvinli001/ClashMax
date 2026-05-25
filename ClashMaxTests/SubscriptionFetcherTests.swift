@@ -142,6 +142,57 @@ final class SubscriptionFetcherTests: XCTestCase {
     XCTAssertEqual(result.source, source)
   }
 
+  func testDecodeAcceptsValidYamlWithTextHTMLContentType() throws {
+    let fetcher = SubscriptionFetcher()
+    let source = """
+    mixed-port: 7890
+    proxy-groups:
+      - name: Proxy
+        type: select
+        proxies: [DIRECT]
+    proxies:
+      - name: DIRECT
+        type: direct
+    rules:
+      - MATCH,DIRECT
+    """
+    let response = HTTPURLResponse(
+      url: URL(string: "https://example.com/sub")!,
+      statusCode: 200,
+      httpVersion: nil,
+      headerFields: [
+        "Content-Type": "text/html; charset=UTF-8",
+        "subscription-userinfo": "upload=1; download=2; total=3",
+        "content-disposition": "attachment; filename*=UTF-8''Remote%20Profile.yaml"
+      ]
+    )!
+
+    let result = try fetcher.decode(data: Data(source.utf8), response: response)
+
+    XCTAssertEqual(result.source, source)
+    XCTAssertEqual(result.metadata.traffic?.download, 2)
+    XCTAssertEqual(result.metadata.remoteFileName, "Remote Profile.yaml")
+  }
+
+  func testDecodeAcceptsBase64ProviderContentWithTextHTMLContentType() throws {
+    let fetcher = SubscriptionFetcher()
+    let providerContent = """
+    vless://00000000-0000-0000-0000-000000000000@example.com:443?security=tls&sni=example.com#VLESS%20Node
+    vmess://eyJuYW1lIjoiVk1lc3MgTm9kZSJ9
+    """
+    let encoded = Data(providerContent.utf8).base64EncodedString()
+    let response = HTTPURLResponse(
+      url: URL(string: "https://example.com/sub")!,
+      statusCode: 200,
+      httpVersion: nil,
+      headerFields: ["Content-Type": "text/html; charset=UTF-8"]
+    )!
+
+    let result = try fetcher.decode(data: Data(encoded.utf8), response: response)
+
+    XCTAssertEqual(result.source, encoded)
+  }
+
   func testDecodeClassifiesHTMLLoginPageAsSubscriptionPanelError() throws {
     let fetcher = SubscriptionFetcher()
     let response = HTTPURLResponse(
@@ -154,6 +205,25 @@ final class SubscriptionFetcherTests: XCTestCase {
     XCTAssertThrowsError(
       try fetcher.decode(
         data: Data("<!doctype html><html><title>Login</title></html>".utf8),
+        response: response
+      )
+    ) { error in
+      XCTAssertTrue(String(describing: error).contains("subscription returned a login or error page"))
+    }
+  }
+
+  func testDecodeClassifiesJSONPanelErrorAsSubscriptionPanelError() throws {
+    let fetcher = SubscriptionFetcher()
+    let response = HTTPURLResponse(
+      url: URL(string: "https://example.com/sub")!,
+      statusCode: 200,
+      httpVersion: nil,
+      headerFields: ["Content-Type": "application/json; charset=utf-8"]
+    )!
+
+    XCTAssertThrowsError(
+      try fetcher.decode(
+        data: Data(#"{"message":"invalid token"}"#.utf8),
         response: response
       )
     ) { error in

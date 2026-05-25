@@ -169,8 +169,15 @@ struct SubscriptionFetcher {
       throw AppError.invalidSubscriptionResponse
     }
     let cleanedSource = stripUTF8BOM(from: source)
-    try rejectPanelErrorPageIfNeeded(cleanedSource, response: http)
-    try ProfileConfigValidator.validateProfileSource(cleanedSource)
+    try rejectPanelErrorPageIfNeeded(cleanedSource)
+    do {
+      try ProfileConfigValidator.validateProfileSource(cleanedSource)
+    } catch {
+      if responseSuggestsPanelError(cleanedSource, response: http) {
+        throw panelError()
+      }
+      throw error
+    }
 
     return SubscriptionFetchResult(
       source: cleanedSource,
@@ -315,21 +322,31 @@ struct SubscriptionFetcher {
     String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(encoding.rawValue)))
   }
 
-  private func rejectPanelErrorPageIfNeeded(_ source: String, response: HTTPURLResponse) throws {
+  private func rejectPanelErrorPageIfNeeded(_ source: String) throws {
+    if bodyLooksLikePanelError(source) {
+      throw panelError()
+    }
+  }
+
+  private func responseSuggestsPanelError(_ source: String, response: HTTPURLResponse) -> Bool {
+    let contentType = response.value(forHTTPHeaderField: "Content-Type")?.lowercased() ?? ""
+    return contentType.contains("text/html") || bodyLooksLikePanelError(source)
+  }
+
+  private func bodyLooksLikePanelError(_ source: String) -> Bool {
     let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
     let lowercased = trimmed.lowercased()
-    let contentType = response.value(forHTTPHeaderField: "Content-Type")?.lowercased() ?? ""
-    if contentType.contains("text/html") ||
-      lowercased.hasPrefix("<!doctype html") ||
+    if lowercased.hasPrefix("<!doctype html") ||
       lowercased.hasPrefix("<html") ||
       lowercased.contains("<title>") ||
       lowercased.contains("<form") {
-      throw panelError()
+      return true
     }
 
     if lowercased.hasPrefix("{") || lowercased.hasPrefix("[") {
-      throw panelError()
+      return true
     }
+    return false
   }
 
   private func panelError() -> AppError {
