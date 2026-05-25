@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Yams
 
 private extension KeyedDecodingContainer {
   func decodeDefault<T: Decodable>(
@@ -93,7 +94,8 @@ enum SubscriptionTemplateKind: String, Codable, CaseIterable, Identifiable, Send
   case rule
   case cnDirect
 
-  static let currentVersion = 1
+  static let legacyVersion = 1
+  static let currentVersion = 2
 
   var id: String { rawValue }
 
@@ -109,14 +111,50 @@ enum SubscriptionTemplateKind: String, Codable, CaseIterable, Identifiable, Send
   var description: String {
     switch self {
     case .minimal:
-      return String(localized: "Only Proxy, Auto, DIRECT, and MATCH.")
+      return String(localized: "Only Proxy, Auto, DIRECT, DNS defaults, and MATCH.")
     case .global:
-      return String(localized: "Send all traffic through the generated Proxy group.")
+      return String(localized: "Send all traffic through the generated Proxy group with app-managed DNS defaults.")
     case .rule:
-      return String(localized: "Use a practical rule-mode template with private network direct rules.")
+      return String(localized: "Use a practical rule-mode template with private network direct rules and app-managed DNS defaults.")
     case .cnDirect:
-      return String(localized: "Route common China/private destinations direct before MATCH.")
+      return String(localized: "Route common China/private destinations direct before MATCH, with ClashX-style DNS defaults.")
     }
+  }
+
+  var presetSummary: String {
+    switch self {
+    case .minimal:
+      return String(localized: "Smallest generated profile for provider subscriptions.")
+    case .global:
+      return String(localized: "All traffic goes through the generated select group.")
+    case .rule:
+      return String(localized: "Private and local traffic stays direct before fallback.")
+    case .cnDirect:
+      return String(localized: "Private and China geodata rules stay direct before fallback.")
+    }
+  }
+
+  var ruleSummary: String {
+    switch self {
+    case .minimal:
+      return String(localized: "Rules: MATCH to the final policy.")
+    case .global:
+      return String(localized: "Rules: MATCH to the generated proxy group.")
+    case .rule:
+      return String(localized: "Rules: local domain plus private IPv4 CIDRs direct, then MATCH.")
+    case .cnDirect:
+      return String(localized: "Rules: private and CN geodata direct, then MATCH.")
+    }
+  }
+
+  var dnsSummary: String {
+    String(localized: "DNS: v2 templates add fake-ip, system hosts, rule-respecting resolver defaults, and fallback filtering.")
+  }
+
+  func versionSummary(version: Int) -> String {
+    version >= Self.currentVersion
+      ? String(localized: "Template v2: includes app-managed DNS base.")
+      : String(localized: "Template v1: legacy generated provider rules without DNS base.")
   }
 }
 
@@ -258,7 +296,7 @@ struct SubscriptionProviderOptions: Codable, Equatable, Sendable {
       generatedTemplateVersion: container.decodeDefault(
         Int.self,
         forKey: .generatedTemplateVersion,
-        default: defaults.generatedTemplateVersion
+        default: SubscriptionTemplateKind.legacyVersion
       )
     )
   }
@@ -297,6 +335,347 @@ struct SubscriptionProviderOptions: Codable, Equatable, Sendable {
 
   var requiresRuntimeConfigPreflight: Bool {
     hasRuntimeMergeYAML || ruleOverlay.hasRuntimeOverlay
+  }
+}
+
+struct ProviderOptionsRuntimeDiff: Identifiable, Codable, Equatable, Sendable {
+  var category: String
+  var title: String
+  var before: String
+  var after: String
+  var isAdvanced: Bool
+
+  var id: String { "\(category):\(title)" }
+
+  init(
+    category: String,
+    title: String,
+    before: String,
+    after: String,
+    isAdvanced: Bool = false
+  ) {
+    self.category = category
+    self.title = title
+    self.before = before
+    self.after = after
+    self.isAdvanced = isAdvanced
+  }
+}
+
+struct ProviderOptionsRisk: Identifiable, Codable, Equatable, Sendable {
+  enum Severity: String, Codable, Sendable {
+    case info
+    case warning
+    case danger
+
+    var displayName: String {
+      switch self {
+      case .info:
+        return String(localized: "Info")
+      case .warning:
+        return String(localized: "Warning")
+      case .danger:
+        return String(localized: "Danger")
+      }
+    }
+  }
+
+  var source: String
+  var keyPath: String
+  var key: String
+  var severity: Severity
+  var message: String
+
+  var id: String { "\(source):\(keyPath):\(severity.rawValue)" }
+}
+
+struct SubscriptionProviderOptionsGuardrailReport: Codable, Equatable, Sendable {
+  var runtimeDiff: [ProviderOptionsRuntimeDiff]
+  var risks: [ProviderOptionsRisk]
+  var presetTitle: String
+  var presetDescription: String
+  var presetDetails: [String]
+  var rollbackAvailable: Bool
+
+  var hasDangerousRisks: Bool {
+    risks.contains { $0.severity == .danger }
+  }
+
+  var hasWarnings: Bool {
+    risks.contains { $0.severity == .warning || $0.severity == .danger }
+  }
+
+  var summary: String {
+    if hasDangerousRisks {
+      return String(localized: "Review high-risk provider options before saving.")
+    }
+    if hasWarnings {
+      return String(localized: "Review provider option warnings before saving.")
+    }
+    return String(localized: "Provider options are within the guarded generated template.")
+  }
+
+  static func analyze(
+    options: SubscriptionProviderOptions,
+    baseline: SubscriptionProviderOptions = .default,
+    rollbackOptions: SubscriptionProviderOptions? = nil
+  ) -> SubscriptionProviderOptionsGuardrailReport {
+    SubscriptionProviderOptionsGuardrailReport(
+      runtimeDiff: runtimeDiff(options: options, baseline: baseline),
+      risks: yamlRisks(options: options),
+      presetTitle: options.generatedTemplate.displayName,
+      presetDescription: options.generatedTemplate.description,
+      presetDetails: [
+        options.generatedTemplate.presetSummary,
+        options.generatedTemplate.ruleSummary,
+        options.generatedTemplate.versionSummary(version: options.generatedTemplateVersion),
+        options.generatedTemplate.dnsSummary
+      ],
+      rollbackAvailable: rollbackOptions.map { $0 != options } ?? false
+    )
+  }
+
+  private static func runtimeDiff(
+    options: SubscriptionProviderOptions,
+    baseline: SubscriptionProviderOptions
+  ) -> [ProviderOptionsRuntimeDiff] {
+    var result: [ProviderOptionsRuntimeDiff] = []
+    appendDiff(
+      &result,
+      category: String(localized: "Template"),
+      title: String(localized: "Preset"),
+      before: baseline.generatedTemplate.displayName,
+      after: options.generatedTemplate.displayName
+    )
+    appendDiff(
+      &result,
+      category: String(localized: "Template"),
+      title: String(localized: "Version"),
+      before: "\(baseline.generatedTemplateVersion)",
+      after: "\(options.generatedTemplateVersion)"
+    )
+    appendDiff(
+      &result,
+      category: String(localized: "Provider"),
+      title: String(localized: "Refresh Interval"),
+      before: "\(baseline.intervalSeconds)s",
+      after: "\(options.intervalSeconds)s"
+    )
+    appendDiff(
+      &result,
+      category: String(localized: "Provider"),
+      title: String(localized: "Fetch Proxy"),
+      before: baseline.fetchProxy.displayName,
+      after: options.fetchProxy.displayName
+    )
+    appendDiff(
+      &result,
+      category: String(localized: "Groups"),
+      title: String(localized: "Select Group"),
+      before: baseline.primaryGroupName,
+      after: options.primaryGroupName
+    )
+    appendDiff(
+      &result,
+      category: String(localized: "Groups"),
+      title: String(localized: "URL-Test Group"),
+      before: baseline.autoGroupName,
+      after: options.autoGroupName
+    )
+    appendDiff(
+      &result,
+      category: String(localized: "Rules"),
+      title: String(localized: "Final MATCH Policy"),
+      before: baseline.finalRulePolicy,
+      after: options.finalRulePolicy
+    )
+    appendDiff(
+      &result,
+      category: String(localized: "Rules"),
+      title: String(localized: "Rule Overlay"),
+      before: baseline.ruleOverlay.summary,
+      after: options.ruleOverlay.summary
+    )
+    appendDiff(
+      &result,
+      category: String(localized: "Advanced"),
+      title: String(localized: "Provider Filter"),
+      before: normalizedPresenceLabel(baseline.filter),
+      after: normalizedPresenceLabel(options.filter),
+      isAdvanced: true
+    )
+    appendDiff(
+      &result,
+      category: String(localized: "Advanced"),
+      title: String(localized: "Exclude Filter"),
+      before: normalizedPresenceLabel(baseline.excludeFilter),
+      after: normalizedPresenceLabel(options.excludeFilter),
+      isAdvanced: true
+    )
+    appendDiff(
+      &result,
+      category: String(localized: "Advanced"),
+      title: String(localized: "Exclude Type"),
+      before: normalizedPresenceLabel(baseline.excludeType),
+      after: normalizedPresenceLabel(options.excludeType),
+      isAdvanced: true
+    )
+    appendDiff(
+      &result,
+      category: String(localized: "Advanced"),
+      title: String(localized: "Provider Override YAML"),
+      before: normalizedPresenceLabel(baseline.overrideYAML),
+      after: normalizedPresenceLabel(options.overrideYAML),
+      isAdvanced: true
+    )
+    appendDiff(
+      &result,
+      category: String(localized: "Advanced"),
+      title: String(localized: "Runtime Merge YAML"),
+      before: normalizedPresenceLabel(baseline.runtimeMergeYAML),
+      after: normalizedPresenceLabel(options.runtimeMergeYAML),
+      isAdvanced: true
+    )
+    appendDiff(
+      &result,
+      category: String(localized: "Advanced"),
+      title: String(localized: "Custom Headers"),
+      before: "\(baseline.normalizedHeaders.count)",
+      after: "\(options.normalizedHeaders.count)",
+      isAdvanced: true
+    )
+    return result
+  }
+
+  private static func appendDiff(
+    _ result: inout [ProviderOptionsRuntimeDiff],
+    category: String,
+    title: String,
+    before: String,
+    after: String,
+    isAdvanced: Bool = false
+  ) {
+    guard before != after else { return }
+    result.append(
+      ProviderOptionsRuntimeDiff(
+        category: category,
+        title: title,
+        before: before.isEmpty ? String(localized: "Empty") : before,
+        after: after.isEmpty ? String(localized: "Empty") : after,
+        isAdvanced: isAdvanced
+      )
+    )
+  }
+
+  private static func normalizedPresenceLabel(_ value: String) -> String {
+    value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      ? String(localized: "Empty")
+      : String(localized: "Configured")
+  }
+
+  private static func yamlRisks(options: SubscriptionProviderOptions) -> [ProviderOptionsRisk] {
+    risks(in: options.overrideYAML, source: String(localized: "Provider Override YAML"))
+      + risks(in: options.runtimeMergeYAML, source: String(localized: "Runtime Merge YAML"))
+  }
+
+  private static func risks(in yaml: String, source: String) -> [ProviderOptionsRisk] {
+    let trimmed = yaml.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return [] }
+    do {
+      guard let root = try Yams.load(yaml: trimmed) as? [String: Any] else {
+        return [
+          ProviderOptionsRisk(
+            source: source,
+            keyPath: source,
+            key: source,
+            severity: .warning,
+            message: String(localized: "YAML must be a mapping to be applied safely.")
+          )
+        ]
+      }
+      var risks: [ProviderOptionsRisk] = []
+      scan(root, path: [], source: source, risks: &risks)
+      return risks
+    } catch {
+      return [
+        ProviderOptionsRisk(
+          source: source,
+          keyPath: source,
+          key: source,
+          severity: .danger,
+          message: String(format: String(localized: "YAML parse failed: %@"), String(describing: error))
+        )
+      ]
+    }
+  }
+
+  private static func scan(
+    _ value: Any,
+    path: [String],
+    source: String,
+    risks: inout [ProviderOptionsRisk]
+  ) {
+    if let map = value as? [String: Any] {
+      for key in map.keys.sorted() {
+        let nextPath = path + [key]
+        if let risk = risk(for: key, path: nextPath, source: source) {
+          risks.append(risk)
+        }
+        if let nested = map[key] {
+          scan(nested, path: nextPath, source: source, risks: &risks)
+        }
+      }
+    } else if let list = value as? [Any] {
+      for (index, element) in list.enumerated() {
+        scan(element, path: path + ["[\(index)]"], source: source, risks: &risks)
+      }
+    }
+  }
+
+  private static func risk(for key: String, path: [String], source: String) -> ProviderOptionsRisk? {
+    let normalizedKey = key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    let dangerKeys: Set<String> = [
+      "external-controller",
+      "external-controller-cors",
+      "secret",
+      "allow-lan",
+      "mixed-port",
+      "port",
+      "socks-port",
+      "http-port",
+      "redir-port",
+      "tproxy-port",
+      "tun",
+      "dns",
+      "script",
+      "listeners"
+    ]
+    guard dangerKeys.contains(normalizedKey) || normalizedKey.hasSuffix("-port") else { return nil }
+    let severity: ProviderOptionsRisk.Severity = ["secret", "external-controller", "listeners", "script"].contains(normalizedKey)
+      ? .danger
+      : .warning
+    let message: String
+    switch normalizedKey {
+    case "external-controller", "external-controller-cors", "secret":
+      message = String(localized: "ClashMax manages controller binding and authentication at runtime.")
+    case "allow-lan":
+      message = String(localized: "LAN exposure is controlled by ClashMax runtime settings.")
+    case "tun":
+      message = String(localized: "TUN settings are controlled by ClashMax and the privileged helper.")
+    case "dns":
+      message = String(localized: "DNS is app-managed in v2 templates and runtime routing modes.")
+    case "script", "listeners":
+      message = String(localized: "Runtime script/listener hooks can change traffic handling outside the guarded template.")
+    default:
+      message = String(localized: "Ports are controlled by ClashMax launch settings.")
+    }
+    return ProviderOptionsRisk(
+      source: source,
+      keyPath: path.joined(separator: "."),
+      key: key,
+      severity: severity,
+      message: message
+    )
   }
 }
 
@@ -2775,6 +3154,142 @@ struct RuleMatchSimulator: Sendable {
   }
 }
 
+struct RuleExplanation: Equatable, Sendable {
+  var connectionID: ConnectionSnapshot.ID
+  var target: String
+  var reportedRule: String?
+  var reportedRulePayload: String?
+  var chosenPolicy: String?
+  var localOutcome: RuleMatchSimulationOutcome
+  var ruleCount: Int
+
+  var reportedRuleSummary: String {
+    [reportedRule, reportedRulePayload].compactMap { $0 }.joined(separator: " ")
+  }
+
+  var chosenPolicySummary: String {
+    if let chosenPolicy, !chosenPolicy.isEmpty {
+      return chosenPolicy
+    }
+    return String(localized: "Unknown")
+  }
+
+  var localSummary: String {
+    "\(localOutcome.title): \(localOutcome.detail)"
+  }
+}
+
+struct RoutingSimulationRequest: Identifiable, Equatable, Sendable {
+  var id: UUID
+  var connectionID: ConnectionSnapshot.ID
+  var target: String
+  var explanation: RuleExplanation
+
+  init(
+    id: UUID = UUID(),
+    connectionID: ConnectionSnapshot.ID,
+    target: String,
+    explanation: RuleExplanation
+  ) {
+    self.id = id
+    self.connectionID = connectionID
+    self.target = target
+    self.explanation = explanation
+  }
+}
+
+struct RuleExplanationBuilder: Sendable {
+  private let simulator = RuleMatchSimulator()
+
+  func explanation(for connection: ConnectionSnapshot, rules: [RuntimeRule]) -> RuleExplanation {
+    let candidates = simulationTargets(for: connection)
+    let fallbackTarget = candidates.first ?? connection.host.trimmingCharacters(in: .whitespacesAndNewlines)
+    let evaluated = candidates.map { target in
+      (target: target, outcome: simulator.simulate(target: target, rules: rules))
+    }
+    let selected = selectedEvaluation(from: evaluated)
+      ?? (target: fallbackTarget, outcome: simulator.simulate(target: fallbackTarget, rules: rules))
+    let matchedPolicy: String?
+    switch selected.outcome {
+    case let .matched(rule):
+      matchedPolicy = rule.policy
+    case .mihomoOnly, .noMatch:
+      matchedPolicy = connection.chain.first
+    }
+    return RuleExplanation(
+      connectionID: connection.id,
+      target: selected.target,
+      reportedRule: connection.rule,
+      reportedRulePayload: connection.rulePayload,
+      chosenPolicy: matchedPolicy,
+      localOutcome: selected.outcome,
+      ruleCount: rules.count
+    )
+  }
+
+  private func selectedEvaluation(
+    from evaluations: [(target: String, outcome: RuleMatchSimulationOutcome)]
+  ) -> (target: String, outcome: RuleMatchSimulationOutcome)? {
+    if let specificMatch = evaluations.first(where: { evaluation in
+      if case let .matched(rule) = evaluation.outcome {
+        return rule.type.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() != "MATCH"
+      }
+      return false
+    }) {
+      return specificMatch
+    }
+    if let mihomoOnly = evaluations.first(where: { evaluation in
+      if case .mihomoOnly = evaluation.outcome {
+        return true
+      }
+      return false
+    }) {
+      return mihomoOnly
+    }
+    if let matchFallback = evaluations.first(where: { evaluation in
+      if case .matched = evaluation.outcome {
+        return true
+      }
+      return false
+    }) {
+      return matchFallback
+    }
+    return evaluations.first
+  }
+
+  private func simulationTargets(for connection: ConnectionSnapshot) -> [String] {
+    let ruleType = connection.rule?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() ?? ""
+    let processTargets = [connection.processPath, connection.processName].compactMap(Self.normalized)
+    let ipTargets = [connection.destinationIP, connection.host].compactMap(Self.normalized)
+    let hostTargets = [connection.host, connection.destinationIP].compactMap(Self.normalized)
+    let ordered: [String]
+    if ruleType.hasPrefix("PROCESS") {
+      ordered = processTargets + hostTargets
+    } else if ruleType.hasPrefix("IP-CIDR") || ruleType == "GEOIP" {
+      ordered = ipTargets + processTargets
+    } else {
+      ordered = hostTargets + processTargets
+    }
+    return Self.unique(ordered)
+  }
+
+  private static func normalized(_ value: String?) -> String? {
+    value?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+  }
+
+  private static func unique(_ values: [String]) -> [String] {
+    var seen = Set<String>()
+    var result: [String] = []
+    for value in values {
+      let key = value.lowercased()
+      guard !seen.contains(key) else { continue }
+      seen.insert(key)
+      result.append(value)
+    }
+    return result
+  }
+}
+
 struct ExternalDashboardProfile: Identifiable, Codable, Equatable, Sendable {
   var id: UUID
   var name: String
@@ -2803,19 +3318,43 @@ struct NetworkPolicyRule: Identifiable, Codable, Equatable, Sendable {
   var ssid: String
   var proxyRoutingMode: ProxyRoutingMode
   var enableSystemProxy: Bool
+  var autoStartRuntime: Bool
+
+  private enum CodingKeys: String, CodingKey {
+    case id
+    case name
+    case ssid
+    case proxyRoutingMode
+    case enableSystemProxy
+    case autoStartRuntime
+  }
 
   init(
     id: UUID = UUID(),
     name: String = "",
     ssid: String = "",
     proxyRoutingMode: ProxyRoutingMode = .systemProxy,
-    enableSystemProxy: Bool = true
+    enableSystemProxy: Bool = true,
+    autoStartRuntime: Bool = false
   ) {
     self.id = id
     self.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
     self.ssid = ssid.trimmingCharacters(in: .whitespacesAndNewlines)
     self.proxyRoutingMode = proxyRoutingMode
     self.enableSystemProxy = enableSystemProxy
+    self.autoStartRuntime = autoStartRuntime
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    self.init(
+      id: container.decodeDefault(UUID.self, forKey: .id, default: UUID()),
+      name: container.decodeDefault(String.self, forKey: .name, default: ""),
+      ssid: container.decodeDefault(String.self, forKey: .ssid, default: ""),
+      proxyRoutingMode: container.decodeDefault(ProxyRoutingMode.self, forKey: .proxyRoutingMode, default: .systemProxy),
+      enableSystemProxy: container.decodeDefault(Bool.self, forKey: .enableSystemProxy, default: true),
+      autoStartRuntime: container.decodeDefault(Bool.self, forKey: .autoStartRuntime, default: false)
+    )
   }
 
   var validationError: String? {
@@ -2832,11 +3371,15 @@ struct NetworkPolicyRule: Identifiable, Codable, Equatable, Sendable {
     let systemProxyText = proxyRoutingMode == .systemProxy && enableSystemProxy
       ? String(localized: "System Proxy on")
       : String(localized: "System Proxy unchanged")
+    let startText = autoStartRuntime
+      ? String(localized: "auto-start")
+      : String(localized: "do not start")
     return String(
-      format: String(localized: "SSID %@, %@, %@"),
+      format: String(localized: "SSID %@, %@, %@, %@"),
       ssid,
       proxyRoutingMode.displayName,
-      systemProxyText
+      systemProxyText,
+      startText
     )
   }
 
@@ -2847,9 +3390,24 @@ struct NetworkPolicyRule: Identifiable, Codable, Equatable, Sendable {
 
 struct NetworkPolicySettings: Codable, Equatable, Sendable {
   var rules: [NetworkPolicyRule]
+  var autoApplyEnabled: Bool
 
-  init(rules: [NetworkPolicyRule] = []) {
+  private enum CodingKeys: String, CodingKey {
+    case rules
+    case autoApplyEnabled
+  }
+
+  init(rules: [NetworkPolicyRule] = [], autoApplyEnabled: Bool = true) {
     self.rules = rules
+    self.autoApplyEnabled = autoApplyEnabled
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    self.init(
+      rules: container.decodeDefault([NetworkPolicyRule].self, forKey: .rules, default: []),
+      autoApplyEnabled: container.decodeDefault(Bool.self, forKey: .autoApplyEnabled, default: true)
+    )
   }
 
   static let `default` = NetworkPolicySettings()
@@ -2869,22 +3427,86 @@ struct NetworkPolicySettings: Codable, Equatable, Sendable {
 struct ClashXMigrationReport: Codable, Equatable, Sendable {
   var configDirectory: String
   var subscriptionURLs: [String]
+  var duplicateSubscriptionURLs: [String]
   var bypassDomains: [String]
   var ports: [String: Int]
+  var allowLan: Bool?
+  var mode: String?
+  var logLevel: String?
+  var systemProxyEnabled: Bool?
+  var conflicts: [String]
+  var unsupportedSettings: [String]
+  var unknownKeys: [String]
+  var inspectedFiles: [String]
   var warnings: [String]
+
+  private enum CodingKeys: String, CodingKey {
+    case configDirectory
+    case subscriptionURLs
+    case duplicateSubscriptionURLs
+    case bypassDomains
+    case ports
+    case allowLan
+    case mode
+    case logLevel
+    case systemProxyEnabled
+    case conflicts
+    case unsupportedSettings
+    case unknownKeys
+    case inspectedFiles
+    case warnings
+  }
 
   init(
     configDirectory: String,
     subscriptionURLs: [String] = [],
+    duplicateSubscriptionURLs: [String] = [],
     bypassDomains: [String] = [],
     ports: [String: Int] = [:],
+    allowLan: Bool? = nil,
+    mode: String? = nil,
+    logLevel: String? = nil,
+    systemProxyEnabled: Bool? = nil,
+    conflicts: [String] = [],
+    unsupportedSettings: [String] = [],
+    unknownKeys: [String] = [],
+    inspectedFiles: [String] = [],
     warnings: [String] = []
   ) {
     self.configDirectory = configDirectory
     self.subscriptionURLs = subscriptionURLs
+    self.duplicateSubscriptionURLs = duplicateSubscriptionURLs
     self.bypassDomains = bypassDomains
     self.ports = ports
+    self.allowLan = allowLan
+    self.mode = mode
+    self.logLevel = logLevel
+    self.systemProxyEnabled = systemProxyEnabled
+    self.conflicts = conflicts
+    self.unsupportedSettings = unsupportedSettings
+    self.unknownKeys = unknownKeys
+    self.inspectedFiles = inspectedFiles
     self.warnings = warnings
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    self.init(
+      configDirectory: container.decodeDefault(String.self, forKey: .configDirectory, default: ""),
+      subscriptionURLs: container.decodeDefault([String].self, forKey: .subscriptionURLs, default: []),
+      duplicateSubscriptionURLs: container.decodeDefault([String].self, forKey: .duplicateSubscriptionURLs, default: []),
+      bypassDomains: container.decodeDefault([String].self, forKey: .bypassDomains, default: []),
+      ports: container.decodeDefault([String: Int].self, forKey: .ports, default: [:]),
+      allowLan: try container.decodeIfPresent(Bool.self, forKey: .allowLan),
+      mode: try container.decodeIfPresent(String.self, forKey: .mode),
+      logLevel: try container.decodeIfPresent(String.self, forKey: .logLevel),
+      systemProxyEnabled: try container.decodeIfPresent(Bool.self, forKey: .systemProxyEnabled),
+      conflicts: container.decodeDefault([String].self, forKey: .conflicts, default: []),
+      unsupportedSettings: container.decodeDefault([String].self, forKey: .unsupportedSettings, default: []),
+      unknownKeys: container.decodeDefault([String].self, forKey: .unknownKeys, default: []),
+      inspectedFiles: container.decodeDefault([String].self, forKey: .inspectedFiles, default: []),
+      warnings: container.decodeDefault([String].self, forKey: .warnings, default: [])
+    )
   }
 
   var summary: String {

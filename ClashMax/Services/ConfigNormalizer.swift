@@ -45,7 +45,8 @@ struct ConfigNormalizer {
       }
       root = try providerBackedConfig(
         providerContentPath: providerContentPath,
-        options: options.subscriptionProviderOptions
+        options: options.subscriptionProviderOptions,
+        ipv6Enabled: overrides.ipv6Enabled
       )
       providerContentProxyNames = parsedProviderContentProxyNames(from: source)
     } else {
@@ -448,7 +449,8 @@ struct ConfigNormalizer {
 
   private func providerBackedConfig(
     providerContentPath: String,
-    options: SubscriptionProviderOptions
+    options: SubscriptionProviderOptions,
+    ipv6Enabled: Bool
   ) throws -> [String: Any] {
     let providerName = Self.appManagedProviderName
     let primaryGroupName = options.primaryGroupName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -515,13 +517,41 @@ struct ConfigNormalizer {
       ])
     }
 
-    return [
+    var root: [String: Any] = [
       "proxy-providers": [
         providerName: provider
       ],
       "proxy-groups": proxyGroups,
       "rules": generatedRules(template: options.generatedTemplate, finalRulePolicy: finalRulePolicy)
     ]
+    if options.generatedTemplateVersion >= SubscriptionTemplateKind.currentVersion {
+      root["dns"] = providerTemplateDNS(ipv6Enabled: ipv6Enabled)
+    }
+    return root
+  }
+
+  private func providerTemplateDNS(ipv6Enabled: Bool) -> [String: Any] {
+    var dns: [String: Any] = [
+      "enable": true,
+      "ipv6": ipv6Enabled,
+      "respect-rules": true,
+      "use-system-hosts": true,
+      "enhanced-mode": "fake-ip",
+      "fake-ip-range": TunSettings.defaultFakeIPRange,
+      "default-nameserver": [
+        "223.5.5.5",
+        "119.29.29.29"
+      ],
+      "fallback-filter": [
+        "geoip": true,
+        "geoip-code": "CN",
+        "ipcidr": [
+          "240.0.0.0/4"
+        ]
+      ]
+    ]
+    applyTunDNSOverlay(.chinaNetworkDefault, to: &dns)
+    return dns
   }
 
   private func generatedRules(template: SubscriptionTemplateKind, finalRulePolicy: String) -> [String] {

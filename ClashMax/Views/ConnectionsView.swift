@@ -194,6 +194,7 @@ struct ConnectionsView: View {
         detailRow("Rule", connection.ruleSummary.isEmpty ? "-" : connection.ruleSummary)
         detailRow("Chain", connection.chain.isEmpty ? "-" : connection.chain.joined(separator: " / "))
         detailRow("Traffic", TrafficSample.formatBytes(connection.download + connection.upload))
+        whyThisRule(connection)
       } else {
         Text("Select a connection to inspect the process, rule, and chain.")
           .font(.caption)
@@ -203,6 +204,25 @@ struct ConnectionsView: View {
     }
     .padding(12)
     .background(.quaternary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+  }
+
+  private func whyThisRule(_ connection: ConnectionSnapshot) -> some View {
+    let explanation = RuleExplanationBuilder().explanation(for: connection, rules: runtimeData.rules)
+    return VStack(alignment: .leading, spacing: 8) {
+      Divider()
+      Label("Why This Rule", systemImage: "scope")
+        .font(.caption.weight(.semibold))
+      detailRow("Mihomo Reported", explanation.reportedRuleSummary.isEmpty ? "-" : explanation.reportedRuleSummary)
+      detailRow("Chosen Target", explanation.target.isEmpty ? "-" : explanation.target)
+      detailRow("Local Simulation", explanation.localSummary)
+      Button {
+        appModel.openRoutingExplanation(for: connection)
+      } label: {
+        Label("Open in Routing", systemImage: "arrow.triangle.branch")
+      }
+      .buttonStyle(.bordered)
+      .controlSize(.small)
+    }
   }
 
   private func detailRow(_ title: String, _ value: String) -> some View {

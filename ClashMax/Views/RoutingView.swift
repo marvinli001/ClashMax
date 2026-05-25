@@ -8,6 +8,7 @@ struct RoutingView: View {
   @State private var draft = RuleOverlaySettings.disabled
   @State private var simulationTarget = ""
   @State private var simulationOutcome: RuleMatchSimulationOutcome = .noMatch
+  @State private var explanationContext: RuleExplanation?
 
   var body: some View {
     AdaptivePage(
@@ -29,12 +30,16 @@ struct RoutingView: View {
     } content: {
       routingWorkspace
     }
-    .onAppear(perform: resetDraft)
+    .onAppear {
+      resetDraft()
+      consumeRoutingSimulationRequest()
+    }
     .onChange(of: scope) { _, _ in resetDraft() }
     .onChange(of: profileStore.activeProfileID) { _, _ in resetDraft() }
     .onChange(of: draft) { _, _ in simulate() }
     .onChange(of: simulationTarget) { _, _ in simulate() }
     .onChange(of: runtimeData.rules) { _, _ in simulate() }
+    .onChange(of: appModel.routingSimulationRequest?.id) { _, _ in consumeRoutingSimulationRequest() }
   }
 
   private var subtitle: String {
@@ -159,6 +164,7 @@ struct RoutingView: View {
   private var routingInspectorContent: some View {
     VStack(alignment: .leading, spacing: 12) {
       runtimeDiffPreview
+      connectionExplanation
       matchSimulator
     }
   }
@@ -280,6 +286,21 @@ struct RoutingView: View {
     }
   }
 
+  @ViewBuilder
+  private var connectionExplanation: some View {
+    if let explanationContext {
+      RoutingInspectorPanel(title: "Connection Context", systemImage: "point.3.connected.trianglepath.dotted") {
+        RoutingDetailRow(
+          title: "Mihomo Reported",
+          value: explanationContext.reportedRuleSummary.isEmpty ? "-" : explanationContext.reportedRuleSummary
+        )
+        RoutingDetailRow(title: "Chosen Target", value: explanationContext.target.isEmpty ? "-" : explanationContext.target)
+        RoutingDetailRow(title: "Chosen Policy", value: explanationContext.chosenPolicySummary)
+        RoutingDetailRow(title: "Local Result", value: explanationContext.localSummary, lineLimit: 5)
+      }
+    }
+  }
+
   private var canSave: Bool {
     draft.validationError == nil && (scope == .global || activeSubscriptionProfile != nil)
   }
@@ -351,6 +372,13 @@ struct RoutingView: View {
         runtimeRule(index: runtimeData.rules.count + index, raw: rule)
       }
     simulationOutcome = simulator.simulate(target: simulationTarget, rules: overlayRules)
+  }
+
+  private func consumeRoutingSimulationRequest() {
+    guard let request = appModel.routingSimulationRequest else { return }
+    explanationContext = request.explanation
+    simulationTarget = request.target
+    simulate()
   }
 
   private func runtimeRule(index: Int, raw: String) -> RuntimeRule {

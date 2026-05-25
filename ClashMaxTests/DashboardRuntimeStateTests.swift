@@ -19,6 +19,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
   override func setUp() {
     super.setUp()
+    do {
+      try Self.installFakeBundledCoreForAppModelTests()
+    } catch {
+      XCTFail("Could not install fake bundled core for AppModel tests: \(error)")
+    }
     Self.clearSharedRoutingDefaults()
   }
 
@@ -223,6 +228,58 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertFalse(runtimeConfig.contains("Old Node"))
   }
 
+  func testUpdatingProviderOptionsRollsBackWhenActiveRuntimeReloadFails() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    let source = """
+    proxies:
+      - { name: Old Node, type: direct }
+    proxy-groups:
+      - { name: Proxy, type: select, proxies: [Old Node, DIRECT] }
+    rules:
+      - MATCH,Proxy
+    """
+    let profile = try await store.addSubscription(
+      name: "Remote",
+      url: URL(string: "https://example.com/sub")!,
+      session: URLSession(configuration: URLProtocolRecorder.configurationReturning(source))
+    )
+    let controller = CoreProcessController(
+      launcher: FakeProcessLauncher(),
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [],
+      testDelayResult: 0,
+      reloadFailureMessage: "reload rejected"
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      apiClient: client,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    try await controller.startUserMode(
+      coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+      configURL: URL(fileURLWithPath: profile.originalConfigPath),
+      workDirectory: paths.runtime,
+      api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+    )
+
+    let nextOptions = SubscriptionProviderOptions(primaryGroupName: "Manual")
+    let didUpdate = await model.updateSubscriptionProviderOptions(profile, options: nextOptions)
+
+    XCTAssertFalse(didUpdate)
+    XCTAssertEqual(store.profiles.first?.subscriptionProviderOptions, profile.subscriptionProviderOptions)
+    let reloadRequestCount = await client.reloadRequestPaths().count
+    XCTAssertEqual(reloadRequestCount, 1)
+    XCTAssertTrue(model.lastError?.contains("reload rejected") == true)
+  }
+
   func testProxyGroupsUnavailableMessageExplainsMissingProfileGroupsBeforeStart() async throws {
     let paths = try Self.makeRuntimePaths()
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
@@ -349,7 +406,9 @@ final class DashboardRuntimeStateTests: XCTestCase {
       paths: paths,
       profileStore: store,
       coreController: controller,
-      defaults: try Self.makeIsolatedDefaults()
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      defaults: try Self.makeIsolatedDefaults(),
+      bundledCoreURLProvider: { URL(fileURLWithPath: "/tmp/mihomo") }
     )
     await model.waitForProfilePreviewRefresh()
     let group = ProxyGroup(
@@ -423,7 +482,9 @@ final class DashboardRuntimeStateTests: XCTestCase {
       paths: paths,
       profileStore: store,
       coreController: controller,
-      defaults: try Self.makeIsolatedDefaults()
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      defaults: try Self.makeIsolatedDefaults(),
+      bundledCoreURLProvider: { URL(fileURLWithPath: "/tmp/mihomo") }
     )
     await model.waitForProfilePreviewRefresh()
 
@@ -479,7 +540,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     try? await Task.sleep(nanoseconds: 120_000_000)
 
     XCTAssertEqual(launcher.launchCount, 1)
-    XCTAssertTrue(model.isRunning)
+    XCTAssertTrue(model.isRunning, model.lastError ?? model.statusSummary)
     XCTAssertFalse(model.previewRuntimeActive)
     XCTAssertEqual(model.runtimeOwner, .user)
   }
@@ -520,7 +581,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     }
 
     XCTAssertEqual(launcher.launchCount, 2)
-    XCTAssertTrue(model.isRunning)
+    XCTAssertTrue(model.isRunning, model.lastError ?? model.statusSummary)
     XCTAssertFalse(model.previewRuntimeActive)
     XCTAssertEqual(model.runtimeOwner, .user)
   }
@@ -592,7 +653,9 @@ final class DashboardRuntimeStateTests: XCTestCase {
       paths: paths,
       profileStore: store,
       coreController: controller,
-      defaults: try Self.makeIsolatedDefaults()
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      defaults: try Self.makeIsolatedDefaults(),
+      bundledCoreURLProvider: { URL(fileURLWithPath: "/tmp/mihomo") }
     )
     let didSelectFirstProfile = await model.selectProfileAsync(firstProfile)
     XCTAssertTrue(didSelectFirstProfile)
@@ -1683,6 +1746,126 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(model.systemProxyEnabled)
     XCTAssertEqual(model.networkPolicyStatusMessage, "Applied Office Wi-Fi for corpnet.")
     XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setwebproxy Wi-Fi 127.0.0.1 7890"))
+  }
+
+  func testNetworkPolicyRuleAutoStartDefaultsOffForLegacyDecoding() throws {
+    let decoded = try JSONDecoder().decode(NetworkPolicyRule.self, from: Data("""
+    {
+      "id": "\(UUID().uuidString)",
+      "name": "Office",
+      "ssid": "CorpNet",
+      "proxyRoutingMode": "systemProxy",
+      "enableSystemProxy": true
+    }
+    """.utf8))
+    let settings = try JSONDecoder().decode(NetworkPolicySettings.self, from: Data("""
+    {
+      "rules": []
+    }
+    """.utf8))
+
+    XCTAssertFalse(decoded.autoStartRuntime)
+    XCTAssertTrue(settings.autoApplyEnabled)
+  }
+
+  func testNetworkEnvironmentMonitorAppliesMatchingPolicyAfterDebounce() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    let monitor = ManualNetworkEnvironmentMonitor()
+    let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+    let controller = SystemProxyController(commandRunner: commandRunner)
+    let rule = NetworkPolicyRule(
+      name: "Office Wi-Fi",
+      ssid: "CorpNet",
+      proxyRoutingMode: .systemProxy,
+      enableSystemProxy: true
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      systemProxyController: controller,
+      defaults: defaults,
+      currentNetworkProvider: StaticCurrentNetworkProvider(ssid: "corpnet"),
+      networkEnvironmentMonitor: monitor
+    )
+    model.networkPolicySettings = NetworkPolicySettings(rules: [rule], autoApplyEnabled: true)
+    model.startNetworkEnvironmentMonitoring()
+
+    monitor.emit(NetworkEnvironmentEvent(reason: "path", ssid: "corpnet", pathStatus: "satisfied", isExpensive: false, isConstrained: false))
+
+    for _ in 0..<120 where !model.systemProxyEnabled {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+
+    XCTAssertEqual(model.lastAppliedNetworkPolicyID, rule.id)
+    XCTAssertTrue(model.systemProxyEnabled)
+    XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setwebproxy Wi-Fi 127.0.0.1 7890"))
+  }
+
+  func testNetworkEnvironmentMonitorSkipsWhenAutoApplyIsDisabled() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let monitor = ManualNetworkEnvironmentMonitor()
+    let rule = NetworkPolicyRule(name: "Office Wi-Fi", ssid: "CorpNet", proxyRoutingMode: .systemProxy)
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: try Self.makeIsolatedDefaults(),
+      currentNetworkProvider: StaticCurrentNetworkProvider(ssid: "corpnet"),
+      networkEnvironmentMonitor: monitor
+    )
+    model.networkPolicySettings = NetworkPolicySettings(rules: [rule], autoApplyEnabled: false)
+    model.startNetworkEnvironmentMonitoring()
+
+    monitor.emit(NetworkEnvironmentEvent(reason: "path", ssid: "corpnet", pathStatus: "satisfied", isExpensive: false, isConstrained: false))
+    try? await Task.sleep(nanoseconds: 800_000_000)
+
+    XCTAssertNil(model.lastAppliedNetworkPolicyID)
+    XCTAssertFalse(model.systemProxyEnabled)
+    XCTAssertEqual(model.networkPolicyStatusMessage, "Automatic network policy application is off.")
+  }
+
+  func testNetworkPolicyCanAutoStartRuntimeWhenRuleRequestsIt() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let launcher = CountingProcessLauncher()
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      defaults: try Self.makeIsolatedDefaults(),
+      bundledCoreURLProvider: { URL(fileURLWithPath: "/tmp/mihomo") }
+    )
+    await model.waitForProfilePreviewRefresh()
+    let rule = NetworkPolicyRule(
+      name: "Office Wi-Fi",
+      ssid: "CorpNet",
+      proxyRoutingMode: .systemProxy,
+      enableSystemProxy: false,
+      autoStartRuntime: true
+    )
+
+    model.applyNetworkPolicy(rule)
+
+    for _ in 0..<500 where !model.isRunning {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertTrue(model.isRunning, model.lastError ?? model.statusSummary)
+    XCTAssertEqual(launcher.launchCount, 1)
+    XCTAssertEqual(model.lastAppliedNetworkPolicyID, rule.id)
   }
 
   func testCommandURLTogglesSystemProxyWithoutSubscriptionImport() async throws {
@@ -6470,6 +6653,24 @@ final class DashboardRuntimeStateTests: XCTestCase {
     UserDefaults.standard.removeObject(forKey: tunDNSDefaultsVersionKey)
   }
 
+  private static func installFakeBundledCoreForAppModelTests() throws {
+    let root = AppConstants.bundledCoreRoot
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let architecture: String
+    #if arch(x86_64)
+      architecture = "amd64"
+    #else
+      architecture = "arm64"
+    #endif
+    let coreURL = root.appendingPathComponent("mihomo-darwin-\(architecture)")
+    guard !FileManager.default.isExecutableFile(atPath: coreURL.path) else { return }
+    try """
+    #!/bin/sh
+    sleep 3600
+    """.write(to: coreURL, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: coreURL.path)
+  }
+
   private func makeRunningRuntimeModel(
     client: any MihomoAPIControlling,
     initialProxyGroups: [ProxyGroup] = [],
@@ -7557,6 +7758,31 @@ private final class UnstoppableRunningProcess: RunningCoreProcess {
 
   func recentOutputTail(maxBytes: Int) -> String {
     ""
+  }
+}
+
+private final class ManualNetworkEnvironmentMonitor: NetworkEnvironmentMonitoring, @unchecked Sendable {
+  private let stream: AsyncStream<NetworkEnvironmentEvent>
+  private let continuation: AsyncStream<NetworkEnvironmentEvent>.Continuation
+
+  init() {
+    var continuation: AsyncStream<NetworkEnvironmentEvent>.Continuation!
+    stream = AsyncStream { continuation = $0 }
+    self.continuation = continuation
+  }
+
+  var events: AsyncStream<NetworkEnvironmentEvent> {
+    stream
+  }
+
+  func start() {}
+
+  func stop() {
+    continuation.finish()
+  }
+
+  func emit(_ event: NetworkEnvironmentEvent) {
+    continuation.yield(event)
   }
 }
 

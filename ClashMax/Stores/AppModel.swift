@@ -459,6 +459,7 @@ final class AppModel: ObservableObject {
   }
   var publicIPInfoState: PublicIPInfoState { publicIP.state }
   @Published private(set) var appNotice: AppNotice?
+  @Published var routingSimulationRequest: RoutingSimulationRequest?
   private var lastErrorOrigin: LastErrorOrigin?
   private var isPublishingNetworkExtensionLastError = false
   @Published var lastError: String? {
@@ -549,6 +550,8 @@ final class AppModel: ObservableObject {
   private var closeAllConnectionsToken: UUID?
   private var networkPolicyApplyTask: Task<Void, Never>?
   private var networkPolicyApplyToken: UUID?
+  private var networkEnvironmentTask: Task<Void, Never>?
+  private var networkEnvironmentDebounceTask: Task<Void, Never>?
   private var runtimeReloadTask: Task<Void, Never>?
   private var runtimeReloadToken: UUID?
   private var runtimeReloadPending = false
@@ -561,6 +564,8 @@ final class AppModel: ObservableObject {
   private var storeCancellables: Set<AnyCancellable> = []
   private let externalDashboardSecretStore: any SecretStoring
   private let currentNetworkProvider: any CurrentNetworkProviding
+  private let networkEnvironmentMonitor: (any NetworkEnvironmentMonitoring)?
+  private let bundledCoreURLProvider: () throws -> URL
   private let delayStateCacheTTL: TimeInterval
   static let publicIPRefreshInterval: TimeInterval = 300
   static let silentStartDefaultsKey = PersistedSettingsStore.silentStartDefaultsKey
@@ -608,12 +613,16 @@ final class AppModel: ObservableObject {
     defaults: UserDefaults = .standard,
     delayStateCacheTTL: TimeInterval = 600,
     externalDashboardSecretStore: any SecretStoring = KeychainStore(service: "\(AppConstants.bundleIdentifier).external-dashboards"),
-    currentNetworkProvider: any CurrentNetworkProviding = CoreWLANCurrentNetworkProvider()
+    currentNetworkProvider: any CurrentNetworkProviding = CoreWLANCurrentNetworkProvider(),
+    networkEnvironmentMonitor: (any NetworkEnvironmentMonitoring)? = nil,
+    bundledCoreURLProvider: (() throws -> URL)? = nil
   ) {
     self.paths = paths
     self.delayStateCacheTTL = delayStateCacheTTL
     self.externalDashboardSecretStore = externalDashboardSecretStore
     self.currentNetworkProvider = currentNetworkProvider
+    self.networkEnvironmentMonitor = networkEnvironmentMonitor ?? NetworkEnvironmentMonitor(currentNetworkProvider: currentNetworkProvider)
+    self.bundledCoreURLProvider = bundledCoreURLProvider ?? Self.resolveBundledCoreURL
     self.profileStore = profileStore ?? ProfileStore(paths: paths)
     self.proxyPreview = ProxyPreviewStore(defaults: defaults)
     self.profileCoordinator = ProfileCoordinator(profileStore: self.profileStore, proxyPreview: self.proxyPreview)
@@ -892,6 +901,16 @@ final class AppModel: ObservableObject {
 
   func openRuntimeLogs() {
     selectedSection = .logs
+  }
+
+  func openRoutingExplanation(for connection: ConnectionSnapshot) {
+    let explanation = RuleExplanationBuilder().explanation(for: connection, rules: runtimeData.rules)
+    routingSimulationRequest = RoutingSimulationRequest(
+      connectionID: connection.id,
+      target: explanation.target,
+      explanation: explanation
+    )
+    selectedSection = .routing
   }
 
   func openLogsFolder() {
@@ -1902,8 +1921,36 @@ final class AppModel: ObservableObject {
   }
 
   func handleNetworkEnvironmentMayHaveChanged(reason: String) {
+    guard networkPolicySettings.autoApplyEnabled else {
+      networkPolicyStatusMessage = String(localized: "Automatic network policy application is off.")
+      return
+    }
     guard !networkPolicySettings.rules.isEmpty else { return }
-    applyMatchingNetworkPolicyForCurrentNetwork(trigger: reason)
+    scheduleNetworkEnvironmentPolicyApply(reason: reason)
+  }
+
+  func startNetworkEnvironmentMonitoring() {
+    guard networkEnvironmentTask == nil, let networkEnvironmentMonitor else { return }
+    networkEnvironmentMonitor.start()
+    networkEnvironmentTask = Task { @MainActor [weak self, networkEnvironmentMonitor] in
+      for await event in networkEnvironmentMonitor.events {
+        guard let self, !Task.isCancelled else { return }
+        currentNetworkSSID = event.ssid ?? currentNetworkProvider.currentSSID()
+        appendAppLog(
+          level: "info",
+          message: "Network environment changed via \(event.reason): path=\(event.pathStatus), ssid=\(event.ssid ?? "none")"
+        )
+        handleNetworkEnvironmentMayHaveChanged(reason: event.reason)
+      }
+    }
+  }
+
+  func stopNetworkEnvironmentMonitoring() {
+    networkEnvironmentDebounceTask?.cancel()
+    networkEnvironmentDebounceTask = nil
+    networkEnvironmentTask?.cancel()
+    networkEnvironmentTask = nil
+    networkEnvironmentMonitor?.stop()
   }
 
   func applyNetworkPolicy(_ rule: NetworkPolicyRule) {
@@ -1932,6 +1979,19 @@ final class AppModel: ObservableObject {
     applyNetworkPolicy(rule, trigger: trigger, matchedSSID: ssid)
   }
 
+  private func scheduleNetworkEnvironmentPolicyApply(reason: String) {
+    networkEnvironmentDebounceTask?.cancel()
+    networkEnvironmentDebounceTask = Task { @MainActor [weak self] in
+      do {
+        try await Task.sleep(nanoseconds: 650_000_000)
+      } catch {
+        return
+      }
+      guard let self, !Task.isCancelled else { return }
+      applyMatchingNetworkPolicyForCurrentNetwork(trigger: reason)
+    }
+  }
+
   private func applyNetworkPolicy(_ rule: NetworkPolicyRule, trigger: String, matchedSSID: String?) {
     networkPolicyApplyTask?.cancel()
     let token = UUID()
@@ -1957,6 +2017,10 @@ final class AppModel: ObservableObject {
     }
 
     setProxyRoutingMode(rule.proxyRoutingMode)
+    if rule.autoStartRuntime, !isRunning, !startInFlight {
+      start()
+      await waitForRuntimeStartAttempt()
+    }
     if rule.proxyRoutingMode == .systemProxy, rule.enableSystemProxy {
       do {
         try await applySystemProxyEnabledState(true)
@@ -1984,8 +2048,19 @@ final class AppModel: ObservableObject {
     appNotice = AppNotice(message: message, tone: .success)
     appendAppLog(
       level: "info",
-      message: "Applied network policy \(rule.name) via \(trigger): \(rule.proxyRoutingMode.rawValue)"
+      message: "Applied network policy \(rule.name) via \(trigger): \(rule.proxyRoutingMode.rawValue), autoStart=\(rule.autoStartRuntime)"
     )
+  }
+
+  private func waitForRuntimeStartAttempt() async {
+    for _ in 0..<80 {
+      guard startInFlight else { return }
+      do {
+        try await Task.sleep(nanoseconds: 50_000_000)
+      } catch {
+        return
+      }
+    }
   }
 
   func registerHelper() {
@@ -3413,6 +3488,10 @@ final class AppModel: ObservableObject {
       mixedPort: overrides.mixedPort,
       onWarning: { [weak self] warning in
         self?.appendAppLog(level: "warn", message: warning)
+        self?.appNotice = AppNotice(
+          message: String(format: String(localized: "System Proxy was changed externally: %@"), warning),
+          tone: .info
+        )
       },
       onError: { [weak self] error in
         self?.lastError = UserFacingError.message(for: error)
@@ -3598,6 +3677,7 @@ final class AppModel: ObservableObject {
     pendingModeTask = nil
     pendingRoutingModeTask?.cancel()
     pendingRoutingModeTask = nil
+    stopNetworkEnvironmentMonitoring()
     profileCoordinator.cancelSubscriptionAutoUpdates()
     cancelRuntimeActionTasks()
     cancelTunHelperPreparation(resetState: false)
@@ -4280,6 +4360,10 @@ final class AppModel: ObservableObject {
   }
 
   private func bundledCoreURL() throws -> URL {
+    try bundledCoreURLProvider()
+  }
+
+  private static func resolveBundledCoreURL() throws -> URL {
     let architecture = ProcessInfo.processInfo.machineHardwareName.contains("x86") ? "amd64" : "arm64"
     let candidates = [
       AppConstants.bundledCoreRoot.appendingPathComponent("mihomo-darwin-\(architecture)"),

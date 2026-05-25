@@ -10,6 +10,7 @@ struct ProfilesView: View {
   @State private var editProfileName = ""
   @State private var editSubscriptionURL = ""
   @State private var editProviderOptions = SubscriptionProviderOptions.default
+  @State private var editRollbackProviderOptions = SubscriptionProviderOptions.default
   @State private var editUpdatePolicy = SubscriptionUpdatePolicy.default
   @State private var profilePendingDeletion: Profile?
   @State private var migrationReport: ClashXMigrationReport?
@@ -100,10 +101,15 @@ struct ProfilesView: View {
         name: $editProfileName,
         subscriptionURL: $editSubscriptionURL,
         providerOptions: $editProviderOptions,
+        rollbackProviderOptions: editRollbackProviderOptions,
         updatePolicy: $editUpdatePolicy,
+        developerMode: appModel.developerMode,
         onCancel: closeEditSheet,
         onResetRemoteName: {
           resetRemoteName(profile)
+        },
+        onRollbackProviderOptions: {
+          editProviderOptions = editRollbackProviderOptions
         },
         onSave: {
           saveProfileEdits(profile)
@@ -125,11 +131,14 @@ struct ProfilesView: View {
         ClashXMigrationReportSheet(
           report: migrationReport,
           onCancel: { self.migrationReport = nil },
-          onApply: { applyMigrationReport(migrationReport) }
+          onApply: { enableSystemProxy in applyMigrationReport(migrationReport, enableSystemProxy: enableSystemProxy) }
         )
         .frame(width: 560)
         .padding(20)
       }
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .clashMaxImportClashXRequested)) { _ in
+      importClashX()
     }
   }
 
@@ -253,6 +262,7 @@ struct ProfilesView: View {
     editProfileName = profile.name
     editSubscriptionURL = profileStore.subscriptionURLString(for: profile) ?? ""
     editProviderOptions = profile.subscriptionProviderOptions
+    editRollbackProviderOptions = profile.subscriptionProviderOptions
     editUpdatePolicy = profile.subscriptionUpdatePolicy
     profileBeingEdited = profile
   }
@@ -262,6 +272,7 @@ struct ProfilesView: View {
     editProfileName = ""
     editSubscriptionURL = ""
     editProviderOptions = .default
+    editRollbackProviderOptions = .default
     editUpdatePolicy = .default
   }
 
@@ -327,13 +338,13 @@ struct ProfilesView: View {
     panel.prompt = "Inspect"
     panel.directoryURL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".config/clash")
     guard panel.runModal() == .OK, let url = panel.url else { return }
-    migrationReport = Self.buildMigrationReport(from: url)
+    migrationReport = ClashXMigrationParser().parse(directoryURL: url)
   }
 
-  private func applyMigrationReport(_ report: ClashXMigrationReport) {
+  private func applyMigrationReport(_ report: ClashXMigrationReport, enableSystemProxy: Bool) {
     migrationReport = nil
     let configURL = URL(fileURLWithPath: report.configDirectory).appendingPathComponent("config.yaml")
-    applyMigrationRuntimeSettings(report)
+    applyMigrationRuntimeSettings(report, enableSystemProxy: enableSystemProxy)
     Task { @MainActor in
       if FileManager.default.fileExists(atPath: configURL.path) {
         do {
@@ -348,10 +359,22 @@ struct ProfilesView: View {
     }
   }
 
-  private func applyMigrationRuntimeSettings(_ report: ClashXMigrationReport) {
+  private func applyMigrationRuntimeSettings(_ report: ClashXMigrationReport, enableSystemProxy: Bool) {
     if let mixedPort = report.ports["mixed-port"] ?? report.ports["port"] {
       let normalizedPort = min(max(mixedPort, 1), 65_535)
       appModel.overrides.mixedPort = normalizedPort
+    }
+
+    if let allowLan = report.allowLan {
+      appModel.overrides.allowLan = allowLan
+    }
+
+    if let mode = report.mode.flatMap(RunMode.init(rawValue:)) {
+      appModel.overrides.mode = mode
+    }
+
+    if let logLevel = report.logLevel {
+      appModel.overrides.logLevel = logLevel
     }
 
     if !report.bypassDomains.isEmpty {
@@ -361,52 +384,18 @@ struct ProfilesView: View {
       )
       appModel.systemProxySettings = settings
     }
-  }
 
-  private static func buildMigrationReport(from directoryURL: URL) -> ClashXMigrationReport {
-    let configURL = directoryURL.appendingPathComponent("config.yaml")
-    guard let source = try? String(contentsOf: configURL, encoding: .utf8),
-          let root = try? Yams.load(yaml: source) as? [String: Any]
-    else {
-      return ClashXMigrationReport(
-        configDirectory: directoryURL.path,
-        warnings: ["config.yaml was not found or could not be parsed."]
-      )
+    if enableSystemProxy, report.systemProxyEnabled == true {
+      appModel.setSystemProxyEnabled(true)
     }
-
-    let providers = root["proxy-providers"] as? [String: Any] ?? [:]
-    let subscriptionURLs = providers.values.compactMap { value -> String? in
-      guard let provider = value as? [String: Any] else { return nil }
-      return (provider["url"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-    .filter { !$0.isEmpty }
-
-    var ports: [String: Int] = [:]
-    for key in ["mixed-port", "port", "socks-port", "redir-port"] {
-      if let value = root[key] as? Int {
-        ports[key] = value
-      }
-    }
-
-    let bypassKeys = ["cfw-bypass", "bypass", "proxy-bypass"]
-    let bypassDomains = bypassKeys.flatMap { key -> [String] in
-      root[key] as? [String] ?? []
-    }
-
-    return ClashXMigrationReport(
-      configDirectory: directoryURL.path,
-      subscriptionURLs: subscriptionURLs,
-      bypassDomains: bypassDomains,
-      ports: ports,
-      warnings: subscriptionURLs.isEmpty ? ["No remote provider subscription URLs were detected."] : []
-    )
   }
 }
 
 private struct ClashXMigrationReportSheet: View {
   let report: ClashXMigrationReport
   let onCancel: () -> Void
-  let onApply: () -> Void
+  let onApply: (Bool) -> Void
+  @State private var enableSystemProxy = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
@@ -419,9 +408,20 @@ private struct ClashXMigrationReportSheet: View {
         .lineLimit(2)
 
       migrationSection("Subscriptions", values: report.subscriptionURLs)
+      migrationSection("Duplicates", values: report.duplicateSubscriptionURLs)
       migrationSection("Bypass", values: report.bypassDomains)
       migrationSection("Ports", values: report.ports.map { "\($0.key): \($0.value)" }.sorted())
+      migrationSection("Runtime", values: runtimeValues)
+      migrationSection("Conflicts", values: report.conflicts)
+      migrationSection("Unsupported", values: report.unsupportedSettings)
+      migrationSection("Unknown Keys", values: report.unknownKeys)
+      migrationSection("Inspected Files", values: report.inspectedFiles)
       migrationSection("Warnings", values: report.warnings)
+
+      Toggle("Enable System Proxy after import", isOn: $enableSystemProxy)
+        .toggleStyle(.checkbox)
+        .disabled(report.systemProxyEnabled != true)
+        .help("ClashMax only enables System Proxy during migration when this checkbox is selected.")
 
       Divider()
 
@@ -429,10 +429,22 @@ private struct ClashXMigrationReportSheet: View {
         Spacer()
         Button("Cancel", action: onCancel)
           .keyboardShortcut(.cancelAction)
-        Button("Apply", action: onApply)
+        Button("Apply") {
+          onApply(enableSystemProxy)
+        }
           .keyboardShortcut(.defaultAction)
       }
     }
+  }
+
+  private var runtimeValues: [String] {
+    [
+      report.allowLan.map { "allow-lan: \($0)" },
+      report.mode.map { "mode: \($0)" },
+      report.logLevel.map { "log-level: \($0)" },
+      report.systemProxyEnabled.map { "system proxy intent: \($0)" }
+    ]
+    .compactMap { $0 }
   }
 
   private func migrationSection(_ title: String, values: [String]) -> some View {
@@ -629,9 +641,12 @@ private struct ProfileEditSheet: View {
   @Binding var name: String
   @Binding var subscriptionURL: String
   @Binding var providerOptions: SubscriptionProviderOptions
+  let rollbackProviderOptions: SubscriptionProviderOptions
   @Binding var updatePolicy: SubscriptionUpdatePolicy
+  let developerMode: Bool
   let onCancel: () -> Void
   let onResetRemoteName: () -> Void
+  let onRollbackProviderOptions: () -> Void
   let onSave: () -> Void
   @FocusState private var isNameFocused: Bool
   @State private var providerOptionsValidationError: String?
@@ -692,7 +707,10 @@ private struct ProfileEditSheet: View {
 
             SubscriptionProviderOptionsEditor(
               options: $providerOptions,
-              validationError: $providerOptionsValidationError
+              validationError: $providerOptionsValidationError,
+              rollbackOptions: rollbackProviderOptions,
+              developerMode: developerMode,
+              onRollback: onRollbackProviderOptions
             )
           } else {
             ProfileEditRow("Source") {
@@ -927,6 +945,9 @@ private struct SubscriptionUpdatePolicyEditor: View {
 private struct SubscriptionProviderOptionsEditor: View {
   @Binding var options: SubscriptionProviderOptions
   @Binding var validationError: String?
+  let rollbackOptions: SubscriptionProviderOptions
+  let developerMode: Bool
+  let onRollback: () -> Void
   @State private var isRuleOverlayPresented = false
   @State private var showsAdvancedOptions = false
 
@@ -943,6 +964,9 @@ private struct SubscriptionProviderOptionsEditor: View {
       }
 
       ProfileEditFootnote(verbatim: options.generatedTemplate.description)
+      presetDetails
+      guardrailRisks
+      runtimeDiff
 
       ProfileEditRow("Provider Interval") {
         VStack(alignment: .trailing, spacing: 4) {
@@ -1007,39 +1031,141 @@ private struct SubscriptionProviderOptionsEditor: View {
       }
 
       ProfileEditContentRow {
-        ProfileEditDisclosureGroup("Advanced YAML and Filters", isExpanded: $showsAdvancedOptions) {
-          VStack(alignment: .leading, spacing: 10) {
-            TextField("Filter", text: $options.filter)
-              .textFieldStyle(.roundedBorder)
-            TextField("Exclude Filter", text: $options.excludeFilter)
-              .textFieldStyle(.roundedBorder)
-            TextField("Exclude Type", text: $options.excludeType)
-              .textFieldStyle(.roundedBorder)
-            TextField("Final MATCH Policy", text: $options.finalRulePolicy)
-              .textFieldStyle(.roundedBorder)
+        HStack(spacing: 10) {
+          Spacer()
+          Button {
+            onRollback()
+            validateAdvancedYAML()
+          } label: {
+            Label("Rollback to Last Working", systemImage: "clock.arrow.circlepath")
+          }
+          .disabled(options == rollbackOptions)
 
-            yamlEditor("Provider Override YAML", text: $options.overrideYAML, minHeight: 72)
-            yamlEditor("Runtime Merge YAML", text: $options.runtimeMergeYAML, minHeight: 88)
-              .help("Merged into runtime config before app-managed launch settings.")
+          Button {
+            options = .default
+            validateAdvancedYAML()
+          } label: {
+            Label("Restore Defaults", systemImage: "arrow.uturn.backward")
+          }
+        }
+      }
 
-            customHeadersEditor
+      if developerMode {
+        ProfileEditContentRow {
+          ProfileEditDisclosureGroup("Advanced YAML and Filters", isExpanded: $showsAdvancedOptions) {
+            VStack(alignment: .leading, spacing: 10) {
+              TextField("Filter", text: $options.filter)
+                .textFieldStyle(.roundedBorder)
+              TextField("Exclude Filter", text: $options.excludeFilter)
+                .textFieldStyle(.roundedBorder)
+              TextField("Exclude Type", text: $options.excludeType)
+                .textFieldStyle(.roundedBorder)
+              TextField("Final MATCH Policy", text: $options.finalRulePolicy)
+                .textFieldStyle(.roundedBorder)
 
-            HStack {
-              Spacer()
-              Button {
-                options = .default
-                validateAdvancedYAML()
-              } label: {
-                Label("Restore Defaults", systemImage: "arrow.uturn.backward")
-              }
+              yamlEditor("Provider Override YAML", text: $options.overrideYAML, minHeight: 72)
+              yamlEditor("Runtime Merge YAML", text: $options.runtimeMergeYAML, minHeight: 88)
+                .help("Merged into runtime config before app-managed launch settings.")
+
+              customHeadersEditor
             }
           }
         }
+      } else {
+        ProfileEditFootnote(verbatim: String(localized: "Developer Mode is required for raw provider filters, YAML merge fields, and custom request headers."))
       }
     }
     .onAppear(perform: validateAdvancedYAML)
     .onChange(of: options.overrideYAML) { _, _ in validateAdvancedYAML() }
     .onChange(of: options.runtimeMergeYAML) { _, _ in validateAdvancedYAML() }
+  }
+
+  private var guardrailReport: SubscriptionProviderOptionsGuardrailReport {
+    SubscriptionProviderOptionsGuardrailReport.analyze(
+      options: options,
+      baseline: rollbackOptions,
+      rollbackOptions: rollbackOptions
+    )
+  }
+
+  private var presetDetails: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      ForEach(guardrailReport.presetDetails, id: \.self) { detail in
+        Label(detail, systemImage: "checkmark.circle")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(2)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  @ViewBuilder
+  private var guardrailRisks: some View {
+    if guardrailReport.risks.isEmpty {
+      EmptyView()
+    } else {
+      VStack(alignment: .leading, spacing: 6) {
+        Text("Guardrails")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.secondary)
+        ForEach(guardrailReport.risks) { risk in
+          HStack(alignment: .top, spacing: 8) {
+            Image(systemName: risk.severity == .danger ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill")
+              .foregroundStyle(risk.severity == .danger ? .red : .orange)
+              .frame(width: 16)
+            VStack(alignment: .leading, spacing: 2) {
+              Text("\(risk.source): \(risk.keyPath)")
+                .font(.caption.weight(.medium))
+                .lineLimit(1)
+              Text(risk.message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            }
+          }
+        }
+      }
+      .padding(10)
+      .background(.quaternary, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+    }
+  }
+
+  @ViewBuilder
+  private var runtimeDiff: some View {
+    let visibleDiff = developerMode
+      ? guardrailReport.runtimeDiff
+      : guardrailReport.runtimeDiff.filter { !$0.isAdvanced }
+    if visibleDiff.isEmpty {
+      ProfileEditFootnote(verbatim: String(localized: "Runtime diff: no generated-template changes from the last working provider options."))
+    } else {
+      VStack(alignment: .leading, spacing: 6) {
+        Text("Runtime Diff")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.secondary)
+        ForEach(visibleDiff) { diff in
+          HStack(alignment: .top, spacing: 8) {
+            Text(diff.title)
+              .font(.caption)
+              .frame(width: 126, alignment: .leading)
+            Text(diff.before)
+              .font(.caption.monospaced())
+              .foregroundStyle(.secondary)
+              .lineLimit(1)
+              .truncationMode(.middle)
+            Image(systemName: "arrow.right")
+              .font(.caption2)
+              .foregroundStyle(.tertiary)
+            Text(diff.after)
+              .font(.caption.monospaced())
+              .lineLimit(1)
+              .truncationMode(.middle)
+          }
+        }
+      }
+      .padding(10)
+      .background(.quaternary, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+    }
   }
 
   private var intervalBinding: Binding<Int> {

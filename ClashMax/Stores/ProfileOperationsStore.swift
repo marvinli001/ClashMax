@@ -227,6 +227,8 @@ final class ProfileCoordinator: ObservableObject {
     guard profile.isSubscription else {
       throw AppError.invalidProfileConfig("Only subscription profiles can update provider options.")
     }
+    let previousOptions = profileStore.profiles.first(where: { $0.id == profile.id })?.subscriptionProviderOptions
+      ?? profile.subscriptionProviderOptions
     try await profileStore.updateSubscriptionProviderOptions(
       profile,
       options: options,
@@ -234,11 +236,27 @@ final class ProfileCoordinator: ObservableObject {
     )
     message = "Updated provider options for \(profile.name)."
     if profile.id == profileStore.activeProfileID {
-      await refreshPreviewAndWait()
-      try await hooks.reloadActiveRuntimeConfigIfNeeded(
-        profile.id,
-        "Subscription provider options updated: Mihomo reloaded"
-      )
+      do {
+        await refreshPreviewAndWait()
+        try await hooks.reloadActiveRuntimeConfigIfNeeded(
+          profile.id,
+          "Subscription provider options updated: Mihomo reloaded"
+        )
+      } catch {
+        do {
+          try await profileStore.updateSubscriptionProviderOptions(
+            profile,
+            options: previousOptions,
+            preflightValidator: NoopSubscriptionProfilePreflightValidator()
+          )
+          await refreshPreviewAndWait()
+          message = "Rolled back provider options for \(profile.name) after runtime reload failed."
+          hooks.appendAppLog("warn", "Rolled back provider options for \(profile.name) after runtime reload failed.")
+        } catch {
+          hooks.appendAppLog("error", "Provider options rollback failed for \(profile.name): \(UserFacingError.message(for: error))")
+        }
+        throw error
+      }
     }
     rescheduleSubscriptionAutoUpdates()
   }

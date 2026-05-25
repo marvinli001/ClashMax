@@ -663,15 +663,14 @@ private struct NetworkPolicySettingsPopover: View {
   @State private var ssid = ""
   @State private var proxyRoutingMode = ProxyRoutingMode.systemProxy
   @State private var enableSystemProxy = true
+  @State private var autoStartRuntime = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
       popoverHeader("Network Policies", systemImage: "wifi.router")
 
-      Text("Rules are applied only from saved user-created entries. ClashMax does not switch TUN or NE Proxy automatically without a matching policy.")
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
+      Toggle("Apply saved policies automatically on network changes", isOn: $settings.autoApplyEnabled)
+        .toggleStyle(.checkbox)
 
       HStack(spacing: 10) {
         Label(statusMessage ?? String(localized: "Current network not checked."), systemImage: currentSSID == nil ? "wifi.slash" : "wifi")
@@ -714,6 +713,9 @@ private struct NetworkPolicySettingsPopover: View {
           .toggleStyle(.checkbox)
           .disabled(proxyRoutingMode != .systemProxy)
 
+        Toggle("Start runtime automatically for this policy", isOn: $autoStartRuntime)
+          .toggleStyle(.checkbox)
+
         HStack {
           if let error = draftRule.validationError {
             Label(error, systemImage: "exclamationmark.triangle.fill")
@@ -752,7 +754,8 @@ private struct NetworkPolicySettingsPopover: View {
       name: name,
       ssid: ssid,
       proxyRoutingMode: proxyRoutingMode,
-      enableSystemProxy: proxyRoutingMode == .systemProxy && enableSystemProxy
+      enableSystemProxy: proxyRoutingMode == .systemProxy && enableSystemProxy,
+      autoStartRuntime: autoStartRuntime
     )
   }
 
@@ -806,6 +809,7 @@ private struct NetworkPolicySettingsPopover: View {
     ssid = ""
     proxyRoutingMode = .systemProxy
     enableSystemProxy = true
+    autoStartRuntime = false
   }
 
   private func removeRule(at index: Int) {

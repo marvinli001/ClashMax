@@ -712,6 +712,107 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(yaml["rules"] as? [String], ["MATCH,Proxy"])
   }
 
+  func testSubscriptionProviderOptionsDecodeMissingTemplateVersionAsLegacyV1() throws {
+    let decoded = try JSONDecoder().decode(SubscriptionProviderOptions.self, from: Data("""
+    {
+      "intervalSeconds": 300,
+      "generatedTemplate": "minimal"
+    }
+    """.utf8))
+
+    XCTAssertEqual(decoded.generatedTemplateVersion, 1)
+    XCTAssertEqual(SubscriptionProviderOptions.default.generatedTemplateVersion, 2)
+    XCTAssertTrue(SubscriptionTemplateKind.minimal.versionSummary(version: 2).contains("v2"))
+  }
+
+  func testProviderBackedLegacyV1DoesNotEmitDNS() throws {
+    let source = "trojan://password@example.com:443#Trojan\n"
+    var options = RuntimeConfigOptions.default
+    options.subscriptionProviderOptions = SubscriptionProviderOptions(generatedTemplateVersion: 1)
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: source,
+      providerContentPath: "/tmp/provider.txt",
+      overrides: .defaultForLaunch(secret: "secret-token"),
+      options: options
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+
+    XCTAssertNil(yaml["dns"])
+  }
+
+  func testProviderBackedV2EmitsDNSBase() throws {
+    let source = "trojan://password@example.com:443#Trojan\n"
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: source,
+      providerContentPath: "/tmp/provider.txt",
+      overrides: .defaultForLaunch(secret: "secret-token")
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let dns = try XCTUnwrap(yaml["dns"] as? [String: Any])
+    let fallbackFilter = try XCTUnwrap(dns["fallback-filter"] as? [String: Any])
+
+    XCTAssertEqual(dns["enable"] as? Bool, true)
+    XCTAssertEqual(dns["ipv6"] as? Bool, false)
+    XCTAssertEqual(dns["respect-rules"] as? Bool, true)
+    XCTAssertEqual(dns["use-system-hosts"] as? Bool, true)
+    XCTAssertEqual(dns["enhanced-mode"] as? String, "fake-ip")
+    XCTAssertEqual(dns["fake-ip-range"] as? String, "198.18.0.1/16")
+    XCTAssertEqual(dns["default-nameserver"] as? [String], ["223.5.5.5", "119.29.29.29"])
+    XCTAssertEqual(dns["nameserver"] as? [String], ["https://dns.alidns.com/dns-query", "https://doh.pub/dns-query"])
+    XCTAssertEqual(dns["fallback"] as? [String], ["tls://8.8.4.4", "tls://1.1.1.1"])
+    XCTAssertEqual(fallbackFilter["geoip"] as? Bool, true)
+    XCTAssertEqual(fallbackFilter["geoip-code"] as? String, "CN")
+  }
+
+  func testProviderBackedV2DNSCanBeOverriddenByRuntimeSettings() throws {
+    let source = "trojan://password@example.com:443#Trojan\n"
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.dnsEnabled = false
+    overrides.ipv6Enabled = true
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: source,
+      providerContentPath: "/tmp/provider.txt",
+      overrides: overrides
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let dns = try XCTUnwrap(yaml["dns"] as? [String: Any])
+
+    XCTAssertEqual(dns["enable"] as? Bool, false)
+    XCTAssertEqual(dns["ipv6"] as? Bool, true)
+  }
+
+  func testProviderOptionsGuardrailMarksDangerousYAMLKeys() throws {
+    let options = SubscriptionProviderOptions(
+      overrideYAML: """
+      dns:
+        enable: true
+      """,
+      runtimeMergeYAML: """
+      external-controller: 0.0.0.0:9090
+      secret: leaked
+      mixed-port: 7899
+      tun:
+        enable: true
+      listeners: []
+      """
+    )
+
+    let report = SubscriptionProviderOptionsGuardrailReport.analyze(options: options)
+    let keyPaths = Set(report.risks.map(\.keyPath))
+
+    XCTAssertTrue(keyPaths.contains("dns"))
+    XCTAssertTrue(keyPaths.contains("external-controller"))
+    XCTAssertTrue(keyPaths.contains("secret"))
+    XCTAssertTrue(keyPaths.contains("mixed-port"))
+    XCTAssertTrue(keyPaths.contains("tun"))
+    XCTAssertTrue(keyPaths.contains("listeners"))
+    XCTAssertTrue(report.hasDangerousRisks)
+    XCTAssertTrue(report.runtimeDiff.contains { $0.isAdvanced && $0.before != $0.after })
+  }
+
   func testURIProviderContentAcceptsMihomo11925SchemesAndUnknownURIs() throws {
     XCTAssertEqual(
       try ProfileConfigInspector.format(of: "tailscale://tag@example.com:443#Tail\n"),
@@ -1287,6 +1388,54 @@ final class ConfigNormalizerTests: XCTestCase {
     }
     XCTAssertEqual(rule.type, "PROCESS-NAME")
     XCTAssertEqual(rule.policy, "DIRECT")
+  }
+
+  func testRuleExplanationBuilderExplainsDomainCIDRProcessProviderAndMatchRules() throws {
+    let rules = [
+      RuntimeRule(index: 1, type: "DOMAIN-SUFFIX", payload: "example.com", policy: "Proxy"),
+      RuntimeRule(index: 2, type: "IP-CIDR", payload: "10.0.0.0/8", policy: "DIRECT"),
+      RuntimeRule(index: 3, type: "PROCESS-NAME", payload: "Safari", policy: "DIRECT"),
+      RuntimeRule(index: 4, type: "RULE-SET", payload: "OpenAI", policy: "Proxy"),
+      RuntimeRule(index: 5, type: "MATCH", payload: "", policy: "Fallback")
+    ]
+    let builder = RuleExplanationBuilder()
+
+    let domain = builder.explanation(
+      for: ConnectionSnapshot(id: "domain", network: "tcp", host: "api.example.com", upload: 0, download: 0, chain: ["Proxy"], rule: "DOMAIN-SUFFIX", rulePayload: "example.com"),
+      rules: rules
+    )
+    let cidr = builder.explanation(
+      for: ConnectionSnapshot(id: "cidr", network: "tcp", host: "10.1.2.3", destinationIP: "10.1.2.3", upload: 0, download: 0, chain: ["DIRECT"], rule: "IP-CIDR", rulePayload: "10.0.0.0/8"),
+      rules: rules
+    )
+    let process = builder.explanation(
+      for: ConnectionSnapshot(id: "process", network: "tcp", host: "17.253.144.10", processName: "Safari", upload: 0, download: 0, chain: ["DIRECT"], rule: "PROCESS-NAME", rulePayload: "Safari"),
+      rules: rules
+    )
+    let providerOnly = builder.explanation(
+      for: ConnectionSnapshot(id: "ruleset", network: "tcp", host: "chat.openai.com", upload: 0, download: 0, chain: ["Proxy"], rule: "RULE-SET", rulePayload: "OpenAI"),
+      rules: [RuntimeRule(index: 1, type: "RULE-SET", payload: "OpenAI", policy: "Proxy")]
+    )
+    let match = builder.explanation(
+      for: ConnectionSnapshot(id: "match", network: "tcp", host: "fallback.test", upload: 0, download: 0, chain: ["Fallback"], rule: "MATCH"),
+      rules: [RuntimeRule(index: 1, type: "MATCH", payload: "", policy: "Fallback")]
+    )
+    let empty = builder.explanation(
+      for: ConnectionSnapshot(id: "empty", network: "tcp", host: "empty.test", upload: 0, download: 0, chain: [], rule: nil),
+      rules: []
+    )
+
+    guard case let .matched(domainRule) = domain.localOutcome else { return XCTFail("Expected domain match") }
+    guard case let .matched(cidrRule) = cidr.localOutcome else { return XCTFail("Expected CIDR match") }
+    guard case let .matched(processRule) = process.localOutcome else { return XCTFail("Expected process match") }
+    guard case .mihomoOnly = providerOnly.localOutcome else { return XCTFail("Expected Mihomo-only provider match") }
+    guard case let .matched(matchRule) = match.localOutcome else { return XCTFail("Expected MATCH fallback") }
+    guard case .noMatch = empty.localOutcome else { return XCTFail("Expected empty runtime no match") }
+
+    XCTAssertEqual(domainRule.type, "DOMAIN-SUFFIX")
+    XCTAssertEqual(cidrRule.type, "IP-CIDR")
+    XCTAssertEqual(processRule.type, "PROCESS-NAME")
+    XCTAssertEqual(matchRule.type, "MATCH")
   }
 
   func testPreviewGroupsExtractXboardStyleInlineYaml() throws {

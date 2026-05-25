@@ -23,6 +23,7 @@ struct ClashMaxApp: App {
         .frame(minWidth: 980, minHeight: 660)
         .onAppear {
           appDelegate.appModel = appModel
+          appModel.startNetworkEnvironmentMonitoring()
           appModel.warmTunHelperRegistrationOnLaunch()
           appModel.warmPreviewRuntimeOnLaunch()
         }
@@ -42,6 +43,62 @@ struct ClashMaxApp: App {
         }
         .keyboardShortcut("0", modifiers: [.command])
       }
+
+      CommandMenu("Config") {
+        Button("Rule Mode") {
+          appModel.requestMode(.rule)
+        }
+        .keyboardShortcut("1", modifiers: [.command, .option])
+
+        Button("Global Mode") {
+          appModel.requestMode(.global)
+        }
+        .keyboardShortcut("2", modifiers: [.command, .option])
+
+        Button("Direct Mode") {
+          appModel.requestMode(.direct)
+        }
+        .keyboardShortcut("3", modifiers: [.command, .option])
+
+        Divider()
+
+        Button("System Proxy Routing") {
+          appModel.requestProxyRoutingMode(.systemProxy)
+        }
+
+        Button("TUN Routing") {
+          appModel.requestProxyRoutingMode(.tun)
+        }
+
+        Button("NE Proxy Routing") {
+          appModel.requestProxyRoutingMode(.neProxy)
+        }
+
+        Divider()
+
+        Button(appModel.systemProxyEnabled ? "Disable System Proxy" : "Enable System Proxy") {
+          appModel.setSystemProxyEnabled(!appModel.systemProxyEnabled)
+        }
+        .keyboardShortcut("s", modifiers: [.command, .option])
+
+        Button("Profiles") {
+          AppDelegate.showMainWindow()
+          appModel.selectedSection = .profiles
+        }
+        .keyboardShortcut("p", modifiers: [.command, .option])
+
+        Button("Update All") {
+          AppDelegate.showMainWindow()
+          appModel.selectedSection = .profiles
+          appModel.updateAllSubscriptions()
+        }
+
+        Button("Import ClashX") {
+          AppDelegate.showMainWindow()
+          appModel.selectedSection = .profiles
+          NotificationCenter.default.post(name: .clashMaxImportClashXRequested, object: nil)
+        }
+      }
     }
 
     MenuBarExtra {
@@ -57,6 +114,7 @@ struct ClashMaxApp: App {
         .appThemeAppearance(appModel.settings.appTheme)
         .onAppear {
           appDelegate.appModel = appModel
+          appModel.startNetworkEnvironmentMonitoring()
           appModel.warmTunHelperRegistrationOnLaunch()
           appModel.warmPreviewRuntimeOnLaunch()
         }
@@ -78,6 +136,7 @@ struct ClashMaxApp: App {
         .appThemeAppearance(appModel.settings.appTheme)
         .onAppear {
           appDelegate.appModel = appModel
+          appModel.startNetworkEnvironmentMonitoring()
           appModel.warmTunHelperRegistrationOnLaunch()
           appModel.warmPreviewRuntimeOnLaunch()
         }
@@ -173,6 +232,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       name: NSWorkspace.didWakeNotification,
       object: nil
     )
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(applicationDidBecomeActive(_:)),
+      name: NSApplication.didBecomeActiveNotification,
+      object: nil
+    )
     NSApp.setActivationPolicy(.regular)
     if UserDefaults.standard.bool(forKey: AppModel.silentStartDefaultsKey) {
       DispatchQueue.main.async {
@@ -185,6 +250,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   deinit {
     NSWorkspace.shared.notificationCenter.removeObserver(self)
+    NotificationCenter.default.removeObserver(self)
   }
 
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -205,6 +271,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     appModel?.handleNetworkEnvironmentMayHaveChanged(reason: "wake")
   }
 
+  @objc func applicationDidBecomeActive(_ notification: Notification) {
+    appModel?.handleNetworkEnvironmentMayHaveChanged(reason: "activation")
+  }
+
   @MainActor
   static func showMainWindow() {
     NSApp.setActivationPolicy(.regular)
@@ -213,4 +283,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       window.makeKeyAndOrderFront(nil)
     }
   }
+}
+
+extension Notification.Name {
+  static let clashMaxImportClashXRequested = Notification.Name("io.github.clashmax.import-clashx-requested")
 }
