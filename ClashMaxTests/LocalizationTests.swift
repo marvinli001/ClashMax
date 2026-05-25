@@ -35,8 +35,12 @@ final class LocalizationTests: XCTestCase {
     let zhBundle = try XCTUnwrap(Bundle(path: zhPath))
 
     XCTAssertEqual(enBundle.localizedString(forKey: "Settings", value: nil, table: nil), "Settings")
+    XCTAssertEqual(enBundle.localizedString(forKey: "Expanded", value: nil, table: nil), "Expanded")
+    XCTAssertEqual(enBundle.localizedString(forKey: "Collapsed", value: nil, table: nil), "Collapsed")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Settings", value: nil, table: nil), "设置")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Language", value: nil, table: nil), "语言")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Expanded", value: nil, table: nil), "已展开")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Collapsed", value: nil, table: nil), "已折叠")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Fake IP DNS", value: nil, table: nil), "Fake IP DNS")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Fake IP Range", value: nil, table: nil), "Fake IP 范围")
     XCTAssertEqual(zhBundle.localizedString(forKey: "System DNS Override", value: nil, table: nil), "覆盖系统 DNS")
