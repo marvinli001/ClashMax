@@ -520,8 +520,33 @@ struct ConfigNormalizer {
         providerName: provider
       ],
       "proxy-groups": proxyGroups,
-      "rules": ["MATCH,\(finalRulePolicy)"]
+      "rules": generatedRules(template: options.generatedTemplate, finalRulePolicy: finalRulePolicy)
     ]
+  }
+
+  private func generatedRules(template: SubscriptionTemplateKind, finalRulePolicy: String) -> [String] {
+    switch template {
+    case .minimal, .global:
+      return ["MATCH,\(finalRulePolicy)"]
+    case .rule:
+      return [
+        "DOMAIN-SUFFIX,local,DIRECT",
+        "IP-CIDR,127.0.0.0/8,DIRECT,no-resolve",
+        "IP-CIDR,10.0.0.0/8,DIRECT,no-resolve",
+        "IP-CIDR,172.16.0.0/12,DIRECT,no-resolve",
+        "IP-CIDR,192.168.0.0/16,DIRECT,no-resolve",
+        "MATCH,\(finalRulePolicy)"
+      ]
+    case .cnDirect:
+      return [
+        "DOMAIN-SUFFIX,local,DIRECT",
+        "GEOSITE,private,DIRECT",
+        "GEOIP,private,DIRECT,no-resolve",
+        "GEOSITE,cn,DIRECT",
+        "GEOIP,CN,DIRECT,no-resolve",
+        "MATCH,\(finalRulePolicy)"
+      ]
+    }
   }
 }
 
@@ -619,6 +644,45 @@ enum ProfileConfigInspector {
     }
   }
 
+  static func contentKind(of source: String) throws -> SubscriptionContentKind {
+    let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+      throw ProfileConfigFormatError.empty
+    }
+    if let decoded = decodedBase64ProviderContent(from: source),
+       isProviderContentText(decoded) {
+      return .base64ShareLinkList
+    }
+    do {
+      let loaded = try Yams.load(yaml: source)
+      if let root = loaded as? [String: Any] {
+        let proxies = root["proxies"] as? [[String: Any]] ?? []
+        let providers = root["proxy-providers"] as? [String: Any] ?? [:]
+        let payload = root["payload"] as? [[String: Any]] ?? []
+        if !payload.isEmpty || (!proxies.isEmpty && providers.isEmpty && !hasRuntimeConfigKeys(root)) {
+          return .proxyProviderContent
+        }
+        guard !proxies.isEmpty || !providers.isEmpty else {
+          throw ProfileConfigFormatError.missingProxyDefinitions
+        }
+        return .clashConfig
+      }
+    } catch let error as ProfileConfigFormatError {
+      throw error
+    } catch {
+      if !isProxyProviderContent(source) {
+        throw ProfileConfigFormatError.yaml(String(describing: error))
+      }
+    }
+    if containsOnlyProviderURIs(in: source) {
+      return .shareLinkList
+    }
+    if isProviderContentText(source) {
+      return .proxyProviderContent
+    }
+    throw ProfileConfigFormatError.rootIsNotMapping
+  }
+
   static func isProxyProviderContent(_ source: String) -> Bool {
     isProviderContentText(source)
       || decodedBase64ProviderContent(from: source).map { isProviderContentText($0) } == true
@@ -642,6 +706,21 @@ enum ProfileConfigInspector {
     let lines = nonEmptyLines(in: source)
     guard !lines.isEmpty else { return false }
     return lines.allSatisfy { providerURI(in: $0) != nil }
+  }
+
+  private static func hasRuntimeConfigKeys(_ root: [String: Any]) -> Bool {
+    [
+      "proxy-groups",
+      "rules",
+      "mixed-port",
+      "port",
+      "socks-port",
+      "redir-port",
+      "tproxy-port",
+      "tun",
+      "dns",
+      "mode"
+    ].contains { root[$0] != nil }
   }
 
   private static func nonEmptyLines(in source: String) -> [String] {

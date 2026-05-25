@@ -118,6 +118,8 @@ final class ProfileStoreTests: XCTestCase {
     let profile = try JSONDecoder().decode(Profile.self, from: data)
 
     XCTAssertEqual(profile.subscriptionProviderOptions, .default)
+    XCTAssertEqual(profile.subscriptionUpdatePolicy, .default)
+    XCTAssertEqual(profile.subscriptionUpdateStatus, .empty)
   }
 
   func testSubscriptionURLIsStoredOutsideManifestAndUpdateRefreshesConfig() async throws {

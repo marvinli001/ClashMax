@@ -48,6 +48,21 @@ final class PersistedSettingsStore: ObservableObject {
       saveCodable(subscriptionFetchSettings, forKey: Self.subscriptionFetchSettingsDefaultsKey)
     }
   }
+  @Published var menuBarPinnedGroupSettings = MenuBarPinnedGroupSettings.default {
+    didSet {
+      saveCodable(menuBarPinnedGroupSettings, forKey: Self.menuBarPinnedGroupSettingsDefaultsKey)
+    }
+  }
+  @Published var externalDashboardProfiles: [ExternalDashboardProfile] = [] {
+    didSet {
+      saveCodable(externalDashboardProfiles, forKey: Self.externalDashboardProfilesDefaultsKey)
+    }
+  }
+  @Published var networkPolicySettings = NetworkPolicySettings.default {
+    didSet {
+      saveCodable(networkPolicySettings, forKey: Self.networkPolicySettingsDefaultsKey)
+    }
+  }
   @Published var appTheme = AppTheme.system {
     didSet {
       saveCodable(appTheme, forKey: Self.appThemeDefaultsKey)
@@ -81,6 +96,9 @@ final class PersistedSettingsStore: ObservableObject {
   private static let ruleOverlaySettingsDefaultsKey = "io.github.clashmax.ruleOverlaySettings"
   private static let delayTestSettingsDefaultsKey = "io.github.clashmax.delayTestSettings"
   private static let subscriptionFetchSettingsDefaultsKey = "io.github.clashmax.subscriptionFetchSettings"
+  private static let menuBarPinnedGroupSettingsDefaultsKey = "io.github.clashmax.menuBarPinnedGroupSettings"
+  private static let externalDashboardProfilesDefaultsKey = "io.github.clashmax.externalDashboardProfiles"
+  private static let networkPolicySettingsDefaultsKey = "io.github.clashmax.networkPolicySettings"
   private static let appThemeDefaultsKey = "io.github.clashmax.appTheme"
   private static let externalControllerSettingsDefaultsKey = "io.github.clashmax.externalControllerSettings"
   private static let externalControllerCORSSettingsDefaultsKey = "io.github.clashmax.externalControllerCORSSettings"
@@ -130,6 +148,24 @@ final class PersistedSettingsStore: ObservableObject {
     subscriptionFetchSettings = Self.loadCodable(
       SubscriptionFetchSettings.self,
       forKey: Self.subscriptionFetchSettingsDefaultsKey,
+      defaults: defaults
+    ) ?? .default
+    menuBarPinnedGroupSettings = Self.loadCodable(
+      MenuBarPinnedGroupSettings.self,
+      forKey: Self.menuBarPinnedGroupSettingsDefaultsKey,
+      defaults: defaults
+    ) ?? .default
+    externalDashboardProfiles = Self.loadCodable(
+      [ExternalDashboardProfile].self,
+      forKey: Self.externalDashboardProfilesDefaultsKey,
+      defaults: defaults
+    ) ?? [
+      ExternalDashboardProfile(name: "YACD", url: URL(string: "https://yacd.metacubex.one")!, readOnly: true),
+      ExternalDashboardProfile(name: "MetaCubeX", url: URL(string: "https://metacubex.github.io/metacubexd")!, readOnly: true)
+    ]
+    networkPolicySettings = Self.loadCodable(
+      NetworkPolicySettings.self,
+      forKey: Self.networkPolicySettingsDefaultsKey,
       defaults: defaults
     ) ?? .default
     appTheme = Self.loadCodable(

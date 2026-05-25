@@ -790,6 +790,59 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(yaml["rules"] as? [String], ["MATCH,Manual"])
   }
 
+  func testProviderContentClassifierDistinguishesRuntimeKinds() throws {
+    let shareLinks = "trojan://password@example.com:443#Trojan\nvless://uuid@example.net:443#VLESS\n"
+    let encodedLinks = Data(shareLinks.utf8).base64EncodedString()
+
+    XCTAssertEqual(
+      try ProfileConfigInspector.contentKind(of: """
+      proxies:
+        - name: DIRECT
+          type: direct
+      proxy-groups:
+        - name: Proxy
+          type: select
+          proxies: [DIRECT]
+      rules:
+        - MATCH,DIRECT
+      """
+      ),
+      .clashConfig
+    )
+    XCTAssertEqual(
+      try ProfileConfigInspector.contentKind(of: "proxies:\n  - name: DIRECT\n    type: direct\n"),
+      .proxyProviderContent
+    )
+    XCTAssertEqual(try ProfileConfigInspector.contentKind(of: shareLinks), .shareLinkList)
+    XCTAssertEqual(try ProfileConfigInspector.contentKind(of: encodedLinks), .base64ShareLinkList)
+  }
+
+  func testCNDirectTemplateWritesDirectRulesBeforeMatchForProviderContent() throws {
+    let source = "trojan://password@example.com:443?sni=example.com#Trojan%20Node\n"
+    var options = RuntimeConfigOptions.default
+    options.subscriptionProviderOptions = SubscriptionProviderOptions(generatedTemplate: .cnDirect)
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: source,
+      providerContentPath: "/tmp/provider.txt",
+      overrides: .defaultForLaunch(secret: "secret-token"),
+      options: options
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+
+    XCTAssertEqual(
+      yaml["rules"] as? [String],
+      [
+        "DOMAIN-SUFFIX,local,DIRECT",
+        "GEOSITE,private,DIRECT",
+        "GEOIP,private,DIRECT,no-resolve",
+        "GEOSITE,cn,DIRECT",
+        "GEOIP,CN,DIRECT,no-resolve",
+        "MATCH,Proxy"
+      ]
+    )
+  }
+
   func testURIProviderContentUsesInternalProviderNameWhenProfileNameMatchesGroups() throws {
     let source = "trojan://password@example.com:443?sni=example.com#Trojan%20Node\n"
 
@@ -1178,6 +1231,62 @@ final class ConfigNormalizerTests: XCTestCase {
     ) { error in
       XCTAssertEqual(String(describing: error), "Disabled rule regex is invalid.")
     }
+  }
+
+  func testRuleMatchSimulatorUsesRuleOrderBeforeMatchFallback() throws {
+    let rules = [
+      RuntimeRule(index: 1, type: "DOMAIN-SUFFIX", payload: "example.com", policy: "DIRECT"),
+      RuntimeRule(index: 2, type: "DOMAIN-KEYWORD", payload: "example", policy: "Proxy"),
+      RuntimeRule(index: 3, type: "MATCH", payload: "", policy: "Proxy")
+    ]
+
+    let outcome = RuleMatchSimulator().simulate(target: "api.example.com", rules: rules)
+
+    guard case let .matched(rule) = outcome else {
+      return XCTFail("Expected local rule match, got \(outcome)")
+    }
+    XCTAssertEqual(rule.index, 1)
+    XCTAssertEqual(rule.policy, "DIRECT")
+  }
+
+  func testRuleMatchSimulatorMatchesIPCIDRNetworks() throws {
+    let rules = [
+      RuntimeRule(index: 1, type: "IP-CIDR", payload: "10.0.0.0/8", policy: "DIRECT"),
+      RuntimeRule(index: 2, type: "IP-CIDR6", payload: "fd00::/8", policy: "DIRECT"),
+      RuntimeRule(index: 3, type: "MATCH", payload: "", policy: "Proxy")
+    ]
+
+    let ipv4Outcome = RuleMatchSimulator().simulate(target: "10.1.2.3", rules: rules)
+    let ipv6Outcome = RuleMatchSimulator().simulate(target: "fd12::1", rules: rules)
+    let missOutcome = RuleMatchSimulator().simulate(target: "11.1.2.3", rules: rules)
+
+    guard case let .matched(ipv4Rule) = ipv4Outcome else {
+      return XCTFail("Expected IPv4 CIDR rule match, got \(ipv4Outcome)")
+    }
+    guard case let .matched(ipv6Rule) = ipv6Outcome else {
+      return XCTFail("Expected IPv6 CIDR rule match, got \(ipv6Outcome)")
+    }
+    guard case let .matched(missRule) = missOutcome else {
+      return XCTFail("Expected fallback rule match, got \(missOutcome)")
+    }
+    XCTAssertEqual(ipv4Rule.index, 1)
+    XCTAssertEqual(ipv6Rule.index, 2)
+    XCTAssertEqual(missRule.index, 3)
+  }
+
+  func testRuleMatchSimulatorSupportsProcessRules() throws {
+    let rules = [
+      RuntimeRule(index: 1, type: "PROCESS-NAME", payload: "Safari", policy: "DIRECT"),
+      RuntimeRule(index: 2, type: "MATCH", payload: "", policy: "Proxy")
+    ]
+
+    let outcome = RuleMatchSimulator().simulate(target: "/Applications/Safari.app", rules: rules)
+
+    guard case let .matched(rule) = outcome else {
+      return XCTFail("Expected process rule match, got \(outcome)")
+    }
+    XCTAssertEqual(rule.type, "PROCESS-NAME")
+    XCTAssertEqual(rule.policy, "DIRECT")
   }
 
   func testPreviewGroupsExtractXboardStyleInlineYaml() throws {

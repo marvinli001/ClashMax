@@ -7,6 +7,18 @@ final class LocalizationTests: XCTestCase {
     XCTAssertEqual(Array(AppSection.allCases.prefix(2)), [.home, .status])
   }
 
+  func testRoutingSectionAppearsBetweenConnectionsAndRules() {
+    guard let connectionsIndex = AppSection.allCases.firstIndex(of: .connections),
+          let routingIndex = AppSection.allCases.firstIndex(of: .routing),
+          let rulesIndex = AppSection.allCases.firstIndex(of: .rules)
+    else {
+      return XCTFail("Expected Connections, Routing, and Rules sections")
+    }
+
+    XCTAssertEqual(routingIndex, AppSection.allCases.index(after: connectionsIndex))
+    XCTAssertEqual(rulesIndex, AppSection.allCases.index(after: routingIndex))
+  }
+
   func testAppBundleDeclaresEnglishAndSimplifiedChineseLocalizations() throws {
     let bundle = try XCTUnwrap(Bundle(identifier: AppConstants.bundleIdentifier))
 

@@ -80,6 +80,29 @@ final class NetworkExtensionProjectConfigurationTests: XCTestCase {
     XCTAssertTrue(plist.contains("group.678WA95W4U.io.github.clashmax.ClashMax.network-extension"))
   }
 
+  func testAppRegistersCommandURLSchemeAndAppShortcuts() throws {
+    let root = try projectRoot()
+    let projectYAML = try String(
+      contentsOf: root.appendingPathComponent("project.yml"),
+      encoding: .utf8
+    )
+    let appInfoPlist = try String(
+      contentsOf: root.appendingPathComponent("Config/ClashMax-Info.plist"),
+      encoding: .utf8
+    )
+    let appIntents = try String(
+      contentsOf: root.appendingPathComponent("ClashMax/App/ClashMaxAppIntents.swift"),
+      encoding: .utf8
+    )
+
+    XCTAssertTrue(projectYAML.contains("- clashmax"))
+    XCTAssertTrue(appInfoPlist.contains("<string>clashmax</string>"))
+    XCTAssertTrue(appIntents.contains("StartClashMaxIntent"))
+    XCTAssertTrue(appIntents.contains("ToggleSystemProxyIntent"))
+    XCTAssertTrue(appIntents.contains("ClashMaxAppShortcuts"))
+    XCTAssertTrue(appIntents.contains("AppShortcutsProvider"))
+  }
+
   func testRunScriptVerifiesEmbeddedSystemExtensionWithoutResigning() throws {
     let root = try projectRoot()
     let projectYAML = try String(

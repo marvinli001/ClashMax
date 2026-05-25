@@ -167,6 +167,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var terminationCleanupInFlight = false
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    NSWorkspace.shared.notificationCenter.addObserver(
+      self,
+      selector: #selector(workspaceDidWake(_:)),
+      name: NSWorkspace.didWakeNotification,
+      object: nil
+    )
     NSApp.setActivationPolicy(.regular)
     if UserDefaults.standard.bool(forKey: AppModel.silentStartDefaultsKey) {
       DispatchQueue.main.async {
@@ -175,6 +181,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     } else {
       Self.showMainWindow()
     }
+  }
+
+  deinit {
+    NSWorkspace.shared.notificationCenter.removeObserver(self)
   }
 
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -189,6 +199,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       sender.reply(toApplicationShouldTerminate: shouldTerminate)
     }
     return .terminateLater
+  }
+
+  @objc private func workspaceDidWake(_ notification: Notification) {
+    appModel?.handleNetworkEnvironmentMayHaveChanged(reason: "wake")
   }
 
   @MainActor

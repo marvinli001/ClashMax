@@ -48,6 +48,15 @@ final class SubscriptionFetcherTests: XCTestCase {
     XCTAssertEqual(options.retryOrder, [.direct, .localClashProxy])
   }
 
+  func testSubscriptionFetchSettingsUseClashXGapDefaultCadence() throws {
+    let settings = SubscriptionFetchSettings.default
+
+    XCTAssertEqual(settings.defaultUpdateIntervalMinutes, 48 * 60)
+    XCTAssertEqual(settings.backgroundCheckIntervalMinutes, 2 * 60)
+    XCTAssertEqual(settings.retryCapMinutes, 6 * 60)
+    XCTAssertFalse(settings.notifyOnUpdateFailure)
+  }
+
   func testSubscriptionProviderOptionsCustomizeHeadersAndFetchProxy() throws {
     let base = SubscriptionFetchOptions(retryOrder: [.direct, .localClashProxy, .systemProxy])
     let providerOptions = SubscriptionProviderOptions(

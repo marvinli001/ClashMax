@@ -9,6 +9,7 @@ final class RuntimeDataStore: ObservableObject {
   @Published var ruleProviders: [RuleProvider] = []
   @Published var rules: [RuntimeRule] = []
   @Published var connections: [ConnectionSnapshot] = []
+  @Published var connectionRecords: [ConnectionRecord] = []
   @Published private(set) var logs: [LogEntry] = []
   @Published var trafficSample: TrafficSample = .zero
   @Published var trafficHistory: [TrafficSample] = []
@@ -20,6 +21,7 @@ final class RuntimeDataStore: ObservableObject {
 
   private var logBuffer = BoundedBuffer<LogEntry>(limit: AppConstants.retainedLogLimit)
   private var connectionBuffer = BoundedBuffer<ConnectionSnapshot>(limit: AppConstants.retainedConnectionLimit)
+  private var connectionRecordBuffer = BoundedBuffer<ConnectionRecord>(limit: AppConstants.retainedConnectionLimit)
   private var logPublishTask: Task<Void, Never>?
 
   var userVisibleLogs: [LogEntry] {
@@ -71,14 +73,38 @@ final class RuntimeDataStore: ObservableObject {
   }
 
   func replaceConnections(_ snapshots: [ConnectionSnapshot]) {
+    let now = Date()
+    let activeIDs = Set(snapshots.map(\.id))
+    let previousRecordsByID = Dictionary(uniqueKeysWithValues: connectionRecords.map { ($0.id, $0) })
+    var nextRecords = snapshots.map { snapshot -> ConnectionRecord in
+      var snapshot = snapshot
+      snapshot.lastSeenAt = now
+      snapshot.endedAt = nil
+      return ConnectionRecord(snapshot: snapshot, isActive: true)
+    }
+    let endedRecords = connectionRecords.compactMap { record -> ConnectionRecord? in
+      guard record.isActive, !activeIDs.contains(record.id) else { return nil }
+      var snapshot = record.snapshot
+      snapshot.endedAt = now
+      return ConnectionRecord(snapshot: snapshot, isActive: false)
+    }
+    let retainedInactive = previousRecordsByID.values.filter { !$0.isActive && !activeIDs.contains($0.id) }
+    nextRecords.append(contentsOf: endedRecords)
+    nextRecords.append(contentsOf: retainedInactive)
+    nextRecords.sort { lhs, rhs in
+      let left = lhs.snapshot.lastSeenAt ?? lhs.snapshot.endedAt ?? lhs.snapshot.startedAt ?? .distantPast
+      let right = rhs.snapshot.lastSeenAt ?? rhs.snapshot.endedAt ?? rhs.snapshot.startedAt ?? .distantPast
+      return left > right
+    }
+    connectionRecordBuffer.replace(with: nextRecords)
+    connectionRecords = connectionRecordBuffer.elements
     connectionBuffer.replace(with: snapshots)
-    connections = connectionBuffer.elements
+    connections = snapshots
   }
 
   func removeConnection(id: ConnectionSnapshot.ID) {
     let remaining = connections.filter { $0.id != id }
-    connectionBuffer.replace(with: remaining)
-    connections = remaining
+    replaceConnections(remaining)
   }
 
   func appendTrafficSample(_ sample: TrafficSample) {
@@ -115,6 +141,8 @@ final class RuntimeDataStore: ObservableObject {
     ruleProviders = []
     rules = []
     replaceConnections([])
+    connectionRecordBuffer.replace(with: [])
+    connectionRecords = []
     closingConnectionIDs = []
     closingAllConnections = false
     providerHealthChecksInFlight = []

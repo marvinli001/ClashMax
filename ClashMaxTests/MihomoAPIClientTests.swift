@@ -314,6 +314,45 @@ final class MihomoAPIClientTests: XCTestCase {
     )
   }
 
+  func testConnectionsDecodeProcessEndpointsAndRulePayload() async throws {
+    let recorder = URLProtocolRecorder(responseBody: """
+    {
+      "connections": [
+        {
+          "id": "abc",
+          "upload": 128,
+          "download": 256,
+          "rule": "DOMAIN-SUFFIX",
+          "rulePayload": "example.com",
+          "chains": ["Proxy", "Japan"],
+          "metadata": {
+            "network": "tcp",
+            "host": "example.com",
+            "sourceIP": "192.168.1.2",
+            "sourcePort": "53000",
+            "destinationIP": "93.184.216.34",
+            "destinationPort": 443,
+            "processName": "Safari",
+            "processPath": "/Applications/Safari.app"
+          }
+        }
+      ]
+    }
+    """)
+    let session = URLSession(configuration: recorder.configuration)
+    let client = MihomoAPIClient(baseURL: URL(string: "http://127.0.0.1:9097")!, secret: "abc", session: session)
+
+    let connections = try await client.connections()
+    let connection = try XCTUnwrap(connections.first)
+
+    XCTAssertEqual(connection.processName, "Safari")
+    XCTAssertEqual(connection.processPath, "/Applications/Safari.app")
+    XCTAssertEqual(connection.sourceAddress, "192.168.1.2:53000")
+    XCTAssertEqual(connection.destinationAddress, "93.184.216.34:443")
+    XCTAssertEqual(connection.ruleSummary, "DOMAIN-SUFFIX example.com")
+    XCTAssertEqual(connection.chain, ["Proxy", "Japan"])
+  }
+
   func testConnectionCloseAndReloadRequestsUseAuthenticatedControlEndpoints() async throws {
     let recorder = URLProtocolRecorder()
     let session = URLSession(configuration: recorder.configuration)

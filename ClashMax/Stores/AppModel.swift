@@ -1,8 +1,26 @@
 import AppKit
 import Combine
+import CoreWLAN
 import Foundation
+@preconcurrency import UserNotifications
 import ServiceManagement
 import UniformTypeIdentifiers
+
+protocol CurrentNetworkProviding {
+  func currentSSID() -> String?
+}
+
+struct CoreWLANCurrentNetworkProvider: CurrentNetworkProviding {
+  func currentSSID() -> String? {
+    CWWiFiClient.shared().interface()?.ssid()?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmptyString
+  }
+}
+
+private extension String {
+  var nonEmptyString: String? {
+    isEmpty ? nil : self
+  }
+}
 
 private enum AppStartupAbort: Error {
   case waitingForTunHelper
@@ -351,6 +369,18 @@ final class AppModel: ObservableObject {
     get { settings.externalControllerSettings }
     set { settings.externalControllerSettings = newValue }
   }
+  var menuBarPinnedGroupSettings: MenuBarPinnedGroupSettings {
+    get { settings.menuBarPinnedGroupSettings }
+    set { settings.menuBarPinnedGroupSettings = newValue }
+  }
+  var externalDashboardProfiles: [ExternalDashboardProfile] {
+    get { settings.externalDashboardProfiles }
+    set { settings.externalDashboardProfiles = newValue }
+  }
+  var networkPolicySettings: NetworkPolicySettings {
+    get { settings.networkPolicySettings }
+    set { settings.networkPolicySettings = newValue }
+  }
   var launchSettings: LaunchSettings { settings.launchSettings }
   var developerMode: Bool {
     get { settings.developerMode }
@@ -438,6 +468,9 @@ final class AppModel: ObservableObject {
       }
     }
   }
+  @Published private(set) var currentNetworkSSID: String?
+  @Published private(set) var networkPolicyStatusMessage: String?
+  @Published private(set) var lastAppliedNetworkPolicyID: NetworkPolicyRule.ID?
   var updatingProfileIDs: Set<Profile.ID> { profileCoordinator.updatingProfileIDs }
   var profileOperationMessage: String? { profileCoordinator.message }
   var profilePreviewGroups: [ProxyGroup] {
@@ -514,6 +547,8 @@ final class AppModel: ObservableObject {
   private var connectionCloseTokens: [ConnectionSnapshot.ID: UUID] = [:]
   private var closeAllConnectionsTask: Task<Void, Never>?
   private var closeAllConnectionsToken: UUID?
+  private var networkPolicyApplyTask: Task<Void, Never>?
+  private var networkPolicyApplyToken: UUID?
   private var runtimeReloadTask: Task<Void, Never>?
   private var runtimeReloadToken: UUID?
   private var runtimeReloadPending = false
@@ -524,6 +559,8 @@ final class AppModel: ObservableObject {
   private var tunDiagnosticsTask: Task<Void, Never>?
   private var publishedNetworkExtensionDiagnosticEventIDs: Set<String> = []
   private var storeCancellables: Set<AnyCancellable> = []
+  private let externalDashboardSecretStore: any SecretStoring
+  private let currentNetworkProvider: any CurrentNetworkProviding
   private let delayStateCacheTTL: TimeInterval
   static let publicIPRefreshInterval: TimeInterval = 300
   static let silentStartDefaultsKey = PersistedSettingsStore.silentStartDefaultsKey
@@ -569,10 +606,14 @@ final class AppModel: ObservableObject {
     pingTester: any PingTesting = SystemPingTester(),
     publicIPInfoClient: any PublicIPInfoFetching = PublicIPInfoClient(),
     defaults: UserDefaults = .standard,
-    delayStateCacheTTL: TimeInterval = 600
+    delayStateCacheTTL: TimeInterval = 600,
+    externalDashboardSecretStore: any SecretStoring = KeychainStore(service: "\(AppConstants.bundleIdentifier).external-dashboards"),
+    currentNetworkProvider: any CurrentNetworkProviding = CoreWLANCurrentNetworkProvider()
   ) {
     self.paths = paths
     self.delayStateCacheTTL = delayStateCacheTTL
+    self.externalDashboardSecretStore = externalDashboardSecretStore
+    self.currentNetworkProvider = currentNetworkProvider
     self.profileStore = profileStore ?? ProfileStore(paths: paths)
     self.proxyPreview = ProxyPreviewStore(defaults: defaults)
     self.profileCoordinator = ProfileCoordinator(profileStore: self.profileStore, proxyPreview: self.proxyPreview)
@@ -597,6 +638,9 @@ final class AppModel: ObservableObject {
       automaticSubscriptionUpdatesEnabled: { [weak self] in
         self?.settings.subscriptionFetchSettings.automaticUpdatesEnabled ?? false
       },
+      subscriptionUpdateSettings: { [weak self] in
+        self?.settings.subscriptionFetchSettings ?? .default
+      },
       subscriptionFetchOptions: { [weak self] profile in
         guard let self else { return SubscriptionFetchOptions() }
         if let profile {
@@ -614,6 +658,9 @@ final class AppModel: ObservableObject {
       },
       appendAppLog: { [weak self] level, message in
         self?.appendAppLog(level: level, message: message)
+      },
+      notifySubscriptionUpdateFailure: { [weak self] profileName, message in
+        self?.notifySubscriptionUpdateFailure(profileName: profileName, message: message)
       },
       clearRuntimeProxyGroups: { [weak self] in
         self?.proxyGroups = []
@@ -934,6 +981,9 @@ final class AppModel: ObservableObject {
   }
 
   func handleIncomingURL(_ url: URL) {
+    if handleCommandURL(url) {
+      return
+    }
     guard SubscriptionURLResolver.resolve(url: url) != nil else {
       lastError = "Invalid subscription URL."
       return
@@ -944,10 +994,191 @@ final class AppModel: ObservableObject {
     }
   }
 
+  private func handleCommandURL(_ url: URL) -> Bool {
+    guard url.scheme?.localizedCaseInsensitiveCompare("clashmax") == .orderedSame else {
+      return false
+    }
+    let action = commandURLAction(from: url)
+    switch action {
+    case "start":
+      start()
+    case "stop":
+      stop()
+    case "restart":
+      restart()
+    case "toggle-system-proxy":
+      setSystemProxyEnabled(!systemProxyEnabled)
+    case "system-proxy-on":
+      setSystemProxyEnabled(true)
+    case "system-proxy-off":
+      setSystemProxyEnabled(false)
+    case "routing-system-proxy":
+      requestProxyRoutingMode(.systemProxy)
+    case "routing-tun":
+      requestProxyRoutingMode(.tun)
+    case "routing-ne-proxy":
+      requestProxyRoutingMode(.neProxy)
+    case "update-due-subscriptions":
+      selectedSection = .profiles
+      updateDueSubscriptions()
+    case "update-all-subscriptions":
+      selectedSection = .profiles
+      updateAllSubscriptions()
+    case "apply-current-network-policy":
+      selectedSection = .settings
+      applyMatchingNetworkPolicyForCurrentNetwork()
+    default:
+      lastError = "Unsupported ClashMax command URL."
+    }
+    return true
+  }
+
+  private func commandURLAction(from url: URL) -> String {
+    if let host = url.host(percentEncoded: false)?.trimmingCharacters(in: .whitespacesAndNewlines),
+       !host.isEmpty {
+      return host
+    }
+    return url.pathComponents
+      .dropFirst()
+      .first?
+      .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+  }
+
   func updateActiveSubscription() {
     guard let profile = profileStore.activeProfile else { return }
     Task {
       await updateSubscription(profile)
+    }
+  }
+
+  func updateDueSubscriptions() {
+    profileCoordinator.updateDueSubscriptions()
+  }
+
+  func updateAllSubscriptions() {
+    profileCoordinator.updateAllSubscriptions()
+  }
+
+  @discardableResult
+  func updateSubscriptionPolicy(_ profile: Profile, policy: SubscriptionUpdatePolicy) async -> Bool {
+    do {
+      try await profileStore.updateSubscriptionUpdatePolicy(profile, policy: policy)
+      profileCoordinator.rescheduleSubscriptionAutoUpdates()
+      lastError = nil
+      return true
+    } catch {
+      lastError = UserFacingError.message(for: error)
+      return false
+    }
+  }
+
+  func toggleMenuBarPinnedGroup(_ group: ProxyGroup) {
+    var settings = menuBarPinnedGroupSettings
+    settings.toggle(group.name)
+    menuBarPinnedGroupSettings = settings
+  }
+
+  var pinnedMenuBarProxyGroups: [ProxyGroup] {
+    let names = menuBarPinnedGroupSettings.groupNames
+    guard !names.isEmpty else { return [] }
+    return names.compactMap { name in
+      visibleProxyGroups.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+    }
+  }
+
+  @discardableResult
+  func saveExternalDashboardProfile(_ profile: ExternalDashboardProfile, secret: String?) -> Bool {
+    var nextProfile = profile
+    let trimmedSecret = secret?.trimmingCharacters(in: .whitespacesAndNewlines)
+    do {
+      if let trimmedSecret, !trimmedSecret.isEmpty {
+        let account = nextProfile.secretAccount ?? "external-dashboard-\(nextProfile.id.uuidString)"
+        try externalDashboardSecretStore.save(trimmedSecret, account: account)
+        nextProfile.secretAccount = account
+      } else if secret != nil, let account = nextProfile.secretAccount {
+        try externalDashboardSecretStore.delete(account: account)
+        nextProfile.secretAccount = nil
+      }
+
+      var profiles = externalDashboardProfiles
+      if let index = profiles.firstIndex(where: { $0.id == nextProfile.id }) {
+        profiles[index] = nextProfile
+      } else {
+        profiles.append(nextProfile)
+      }
+      externalDashboardProfiles = profiles
+      lastError = nil
+      return true
+    } catch {
+      lastError = UserFacingError.message(for: error)
+      return false
+    }
+  }
+
+  func deleteExternalDashboardProfile(_ profile: ExternalDashboardProfile) {
+    if let account = profile.secretAccount {
+      try? externalDashboardSecretStore.delete(account: account)
+    }
+    externalDashboardProfiles.removeAll { $0.id == profile.id }
+  }
+
+  func externalDashboardURL(for profile: ExternalDashboardProfile) -> URL {
+    let secret = profile.readOnly
+      ? nil
+      : profile.secretAccount.flatMap { try? externalDashboardSecretStore.load(account: $0) }
+        ?? externalControllerSettings.normalizedSecret
+    return Self.dashboardURL(
+      baseURL: profile.url,
+      controllerHost: externalControllerSettings.normalizedHost,
+      controllerPort: externalControllerSettings.normalizedPort,
+      secret: secret
+    )
+  }
+
+  static func dashboardURL(
+    baseURL: URL,
+    controllerHost: String,
+    controllerPort: Int,
+    secret: String?
+  ) -> URL {
+    guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
+      return baseURL
+    }
+    var items = components.queryItems ?? []
+    let fixedValues = [
+      URLQueryItem(name: "hostname", value: controllerHost),
+      URLQueryItem(name: "port", value: "\(controllerPort)")
+    ]
+    for value in fixedValues {
+      items.removeAll { $0.name.caseInsensitiveCompare(value.name) == .orderedSame }
+      items.append(value)
+    }
+    items.removeAll { $0.name.caseInsensitiveCompare("secret") == .orderedSame }
+    if let secret = secret?.trimmingCharacters(in: .whitespacesAndNewlines), !secret.isEmpty {
+      items.append(URLQueryItem(name: "secret", value: secret))
+    }
+    components.queryItems = items
+    return components.url ?? baseURL
+  }
+
+  @discardableResult
+  func updateGlobalRuleOverlay(_ overlay: RuleOverlaySettings) async -> Bool {
+    if let validationError = overlay.validationError {
+      lastError = validationError
+      return false
+    }
+    ruleOverlaySettings = overlay
+    guard let profileID = profileStore.activeProfileID, isRunning else {
+      lastError = nil
+      return true
+    }
+    do {
+      try await reloadActiveRuntimeConfigIfNeeded(for: profileID, logMessage: "Rule overlay updated")
+      lastError = nil
+      return true
+    } catch {
+      lastError = UserFacingError.message(for: error)
+      return false
     }
   }
 
@@ -1643,6 +1874,118 @@ final class AppModel: ObservableObject {
       setProxyRoutingMode(mode)
       pendingRoutingModeTask = nil
     }
+  }
+
+  func refreshCurrentNetworkPolicyState() {
+    let ssid = currentNetworkProvider.currentSSID()
+    currentNetworkSSID = ssid
+    guard let ssid else {
+      networkPolicyStatusMessage = String(localized: "No Wi-Fi SSID detected.")
+      return
+    }
+    if let rule = networkPolicySettings.matchingRule(ssid: ssid) {
+      networkPolicyStatusMessage = String(
+        format: String(localized: "Current network %@ matches %@."),
+        ssid,
+        rule.name
+      )
+    } else {
+      networkPolicyStatusMessage = String(
+        format: String(localized: "No saved policy matches %@."),
+        ssid
+      )
+    }
+  }
+
+  func applyMatchingNetworkPolicyForCurrentNetwork() {
+    applyMatchingNetworkPolicyForCurrentNetwork(trigger: "manual")
+  }
+
+  func handleNetworkEnvironmentMayHaveChanged(reason: String) {
+    guard !networkPolicySettings.rules.isEmpty else { return }
+    applyMatchingNetworkPolicyForCurrentNetwork(trigger: reason)
+  }
+
+  func applyNetworkPolicy(_ rule: NetworkPolicyRule) {
+    applyNetworkPolicy(rule, trigger: "manual", matchedSSID: nil)
+  }
+
+  private func applyMatchingNetworkPolicyForCurrentNetwork(trigger: String) {
+    let ssid = currentNetworkProvider.currentSSID()
+    currentNetworkSSID = ssid
+    guard let ssid else {
+      let message = String(localized: "No Wi-Fi SSID detected.")
+      networkPolicyStatusMessage = message
+      if trigger == "manual" {
+        appNotice = AppNotice(message: message, tone: .info)
+      }
+      return
+    }
+    guard let rule = networkPolicySettings.matchingRule(ssid: ssid) else {
+      let message = String(format: String(localized: "No saved policy matches %@."), ssid)
+      networkPolicyStatusMessage = message
+      if trigger == "manual" {
+        appNotice = AppNotice(message: message, tone: .info)
+      }
+      return
+    }
+    applyNetworkPolicy(rule, trigger: trigger, matchedSSID: ssid)
+  }
+
+  private func applyNetworkPolicy(_ rule: NetworkPolicyRule, trigger: String, matchedSSID: String?) {
+    networkPolicyApplyTask?.cancel()
+    let token = UUID()
+    networkPolicyApplyToken = token
+    networkPolicyApplyTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer {
+        if self.networkPolicyApplyToken == token {
+          self.networkPolicyApplyTask = nil
+          self.networkPolicyApplyToken = nil
+        }
+      }
+      guard !Task.isCancelled else { return }
+      await self.applyNetworkPolicyRule(rule, trigger: trigger, matchedSSID: matchedSSID)
+    }
+  }
+
+  private func applyNetworkPolicyRule(_ rule: NetworkPolicyRule, trigger: String, matchedSSID: String?) async {
+    if let validationError = rule.validationError {
+      networkPolicyStatusMessage = validationError
+      lastError = validationError
+      return
+    }
+
+    setProxyRoutingMode(rule.proxyRoutingMode)
+    if rule.proxyRoutingMode == .systemProxy, rule.enableSystemProxy {
+      do {
+        try await applySystemProxyEnabledState(true)
+      } catch {
+        let message = UserFacingError.message(for: error)
+        networkPolicyStatusMessage = message
+        lastError = message
+        return
+      }
+    }
+    guard !Task.isCancelled else { return }
+
+    lastAppliedNetworkPolicyID = rule.id
+    let message: String
+    if let matchedSSID {
+      message = String(
+        format: String(localized: "Applied %@ for %@."),
+        rule.name,
+        matchedSSID
+      )
+    } else {
+      message = String(format: String(localized: "Applied %@."), rule.name)
+    }
+    networkPolicyStatusMessage = message
+    appNotice = AppNotice(message: message, tone: .success)
+    appendAppLog(
+      level: "info",
+      message: "Applied network policy \(rule.name) via \(trigger): \(rule.proxyRoutingMode.rawValue)"
+    )
   }
 
   func registerHelper() {
@@ -2622,18 +2965,22 @@ final class AppModel: ObservableObject {
     Task { @MainActor [weak self] in
       guard let self else { return }
       do {
-        if enabled {
-          proxyRoutingMode = .systemProxy
-          try await applySystemProxySettings()
-          systemProxyEnabled = true
-          try await activateSystemProxyGuardIfNeeded()
-        } else {
-          _ = try await restoreSystemProxyState(disableWhenNoSnapshot: true)
-          systemProxyEnabled = false
-        }
+        try await applySystemProxyEnabledState(enabled)
       } catch {
         lastError = UserFacingError.message(for: error)
       }
+    }
+  }
+
+  private func applySystemProxyEnabledState(_ enabled: Bool) async throws {
+    if enabled {
+      proxyRoutingMode = .systemProxy
+      try await applySystemProxySettings()
+      systemProxyEnabled = true
+      try await activateSystemProxyGuardIfNeeded()
+    } else {
+      _ = try await restoreSystemProxyState(disableWhenNoSnapshot: true)
+      systemProxyEnabled = false
     }
   }
 
@@ -3985,6 +4332,23 @@ final class AppModel: ObservableObject {
 
   private func appendAppLog(level: String, message: String) {
     runtimeData.appendLog(level: level, message: message)
+  }
+
+  private func notifySubscriptionUpdateFailure(profileName: String, message: String) {
+    guard settings.subscriptionFetchSettings.notifyOnUpdateFailure else { return }
+    let content = UNMutableNotificationContent()
+    content.title = String(localized: "Subscription Update Failed")
+    content.subtitle = profileName
+    content.body = message
+    let request = UNNotificationRequest(
+      identifier: "subscription-update-\(profileName)-\(Date().timeIntervalSince1970)",
+      content: content,
+      trigger: nil
+    )
+    UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
+      guard granted else { return }
+      UNUserNotificationCenter.current().add(request)
+    }
   }
 
   private func publishStartupDiagnostics(level: String = "info") {

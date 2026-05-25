@@ -432,10 +432,17 @@ struct MihomoAPIClient: Sendable {
         id: id,
         network: metadata["network"] as? String ?? "",
         host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
+        sourceIP: Self.stringValue(for: ["sourceIP", "source-ip", "srcIP", "source"], in: metadata),
+        sourcePort: Self.intValue(for: ["sourcePort", "source-port", "srcPort"], in: metadata),
+        destinationIP: Self.stringValue(for: ["destinationIP", "destination-ip", "dstIP"], in: metadata),
+        destinationPort: Self.intValue(for: ["destinationPort", "destination-port", "dstPort"], in: metadata),
+        processName: Self.stringValue(for: ["process", "processName", "process-name"], in: metadata),
+        processPath: Self.stringValue(for: ["processPath", "process-path"], in: metadata),
         upload: item["upload"] as? Int ?? 0,
         download: item["download"] as? Int ?? 0,
         chain: chains,
         rule: item["rule"] as? String,
+        rulePayload: item["rulePayload"] as? String ?? item["rule-payload"] as? String,
         startedAt: nil
       )
     }
@@ -556,6 +563,22 @@ struct MihomoAPIClient: Sendable {
   private static func dateValue(for keys: [String], in object: [String: Any]) -> Date? {
     keys.lazy.compactMap { key in
       date(from: object[key] ?? object.first { $0.key.caseInsensitiveCompare(key) == .orderedSame }?.value)
+    }.first
+  }
+
+  private static func stringValue(for keys: [String], in object: [String: Any]) -> String? {
+    keys.lazy.compactMap { key -> String? in
+      let value = object[key] ?? object.first { $0.key.caseInsensitiveCompare(key) == .orderedSame }?.value
+      switch value {
+      case let string as String:
+        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+      case let convertible as CustomStringConvertible:
+        let trimmed = String(describing: convertible).trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+      default:
+        return nil
+      }
     }.first
   }
 }

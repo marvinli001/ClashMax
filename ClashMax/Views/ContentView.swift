@@ -57,6 +57,8 @@ struct ContentView: View {
       ProxiesView()
     case .connections:
       ConnectionsView()
+    case .routing:
+      RoutingView()
     case .rules:
       RulesView()
     case .logs:

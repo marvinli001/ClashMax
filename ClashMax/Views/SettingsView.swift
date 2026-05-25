@@ -7,6 +7,7 @@ struct SettingsView: View {
   @EnvironmentObject private var appUpdateController: AppUpdateController
   private let bundledCoreInfo: BundledCoreInfo
   @State private var isRuleOverlayPresented = false
+  @State private var isNetworkPoliciesPresented = false
 
   init(bundledCoreInfo: BundledCoreInfo = BundledCoreInfo()) {
     self.bundledCoreInfo = bundledCoreInfo
@@ -156,7 +157,9 @@ struct SettingsView: View {
             description: "Run manual delay tests twice and use the second result to reduce handshake bias.",
             isOn: $settings.delayTestSettings.unifiedDelay
           )
-          ExternalControlSettingsRow()
+          if appModel.developerMode {
+            ExternalControlSettingsRow()
+          }
           SettingsControlRow("Log Level", description: "Runtime logging verbosity.") {
             Picker("Log Level", selection: $settings.overrides.logLevel) {
               Text("Info").tag("info")
@@ -216,8 +219,55 @@ struct SettingsView: View {
           )
           SettingsToggleRow(
             "Automatic Updates",
-            description: "Refresh subscriptions using profile-update-interval metadata when providers publish it.",
+            description: "Refresh subscriptions using per-profile policy, remote metadata, and the global fallback interval.",
             isOn: $settings.subscriptionFetchSettings.automaticUpdatesEnabled
+          )
+          SettingsControlRow(
+            "Default Subscription Interval",
+            description: "Fallback interval used when a subscription does not publish profile-update-interval."
+          ) {
+            NumberStepperField(
+              accessibilityLabel: "Default Subscription Interval",
+              value: Binding(
+                get: { settings.subscriptionFetchSettings.defaultUpdateIntervalMinutes },
+                set: { settings.subscriptionFetchSettings.defaultUpdateIntervalMinutes = SubscriptionUpdatePolicy.normalizedInterval($0) }
+              ),
+              range: SubscriptionUpdatePolicy.minimumIntervalMinutes...SubscriptionUpdatePolicy.maximumIntervalMinutes,
+              step: 60
+            )
+          }
+          SettingsControlRow(
+            "Background Check Interval",
+            description: "How often ClashMax wakes to check whether any subscription is due."
+          ) {
+            NumberStepperField(
+              accessibilityLabel: "Background Check Interval",
+              value: Binding(
+                get: { settings.subscriptionFetchSettings.backgroundCheckIntervalMinutes },
+                set: { settings.subscriptionFetchSettings.backgroundCheckIntervalMinutes = SubscriptionUpdatePolicy.normalizedInterval($0) }
+              ),
+              range: SubscriptionUpdatePolicy.minimumIntervalMinutes...SubscriptionUpdatePolicy.maximumIntervalMinutes,
+              step: 30
+            )
+          }
+          SettingsControlRow(
+            "Retry Backoff Cap",
+            description: "Maximum delay after repeated subscription update failures."
+          ) {
+            NumberStepperField(
+              accessibilityLabel: "Retry Backoff Cap",
+              value: Binding(
+                get: { settings.subscriptionFetchSettings.retryCapMinutes },
+                set: { settings.subscriptionFetchSettings.retryCapMinutes = SubscriptionUpdatePolicy.normalizedInterval($0) }
+              ),
+              range: SubscriptionUpdatePolicy.minimumIntervalMinutes...SubscriptionUpdatePolicy.maximumIntervalMinutes,
+              step: 30
+            )
+          }
+          SettingsToggleRow(
+            "Notify Update Failures",
+            description: "Show a macOS notification when automatic subscription refresh fails.",
+            isOn: $settings.subscriptionFetchSettings.notifyOnUpdateFailure
           )
         }
 
@@ -250,6 +300,36 @@ struct SettingsView: View {
             .pickerStyle(.menu)
             .frame(width: 180, alignment: .trailing)
             .help("Start uses this routing mode.")
+          }
+
+          SettingsControlRow("Network Policies", description: settings.networkPolicySettings.summary) {
+            Button {
+              isNetworkPoliciesPresented = true
+            } label: {
+              Label("Configure", systemImage: "wifi.router")
+            }
+            .popover(isPresented: $isNetworkPoliciesPresented, arrowEdge: .bottom) {
+              NetworkPolicySettingsPopover(
+                settings: $settings.networkPolicySettings,
+                currentSSID: appModel.currentNetworkSSID,
+                statusMessage: appModel.networkPolicyStatusMessage,
+                lastAppliedPolicyID: appModel.lastAppliedNetworkPolicyID,
+                onRefresh: {
+                  appModel.refreshCurrentNetworkPolicyState()
+                },
+                onApplyCurrent: {
+                  appModel.applyMatchingNetworkPolicyForCurrentNetwork()
+                },
+                onApplyRule: { rule in
+                  appModel.applyNetworkPolicy(rule)
+                }
+              )
+                .frame(width: 560)
+                .padding(18)
+                .onAppear {
+                  appModel.refreshCurrentNetworkPolicyState()
+                }
+            }
           }
 
           if settings.proxyRoutingMode == .tun {
@@ -567,6 +647,261 @@ struct SettingsView: View {
         Label("Repair DNS", systemImage: "wrench.and.screwdriver")
       }
       .disabled(!appModel.canRepairNetworkExtensionDNS)
+    }
+  }
+}
+
+private struct NetworkPolicySettingsPopover: View {
+  @Binding var settings: NetworkPolicySettings
+  let currentSSID: String?
+  let statusMessage: String?
+  let lastAppliedPolicyID: NetworkPolicyRule.ID?
+  let onRefresh: () -> Void
+  let onApplyCurrent: () -> Void
+  let onApplyRule: (NetworkPolicyRule) -> Void
+  @State private var name = ""
+  @State private var ssid = ""
+  @State private var proxyRoutingMode = ProxyRoutingMode.systemProxy
+  @State private var enableSystemProxy = true
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      popoverHeader("Network Policies", systemImage: "wifi.router")
+
+      Text("Rules are applied only from saved user-created entries. ClashMax does not switch TUN or NE Proxy automatically without a matching policy.")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+
+      HStack(spacing: 10) {
+        Label(statusMessage ?? String(localized: "Current network not checked."), systemImage: currentSSID == nil ? "wifi.slash" : "wifi")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(2)
+        Spacer()
+        Button {
+          onRefresh()
+        } label: {
+          Image(systemName: "arrow.clockwise")
+            .frame(width: 22, height: 22)
+        }
+        .buttonStyle(.borderless)
+        .help("Refresh current network")
+
+        Button {
+          onApplyCurrent()
+        } label: {
+          Label("Apply Current", systemImage: "bolt")
+        }
+        .disabled(settings.rules.isEmpty)
+        .help("Apply the saved policy matching the current Wi-Fi SSID.")
+      }
+
+      VStack(alignment: .leading, spacing: 10) {
+        TextField("Policy Name", text: $name)
+          .textFieldStyle(.roundedBorder)
+        TextField("Wi-Fi SSID", text: $ssid)
+          .textFieldStyle(.roundedBorder)
+
+        Picker("Routing", selection: $proxyRoutingMode) {
+          ForEach(ProxyRoutingMode.allCases) { mode in
+            Label(mode.displayName, systemImage: mode.symbolName).tag(mode)
+          }
+        }
+        .pickerStyle(.segmented)
+
+        Toggle("Enable System Proxy when this policy selects System Proxy", isOn: $enableSystemProxy)
+          .toggleStyle(.checkbox)
+          .disabled(proxyRoutingMode != .systemProxy)
+
+        HStack {
+          if let error = draftRule.validationError {
+            Label(error, systemImage: "exclamationmark.triangle.fill")
+              .font(.caption)
+              .foregroundStyle(.red)
+              .lineLimit(2)
+          }
+          Spacer()
+          Button {
+            addRule()
+          } label: {
+            Label("Add Policy", systemImage: "plus")
+          }
+          .disabled(draftRule.validationError != nil)
+        }
+      }
+
+      Divider()
+
+      if settings.rules.isEmpty {
+        Text("No network policies")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      } else {
+        VStack(alignment: .leading, spacing: 8) {
+          ForEach(Array(settings.rules.enumerated()), id: \.element.id) { index, rule in
+            networkPolicyRow(rule, at: index)
+          }
+        }
+      }
+    }
+  }
+
+  private var draftRule: NetworkPolicyRule {
+    NetworkPolicyRule(
+      name: name,
+      ssid: ssid,
+      proxyRoutingMode: proxyRoutingMode,
+      enableSystemProxy: proxyRoutingMode == .systemProxy && enableSystemProxy
+    )
+  }
+
+  private func networkPolicyRow(_ rule: NetworkPolicyRule, at index: Int) -> some View {
+    HStack(spacing: 10) {
+      Image(systemName: rule.proxyRoutingMode.symbolName)
+        .foregroundStyle(.secondary)
+        .frame(width: 18)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(rule.name)
+          .font(.callout)
+          .lineLimit(1)
+        Text(rule.description)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(2)
+      }
+      Spacer()
+      if lastAppliedPolicyID == rule.id {
+        Image(systemName: "checkmark.circle.fill")
+          .foregroundStyle(.green)
+          .help("Last applied policy")
+      }
+      Button {
+        onApplyRule(rule)
+      } label: {
+        Image(systemName: "play.fill")
+          .frame(width: 22, height: 22)
+      }
+      .buttonStyle(.borderless)
+      .help("Apply policy")
+      Button {
+        removeRule(at: index)
+      } label: {
+        Image(systemName: "trash")
+          .frame(width: 22, height: 22)
+      }
+      .buttonStyle(.borderless)
+      .help("Remove policy")
+    }
+    .padding(.horizontal, 10)
+    .padding(.vertical, 8)
+    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+  }
+
+  private func addRule() {
+    let rule = draftRule
+    guard rule.validationError == nil else { return }
+    settings.rules.append(rule)
+    name = ""
+    ssid = ""
+    proxyRoutingMode = .systemProxy
+    enableSystemProxy = true
+  }
+
+  private func removeRule(at index: Int) {
+    guard settings.rules.indices.contains(index) else { return }
+    settings.rules.remove(at: index)
+  }
+}
+
+private struct ExternalDashboardProfilesPopover: View {
+  let profiles: [ExternalDashboardProfile]
+  @Binding var name: String
+  @Binding var urlString: String
+  @Binding var readOnly: Bool
+  @Binding var secret: String
+  @Binding var error: String?
+  let onAdd: () -> Void
+  let onDelete: (ExternalDashboardProfile) -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      popoverHeader("External Dashboards", systemImage: "rectangle.3.group")
+
+      Text("Dashboard secrets are stored in Keychain. Saved profiles keep only the Keychain account reference.")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+
+      VStack(alignment: .leading, spacing: 10) {
+        TextField("Name", text: $name)
+          .textFieldStyle(.roundedBorder)
+        TextField("Dashboard URL", text: $urlString)
+          .textFieldStyle(.roundedBorder)
+        Toggle("Read-only dashboard", isOn: $readOnly)
+          .toggleStyle(.checkbox)
+        SecureField("Dashboard Secret", text: $secret)
+          .textFieldStyle(.roundedBorder)
+          .disabled(readOnly)
+        HStack {
+          if let error {
+            Label(error, systemImage: "exclamationmark.triangle.fill")
+              .font(.caption)
+              .foregroundStyle(.red)
+              .lineLimit(2)
+          }
+          Spacer()
+          Button {
+            onAdd()
+          } label: {
+            Label("Add Dashboard", systemImage: "plus")
+          }
+        }
+      }
+
+      Divider()
+
+      if profiles.isEmpty {
+        Text("No dashboards")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      } else {
+        VStack(alignment: .leading, spacing: 8) {
+          ForEach(profiles) { profile in
+            HStack(spacing: 10) {
+              Image(systemName: profile.readOnly ? "eye" : "pencil")
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+              VStack(alignment: .leading, spacing: 2) {
+                Text(profile.name)
+                  .lineLimit(1)
+                Text(profile.url.absoluteString)
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+                  .lineLimit(1)
+                  .truncationMode(.middle)
+              }
+              Spacer()
+              if profile.secretAccount != nil {
+                Image(systemName: "key")
+                  .foregroundStyle(.secondary)
+                  .help("Secret stored in Keychain")
+              }
+              Button {
+                onDelete(profile)
+              } label: {
+                Image(systemName: "trash")
+                  .frame(width: 22, height: 22)
+              }
+              .buttonStyle(.borderless)
+              .help("Remove dashboard")
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+          }
+        }
+      }
     }
   }
 }
@@ -1097,6 +1432,13 @@ private struct ExternalControlSettingsRow: View {
   @State private var originDraft = ""
   @State private var corsError: String?
   @State private var suppressControllerPresentation = false
+  @State private var controllerHealth = ""
+  @State private var isDashboardProfilesPresented = false
+  @State private var dashboardNameDraft = ""
+  @State private var dashboardURLDraft = "https://yacd.metacubex.one"
+  @State private var dashboardReadOnlyDraft = true
+  @State private var dashboardSecretDraft = ""
+  @State private var dashboardError: String?
 
   var body: some View {
     HStack(alignment: .center, spacing: 16) {
@@ -1117,6 +1459,9 @@ private struct ExternalControlSettingsRow: View {
       .layoutPriority(1)
 
       Spacer(minLength: 16)
+
+      dashboardProfilesButton
+      dashboardMenu
 
       Image(systemName: "chevron.right")
         .font(.caption.weight(.semibold))
@@ -1145,6 +1490,60 @@ private struct ExternalControlSettingsRow: View {
       )
       .frame(width: 520)
       .padding(24)
+    }
+  }
+
+  private var dashboardMenu: some View {
+    Menu {
+      ForEach(settings.externalDashboardProfiles) { profile in
+        Button {
+          NSWorkspace.shared.open(appModel.externalDashboardURL(for: profile))
+        } label: {
+          Label(profile.name, systemImage: profile.readOnly ? "eye" : "pencil")
+        }
+      }
+      Divider()
+      Button {
+        controllerHealth = appModel.isRunning
+          ? String(localized: "Controller is running.")
+          : String(localized: "Controller is unavailable until the runtime starts.")
+      } label: {
+        Label("Health Check", systemImage: "heart.text.square")
+      }
+    } label: {
+      Image(systemName: "safari")
+        .frame(width: 22, height: 22)
+    }
+    .help(controllerHealth.isEmpty ? "Open external dashboard" : controllerHealth)
+  }
+
+  private var dashboardProfilesButton: some View {
+    Button {
+      suppressControllerPresentation = true
+      resetDashboardDraft()
+      isDashboardProfilesPresented = true
+      DispatchQueue.main.async {
+        suppressControllerPresentation = false
+      }
+    } label: {
+      Image(systemName: "rectangle.3.group")
+        .frame(width: 22, height: 22)
+    }
+    .buttonStyle(.borderless)
+    .help("Manage external dashboard profiles")
+    .popover(isPresented: $isDashboardProfilesPresented, arrowEdge: .bottom) {
+      ExternalDashboardProfilesPopover(
+        profiles: settings.externalDashboardProfiles,
+        name: $dashboardNameDraft,
+        urlString: $dashboardURLDraft,
+        readOnly: $dashboardReadOnlyDraft,
+        secret: $dashboardSecretDraft,
+        error: $dashboardError,
+        onAdd: saveDashboardProfile,
+        onDelete: deleteDashboardProfile
+      )
+      .frame(width: 540)
+      .padding(18)
     }
   }
 
@@ -1238,6 +1637,39 @@ private struct ExternalControlSettingsRow: View {
     controllerSettings.cors = corsDraft
     settings.externalControllerSettings = controllerSettings
     isCORSPresented = false
+  }
+
+  private func resetDashboardDraft() {
+    dashboardNameDraft = ""
+    dashboardURLDraft = "https://yacd.metacubex.one"
+    dashboardReadOnlyDraft = true
+    dashboardSecretDraft = ""
+    dashboardError = nil
+  }
+
+  private func saveDashboardProfile() {
+    let trimmedName = dashboardNameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedName.isEmpty else {
+      dashboardError = "Dashboard name cannot be empty."
+      return
+    }
+    guard let url = URL(string: dashboardURLDraft.trimmingCharacters(in: .whitespacesAndNewlines)),
+          ["http", "https"].contains(url.scheme?.lowercased() ?? "")
+    else {
+      dashboardError = "Dashboard URL must start with http or https."
+      return
+    }
+    let profile = ExternalDashboardProfile(name: trimmedName, url: url, readOnly: dashboardReadOnlyDraft)
+    let secret = dashboardReadOnlyDraft ? nil : dashboardSecretDraft
+    guard appModel.saveExternalDashboardProfile(profile, secret: secret) else {
+      dashboardError = appModel.lastError
+      return
+    }
+    resetDashboardDraft()
+  }
+
+  private func deleteDashboardProfile(_ profile: ExternalDashboardProfile) {
+    appModel.deleteExternalDashboardProfile(profile)
   }
 
   private static func parseAddress(_ value: String) -> (host: String, port: Int)? {

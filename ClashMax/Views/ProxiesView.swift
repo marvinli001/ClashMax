@@ -1055,6 +1055,13 @@ private struct ProxyGroupDetailPane: View {
       }
       .disabled(!appModel.canControlRuntimeProxies || !group.nodes.contains(where: \.isSelectable))
       .help("Test delay for this group")
+
+      Button {
+        appModel.toggleMenuBarPinnedGroup(group)
+      } label: {
+        Image(systemName: appModel.menuBarPinnedGroupSettings.contains(group.name) ? "pin.fill" : "pin")
+      }
+      .help(appModel.menuBarPinnedGroupSettings.contains(group.name) ? "Unpin from menu bar" : "Pin to menu bar")
     }
   }
 

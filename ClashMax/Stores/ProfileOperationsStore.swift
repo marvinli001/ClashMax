@@ -24,20 +24,24 @@ final class ProfileCoordinator: ObservableObject {
 
   func configureRuntimeHooks(
     automaticSubscriptionUpdatesEnabled: @escaping () -> Bool,
+    subscriptionUpdateSettings: @escaping () -> SubscriptionFetchSettings,
     subscriptionFetchOptions: @escaping (Profile?) -> SubscriptionFetchOptions,
     preflightValidator: @escaping () -> any SubscriptionProfilePreflightValidating,
     reloadActiveRuntimeConfigIfNeeded: @escaping (Profile.ID, String) async throws -> Void,
     appendAppLog: @escaping (String, String) -> Void,
+    notifySubscriptionUpdateFailure: @escaping (String, String) -> Void,
     clearRuntimeProxyGroups: @escaping () -> Void,
     shouldRestartRuntimeAfterProfileSelection: @escaping () -> Bool,
     restartRuntime: @escaping () -> Void
   ) {
     hooks = ProfileCoordinatorHooks(
       automaticSubscriptionUpdatesEnabled: automaticSubscriptionUpdatesEnabled,
+      subscriptionUpdateSettings: subscriptionUpdateSettings,
       subscriptionFetchOptions: subscriptionFetchOptions,
       preflightValidator: preflightValidator,
       reloadActiveRuntimeConfigIfNeeded: reloadActiveRuntimeConfigIfNeeded,
       appendAppLog: appendAppLog,
+      notifySubscriptionUpdateFailure: notifySubscriptionUpdateFailure,
       clearRuntimeProxyGroups: clearRuntimeProxyGroups,
       shouldRestartRuntimeAfterProfileSelection: shouldRestartRuntimeAfterProfileSelection,
       restartRuntime: restartRuntime
@@ -308,14 +312,34 @@ final class ProfileCoordinator: ObservableObject {
   }
 
   func rescheduleSubscriptionAutoUpdates(now: Date = Date()) {
+    let settings = hooks.subscriptionUpdateSettings()
     subscriptionScheduler.reschedule(
       now: now,
       profiles: profileStore.profiles,
       automaticUpdatesEnabled: hooks.automaticSubscriptionUpdatesEnabled(),
+      settings: settings,
       runDueUpdates: { [weak self] in
-        await self?.runDueSubscriptionAutoUpdates()
+        await self?.runDueSubscriptionAutoUpdates(cancelScheduledTask: false)
       }
     )
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      await profileStore.updateSubscriptionNextUpdateDates(
+        subscriptionScheduler.nextUpdateDates(in: profileStore.profiles, now: now, settings: settings)
+      )
+    }
+  }
+
+  func updateDueSubscriptions() {
+    Task { @MainActor [weak self] in
+      await self?.runDueSubscriptionAutoUpdates(forceDueOnly: true)
+    }
+  }
+
+  func updateAllSubscriptions() {
+    Task { @MainActor [weak self] in
+      await self?.runDueSubscriptionAutoUpdates(forceAll: true)
+    }
   }
 
   func cancelSubscriptionAutoUpdates() {
@@ -338,23 +362,65 @@ final class ProfileCoordinator: ObservableObject {
     message = nil
     defer { setProfile(profile.id, updating: false) }
 
-    try await profileStore.updateSubscription(
-      profile,
-      session: session,
-      fetchOptions: fetchOptions,
-      preflightValidator: preflightValidator
-    )
-    let name = profileStore.profiles.first { $0.id == profile.id }?.name ?? profile.name
-    message = "Updated subscription \(name)."
-    return true
+    let startedAt = Date()
+    try? await profileStore.markSubscriptionUpdateStarted(profileID: profile.id, at: startedAt)
+    do {
+      try await profileStore.updateSubscription(
+        profile,
+        session: session,
+        fetchOptions: fetchOptions,
+        preflightValidator: preflightValidator
+      )
+      let finishedAt = Date()
+      let current = profileStore.profiles.first { $0.id == profile.id } ?? profile
+      try? await profileStore.markSubscriptionUpdateSucceeded(
+        profileID: profile.id,
+        at: finishedAt,
+        nextUpdateAt: subscriptionScheduler.updateDate(
+          for: current,
+          now: finishedAt,
+          settings: hooks.subscriptionUpdateSettings()
+        )
+      )
+      let name = profileStore.profiles.first { $0.id == profile.id }?.name ?? profile.name
+      message = "Updated subscription \(name)."
+      return true
+    } catch {
+      let failedAt = Date()
+      let current = profileStore.profiles.first { $0.id == profile.id } ?? profile
+      let backoffUntil = subscriptionScheduler.failureBackoffDate(
+        for: current,
+        now: failedAt,
+        settings: hooks.subscriptionUpdateSettings()
+      )
+      try? await profileStore.markSubscriptionUpdateFailed(
+        profileID: profile.id,
+        message: UserFacingError.message(for: error),
+        at: failedAt,
+        backoffUntil: backoffUntil,
+        nextUpdateAt: backoffUntil
+      )
+      throw error
+    }
   }
 
-  private func runDueSubscriptionAutoUpdates() async {
-    subscriptionScheduler.clearScheduledTask()
-    guard hooks.automaticSubscriptionUpdatesEnabled() else { return }
+  private func runDueSubscriptionAutoUpdates(
+    forceDueOnly: Bool = false,
+    forceAll: Bool = false,
+    cancelScheduledTask: Bool = true
+  ) async {
+    if cancelScheduledTask {
+      subscriptionScheduler.cancel()
+    } else {
+      subscriptionScheduler.clearScheduledTask()
+    }
+    guard forceDueOnly || forceAll || hooks.automaticSubscriptionUpdatesEnabled() else { return }
 
     let now = Date()
-    let dueProfiles = subscriptionScheduler.dueProfiles(from: profileStore.profiles, now: now)
+    let settings = hooks.subscriptionUpdateSettings()
+    let dueProfiles = forceAll
+      ? profileStore.profiles.filter(\.isSubscription)
+      : subscriptionScheduler.dueProfiles(from: profileStore.profiles, now: now, settings: settings)
     guard !dueProfiles.isEmpty else {
       rescheduleSubscriptionAutoUpdates(now: now)
       return
@@ -370,18 +436,23 @@ final class ProfileCoordinator: ObservableObject {
           preflightValidator: hooks.preflightValidator()
         )
         if updated {
-          subscriptionScheduler.clearBackoff(for: profile.id)
           hooks.appendAppLog("info", "Auto-updated subscription \(profile.name).")
           shouldRefreshPreview = shouldRefreshPreview || profile.id == profileStore.activeProfileID
         } else {
-          subscriptionScheduler.deferBriefly(profile.id, now: now)
+          try? await profileStore.markSubscriptionUpdateFailed(
+            profileID: profile.id,
+            message: "Skipped because another update is already running.",
+            at: Date(),
+            backoffUntil: now.addingTimeInterval(60),
+            nextUpdateAt: now.addingTimeInterval(60)
+          )
         }
       } catch {
-        subscriptionScheduler.deferAfterFailure(profile.id, now: Date())
         hooks.appendAppLog(
           "warn",
           "Could not auto-update subscription \(profile.name): \(UserFacingError.message(for: error))"
         )
+        hooks.notifySubscriptionUpdateFailure(profile.name, UserFacingError.message(for: error))
       }
     }
 
@@ -397,12 +468,14 @@ typealias ProfileOperationsStore = ProfileCoordinator
 
 private struct ProfileCoordinatorHooks {
   var automaticSubscriptionUpdatesEnabled: () -> Bool = { false }
+  var subscriptionUpdateSettings: () -> SubscriptionFetchSettings = { .default }
   var subscriptionFetchOptions: (Profile?) -> SubscriptionFetchOptions = { _ in SubscriptionFetchOptions() }
   var preflightValidator: () -> any SubscriptionProfilePreflightValidating = {
     NoopSubscriptionProfilePreflightValidator()
   }
   var reloadActiveRuntimeConfigIfNeeded: (Profile.ID, String) async throws -> Void = { _, _ in }
   var appendAppLog: (String, String) -> Void = { _, _ in }
+  var notifySubscriptionUpdateFailure: (String, String) -> Void = { _, _ in }
   var clearRuntimeProxyGroups: () -> Void = {}
   var shouldRestartRuntimeAfterProfileSelection: () -> Bool = { false }
   var restartRuntime: () -> Void = {}
@@ -410,12 +483,11 @@ private struct ProfileCoordinatorHooks {
 
 @MainActor
 private final class SubscriptionAutoUpdateScheduler {
-  private let retryDelay: TimeInterval
+  private let initialRetryDelay: TimeInterval
   private var task: Task<Void, Never>?
-  private var backoffUntil: [Profile.ID: Date] = [:]
 
   init(retryDelay: TimeInterval) {
-    self.retryDelay = retryDelay
+    self.initialRetryDelay = retryDelay
   }
 
   func cancel() {
@@ -431,11 +503,12 @@ private final class SubscriptionAutoUpdateScheduler {
     now: Date,
     profiles: [Profile],
     automaticUpdatesEnabled: Bool,
+    settings: SubscriptionFetchSettings,
     runDueUpdates: @escaping () async -> Void
   ) {
     cancel()
     guard automaticUpdatesEnabled,
-          let nextUpdateAt = nextUpdateDate(in: profiles, now: now)
+          let nextUpdateAt = nextWakeDate(in: profiles, now: now, settings: settings)
     else {
       return
     }
@@ -452,48 +525,56 @@ private final class SubscriptionAutoUpdateScheduler {
     }
   }
 
-  func dueProfiles(from profiles: [Profile], now: Date) -> [Profile] {
+  func dueProfiles(from profiles: [Profile], now: Date, settings: SubscriptionFetchSettings) -> [Profile] {
     profiles.filter { profile in
-      guard let updateAt = updateDate(for: profile, now: now) else { return false }
+      guard let updateAt = updateDate(for: profile, now: now, settings: settings) else { return false }
       return updateAt <= now
     }
   }
 
-  func clearBackoff(for profileID: Profile.ID) {
-    backoffUntil[profileID] = nil
-  }
-
-  func deferBriefly(_ profileID: Profile.ID, now: Date) {
-    backoffUntil[profileID] = now.addingTimeInterval(60)
-  }
-
-  func deferAfterFailure(_ profileID: Profile.ID, now: Date) {
-    backoffUntil[profileID] = now.addingTimeInterval(retryDelay)
-  }
-
-  private func nextUpdateDate(in profiles: [Profile], now: Date) -> Date? {
-    profiles
-      .compactMap { updateDate(for: $0, now: now) }
-      .min()
-  }
-
-  private func updateDate(for profile: Profile, now: Date) -> Date? {
-    guard profile.isSubscription,
-          let metadata = profile.subscriptionMetadata,
-          let intervalMinutes = metadata.updateIntervalMinutes,
-          intervalMinutes > 0
-    else {
-      return nil
+  func nextUpdateDates(
+    in profiles: [Profile],
+    now: Date,
+    settings: SubscriptionFetchSettings
+  ) -> [Profile.ID: Date?] {
+    profiles.reduce(into: [Profile.ID: Date?]()) { result, profile in
+      guard profile.isSubscription else { return }
+      result[profile.id] = updateDate(for: profile, now: now, settings: settings)
     }
+  }
 
-    let baseDate = (metadata.lastFetchedAt ?? profile.updatedAt)
+  func updateDate(for profile: Profile, now: Date, settings: SubscriptionFetchSettings) -> Date? {
+    guard profile.isSubscription,
+          let intervalMinutes = profile.subscriptionUpdatePolicy.effectiveIntervalMinutes(
+            remoteIntervalMinutes: profile.subscriptionMetadata?.updateIntervalMinutes,
+            globalDefaultMinutes: settings.defaultUpdateIntervalMinutes
+          )
+    else { return nil }
+
+    let baseDate = (profile.subscriptionMetadata?.lastFetchedAt ?? profile.updatedAt)
       .addingTimeInterval(TimeInterval(intervalMinutes * 60))
-    if baseDate <= now,
-       let backoffDate = backoffUntil[profile.id],
-       backoffDate > now {
+    if let backoffDate = profile.subscriptionUpdateStatus.backoffUntil,
+       backoffDate > now,
+       baseDate <= now {
       return backoffDate
     }
     return baseDate
+  }
+
+  func failureBackoffDate(for profile: Profile, now: Date, settings: SubscriptionFetchSettings) -> Date {
+    let failureCount = max(1, profile.subscriptionUpdateStatus.consecutiveFailures + 1)
+    let multiplier = pow(2.0, Double(min(failureCount - 1, 8)))
+    let cappedSeconds = min(initialRetryDelay * multiplier, TimeInterval(settings.retryCapMinutes * 60))
+    return now.addingTimeInterval(cappedSeconds)
+  }
+
+  private func nextWakeDate(in profiles: [Profile], now: Date, settings: SubscriptionFetchSettings) -> Date? {
+    let nextProfileUpdate = profiles
+      .compactMap { updateDate(for: $0, now: now, settings: settings) }
+      .min()
+    let backgroundWake = now.addingTimeInterval(TimeInterval(settings.backgroundCheckIntervalMinutes * 60))
+    guard let nextProfileUpdate else { return backgroundWake }
+    return min(nextProfileUpdate, backgroundWake)
   }
 
   private static func nanoseconds(for seconds: TimeInterval) -> UInt64 {

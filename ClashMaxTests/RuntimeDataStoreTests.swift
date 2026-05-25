@@ -40,4 +40,27 @@ final class RuntimeDataStoreTests: XCTestCase {
     XCTAssertEqual(store.logs.count, 20)
     XCTAssertEqual(changeCount, 1)
   }
+
+  func testConnectionHistoryTracksEndedRecords() async throws {
+    let store = RuntimeDataStore()
+    let first = ConnectionSnapshot(
+      id: "one",
+      network: "tcp",
+      host: "example.com",
+      processName: "Safari",
+      upload: 10,
+      download: 20,
+      chain: ["Proxy"],
+      rule: "MATCH"
+    )
+
+    store.replaceConnections([first])
+    store.replaceConnections([])
+
+    XCTAssertTrue(store.connections.isEmpty)
+    let record = try XCTUnwrap(store.connectionRecords.first)
+    XCTAssertEqual(record.snapshot.processName, "Safari")
+    XCTAssertNotNil(record.snapshot.lastSeenAt)
+    XCTAssertNotNil(record.snapshot.endedAt)
+  }
 }

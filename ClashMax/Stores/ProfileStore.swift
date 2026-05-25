@@ -494,6 +494,68 @@ final class ProfileStore: ObservableObject {
     }
   }
 
+  func updateSubscriptionUpdatePolicy(_ profile: Profile, policy: SubscriptionUpdatePolicy) async throws {
+    await waitForManifestLoad()
+    try await withMutationLock {
+      guard let index = profiles.firstIndex(where: { $0.id == profile.id }),
+            profiles[index].isSubscription
+      else { return }
+      var nextProfiles = profiles
+      nextProfiles[index].subscriptionUpdatePolicy = policy
+      nextProfiles[index].updatedAt = Date()
+      try await saveManifest(profiles: nextProfiles, activeProfileID: activeProfileID)
+      profiles = nextProfiles
+    }
+  }
+
+  func markSubscriptionUpdateStarted(profileID: Profile.ID, at date: Date) async throws {
+    try await updateSubscriptionUpdateStatus(profileID: profileID) { status in
+      status.started(at: date)
+    }
+  }
+
+  func markSubscriptionUpdateSucceeded(profileID: Profile.ID, at date: Date, nextUpdateAt: Date?) async throws {
+    try await updateSubscriptionUpdateStatus(profileID: profileID) { status in
+      status.succeeded(at: date, nextUpdateAt: nextUpdateAt)
+    }
+  }
+
+  func markSubscriptionUpdateFailed(
+    profileID: Profile.ID,
+    message: String,
+    at date: Date,
+    backoffUntil: Date?,
+    nextUpdateAt: Date?
+  ) async throws {
+    try await updateSubscriptionUpdateStatus(profileID: profileID) { status in
+      status.failed(message: message, at: date, backoffUntil: backoffUntil, nextUpdateAt: nextUpdateAt)
+    }
+  }
+
+  func updateSubscriptionNextUpdateDates(_ nextUpdateDates: [Profile.ID: Date?]) async {
+    await waitForManifestLoad()
+    do {
+      try await withMutationLock {
+        var nextProfiles = profiles
+        var changed = false
+        for index in nextProfiles.indices where nextProfiles[index].isSubscription {
+          guard nextUpdateDates.keys.contains(nextProfiles[index].id) else { continue }
+          let nextUpdateAt = nextUpdateDates[nextProfiles[index].id] ?? nil
+          if nextProfiles[index].subscriptionUpdateStatus.nextUpdateAt != nextUpdateAt {
+            nextProfiles[index].subscriptionUpdateStatus = nextProfiles[index].subscriptionUpdateStatus
+              .scheduled(nextUpdateAt: nextUpdateAt)
+            changed = true
+          }
+        }
+        guard changed else { return }
+        try await saveManifest(profiles: nextProfiles, activeProfileID: activeProfileID)
+        profiles = nextProfiles
+      }
+    } catch {
+      // Scheduling metadata should never block the app from running.
+    }
+  }
+
   func delete(_ profile: Profile) async throws {
     await waitForManifestLoad()
     try await withMutationLock {
@@ -526,6 +588,22 @@ final class ProfileStore: ObservableObject {
   func subscriptionURLString(for profile: Profile) -> String? {
     guard case let .subscription(id) = profile.source else { return nil }
     return subscriptionURLCache[id]
+  }
+
+  private func updateSubscriptionUpdateStatus(
+    profileID: Profile.ID,
+    transform: (SubscriptionUpdateStatus) -> SubscriptionUpdateStatus
+  ) async throws {
+    await waitForManifestLoad()
+    try await withMutationLock {
+      guard let index = profiles.firstIndex(where: { $0.id == profileID }),
+            profiles[index].isSubscription
+      else { return }
+      var nextProfiles = profiles
+      nextProfiles[index].subscriptionUpdateStatus = transform(nextProfiles[index].subscriptionUpdateStatus)
+      try await saveManifest(profiles: nextProfiles, activeProfileID: activeProfileID)
+      profiles = nextProfiles
+    }
   }
 
   nonisolated private static func subscriptionAccount(for id: UUID) -> String {

@@ -1,4 +1,5 @@
 import SwiftUI
+import Yams
 
 struct ProfilesView: View {
   @EnvironmentObject private var appModel: AppModel
@@ -9,7 +10,9 @@ struct ProfilesView: View {
   @State private var editProfileName = ""
   @State private var editSubscriptionURL = ""
   @State private var editProviderOptions = SubscriptionProviderOptions.default
+  @State private var editUpdatePolicy = SubscriptionUpdatePolicy.default
   @State private var profilePendingDeletion: Profile?
+  @State private var migrationReport: ClashXMigrationReport?
 
   var body: some View {
     AdaptivePage(
@@ -17,9 +20,29 @@ struct ProfilesView: View {
       subtitle: profilesSubtitle
     ) {
       Button {
+        appModel.updateDueSubscriptions()
+      } label: {
+        Label("Update Due", systemImage: "clock.arrow.circlepath")
+      }
+      .disabled(!profileStore.profiles.contains(where: \.isSubscription))
+
+      Button {
+        appModel.updateAllSubscriptions()
+      } label: {
+        Label("Update All", systemImage: "arrow.triangle.2.circlepath.circle")
+      }
+      .disabled(!profileStore.profiles.contains(where: \.isSubscription))
+
+      Button {
         appModel.importLocalProfile()
       } label: {
         Label("Import YAML", systemImage: "square.and.arrow.down")
+      }
+
+      Button {
+        importClashX()
+      } label: {
+        Label("Import ClashX", systemImage: "arrow.triangle.branch")
       }
     } content: {
       VStack(alignment: .leading, spacing: 14) {
@@ -77,6 +100,7 @@ struct ProfilesView: View {
         name: $editProfileName,
         subscriptionURL: $editSubscriptionURL,
         providerOptions: $editProviderOptions,
+        updatePolicy: $editUpdatePolicy,
         onCancel: closeEditSheet,
         onResetRemoteName: {
           resetRemoteName(profile)
@@ -95,6 +119,17 @@ struct ProfilesView: View {
       }
     } message: {
       Text("Remove \(profilePendingDeletion?.name ?? "this profile") from ClashMax. Stored subscription metadata and the app-managed profile copy will be deleted.")
+    }
+    .sheet(isPresented: migrationReportPresented) {
+      if let migrationReport {
+        ClashXMigrationReportSheet(
+          report: migrationReport,
+          onCancel: { self.migrationReport = nil },
+          onApply: { applyMigrationReport(migrationReport) }
+        )
+        .frame(width: 560)
+        .padding(20)
+      }
     }
   }
 
@@ -197,6 +232,17 @@ struct ProfilesView: View {
     )
   }
 
+  private var migrationReportPresented: Binding<Bool> {
+    Binding(
+      get: { migrationReport != nil },
+      set: { isPresented in
+        if !isPresented {
+          migrationReport = nil
+        }
+      }
+    )
+  }
+
   private func confirmDeleteProfile() {
     guard let profile = profilePendingDeletion else { return }
     profilePendingDeletion = nil
@@ -207,6 +253,7 @@ struct ProfilesView: View {
     editProfileName = profile.name
     editSubscriptionURL = profileStore.subscriptionURLString(for: profile) ?? ""
     editProviderOptions = profile.subscriptionProviderOptions
+    editUpdatePolicy = profile.subscriptionUpdatePolicy
     profileBeingEdited = profile
   }
 
@@ -215,6 +262,7 @@ struct ProfilesView: View {
     editProfileName = ""
     editSubscriptionURL = ""
     editProviderOptions = .default
+    editUpdatePolicy = .default
   }
 
   private func currentProfile(matching profile: Profile) -> Profile? {
@@ -227,10 +275,12 @@ struct ProfilesView: View {
     let trimmedURL = editSubscriptionURL.trimmingCharacters(in: .whitespacesAndNewlines)
     let originalURL = profileStore.subscriptionURLString(for: profile)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     let nextProviderOptions = editProviderOptions
+    let nextUpdatePolicy = editUpdatePolicy
 
     Task { @MainActor in
       var workingProfile = currentProfile(matching: profile) ?? profile
       let providerOptionsChanged = workingProfile.subscriptionProviderOptions != nextProviderOptions
+      let updatePolicyChanged = workingProfile.subscriptionUpdatePolicy != nextUpdatePolicy
       let subscriptionURLChanged = workingProfile.isSubscription && trimmedURL != originalURL
 
       if workingProfile.isSubscription, providerOptionsChanged, subscriptionURLChanged {
@@ -248,6 +298,11 @@ struct ProfilesView: View {
         workingProfile = currentProfile(matching: workingProfile) ?? workingProfile
       }
 
+      if workingProfile.isSubscription, updatePolicyChanged {
+        guard await appModel.updateSubscriptionPolicy(workingProfile, policy: nextUpdatePolicy) else { return }
+        workingProfile = currentProfile(matching: workingProfile) ?? workingProfile
+      }
+
       if workingProfile.name != trimmedName {
         guard await appModel.renameProfileAsync(workingProfile, to: trimmedName) else { return }
       }
@@ -260,6 +315,141 @@ struct ProfilesView: View {
       guard await appModel.resetSubscriptionName(profile) else { return }
       if let updated = currentProfile(matching: profile) {
         editProfileName = updated.name
+      }
+    }
+  }
+
+  private func importClashX() {
+    let panel = NSOpenPanel()
+    panel.canChooseDirectories = true
+    panel.canChooseFiles = false
+    panel.allowsMultipleSelection = false
+    panel.prompt = "Inspect"
+    panel.directoryURL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".config/clash")
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    migrationReport = Self.buildMigrationReport(from: url)
+  }
+
+  private func applyMigrationReport(_ report: ClashXMigrationReport) {
+    migrationReport = nil
+    let configURL = URL(fileURLWithPath: report.configDirectory).appendingPathComponent("config.yaml")
+    applyMigrationRuntimeSettings(report)
+    Task { @MainActor in
+      if FileManager.default.fileExists(atPath: configURL.path) {
+        do {
+          _ = try await profileCoordinator.importLocalProfile(from: configURL)
+        } catch {
+          appModel.lastError = UserFacingError.message(for: error)
+        }
+      }
+      for subscriptionURL in report.subscriptionURLs {
+        _ = await appModel.addSubscription(urlString: subscriptionURL)
+      }
+    }
+  }
+
+  private func applyMigrationRuntimeSettings(_ report: ClashXMigrationReport) {
+    if let mixedPort = report.ports["mixed-port"] ?? report.ports["port"] {
+      let normalizedPort = min(max(mixedPort, 1), 65_535)
+      appModel.overrides.mixedPort = normalizedPort
+    }
+
+    if !report.bypassDomains.isEmpty {
+      var settings = appModel.systemProxySettings
+      settings.customBypassDomains = SystemProxySettings.normalizedBypassDomains(
+        settings.customBypassDomains + report.bypassDomains
+      )
+      appModel.systemProxySettings = settings
+    }
+  }
+
+  private static func buildMigrationReport(from directoryURL: URL) -> ClashXMigrationReport {
+    let configURL = directoryURL.appendingPathComponent("config.yaml")
+    guard let source = try? String(contentsOf: configURL, encoding: .utf8),
+          let root = try? Yams.load(yaml: source) as? [String: Any]
+    else {
+      return ClashXMigrationReport(
+        configDirectory: directoryURL.path,
+        warnings: ["config.yaml was not found or could not be parsed."]
+      )
+    }
+
+    let providers = root["proxy-providers"] as? [String: Any] ?? [:]
+    let subscriptionURLs = providers.values.compactMap { value -> String? in
+      guard let provider = value as? [String: Any] else { return nil }
+      return (provider["url"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    .filter { !$0.isEmpty }
+
+    var ports: [String: Int] = [:]
+    for key in ["mixed-port", "port", "socks-port", "redir-port"] {
+      if let value = root[key] as? Int {
+        ports[key] = value
+      }
+    }
+
+    let bypassKeys = ["cfw-bypass", "bypass", "proxy-bypass"]
+    let bypassDomains = bypassKeys.flatMap { key -> [String] in
+      root[key] as? [String] ?? []
+    }
+
+    return ClashXMigrationReport(
+      configDirectory: directoryURL.path,
+      subscriptionURLs: subscriptionURLs,
+      bypassDomains: bypassDomains,
+      ports: ports,
+      warnings: subscriptionURLs.isEmpty ? ["No remote provider subscription URLs were detected."] : []
+    )
+  }
+}
+
+private struct ClashXMigrationReportSheet: View {
+  let report: ClashXMigrationReport
+  let onCancel: () -> Void
+  let onApply: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      Label("ClashX Migration Report", systemImage: "arrow.triangle.branch")
+        .font(.title3.weight(.semibold))
+
+      Text(report.configDirectory)
+        .font(.caption.monospaced())
+        .foregroundStyle(.secondary)
+        .lineLimit(2)
+
+      migrationSection("Subscriptions", values: report.subscriptionURLs)
+      migrationSection("Bypass", values: report.bypassDomains)
+      migrationSection("Ports", values: report.ports.map { "\($0.key): \($0.value)" }.sorted())
+      migrationSection("Warnings", values: report.warnings)
+
+      Divider()
+
+      HStack {
+        Spacer()
+        Button("Cancel", action: onCancel)
+          .keyboardShortcut(.cancelAction)
+        Button("Apply", action: onApply)
+          .keyboardShortcut(.defaultAction)
+      }
+    }
+  }
+
+  private func migrationSection(_ title: String, values: [String]) -> some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text(LocalizedStringKey(title))
+        .font(.headline)
+      if values.isEmpty {
+        Text("Empty")
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+      } else {
+        ForEach(values, id: \.self) { value in
+          Text(value)
+            .font(.caption)
+            .lineLimit(1)
+            .truncationMode(.middle)
+        }
       }
     }
   }
@@ -382,6 +572,8 @@ private struct ProfileMetricsRow: View {
       metric("Usage", profile.subscriptionMetadata?.trafficSummary ?? "-", "chart.bar")
       metric("Expires", expiresLabel, "calendar")
       metric("Interval", updateIntervalLabel(profile.subscriptionMetadata?.updateIntervalMinutes), "clock.arrow.circlepath")
+      metric("Next", nextUpdateLabel, "calendar.badge.clock")
+      metric("Result", profile.subscriptionUpdateStatus.result.displayName, "checkmark.seal")
       metric("Updated", profile.updatedAt.formatted(date: .abbreviated, time: .omitted), "arrow.triangle.2.circlepath")
     }
   }
@@ -419,13 +611,12 @@ private struct ProfileMetricsRow: View {
 
   private func updateIntervalLabel(_ minutes: Int?) -> String {
     guard let minutes, minutes > 0 else { return "-" }
-    if minutes % 1_440 == 0 {
-      return "\(minutes / 1_440)d"
-    }
-    if minutes % 60 == 0 {
-      return "\(minutes / 60)h"
-    }
-    return "\(minutes)m"
+    return SubscriptionFetchSettings.intervalDescription(minutes)
+  }
+
+  private var nextUpdateLabel: String {
+    guard let nextUpdateAt = profile.subscriptionUpdateStatus.nextUpdateAt else { return "-" }
+    return nextUpdateAt.formatted(date: .abbreviated, time: .shortened)
   }
 }
 
@@ -438,6 +629,7 @@ private struct ProfileEditSheet: View {
   @Binding var name: String
   @Binding var subscriptionURL: String
   @Binding var providerOptions: SubscriptionProviderOptions
+  @Binding var updatePolicy: SubscriptionUpdatePolicy
   let onCancel: () -> Void
   let onResetRemoteName: () -> Void
   let onSave: () -> Void
@@ -488,6 +680,8 @@ private struct ProfileEditSheet: View {
           }
           .disabled(!profile.nameIsUserCustomized)
 
+          SubscriptionUpdatePolicyEditor(policy: $updatePolicy)
+
           SubscriptionProviderOptionsEditor(
             options: $providerOptions,
             validationError: $providerOptionsValidationError
@@ -525,13 +719,73 @@ private struct ProfileEditSheet: View {
   }
 }
 
+private struct SubscriptionUpdatePolicyEditor: View {
+  @Binding var policy: SubscriptionUpdatePolicy
+  @State private var intervalDraft = ""
+
+  var body: some View {
+    Section("Subscription Updates") {
+      Toggle("Automatic Updates", isOn: $policy.automaticUpdatesEnabled)
+      Toggle("Use Remote Interval", isOn: $policy.prefersRemoteInterval)
+        .disabled(!policy.automaticUpdatesEnabled || policy.intervalOverrideMinutes != nil)
+      HStack {
+        Text("Override Interval")
+        Spacer()
+        TextField("Default", text: $intervalDraft)
+          .textFieldStyle(.roundedBorder)
+          .frame(width: 72)
+          .multilineTextAlignment(.trailing)
+          .monospacedDigit()
+          .onSubmit {
+            commitInterval()
+          }
+          .onChange(of: intervalDraft) { _, _ in commitInterval(allowEmpty: true) }
+        Text("minutes")
+          .foregroundStyle(.secondary)
+      }
+      Text("Leave empty to use the remote profile-update-interval or the global default.")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+    .onAppear {
+      intervalDraft = policy.intervalOverrideMinutes.map(String.init) ?? ""
+    }
+    .onChange(of: policy.intervalOverrideMinutes) { _, value in
+      intervalDraft = value.map(String.init) ?? ""
+    }
+  }
+
+  private func commitInterval(allowEmpty: Bool = false) {
+    let trimmed = intervalDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.isEmpty {
+      if allowEmpty || policy.intervalOverrideMinutes != nil {
+        policy.intervalOverrideMinutes = nil
+      }
+      return
+    }
+    guard let parsed = Int(trimmed) else { return }
+    policy.intervalOverrideMinutes = SubscriptionUpdatePolicy.normalizedInterval(parsed)
+  }
+}
+
 private struct SubscriptionProviderOptionsEditor: View {
   @Binding var options: SubscriptionProviderOptions
   @Binding var validationError: String?
   @State private var isRuleOverlayPresented = false
+  @State private var showsAdvancedOptions = false
 
   var body: some View {
     Section("Provider Options") {
+      Picker("Generated Template", selection: $options.generatedTemplate) {
+        ForEach(SubscriptionTemplateKind.allCases) { template in
+          Text(template.displayName).tag(template)
+        }
+      }
+      Text(options.generatedTemplate.description)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .lineLimit(2)
+
       LabeledContent("Provider Interval") {
         VStack(alignment: .trailing, spacing: 4) {
           ProfileNumberStepperField(
@@ -558,12 +812,8 @@ private struct SubscriptionProviderOptionsEditor: View {
         }
       }
 
-      TextField("Filter", text: $options.filter)
-      TextField("Exclude Filter", text: $options.excludeFilter)
-      TextField("Exclude Type", text: $options.excludeType)
       TextField("Generated Select Group", text: $options.primaryGroupName)
       TextField("Generated URL-Test Group", text: $options.autoGroupName)
-      TextField("Final MATCH Policy", text: $options.finalRulePolicy)
 
       HStack(spacing: 10) {
         VStack(alignment: .leading, spacing: 2) {
@@ -583,74 +833,37 @@ private struct SubscriptionProviderOptionsEditor: View {
           RuleOverlaySettingsPopover(settings: $options.ruleOverlay)
             .padding(16)
             .frame(width: 420)
-        }
-      }
-
-      VStack(alignment: .leading, spacing: 6) {
-        Text("Provider Override YAML")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-        TextEditor(text: $options.overrideYAML)
-          .font(.system(.caption, design: .monospaced))
-          .frame(minHeight: 72)
-          .overlay {
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-              .strokeBorder(.quaternary, lineWidth: 1)
           }
       }
 
-      VStack(alignment: .leading, spacing: 6) {
-        Text("Runtime Merge YAML")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-        TextEditor(text: $options.runtimeMergeYAML)
-          .font(.system(.caption, design: .monospaced))
-          .frame(minHeight: 88)
-          .overlay {
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-              .strokeBorder(.quaternary, lineWidth: 1)
-          }
-          .help("Merged into runtime config before app-managed launch settings.")
-      }
+      DisclosureGroup("Advanced YAML and Filters", isExpanded: $showsAdvancedOptions) {
+        VStack(alignment: .leading, spacing: 10) {
+          TextField("Filter", text: $options.filter)
+          TextField("Exclude Filter", text: $options.excludeFilter)
+          TextField("Exclude Type", text: $options.excludeType)
+          TextField("Final MATCH Policy", text: $options.finalRulePolicy)
 
-      VStack(alignment: .leading, spacing: 8) {
-        HStack {
-          Text("Custom Headers")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-          Spacer()
-          Button {
-            options.requestHeaders.append(SubscriptionRequestHeader())
-          } label: {
-            Image(systemName: "plus")
-          }
-          .buttonStyle(.borderless)
-          .help("Add custom header")
-        }
+          yamlEditor("Provider Override YAML", text: $options.overrideYAML, minHeight: 72)
+          yamlEditor("Runtime Merge YAML", text: $options.runtimeMergeYAML, minHeight: 88)
+            .help("Merged into runtime config before app-managed launch settings.")
 
-        if options.requestHeaders.isEmpty {
-          Text("Empty")
-            .font(.caption)
-            .foregroundStyle(.tertiary)
-        } else {
-          ForEach($options.requestHeaders) { $header in
-            HStack(spacing: 8) {
-              TextField("Header", text: $header.name)
-                .textFieldStyle(.roundedBorder)
-              SecureField("Value", text: $header.value)
-                .textFieldStyle(.roundedBorder)
-              Button {
-                options.requestHeaders.removeAll { $0.id == header.id }
-              } label: {
-                Image(systemName: "trash")
-              }
-              .buttonStyle(.borderless)
-              .help("Remove header")
+          customHeadersEditor
+
+          HStack {
+            Spacer()
+            Button {
+              options = .default
+              validateAdvancedYAML()
+            } label: {
+              Label("Restore Defaults", systemImage: "arrow.uturn.backward")
             }
           }
         }
       }
     }
+    .onAppear(perform: validateAdvancedYAML)
+    .onChange(of: options.overrideYAML) { _, _ in validateAdvancedYAML() }
+    .onChange(of: options.runtimeMergeYAML) { _, _ in validateAdvancedYAML() }
   }
 
   private var intervalBinding: Binding<Int> {
@@ -661,6 +874,87 @@ private struct SubscriptionProviderOptionsEditor: View {
         SubscriptionProviderOptions.maximumIntervalSeconds
       ) }
     )
+  }
+
+  private func yamlEditor(_ title: String, text: Binding<String>, minHeight: CGFloat) -> some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text(LocalizedStringKey(title))
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      TextEditor(text: text)
+        .font(.system(.caption, design: .monospaced))
+        .frame(minHeight: minHeight)
+        .overlay {
+          RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .strokeBorder(.quaternary, lineWidth: 1)
+        }
+    }
+  }
+
+  private var customHeadersEditor: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack {
+        Text("Custom Headers")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        Spacer()
+        Button {
+          options.requestHeaders.append(SubscriptionRequestHeader())
+        } label: {
+          Image(systemName: "plus")
+        }
+        .buttonStyle(.borderless)
+        .help("Add custom header")
+      }
+
+      if options.requestHeaders.isEmpty {
+        Text("Empty")
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+      } else {
+        ForEach($options.requestHeaders) { $header in
+          HStack(spacing: 8) {
+            TextField("Header", text: $header.name)
+              .textFieldStyle(.roundedBorder)
+            SecureField("Value", text: $header.value)
+              .textFieldStyle(.roundedBorder)
+            Button {
+              options.requestHeaders.removeAll { $0.id == header.id }
+            } label: {
+              Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .help("Remove header")
+          }
+        }
+      }
+    }
+  }
+
+  private func validateAdvancedYAML() {
+    if let error = yamlValidationError(options.overrideYAML, label: "Provider override") {
+      validationError = error
+      return
+    }
+    if let error = yamlValidationError(options.runtimeMergeYAML, label: "Runtime merge") {
+      validationError = error
+      return
+    }
+    validationError = nil
+  }
+
+  private func yamlValidationError(_ yaml: String, label: String) -> String? {
+    let trimmed = yaml.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    do {
+      let loaded = try Yams.load(yaml: trimmed)
+      guard loaded is [String: Any] else {
+        return "\(label) YAML must be a mapping."
+      }
+      return nil
+    } catch {
+      return "\(label) YAML parse error: \(String(describing: error))"
+    }
   }
 }
 

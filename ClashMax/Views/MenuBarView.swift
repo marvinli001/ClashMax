@@ -100,6 +100,8 @@ struct MenuBarView: View {
           .menuBarPopupPickerStyle()
         }
 
+        MenuBarRoutingQuickButtons()
+
         MenuBarControlRow(title: systemProxyToggleTitle, systemImage: "network.badge.shield.half.filled") {
           Toggle("", isOn: Binding(
             get: { appModel.systemProxyEnabled },
@@ -116,6 +118,12 @@ struct MenuBarView: View {
         )
       }
 
+      if !appModel.pinnedMenuBarProxyGroups.isEmpty {
+        Divider()
+
+        MenuBarPinnedGroupsSection(groups: appModel.pinnedMenuBarProxyGroups)
+      }
+
       Divider()
 
       VStack(spacing: 5) {
@@ -128,16 +136,46 @@ struct MenuBarView: View {
           }
           .disabled(!(appModel.profileStore.activeProfile?.isSubscription ?? false))
 
-          CheckForUpdatesButton(updateController: appUpdateController, fillsWidth: true)
+          Button {
+            appModel.updateAllSubscriptions()
+          } label: {
+            Label("Update All", systemImage: "arrow.triangle.2.circlepath.circle")
+              .frame(maxWidth: .infinity)
+          }
+          .disabled(!appModel.profileStore.profiles.contains(where: \.isSubscription))
         }
 
         HStack(spacing: 5) {
+          Button {
+            appModel.testDelayForAllProxyGroups()
+          } label: {
+            Label("Test All", systemImage: "waveform.path.ecg")
+              .frame(maxWidth: .infinity)
+          }
+          .disabled(!appModel.canControlRuntimeProxies || appModel.visibleProxyGroups.isEmpty)
+
+          Button {
+            appModel.updateAllProxyProviders()
+            appModel.updateAllRuleProviders()
+          } label: {
+            Label("Providers", systemImage: "shippingbox")
+              .frame(maxWidth: .infinity)
+          }
+          .disabled(!appModel.canControlRuntimeProxies)
+        }
+
+        HStack(spacing: 5) {
+          CheckForUpdatesButton(updateController: appUpdateController, fillsWidth: true)
+
           Button {
             AppDelegate.showMainWindow()
           } label: {
             Label("Open Main Window", systemImage: "macwindow")
               .frame(maxWidth: .infinity)
           }
+        }
+
+        HStack(spacing: 5) {
 
           Button {
             NSApp.terminate(nil)
@@ -291,6 +329,61 @@ struct MenuBarRuntimePresentation {
       symbolName = "shield"
       tint = .secondary
       showsTraffic = false
+    }
+  }
+}
+
+private struct MenuBarRoutingQuickButtons: View {
+  @EnvironmentObject private var appModel: AppModel
+
+  var body: some View {
+    HStack(spacing: 6) {
+      Label("Quick", systemImage: "bolt")
+        .font(.callout)
+        .lineLimit(1)
+      Spacer(minLength: 6)
+      HStack(spacing: 4) {
+        ForEach(ProxyRoutingMode.allCases) { mode in
+          Button {
+            appModel.requestProxyRoutingMode(mode)
+          } label: {
+            Image(systemName: mode.symbolName)
+              .frame(width: 24, height: 22)
+          }
+          .buttonStyle(.borderless)
+          .foregroundStyle(appModel.proxyRoutingMode == mode ? Color.accentColor : Color.secondary)
+          .help(mode.displayName)
+        }
+      }
+    }
+  }
+}
+
+private struct MenuBarPinnedGroupsSection: View {
+  @EnvironmentObject private var appModel: AppModel
+  let groups: [ProxyGroup]
+
+  var body: some View {
+    VStack(spacing: 7) {
+      ForEach(groups.prefix(MenuBarPinnedGroupSettings.maximumPinnedGroups)) { group in
+        MenuBarControlRow(title: group.name, systemImage: "pin.fill") {
+          Menu {
+            ForEach(group.nodes.filter(\.isSelectable)) { node in
+              Button {
+                appModel.selectProxy(group: group, node: node)
+              } label: {
+                Label(node.name, systemImage: node.name == group.selected ? "checkmark.circle.fill" : "circle")
+              }
+            }
+          } label: {
+            Label(group.selected ?? String(localized: "Select"), systemImage: "point.3.connected.trianglepath.dotted")
+              .lineLimit(1)
+              .frame(width: MenuBarPanelLayout.controlWidth, alignment: .trailing)
+          }
+          .controlSize(.small)
+          .disabled(!appModel.canControlRuntimeProxies || group.nodes.filter(\.isSelectable).isEmpty)
+        }
+      }
     }
   }
 }

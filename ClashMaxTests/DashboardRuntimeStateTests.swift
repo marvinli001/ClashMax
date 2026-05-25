@@ -1160,6 +1160,60 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertFalse(model.overrides.externalControllerCORS.enabled)
   }
 
+  func testExternalDashboardProfileStoresSecretOutsidePersistedProfile() throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    let dashboardSecrets = InMemorySecretStore()
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: defaults,
+      externalDashboardSecretStore: dashboardSecrets
+    )
+
+    let profile = ExternalDashboardProfile(
+      name: "Local YACD",
+      url: URL(string: "https://yacd.example")!,
+      readOnly: false
+    )
+
+    XCTAssertTrue(model.saveExternalDashboardProfile(profile, secret: "dashboard-secret"))
+    let saved = try XCTUnwrap(model.externalDashboardProfiles.first { $0.name == "Local YACD" })
+    let account = try XCTUnwrap(saved.secretAccount)
+    let encodedProfiles = String(data: try JSONEncoder().encode(model.externalDashboardProfiles), encoding: .utf8)
+
+    XCTAssertEqual(dashboardSecrets.storedValues[account], "dashboard-secret")
+    XCTAssertFalse(encodedProfiles?.contains("dashboard-secret") == true)
+    XCTAssertTrue(model.externalDashboardURL(for: saved).absoluteString.contains("secret=dashboard-secret"))
+  }
+
+  func testReadOnlyExternalDashboardDoesNotExposeControllerSecret() throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    let dashboardSecrets = InMemorySecretStore()
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: defaults,
+      externalDashboardSecretStore: dashboardSecrets
+    )
+    let profile = ExternalDashboardProfile(
+      name: "Read Only",
+      url: URL(string: "https://yacd.example?theme=dark&secret=embedded")!,
+      readOnly: true
+    )
+
+    XCTAssertTrue(model.saveExternalDashboardProfile(profile, secret: "dashboard-secret"))
+    let saved = try XCTUnwrap(model.externalDashboardProfiles.first { $0.name == "Read Only" })
+    let url = model.externalDashboardURL(for: saved)
+    let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+
+    XCTAssertEqual(queryItems.first { $0.name == "theme" }?.value, "dark")
+    XCTAssertEqual(queryItems.first { $0.name == "hostname" }?.value, model.externalControllerSettings.normalizedHost)
+    XCTAssertEqual(queryItems.first { $0.name == "port" }?.value, "\(model.externalControllerSettings.normalizedPort)")
+    XCTAssertNil(queryItems.first { $0.name.caseInsensitiveCompare("secret") == .orderedSame })
+  }
+
   func testExternalControllerSettingsMigratesPartialNestedCORSFromUserDefaults() throws {
     let paths = try Self.makeRuntimePaths()
     let defaults = try Self.makeIsolatedDefaults()
@@ -1389,7 +1443,26 @@ final class DashboardRuntimeStateTests: XCTestCase {
         useLocalClashProxy: false,
         useSystemProxy: true,
         allowsInsecureTLS: true,
-        automaticUpdatesEnabled: false
+        automaticUpdatesEnabled: false,
+        defaultUpdateIntervalMinutes: 2_880,
+        backgroundCheckIntervalMinutes: 120,
+        retryCapMinutes: 360,
+        notifyOnUpdateFailure: true
+      )
+    )
+    try assertRoundTrip(
+      MenuBarPinnedGroupSettings(groupNames: ["Proxy", "Auto", "Fallback", "Ignored"])
+    )
+    try assertRoundTrip(
+      NetworkPolicySettings(
+        rules: [
+          NetworkPolicyRule(
+            name: "Office",
+            ssid: "CorpWiFi",
+            proxyRoutingMode: .systemProxy,
+            enableSystemProxy: true
+          )
+        ]
       )
     )
     try assertRoundTrip(
@@ -1575,6 +1648,64 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     XCTAssertFalse(model.systemProxyEnabled)
     XCTAssertEqual(controller.guardState, .idle)
+  }
+
+  func testApplyingCurrentNetworkPolicyUsesSavedRuleOnly() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+    let controller = SystemProxyController(commandRunner: commandRunner)
+    let rule = NetworkPolicyRule(
+      name: "Office Wi-Fi",
+      ssid: "CorpNet",
+      proxyRoutingMode: .systemProxy,
+      enableSystemProxy: true
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      systemProxyController: controller,
+      defaults: defaults,
+      currentNetworkProvider: StaticCurrentNetworkProvider(ssid: "corpnet")
+    )
+    model.networkPolicySettings = NetworkPolicySettings(rules: [rule])
+
+    model.applyMatchingNetworkPolicyForCurrentNetwork()
+
+    for _ in 0..<40 where !model.systemProxyEnabled {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(model.currentNetworkSSID, "corpnet")
+    XCTAssertEqual(model.lastAppliedNetworkPolicyID, rule.id)
+    XCTAssertEqual(model.proxyRoutingMode, .systemProxy)
+    XCTAssertTrue(model.systemProxyEnabled)
+    XCTAssertEqual(model.networkPolicyStatusMessage, "Applied Office Wi-Fi for corpnet.")
+    XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setwebproxy Wi-Fi 127.0.0.1 7890"))
+  }
+
+  func testCommandURLTogglesSystemProxyWithoutSubscriptionImport() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+    let controller = SystemProxyController(commandRunner: commandRunner)
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      systemProxyController: controller,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    model.handleIncomingURL(try XCTUnwrap(URL(string: "clashmax://toggle-system-proxy")))
+
+    for _ in 0..<40 where !model.systemProxyEnabled {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertTrue(model.systemProxyEnabled)
+    XCTAssertNil(model.lastError)
+    XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setwebproxy Wi-Fi 127.0.0.1 7890"))
   }
 
   func testSystemProxyRestoreIgnoresUnspecifiedRawProxyHosts() async throws {
@@ -7426,5 +7557,13 @@ private final class UnstoppableRunningProcess: RunningCoreProcess {
 
   func recentOutputTail(maxBytes: Int) -> String {
     ""
+  }
+}
+
+private struct StaticCurrentNetworkProvider: CurrentNetworkProviding {
+  let ssid: String?
+
+  func currentSSID() -> String? {
+    ssid
   }
 }

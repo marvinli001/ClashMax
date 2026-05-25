@@ -80,6 +80,46 @@ enum SubscriptionProviderFetchProxy: String, Codable, CaseIterable, Identifiable
   }
 }
 
+enum SubscriptionContentKind: String, Codable, Equatable, Sendable {
+  case clashConfig
+  case proxyProviderContent
+  case shareLinkList
+  case base64ShareLinkList
+}
+
+enum SubscriptionTemplateKind: String, Codable, CaseIterable, Identifiable, Sendable {
+  case minimal
+  case global
+  case rule
+  case cnDirect
+
+  static let currentVersion = 1
+
+  var id: String { rawValue }
+
+  var displayName: String {
+    switch self {
+    case .minimal: String(localized: "Minimal")
+    case .global: String(localized: "Global")
+    case .rule: String(localized: "Rule")
+    case .cnDirect: String(localized: "CN Direct")
+    }
+  }
+
+  var description: String {
+    switch self {
+    case .minimal:
+      return String(localized: "Only Proxy, Auto, DIRECT, and MATCH.")
+    case .global:
+      return String(localized: "Send all traffic through the generated Proxy group.")
+    case .rule:
+      return String(localized: "Use a practical rule-mode template with private network direct rules.")
+    case .cnDirect:
+      return String(localized: "Route common China/private destinations direct before MATCH.")
+    }
+  }
+}
+
 struct SubscriptionRequestHeader: Identifiable, Codable, Equatable, Sendable {
   var id: UUID
   var name: String
@@ -135,6 +175,8 @@ struct SubscriptionProviderOptions: Codable, Equatable, Sendable {
   var autoGroupName: String
   var finalRulePolicy: String
   var ruleOverlay: RuleOverlaySettings
+  var generatedTemplate: SubscriptionTemplateKind
+  var generatedTemplateVersion: Int
 
   private enum CodingKeys: String, CodingKey {
     case intervalSeconds
@@ -150,6 +192,8 @@ struct SubscriptionProviderOptions: Codable, Equatable, Sendable {
     case autoGroupName
     case finalRulePolicy
     case ruleOverlay
+    case generatedTemplate
+    case generatedTemplateVersion
   }
 
   init(
@@ -164,7 +208,9 @@ struct SubscriptionProviderOptions: Codable, Equatable, Sendable {
     primaryGroupName: String = "Proxy",
     autoGroupName: String = "Auto",
     finalRulePolicy: String = "Proxy",
-    ruleOverlay: RuleOverlaySettings = .disabled
+    ruleOverlay: RuleOverlaySettings = .disabled,
+    generatedTemplate: SubscriptionTemplateKind = .minimal,
+    generatedTemplateVersion: Int = SubscriptionTemplateKind.currentVersion
   ) {
     self.intervalSeconds = min(max(intervalSeconds, Self.minimumIntervalSeconds), Self.maximumIntervalSeconds)
     self.filter = filter
@@ -178,6 +224,8 @@ struct SubscriptionProviderOptions: Codable, Equatable, Sendable {
     self.autoGroupName = autoGroupName
     self.finalRulePolicy = finalRulePolicy
     self.ruleOverlay = ruleOverlay
+    self.generatedTemplate = generatedTemplate
+    self.generatedTemplateVersion = max(1, generatedTemplateVersion)
   }
 
   static let `default` = SubscriptionProviderOptions()
@@ -201,7 +249,17 @@ struct SubscriptionProviderOptions: Codable, Equatable, Sendable {
       primaryGroupName: container.decodeDefault(String.self, forKey: .primaryGroupName, default: defaults.primaryGroupName),
       autoGroupName: container.decodeDefault(String.self, forKey: .autoGroupName, default: defaults.autoGroupName),
       finalRulePolicy: container.decodeDefault(String.self, forKey: .finalRulePolicy, default: defaults.finalRulePolicy),
-      ruleOverlay: container.decodeDefault(RuleOverlaySettings.self, forKey: .ruleOverlay, default: defaults.ruleOverlay)
+      ruleOverlay: container.decodeDefault(RuleOverlaySettings.self, forKey: .ruleOverlay, default: defaults.ruleOverlay),
+      generatedTemplate: container.decodeDefault(
+        SubscriptionTemplateKind.self,
+        forKey: .generatedTemplate,
+        default: defaults.generatedTemplate
+      ),
+      generatedTemplateVersion: container.decodeDefault(
+        Int.self,
+        forKey: .generatedTemplateVersion,
+        default: defaults.generatedTemplateVersion
+      )
     )
   }
 
@@ -221,6 +279,8 @@ struct SubscriptionProviderOptions: Codable, Equatable, Sendable {
     try container.encode(autoGroupName, forKey: .autoGroupName)
     try container.encode(finalRulePolicy, forKey: .finalRulePolicy)
     try container.encode(ruleOverlay, forKey: .ruleOverlay)
+    try container.encode(generatedTemplate, forKey: .generatedTemplate)
+    try container.encode(generatedTemplateVersion, forKey: .generatedTemplateVersion)
   }
 
   var normalizedHeaders: [String: String] {
@@ -240,6 +300,194 @@ struct SubscriptionProviderOptions: Codable, Equatable, Sendable {
   }
 }
 
+enum SubscriptionUpdateResult: String, Codable, Equatable, Sendable {
+  case never
+  case running
+  case succeeded
+  case failed
+  case skipped
+
+  var displayName: String {
+    switch self {
+    case .never: String(localized: "Never")
+    case .running: String(localized: "Running")
+    case .succeeded: String(localized: "Succeeded")
+    case .failed: String(localized: "Failed")
+    case .skipped: String(localized: "Skipped")
+    }
+  }
+}
+
+struct SubscriptionUpdatePolicy: Codable, Equatable, Sendable {
+  static let minimumIntervalMinutes = 30
+  static let maximumIntervalMinutes = 7 * 24 * 60
+
+  var automaticUpdatesEnabled: Bool
+  var intervalOverrideMinutes: Int?
+  var prefersRemoteInterval: Bool
+
+  private enum CodingKeys: String, CodingKey {
+    case automaticUpdatesEnabled
+    case intervalOverrideMinutes
+    case prefersRemoteInterval
+  }
+
+  init(
+    automaticUpdatesEnabled: Bool = true,
+    intervalOverrideMinutes: Int? = nil,
+    prefersRemoteInterval: Bool = true
+  ) {
+    self.automaticUpdatesEnabled = automaticUpdatesEnabled
+    self.intervalOverrideMinutes = intervalOverrideMinutes.map(Self.normalizedInterval)
+    self.prefersRemoteInterval = prefersRemoteInterval
+  }
+
+  static let `default` = SubscriptionUpdatePolicy()
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    let defaults = Self.default
+    self.init(
+      automaticUpdatesEnabled: container.decodeDefault(
+        Bool.self,
+        forKey: .automaticUpdatesEnabled,
+        default: defaults.automaticUpdatesEnabled
+      ),
+      intervalOverrideMinutes: try container.decodeIfPresent(Int.self, forKey: .intervalOverrideMinutes),
+      prefersRemoteInterval: container.decodeDefault(
+        Bool.self,
+        forKey: .prefersRemoteInterval,
+        default: defaults.prefersRemoteInterval
+      )
+    )
+  }
+
+  func effectiveIntervalMinutes(remoteIntervalMinutes: Int?, globalDefaultMinutes: Int) -> Int? {
+    guard automaticUpdatesEnabled else { return nil }
+    if let intervalOverrideMinutes {
+      return Self.normalizedInterval(intervalOverrideMinutes)
+    }
+    if prefersRemoteInterval, let remoteIntervalMinutes, remoteIntervalMinutes > 0 {
+      return Self.normalizedInterval(remoteIntervalMinutes)
+    }
+    return Self.normalizedInterval(globalDefaultMinutes)
+  }
+
+  static func normalizedInterval(_ minutes: Int) -> Int {
+    min(max(minutes, minimumIntervalMinutes), maximumIntervalMinutes)
+  }
+}
+
+struct SubscriptionUpdateStatus: Codable, Equatable, Sendable {
+  var result: SubscriptionUpdateResult
+  var lastStartedAt: Date?
+  var lastFinishedAt: Date?
+  var lastSucceededAt: Date?
+  var lastError: String?
+  var nextUpdateAt: Date?
+  var backoffUntil: Date?
+  var consecutiveFailures: Int
+
+  private enum CodingKeys: String, CodingKey {
+    case result
+    case lastStartedAt
+    case lastFinishedAt
+    case lastSucceededAt
+    case lastError
+    case nextUpdateAt
+    case backoffUntil
+    case consecutiveFailures
+  }
+
+  init(
+    result: SubscriptionUpdateResult = .never,
+    lastStartedAt: Date? = nil,
+    lastFinishedAt: Date? = nil,
+    lastSucceededAt: Date? = nil,
+    lastError: String? = nil,
+    nextUpdateAt: Date? = nil,
+    backoffUntil: Date? = nil,
+    consecutiveFailures: Int = 0
+  ) {
+    self.result = result
+    self.lastStartedAt = lastStartedAt
+    self.lastFinishedAt = lastFinishedAt
+    self.lastSucceededAt = lastSucceededAt
+    self.lastError = lastError?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    self.nextUpdateAt = nextUpdateAt
+    self.backoffUntil = backoffUntil
+    self.consecutiveFailures = max(0, consecutiveFailures)
+  }
+
+  static let empty = SubscriptionUpdateStatus()
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    self.init(
+      result: container.decodeDefault(SubscriptionUpdateResult.self, forKey: .result, default: .never),
+      lastStartedAt: try container.decodeIfPresent(Date.self, forKey: .lastStartedAt),
+      lastFinishedAt: try container.decodeIfPresent(Date.self, forKey: .lastFinishedAt),
+      lastSucceededAt: try container.decodeIfPresent(Date.self, forKey: .lastSucceededAt),
+      lastError: try container.decodeIfPresent(String.self, forKey: .lastError),
+      nextUpdateAt: try container.decodeIfPresent(Date.self, forKey: .nextUpdateAt),
+      backoffUntil: try container.decodeIfPresent(Date.self, forKey: .backoffUntil),
+      consecutiveFailures: container.decodeDefault(Int.self, forKey: .consecutiveFailures, default: 0)
+    )
+  }
+
+  func started(at date: Date) -> SubscriptionUpdateStatus {
+    SubscriptionUpdateStatus(
+      result: .running,
+      lastStartedAt: date,
+      lastFinishedAt: lastFinishedAt,
+      lastSucceededAt: lastSucceededAt,
+      lastError: nil,
+      nextUpdateAt: nextUpdateAt,
+      backoffUntil: backoffUntil,
+      consecutiveFailures: consecutiveFailures
+    )
+  }
+
+  func succeeded(at date: Date, nextUpdateAt: Date?) -> SubscriptionUpdateStatus {
+    SubscriptionUpdateStatus(
+      result: .succeeded,
+      lastStartedAt: lastStartedAt,
+      lastFinishedAt: date,
+      lastSucceededAt: date,
+      lastError: nil,
+      nextUpdateAt: nextUpdateAt,
+      backoffUntil: nil,
+      consecutiveFailures: 0
+    )
+  }
+
+  func failed(message: String, at date: Date, backoffUntil: Date?, nextUpdateAt: Date?) -> SubscriptionUpdateStatus {
+    SubscriptionUpdateStatus(
+      result: .failed,
+      lastStartedAt: lastStartedAt,
+      lastFinishedAt: date,
+      lastSucceededAt: lastSucceededAt,
+      lastError: message,
+      nextUpdateAt: nextUpdateAt,
+      backoffUntil: backoffUntil,
+      consecutiveFailures: consecutiveFailures + 1
+    )
+  }
+
+  func scheduled(nextUpdateAt: Date?) -> SubscriptionUpdateStatus {
+    SubscriptionUpdateStatus(
+      result: result,
+      lastStartedAt: lastStartedAt,
+      lastFinishedAt: lastFinishedAt,
+      lastSucceededAt: lastSucceededAt,
+      lastError: lastError,
+      nextUpdateAt: nextUpdateAt,
+      backoffUntil: backoffUntil,
+      consecutiveFailures: consecutiveFailures
+    )
+  }
+}
+
 struct Profile: Identifiable, Codable, Equatable, Sendable {
   var id: UUID
   var name: String
@@ -248,6 +496,8 @@ struct Profile: Identifiable, Codable, Equatable, Sendable {
   var originalConfigPath: String
   var subscriptionMetadata: SubscriptionMetadata?
   var subscriptionProviderOptions: SubscriptionProviderOptions
+  var subscriptionUpdatePolicy: SubscriptionUpdatePolicy
+  var subscriptionUpdateStatus: SubscriptionUpdateStatus
   var createdAt: Date
   var updatedAt: Date
 
@@ -259,6 +509,8 @@ struct Profile: Identifiable, Codable, Equatable, Sendable {
     case originalConfigPath
     case subscriptionMetadata
     case subscriptionProviderOptions
+    case subscriptionUpdatePolicy
+    case subscriptionUpdateStatus
     case createdAt
     case updatedAt
   }
@@ -271,6 +523,8 @@ struct Profile: Identifiable, Codable, Equatable, Sendable {
     originalConfigPath: String,
     subscriptionMetadata: SubscriptionMetadata? = nil,
     subscriptionProviderOptions: SubscriptionProviderOptions = .default,
+    subscriptionUpdatePolicy: SubscriptionUpdatePolicy = .default,
+    subscriptionUpdateStatus: SubscriptionUpdateStatus = .empty,
     createdAt: Date = Date(),
     updatedAt: Date = Date()
   ) {
@@ -281,6 +535,8 @@ struct Profile: Identifiable, Codable, Equatable, Sendable {
     self.originalConfigPath = originalConfigPath
     self.subscriptionMetadata = subscriptionMetadata
     self.subscriptionProviderOptions = subscriptionProviderOptions
+    self.subscriptionUpdatePolicy = subscriptionUpdatePolicy
+    self.subscriptionUpdateStatus = subscriptionUpdateStatus
     self.createdAt = createdAt
     self.updatedAt = updatedAt
   }
@@ -296,6 +552,16 @@ struct Profile: Identifiable, Codable, Equatable, Sendable {
       SubscriptionProviderOptions.self,
       forKey: .subscriptionProviderOptions,
       default: .default
+    )
+    subscriptionUpdatePolicy = container.decodeDefault(
+      SubscriptionUpdatePolicy.self,
+      forKey: .subscriptionUpdatePolicy,
+      default: .default
+    )
+    subscriptionUpdateStatus = container.decodeDefault(
+      SubscriptionUpdateStatus.self,
+      forKey: .subscriptionUpdateStatus,
+      default: .empty
     )
     createdAt = try container.decode(Date.self, forKey: .createdAt)
     updatedAt = try container.decode(Date.self, forKey: .updatedAt)
@@ -681,6 +947,8 @@ struct ManagedRuleOverlayRule: Codable, Equatable, Identifiable, Sendable {
     case ipCIDR6 = "IP-CIDR6"
     case geoIP = "GEOIP"
     case geoSite = "GEOSITE"
+    case processName = "PROCESS-NAME"
+    case processPath = "PROCESS-PATH"
     case match = "MATCH"
 
     var id: String { rawValue }
@@ -694,7 +962,7 @@ struct ManagedRuleOverlayRule: Codable, Equatable, Identifiable, Sendable {
       switch self {
       case .ipCIDR, .ipCIDR6, .geoIP:
         return true
-      case .domain, .domainSuffix, .domainKeyword, .geoSite, .match:
+      case .domain, .domainSuffix, .domainKeyword, .geoSite, .processName, .processPath, .match:
         return false
       }
     }
@@ -2206,15 +2474,131 @@ struct ProxyGroup: Identifiable, Codable, Equatable, Sendable {
   }
 }
 
+struct MenuBarPinnedGroupSettings: Codable, Equatable, Sendable {
+  static let maximumPinnedGroups = 3
+
+  var groupNames: [String]
+
+  init(groupNames: [String] = []) {
+    self.groupNames = Self.normalized(groupNames)
+  }
+
+  static let `default` = MenuBarPinnedGroupSettings()
+
+  mutating func toggle(_ groupName: String) {
+    let normalizedName = groupName.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalizedName.isEmpty else { return }
+    if groupNames.contains(where: { $0.caseInsensitiveCompare(normalizedName) == .orderedSame }) {
+      groupNames.removeAll { $0.caseInsensitiveCompare(normalizedName) == .orderedSame }
+    } else {
+      groupNames = Self.normalized(groupNames + [normalizedName])
+    }
+  }
+
+  func contains(_ groupName: String) -> Bool {
+    groupNames.contains { $0.caseInsensitiveCompare(groupName) == .orderedSame }
+  }
+
+  static func normalized(_ groupNames: [String]) -> [String] {
+    var seen = Set<String>()
+    var result: [String] = []
+    for groupName in groupNames {
+      let trimmed = groupName.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty else { continue }
+      let key = trimmed.lowercased()
+      guard seen.insert(key).inserted else { continue }
+      result.append(trimmed)
+      if result.count == maximumPinnedGroups { break }
+    }
+    return result
+  }
+}
+
 struct ConnectionSnapshot: Identifiable, Codable, Equatable, Sendable {
   var id: String
   var network: String
   var host: String
+  var sourceIP: String?
+  var sourcePort: Int?
+  var destinationIP: String?
+  var destinationPort: Int?
+  var processName: String?
+  var processPath: String?
   var upload: Int
   var download: Int
   var chain: [String]
   var rule: String?
+  var rulePayload: String?
   var startedAt: Date?
+  var lastSeenAt: Date?
+  var endedAt: Date?
+
+  init(
+    id: String,
+    network: String,
+    host: String,
+    sourceIP: String? = nil,
+    sourcePort: Int? = nil,
+    destinationIP: String? = nil,
+    destinationPort: Int? = nil,
+    processName: String? = nil,
+    processPath: String? = nil,
+    upload: Int,
+    download: Int,
+    chain: [String],
+    rule: String?,
+    rulePayload: String? = nil,
+    startedAt: Date? = nil,
+    lastSeenAt: Date? = nil,
+    endedAt: Date? = nil
+  ) {
+    self.id = id
+    self.network = network
+    self.host = host
+    self.sourceIP = sourceIP?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    self.sourcePort = sourcePort
+    self.destinationIP = destinationIP?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    self.destinationPort = destinationPort
+    self.processName = processName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    self.processPath = processPath?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    self.upload = upload
+    self.download = download
+    self.chain = chain
+    self.rule = rule?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    self.rulePayload = rulePayload?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    self.startedAt = startedAt
+    self.lastSeenAt = lastSeenAt
+    self.endedAt = endedAt
+  }
+
+  var appDisplayName: String {
+    processName ?? processPath.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent } ?? "-"
+  }
+
+  var sourceAddress: String {
+    Self.endpointLabel(host: sourceIP, port: sourcePort)
+  }
+
+  var destinationAddress: String {
+    let destinationHost = destinationIP ?? host
+    return Self.endpointLabel(host: destinationHost, port: destinationPort)
+  }
+
+  var ruleSummary: String {
+    [rule, rulePayload].compactMap { $0 }.joined(separator: " ")
+  }
+
+  private static func endpointLabel(host: String?, port: Int?) -> String {
+    guard let host, !host.isEmpty else { return "-" }
+    guard let port else { return host }
+    return "\(host):\(port)"
+  }
+}
+
+struct ConnectionRecord: Identifiable, Codable, Equatable, Sendable {
+  var id: String { snapshot.id }
+  var snapshot: ConnectionSnapshot
+  var isActive: Bool
 }
 
 struct RuntimeRule: Identifiable, Codable, Equatable, Sendable {
@@ -2243,6 +2627,276 @@ struct RuntimeRule: Identifiable, Codable, Equatable, Sendable {
     self.policy = policy
     self.providerName = providerName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     self.raw = raw ?? [type, payload, policy].filter { !$0.isEmpty }.joined(separator: ",")
+  }
+}
+
+enum RuleMatchSimulationOutcome: Equatable, Sendable {
+  case matched(RuntimeRule)
+  case mihomoOnly(String)
+  case noMatch
+
+  var title: String {
+    switch self {
+    case let .matched(rule):
+      return String(format: String(localized: "Matched rule #%lld"), Int64(rule.index))
+    case .mihomoOnly:
+      return String(localized: "Reported by Mihomo")
+    case .noMatch:
+      return String(localized: "No local match")
+    }
+  }
+
+  var detail: String {
+    switch self {
+    case let .matched(rule):
+      return rule.raw
+    case let .mihomoOnly(reason):
+      return reason
+    case .noMatch:
+      return String(localized: "No supported local rule matched. Runtime provider and geodata rules may still match inside Mihomo.")
+    }
+  }
+}
+
+struct RuleMatchSimulator: Sendable {
+  func simulate(target: String, rules: [RuntimeRule]) -> RuleMatchSimulationOutcome {
+    let normalizedTarget = target.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalizedTarget.isEmpty else { return .noMatch }
+
+    for rule in rules.sorted(by: { $0.index < $1.index }) {
+      switch match(rule: rule, target: normalizedTarget) {
+      case true:
+        return .matched(rule)
+      case false:
+        continue
+      case nil:
+        return .mihomoOnly(String(localized: "This rule type depends on provider, geodata, or runtime-only Mihomo matching."))
+      }
+    }
+    return .noMatch
+  }
+
+  private func match(rule: RuntimeRule, target: String) -> Bool? {
+    let type = rule.type.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    let payload = rule.payload.trimmingCharacters(in: .whitespacesAndNewlines)
+    let target = target.trimmingCharacters(in: .whitespacesAndNewlines)
+    switch type {
+    case "DOMAIN":
+      return target.caseInsensitiveCompare(payload) == .orderedSame
+    case "DOMAIN-SUFFIX":
+      let lowerTarget = target.lowercased()
+      let lowerPayload = payload.lowercased()
+      return lowerTarget == lowerPayload || lowerTarget.hasSuffix(".\(lowerPayload)")
+    case "DOMAIN-KEYWORD":
+      return target.localizedCaseInsensitiveContains(payload)
+    case "IP-CIDR":
+      return matchCIDR(payload: payload, target: target, family: .ipv4)
+    case "IP-CIDR6":
+      return matchCIDR(payload: payload, target: target, family: .ipv6)
+    case "PROCESS-NAME":
+      let processNameURL = URL(fileURLWithPath: target)
+      let processName = processNameURL.lastPathComponent
+      let processNameWithoutExtension = processNameURL.deletingPathExtension().lastPathComponent
+      return target.caseInsensitiveCompare(payload) == .orderedSame
+        || processName.caseInsensitiveCompare(payload) == .orderedSame
+        || processNameWithoutExtension.caseInsensitiveCompare(payload) == .orderedSame
+    case "PROCESS-PATH":
+      return target.caseInsensitiveCompare(payload) == .orderedSame
+    case "MATCH":
+      return true
+    case "GEOSITE", "GEOIP", "RULE-SET":
+      return nil
+    default:
+      return target.localizedCaseInsensitiveContains(payload)
+    }
+  }
+
+  private func matchCIDR(
+    payload: String,
+    target: String,
+    family: NetworkExtensionRouteCIDR.AddressFamily
+  ) -> Bool {
+    guard let cidr = try? NetworkExtensionRouteCIDR(payload),
+          cidr.family == family
+    else {
+      return false
+    }
+
+    switch family {
+    case .ipv4:
+      guard let targetValue = ipv4Value(target),
+            let cidrValue = ipv4Value(cidr.address)
+      else {
+        return false
+      }
+      let mask: UInt32 = cidr.prefix == 0 ? 0 : UInt32.max << UInt32(32 - cidr.prefix)
+      return targetValue & mask == cidrValue & mask
+    case .ipv6:
+      guard let targetBytes = ipv6Bytes(target),
+            let cidrBytes = ipv6Bytes(cidr.address)
+      else {
+        return false
+      }
+      return ipv6(targetBytes, matches: cidrBytes, prefix: cidr.prefix)
+    }
+  }
+
+  private func ipv4Value(_ value: String) -> UInt32? {
+    var address = in_addr()
+    let normalized = value.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+    let result = normalized.withCString { inet_pton(AF_INET, $0, &address) }
+    guard result == 1 else { return nil }
+    return UInt32(bigEndian: address.s_addr)
+  }
+
+  private func ipv6Bytes(_ value: String) -> [UInt8]? {
+    var address = in6_addr()
+    let normalized = value.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+    let result = normalized.withCString { inet_pton(AF_INET6, $0, &address) }
+    guard result == 1 else { return nil }
+    return withUnsafeBytes(of: address) { Array($0) }
+  }
+
+  private func ipv6(_ lhs: [UInt8], matches rhs: [UInt8], prefix: Int) -> Bool {
+    guard lhs.count == 16, rhs.count == 16 else { return false }
+    var remainingBits = prefix
+    for index in 0..<16 {
+      if remainingBits >= 8 {
+        guard lhs[index] == rhs[index] else { return false }
+        remainingBits -= 8
+      } else if remainingBits > 0 {
+        let mask = UInt8.max << UInt8(8 - remainingBits)
+        return lhs[index] & mask == rhs[index] & mask
+      } else {
+        return true
+      }
+    }
+    return true
+  }
+}
+
+struct ExternalDashboardProfile: Identifiable, Codable, Equatable, Sendable {
+  var id: UUID
+  var name: String
+  var url: URL
+  var readOnly: Bool
+  var secretAccount: String?
+
+  init(
+    id: UUID = UUID(),
+    name: String,
+    url: URL = URL(string: "https://yacd.metacubex.one")!,
+    readOnly: Bool = true,
+    secretAccount: String? = nil
+  ) {
+    self.id = id
+    self.name = name.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? String(localized: "Dashboard")
+    self.url = url
+    self.readOnly = readOnly
+    self.secretAccount = secretAccount?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+  }
+}
+
+struct NetworkPolicyRule: Identifiable, Codable, Equatable, Sendable {
+  var id: UUID
+  var name: String
+  var ssid: String
+  var proxyRoutingMode: ProxyRoutingMode
+  var enableSystemProxy: Bool
+
+  init(
+    id: UUID = UUID(),
+    name: String = "",
+    ssid: String = "",
+    proxyRoutingMode: ProxyRoutingMode = .systemProxy,
+    enableSystemProxy: Bool = true
+  ) {
+    self.id = id
+    self.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    self.ssid = ssid.trimmingCharacters(in: .whitespacesAndNewlines)
+    self.proxyRoutingMode = proxyRoutingMode
+    self.enableSystemProxy = enableSystemProxy
+  }
+
+  var validationError: String? {
+    if name.isEmpty {
+      return String(localized: "Network policy name cannot be empty.")
+    }
+    if ssid.isEmpty {
+      return String(localized: "Network SSID cannot be empty.")
+    }
+    return nil
+  }
+
+  var description: String {
+    let systemProxyText = proxyRoutingMode == .systemProxy && enableSystemProxy
+      ? String(localized: "System Proxy on")
+      : String(localized: "System Proxy unchanged")
+    return String(
+      format: String(localized: "SSID %@, %@, %@"),
+      ssid,
+      proxyRoutingMode.displayName,
+      systemProxyText
+    )
+  }
+
+  func matches(ssid candidate: String) -> Bool {
+    ssid.caseInsensitiveCompare(candidate.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame
+  }
+}
+
+struct NetworkPolicySettings: Codable, Equatable, Sendable {
+  var rules: [NetworkPolicyRule]
+
+  init(rules: [NetworkPolicyRule] = []) {
+    self.rules = rules
+  }
+
+  static let `default` = NetworkPolicySettings()
+
+  var summary: String {
+    if rules.isEmpty {
+      return String(localized: "No saved network policies")
+    }
+    return String(format: String(localized: "%lld saved rules"), Int64(rules.count))
+  }
+
+  func matchingRule(ssid: String) -> NetworkPolicyRule? {
+    rules.first { $0.matches(ssid: ssid) }
+  }
+}
+
+struct ClashXMigrationReport: Codable, Equatable, Sendable {
+  var configDirectory: String
+  var subscriptionURLs: [String]
+  var bypassDomains: [String]
+  var ports: [String: Int]
+  var warnings: [String]
+
+  init(
+    configDirectory: String,
+    subscriptionURLs: [String] = [],
+    bypassDomains: [String] = [],
+    ports: [String: Int] = [:],
+    warnings: [String] = []
+  ) {
+    self.configDirectory = configDirectory
+    self.subscriptionURLs = subscriptionURLs
+    self.bypassDomains = bypassDomains
+    self.ports = ports
+    self.warnings = warnings
+  }
+
+  var summary: String {
+    let subscriptionSummary = String.localizedStringWithFormat(
+      NSLocalizedString("%lld subscriptions", comment: ""),
+      Int64(subscriptionURLs.count)
+    )
+    let bypassSummary = String.localizedStringWithFormat(
+      NSLocalizedString("%lld bypass entries", comment: ""),
+      Int64(bypassDomains.count)
+    )
+    return "\(subscriptionSummary), \(bypassSummary)"
   }
 }
 
@@ -2406,6 +3060,9 @@ struct SubscriptionFetchSettings: Codable, Equatable, Sendable {
   static let defaultUserAgent = "clash.meta"
   static let minimumTimeoutSeconds = 5
   static let maximumTimeoutSeconds = 120
+  static let standardUpdateIntervalMinutes = 48 * 60
+  static let standardBackgroundCheckIntervalMinutes = 2 * 60
+  static let standardRetryCapMinutes = 6 * 60
 
   var userAgent: String
   var timeoutSeconds: Int
@@ -2413,6 +3070,10 @@ struct SubscriptionFetchSettings: Codable, Equatable, Sendable {
   var useSystemProxy: Bool
   var allowsInsecureTLS: Bool
   var automaticUpdatesEnabled: Bool
+  var defaultUpdateIntervalMinutes: Int
+  var backgroundCheckIntervalMinutes: Int
+  var retryCapMinutes: Int
+  var notifyOnUpdateFailure: Bool
 
   private enum CodingKeys: String, CodingKey {
     case userAgent
@@ -2421,6 +3082,10 @@ struct SubscriptionFetchSettings: Codable, Equatable, Sendable {
     case useSystemProxy
     case allowsInsecureTLS
     case automaticUpdatesEnabled
+    case defaultUpdateIntervalMinutes
+    case backgroundCheckIntervalMinutes
+    case retryCapMinutes
+    case notifyOnUpdateFailure
   }
 
   init(
@@ -2429,7 +3094,11 @@ struct SubscriptionFetchSettings: Codable, Equatable, Sendable {
     useLocalClashProxy: Bool = true,
     useSystemProxy: Bool = true,
     allowsInsecureTLS: Bool = false,
-    automaticUpdatesEnabled: Bool = true
+    automaticUpdatesEnabled: Bool = true,
+    defaultUpdateIntervalMinutes: Int = Self.standardUpdateIntervalMinutes,
+    backgroundCheckIntervalMinutes: Int = Self.standardBackgroundCheckIntervalMinutes,
+    retryCapMinutes: Int = Self.standardRetryCapMinutes,
+    notifyOnUpdateFailure: Bool = false
   ) {
     let trimmedUserAgent = userAgent.trimmingCharacters(in: .whitespacesAndNewlines)
     self.userAgent = trimmedUserAgent.isEmpty ? Self.defaultUserAgent : trimmedUserAgent
@@ -2438,6 +3107,10 @@ struct SubscriptionFetchSettings: Codable, Equatable, Sendable {
     self.useSystemProxy = useSystemProxy
     self.allowsInsecureTLS = allowsInsecureTLS
     self.automaticUpdatesEnabled = automaticUpdatesEnabled
+    self.defaultUpdateIntervalMinutes = SubscriptionUpdatePolicy.normalizedInterval(defaultUpdateIntervalMinutes)
+    self.backgroundCheckIntervalMinutes = SubscriptionUpdatePolicy.normalizedInterval(backgroundCheckIntervalMinutes)
+    self.retryCapMinutes = SubscriptionUpdatePolicy.normalizedInterval(retryCapMinutes)
+    self.notifyOnUpdateFailure = notifyOnUpdateFailure
   }
 
   static let `default` = SubscriptionFetchSettings()
@@ -2463,12 +3136,46 @@ struct SubscriptionFetchSettings: Codable, Equatable, Sendable {
         Bool.self,
         forKey: .automaticUpdatesEnabled,
         default: defaults.automaticUpdatesEnabled
+      ),
+      defaultUpdateIntervalMinutes: container.decodeDefault(
+        Int.self,
+        forKey: .defaultUpdateIntervalMinutes,
+        default: defaults.defaultUpdateIntervalMinutes
+      ),
+      backgroundCheckIntervalMinutes: container.decodeDefault(
+        Int.self,
+        forKey: .backgroundCheckIntervalMinutes,
+        default: defaults.backgroundCheckIntervalMinutes
+      ),
+      retryCapMinutes: container.decodeDefault(Int.self, forKey: .retryCapMinutes, default: defaults.retryCapMinutes),
+      notifyOnUpdateFailure: container.decodeDefault(
+        Bool.self,
+        forKey: .notifyOnUpdateFailure,
+        default: defaults.notifyOnUpdateFailure
       )
     )
   }
 
   var timeoutDescription: String {
     "\(timeoutSeconds)s"
+  }
+
+  var defaultUpdateIntervalDescription: String {
+    Self.intervalDescription(defaultUpdateIntervalMinutes)
+  }
+
+  var backgroundCheckIntervalDescription: String {
+    Self.intervalDescription(backgroundCheckIntervalMinutes)
+  }
+
+  static func intervalDescription(_ minutes: Int) -> String {
+    if minutes % 1_440 == 0 {
+      return "\(minutes / 1_440)d"
+    }
+    if minutes % 60 == 0 {
+      return "\(minutes / 60)h"
+    }
+    return "\(minutes)m"
   }
 
   func fetchOptions(currentMixedPort: Int) -> SubscriptionFetchOptions {

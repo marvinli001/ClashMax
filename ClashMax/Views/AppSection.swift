@@ -6,6 +6,7 @@ enum AppSection: String, CaseIterable, Identifiable {
   case profiles
   case proxies
   case connections
+  case routing
   case rules
   case logs
   case settings
@@ -19,6 +20,7 @@ enum AppSection: String, CaseIterable, Identifiable {
     case .profiles: String(localized: "Profiles")
     case .proxies: String(localized: "Proxies")
     case .connections: String(localized: "Connections")
+    case .routing: String(localized: "Routing")
     case .rules: String(localized: "Rules")
     case .logs: String(localized: "Logs")
     case .settings: String(localized: "Settings")
@@ -32,6 +34,7 @@ enum AppSection: String, CaseIterable, Identifiable {
     case .profiles: "doc.text"
     case .proxies: "point.3.connected.trianglepath.dotted"
     case .connections: "network"
+    case .routing: "arrow.triangle.branch"
     case .rules: "list.bullet.rectangle"
     case .logs: "terminal"
     case .settings: "gearshape"
