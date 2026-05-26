@@ -3299,7 +3299,19 @@
         }
       }
     },
+    "Global Secure" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全局安全"
+          }
+        }
+      }
+    },
     "Global shortcut registration failed: %@" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -3311,17 +3323,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "全局快捷键注册失败：%@"
-          }
-        }
-      }
-    },
-    "Global Secure" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "全局安全"
           }
         }
       }
@@ -7658,6 +7659,7 @@
       }
     },
     "Shortcut must contain one key and at least one modifier." : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {

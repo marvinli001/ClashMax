@@ -37,7 +37,7 @@ packages:
     from: "1.5.1"
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
-    from: "2.9.1"
+    from: "2.9.2"
 targets:
   ClashMax:
     type: application
