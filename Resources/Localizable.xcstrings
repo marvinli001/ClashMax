@@ -64,6 +64,12 @@
             "state" : "new",
             "value" : "%1$lld active, %2$lld retained"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 个活动连接，%2$lld 个保留连接"
+          }
         }
       }
     },
@@ -132,6 +138,22 @@
         }
       }
     },
+    "%lld of %lld" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%1$lld of %2$lld"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld / %2$lld"
+          }
+        }
+      }
+    },
     "%lld preview groups" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -161,6 +183,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lld 个配置"
+          }
+        }
+      }
+    },
+    "%lld rules" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%lld rules"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 条规则"
           }
         }
       }
@@ -492,6 +530,742 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Allow LAN"
+          }
+        }
+      }
+    },
+    "Advanced" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Advanced"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "高级"
+          }
+        }
+      }
+    },
+    "Advanced YAML and Filters" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Advanced YAML and Filters"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "高级 YAML 与过滤器"
+          }
+        }
+      }
+    },
+    "All traffic goes through the generated select group." : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "All traffic goes through the generated select group."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所有流量都通过生成的选择组。"
+          }
+        }
+      }
+    },
+    "Configured" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Configured"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已配置"
+          }
+        }
+      }
+    },
+    "Developer Mode is required for raw provider filters, YAML merge fields, and custom request headers." : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Developer Mode is required for raw provider filters, YAML merge fields, and custom request headers."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "需要启用开发者模式，才能使用原始 provider 过滤器、YAML 合并字段和自定义请求头。"
+          }
+        }
+      }
+    },
+    "DNS: v2 templates add fake-ip, system hosts, rule-respecting resolver defaults, and fallback filtering." : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "DNS: v2 templates add fake-ip, system hosts, rule-respecting resolver defaults, and fallback filtering."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DNS：v2 模板会添加 fake-ip、系统 hosts、遵循规则的解析器默认值和 fallback 过滤。"
+          }
+        }
+      }
+    },
+    "Final MATCH Policy" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Final MATCH Policy"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最终 MATCH 策略"
+          }
+        }
+      }
+    },
+    "Generated Select Group" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Generated Select Group"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "生成的 Select 组"
+          }
+        }
+      }
+    },
+    "Generated Template" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Generated Template"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "生成模板"
+          }
+        }
+      }
+    },
+    "Generated URL-Test Group" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Generated URL-Test Group"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "生成的 URL-Test 组"
+          }
+        }
+      }
+    },
+    "Guardrails" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Guardrails"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "防护检查"
+          }
+        }
+      }
+    },
+    "Leave empty to use the remote profile-update-interval or the global default." : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Leave empty to use the remote profile-update-interval or the global default."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "留空则使用远端 profile-update-interval 或全局默认值。"
+          }
+        }
+      }
+    },
+    "Minimal" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Minimal"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最小"
+          }
+        }
+      }
+    },
+    "Only Proxy, Auto, DIRECT, DNS defaults, and MATCH." : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Only Proxy, Auto, DIRECT, DNS defaults, and MATCH."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅包含 Proxy、Auto、DIRECT、DNS 默认值和 MATCH。"
+          }
+        }
+      }
+    },
+    "Override Interval" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Override Interval"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "覆盖间隔"
+          }
+        }
+      }
+    },
+    "Preset" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Preset"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "预设"
+          }
+        }
+      }
+    },
+    "Pick a node and we'll remember it. Tests start a quiet preview core automatically." : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pick a node and we'll remember it. Tests start a quiet preview core automatically."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择节点后会记住该选择。测速会自动启动安静的预览核心。"
+          }
+        }
+      }
+    },
+    "Preview core is running on loopback for delay testing. Hit Start on Home to redirect traffic." : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Preview core is running on loopback for delay testing. Hit Start on Home to redirect traffic."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "预览核心正在本机回环地址运行，用于延迟测试。到首页点击启动即可接管流量。"
+          }
+        }
+      }
+    },
+    "Private and China geodata rules stay direct before fallback." : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Private and China geodata rules stay direct before fallback."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "私有网络和中国大陆 geodata 规则会在 fallback 前直连。"
+          }
+        }
+      }
+    },
+    "Private and local traffic stays direct before fallback." : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Private and local traffic stays direct before fallback."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "私有和本地流量会在 fallback 前直连。"
+          }
+        }
+      }
+    },
+    "Provider" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Provider"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Provider"
+          }
+        }
+      }
+    },
+    "Provider Filter" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Provider Filter"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Provider 过滤器"
+          }
+        }
+      }
+    },
+    "Refresh Interval" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Refresh Interval"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刷新间隔"
+          }
+        }
+      }
+    },
+    "Rollback" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Rollback"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回滚"
+          }
+        }
+      }
+    },
+    "Restore Remote Name" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Restore Remote Name"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "恢复远端名称"
+          }
+        }
+      }
+    },
+    "Rollback to Last Working" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Rollback to Last Working"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回滚到上次可用"
+          }
+        }
+      }
+    },
+    "Merged into runtime config before app-managed launch settings." : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Merged into runtime config before app-managed launch settings."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会在 App 管理的启动设置之前合并进运行时配置。"
+          }
+        }
+      }
+    },
+    "Route common China/private destinations direct before MATCH, with ClashX-style DNS defaults." : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Route common China/private destinations direct before MATCH, with ClashX-style DNS defaults."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "常见中国大陆/私有目标在 MATCH 前直连，并使用 ClashX 风格 DNS 默认值。"
+          }
+        }
+      }
+    },
+    "Rules: MATCH to the final policy." : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Rules: MATCH to the final policy."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "规则：MATCH 到最终策略。"
+          }
+        }
+      }
+    },
+    "Rules: MATCH to the generated proxy group." : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Rules: MATCH to the generated proxy group."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "规则：MATCH 到生成的代理组。"
+          }
+        }
+      }
+    },
+    "Rules: local domain plus private IPv4 CIDRs direct, then MATCH." : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Rules: local domain plus private IPv4 CIDRs direct, then MATCH."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "规则：本地域名和私有 IPv4 CIDR 直连，然后 MATCH。"
+          }
+        }
+      }
+    },
+    "Rules: private and CN geodata direct, then MATCH." : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Rules: private and CN geodata direct, then MATCH."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "规则：私有和中国大陆 geodata 直连，然后 MATCH。"
+          }
+        }
+      }
+    },
+    "Runtime diff: no generated-template changes from the last working provider options." : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Runtime diff: no generated-template changes from the last working provider options."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "运行时差异：与上次可用的 Provider 选项相比，没有生成模板变化。"
+          }
+        }
+      }
+    },
+    "Select Group" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Select Group"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Select 组"
+          }
+        }
+      }
+    },
+    "Send all traffic through the generated Proxy group with app-managed DNS defaults." : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Send all traffic through the generated Proxy group with app-managed DNS defaults."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用 App 管理的 DNS 默认值，并将所有流量发送到生成的 Proxy 组。"
+          }
+        }
+      }
+    },
+    "Smallest generated profile for provider subscriptions." : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Smallest generated profile for provider subscriptions."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Provider 订阅的最小生成配置。"
+          }
+        }
+      }
+    },
+    "Subscription Updates" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Subscription Updates"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "订阅更新"
+          }
+        }
+      }
+    },
+    "Template" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Template"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模板"
+          }
+        }
+      }
+    },
+    "Template v1: legacy generated provider rules without DNS base." : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Template v1: legacy generated provider rules without DNS base."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模板 v1：旧版生成 provider 规则，不包含 DNS 基础配置。"
+          }
+        }
+      }
+    },
+    "Template v2: includes app-managed DNS base." : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Template v2: includes app-managed DNS base."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模板 v2：包含 App 管理的 DNS 基础配置。"
+          }
+        }
+      }
+    },
+    "URL-Test Group" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "URL-Test Group"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "URL-Test 组"
+          }
+        }
+      }
+    },
+    "Use Remote Interval" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Use Remote Interval"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用远端间隔"
+          }
+        }
+      }
+    },
+    "Use a practical rule-mode template with private network direct rules and app-managed DNS defaults." : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Use a practical rule-mode template with private network direct rules and app-managed DNS defaults."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用实用规则模式模板，包含私有网络直连规则和 App 管理的 DNS 默认值。"
+          }
+        }
+      }
+    },
+    "Version" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Version"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "版本"
+          }
+        }
+      }
+    },
+    "%@ YAML must be a mapping." : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ YAML must be a mapping."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ YAML 必须是映射。"
+          }
+        }
+      }
+    },
+    "%@ YAML parse error: %@" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%1$@ YAML parse error: %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ YAML 解析失败：%2$@"
           }
         }
       }
@@ -1458,6 +2232,7 @@
       }
     },
     "Custom Headers" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -1795,6 +2570,22 @@
         }
       }
     },
+    "Disable Rule" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Disable Rule"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "停用规则"
+          }
+        }
+      }
+    },
     "Disable System Proxy" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1843,6 +2634,54 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已停用的配置规则"
+          }
+        }
+      }
+    },
+    "Disabled rule pattern cannot be empty." : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Disabled rule pattern cannot be empty."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "停用规则匹配内容不能为空。"
+          }
+        }
+      }
+    },
+    "Disabled rule pattern cannot contain line breaks." : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Disabled rule pattern cannot contain line breaks."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "停用规则匹配内容不能包含换行。"
+          }
+        }
+      }
+    },
+    "Disabled rule regex is invalid." : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Disabled rule regex is invalid."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "停用规则正则表达式无效。"
           }
         }
       }
@@ -2076,6 +2915,12 @@
           "stringUnit" : {
             "state" : "needs_review",
             "value" : "Empty"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "空"
           }
         }
       }
@@ -2994,6 +3839,22 @@
         }
       }
     },
+    "Import ClashX" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Import ClashX"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "导入 ClashX"
+          }
+        }
+      }
+    },
     "Import YAML" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -3546,7 +4407,21 @@
     },
     "minutes" : {
       "comment" : "A label for the minutes field.",
-      "isCommentAutoGenerated" : true
+      "isCommentAutoGenerated" : true,
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "minutes"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分钟"
+          }
+        }
+      }
     },
     "Mismatch" : {
       "extractionState" : "stale",
@@ -5569,6 +6444,22 @@
         }
       }
     },
+    "Rule pattern" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Rule pattern"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "规则匹配内容"
+          }
+        }
+      }
+    },
     "Rule policy cannot be empty." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -5670,6 +6561,7 @@
       }
     },
     "Rules are applied only from saved user-created entries. ClashMax does not switch TUN or NE Proxy automatically without a matching policy." : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -6038,6 +6930,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "搜索 App、主机、IP、规则、链路"
+          }
+        }
+      }
+    },
+    "Search rules, type=, policy=, provider=" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Search rules, type=, policy=, provider="
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索规则，支持 type=、policy=、provider="
           }
         }
       }
@@ -7201,6 +8109,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "全部更新"
+          }
+        }
+      }
+    },
+    "Update Due" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Update Due"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更新到期项"
           }
         }
       }

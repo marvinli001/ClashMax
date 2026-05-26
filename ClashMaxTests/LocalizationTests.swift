@@ -106,4 +106,33 @@ final class LocalizationTests: XCTestCase {
     let ownerFormat = zhBundle.localizedString(forKey: "Owner: %@", value: nil, table: nil)
     XCTAssertEqual(String(format: ownerFormat, "用户模式"), "归属：用户模式")
   }
+
+  func testSimplifiedChineseStringCatalogProvidesOperationalScreenshotKeys() throws {
+    let bundle = try XCTUnwrap(Bundle(identifier: AppConstants.bundleIdentifier))
+    let zhPath = try XCTUnwrap(bundle.path(forResource: "zh-Hans", ofType: "lproj"))
+    let zhBundle = try XCTUnwrap(Bundle(path: zhPath))
+
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Rule value cannot be empty.", value: nil, table: nil), "规则值不能为空。")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Rule pattern", value: nil, table: nil), "规则匹配内容")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Disabled rule pattern cannot be empty.", value: nil, table: nil), "停用规则匹配内容不能为空。")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Disabled rule pattern cannot contain line breaks.", value: nil, table: nil), "停用规则匹配内容不能包含换行。")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Disabled rule regex is invalid.", value: nil, table: nil), "停用规则正则表达式无效。")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Disable Rule", value: nil, table: nil), "停用规则")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Rollback", value: nil, table: nil), "回滚")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Rollback to Last Working", value: nil, table: nil), "回滚到上次可用")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Empty", value: nil, table: nil), "空")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Search rules, type=, policy=, provider=", value: nil, table: nil), "搜索规则，支持 type=、policy=、provider=")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Preview core is running on loopback for delay testing. Hit Start on Home to redirect traffic.", value: nil, table: nil), "预览核心正在本机回环地址运行，用于延迟测试。到首页点击启动即可接管流量。")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Update Due", value: nil, table: nil), "更新到期项")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Import ClashX", value: nil, table: nil), "导入 ClashX")
+
+    let connectionsFormat = zhBundle.localizedString(forKey: "%lld active, %lld retained", value: nil, table: nil)
+    XCTAssertEqual(String(format: connectionsFormat, Int64(0), Int64(0)), "0 个活动连接，0 个保留连接")
+
+    let rulesFormat = zhBundle.localizedString(forKey: "%lld rules", value: nil, table: nil)
+    XCTAssertEqual(String(format: rulesFormat, Int64(0)), "0 条规则")
+
+    let filteredRulesFormat = zhBundle.localizedString(forKey: "%lld of %lld", value: nil, table: nil)
+    XCTAssertEqual(String(format: filteredRulesFormat, Int64(0), Int64(0)), "0 / 0")
+  }
 }

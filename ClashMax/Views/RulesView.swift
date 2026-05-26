@@ -100,9 +100,16 @@ struct RulesView: View {
 
   private var ruleSummary: String {
     if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-      return "\(runtimeData.rules.count) rules"
+      return String.localizedStringWithFormat(
+        NSLocalizedString("%lld rules", comment: ""),
+        Int64(runtimeData.rules.count)
+      )
     }
-    return "\(filteredRules.count) of \(runtimeData.rules.count)"
+    return String.localizedStringWithFormat(
+      NSLocalizedString("%lld of %lld", comment: ""),
+      Int64(filteredRules.count),
+      Int64(runtimeData.rules.count)
+    )
   }
 
   private var filteredRules: [RuntimeRule] {

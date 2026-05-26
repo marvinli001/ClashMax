@@ -1720,9 +1720,9 @@ enum ProxyPreviewNoticeKind: Equatable {
   var message: String {
     switch self {
     case .previewRuntime:
-      return "Preview core is running on loopback for delay testing. Hit Start on Home to redirect traffic."
+      return String(localized: "Preview core is running on loopback for delay testing. Hit Start on Home to redirect traffic.")
     case .offlinePreview:
-      return "Pick a node and we'll remember it. Tests start a quiet preview core automatically."
+      return String(localized: "Pick a node and we'll remember it. Tests start a quiet preview core automatically.")
     }
   }
 }

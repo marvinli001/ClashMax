@@ -738,7 +738,7 @@ private struct ProfileEditSheet: View {
       }
     }
     .padding(20)
-    .frame(width: 560)
+    .frame(width: 620)
     .onAppear {
       isNameFocused = true
     }
@@ -754,6 +754,8 @@ private struct ProfileEditSheet: View {
 private enum ProfileEditLayout {
   static let labelWidth: CGFloat = 166
   static let rowSpacing: CGFloat = 12
+  static let rowInnerSpacing: CGFloat = 8
+  static let panelCornerRadius: CGFloat = 6
 }
 
 private struct ProfileEditSection<Content: View>: View {
@@ -781,15 +783,21 @@ private struct ProfileEditSection<Content: View>: View {
 
 private struct ProfileEditRow<Content: View>: View {
   let title: LocalizedStringKey
+  let alignment: VerticalAlignment
   @ViewBuilder let content: Content
 
-  init(_ title: LocalizedStringKey, @ViewBuilder content: () -> Content) {
+  init(
+    _ title: LocalizedStringKey,
+    alignment: VerticalAlignment = .firstTextBaseline,
+    @ViewBuilder content: () -> Content
+  ) {
     self.title = title
+    self.alignment = alignment
     self.content = content()
   }
 
   var body: some View {
-    HStack(alignment: .firstTextBaseline, spacing: ProfileEditLayout.rowSpacing) {
+    HStack(alignment: alignment, spacing: ProfileEditLayout.rowSpacing) {
       Text(title)
         .font(.callout.weight(.medium))
         .foregroundStyle(.secondary)
@@ -805,6 +813,71 @@ private struct ProfileEditRow<Content: View>: View {
 }
 
 private struct ProfileEditContentRow<Content: View>: View {
+  let alignment: VerticalAlignment
+  @ViewBuilder let content: Content
+
+  init(alignment: VerticalAlignment = .firstTextBaseline, @ViewBuilder content: () -> Content) {
+    self.alignment = alignment
+    self.content = content()
+  }
+
+  var body: some View {
+    HStack(alignment: alignment, spacing: ProfileEditLayout.rowSpacing) {
+      Spacer()
+        .frame(width: ProfileEditLayout.labelWidth)
+
+      content
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+  }
+}
+
+private struct ProfileEditToggleRow: View {
+  let title: LocalizedStringKey
+  @Binding var isOn: Bool
+  var isDisabled = false
+
+  init(_ title: LocalizedStringKey, isOn: Binding<Bool>, isDisabled: Bool = false) {
+    self.title = title
+    _isOn = isOn
+    self.isDisabled = isDisabled
+  }
+
+  var body: some View {
+    ProfileEditRow(title, alignment: .center) {
+      Toggle(title, isOn: $isOn)
+        .labelsHidden()
+        .toggleStyle(.switch)
+        .disabled(isDisabled)
+    }
+  }
+}
+
+private struct ProfileEditTextEditorRow: View {
+  let title: LocalizedStringKey
+  @Binding var text: String
+  var minHeight: CGFloat
+
+  init(_ title: LocalizedStringKey, text: Binding<String>, minHeight: CGFloat) {
+    self.title = title
+    _text = text
+    self.minHeight = minHeight
+  }
+
+  var body: some View {
+    ProfileEditRow(title, alignment: .top) {
+      TextEditor(text: $text)
+        .font(.system(.caption, design: .monospaced))
+        .frame(minHeight: minHeight)
+        .overlay {
+          RoundedRectangle(cornerRadius: ProfileEditLayout.panelCornerRadius, style: .continuous)
+            .strokeBorder(.quaternary, lineWidth: 1)
+        }
+    }
+  }
+}
+
+private struct ProfileEditInfoRow<Content: View>: View {
   @ViewBuilder let content: Content
 
   init(@ViewBuilder content: () -> Content) {
@@ -812,12 +885,8 @@ private struct ProfileEditContentRow<Content: View>: View {
   }
 
   var body: some View {
-    HStack(alignment: .firstTextBaseline, spacing: ProfileEditLayout.rowSpacing) {
-      Spacer()
-        .frame(width: ProfileEditLayout.labelWidth)
-
+    ProfileEditContentRow(alignment: .top) {
       content
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
   }
 }
@@ -844,7 +913,33 @@ private struct ProfileEditFootnote: View {
   }
 }
 
-private struct ProfileEditDisclosureGroup<Content: View>: View {
+private struct ProfileEditInfoPanel<Content: View>: View {
+  let title: LocalizedStringKey
+  @ViewBuilder let content: Content
+
+  init(_ title: LocalizedStringKey, @ViewBuilder content: () -> Content) {
+    self.title = title
+    self.content = content()
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text(title)
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+
+      content
+    }
+    .padding(10)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(
+      .quaternary,
+      in: RoundedRectangle(cornerRadius: ProfileEditLayout.panelCornerRadius, style: .continuous)
+    )
+  }
+}
+
+private struct ProfileEditDisclosureRow<Content: View>: View {
   let title: LocalizedStringKey
   @Binding var isExpanded: Bool
   @ViewBuilder let content: Content
@@ -857,28 +952,26 @@ private struct ProfileEditDisclosureGroup<Content: View>: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
-      Button {
-        withAnimation(.easeInOut(duration: 0.16)) {
-          isExpanded.toggle()
+      ProfileEditRow(title, alignment: .center) {
+        Button {
+          withAnimation(.easeInOut(duration: 0.16)) {
+            isExpanded.toggle()
+          }
+        } label: {
+          HStack(spacing: 5) {
+            Image(systemName: "chevron.right")
+              .font(.caption.weight(.semibold))
+              .rotationEffect(.degrees(isExpanded ? 90 : 0))
+              .frame(width: 10)
+            Spacer(minLength: 0)
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .contentShape(Rectangle())
         }
-      } label: {
-        HStack(spacing: 5) {
-          Image(systemName: "chevron.right")
-            .font(.caption.weight(.semibold))
-            .rotationEffect(.degrees(isExpanded ? 90 : 0))
-            .frame(width: 10)
-
-          Text(title)
-            .font(.callout.weight(.medium))
-            .lineLimit(1)
-
-          Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityValue(isExpanded ? Text("Expanded") : Text("Collapsed"))
       }
-      .buttonStyle(.plain)
-      .accessibilityValue(isExpanded ? Text("Expanded") : Text("Collapsed"))
 
       if isExpanded {
         content
@@ -894,17 +987,16 @@ private struct SubscriptionUpdatePolicyEditor: View {
 
   var body: some View {
     ProfileEditSection("Subscription Updates") {
-      ProfileEditContentRow {
-        Toggle("Automatic Updates", isOn: $policy.automaticUpdatesEnabled)
-      }
+      ProfileEditToggleRow("Automatic Updates", isOn: $policy.automaticUpdatesEnabled)
 
-      ProfileEditContentRow {
-        Toggle("Use Remote Interval", isOn: $policy.prefersRemoteInterval)
-          .disabled(!policy.automaticUpdatesEnabled || policy.intervalOverrideMinutes != nil)
-      }
+      ProfileEditToggleRow(
+        "Use Remote Interval",
+        isOn: $policy.prefersRemoteInterval,
+        isDisabled: !policy.automaticUpdatesEnabled || policy.intervalOverrideMinutes != nil
+      )
 
       ProfileEditRow("Override Interval") {
-        HStack(spacing: 8) {
+        HStack(spacing: ProfileEditLayout.rowInnerSpacing) {
           TextField("Default", text: $intervalDraft)
             .textFieldStyle(.roundedBorder)
             .frame(width: 72)
@@ -969,7 +1061,7 @@ private struct SubscriptionProviderOptionsEditor: View {
       runtimeDiff
 
       ProfileEditRow("Provider Interval") {
-        VStack(alignment: .trailing, spacing: 4) {
+        VStack(alignment: .leading, spacing: 4) {
           ProfileNumberStepperField(
             accessibilityLabel: "Provider Interval",
             value: intervalBinding,
@@ -1051,25 +1143,29 @@ private struct SubscriptionProviderOptionsEditor: View {
       }
 
       if developerMode {
-        ProfileEditContentRow {
-          ProfileEditDisclosureGroup("Advanced YAML and Filters", isExpanded: $showsAdvancedOptions) {
-            VStack(alignment: .leading, spacing: 10) {
-              TextField("Filter", text: $options.filter)
-                .textFieldStyle(.roundedBorder)
-              TextField("Exclude Filter", text: $options.excludeFilter)
-                .textFieldStyle(.roundedBorder)
-              TextField("Exclude Type", text: $options.excludeType)
-                .textFieldStyle(.roundedBorder)
-              TextField("Final MATCH Policy", text: $options.finalRulePolicy)
-                .textFieldStyle(.roundedBorder)
-
-              yamlEditor("Provider Override YAML", text: $options.overrideYAML, minHeight: 72)
-              yamlEditor("Runtime Merge YAML", text: $options.runtimeMergeYAML, minHeight: 88)
-                .help("Merged into runtime config before app-managed launch settings.")
-
-              customHeadersEditor
-            }
+        ProfileEditDisclosureRow("Advanced YAML and Filters", isExpanded: $showsAdvancedOptions) {
+          ProfileEditRow("Filter") {
+            TextField("Filter", text: $options.filter)
+              .textFieldStyle(.roundedBorder)
           }
+          ProfileEditRow("Exclude Filter") {
+            TextField("Exclude Filter", text: $options.excludeFilter)
+              .textFieldStyle(.roundedBorder)
+          }
+          ProfileEditRow("Exclude Type") {
+            TextField("Exclude Type", text: $options.excludeType)
+              .textFieldStyle(.roundedBorder)
+          }
+          ProfileEditRow("Final MATCH Policy") {
+            TextField("Final MATCH Policy", text: $options.finalRulePolicy)
+              .textFieldStyle(.roundedBorder)
+          }
+
+          ProfileEditTextEditorRow("Provider Override YAML", text: $options.overrideYAML, minHeight: 72)
+          ProfileEditTextEditorRow("Runtime Merge YAML", text: $options.runtimeMergeYAML, minHeight: 88)
+            .help("Merged into runtime config before app-managed launch settings.")
+
+          customHeadersEditor
         }
       } else {
         ProfileEditFootnote(verbatim: String(localized: "Developer Mode is required for raw provider filters, YAML merge fields, and custom request headers."))
@@ -1088,46 +1184,46 @@ private struct SubscriptionProviderOptionsEditor: View {
     )
   }
 
+  @ViewBuilder
   private var presetDetails: some View {
-    VStack(alignment: .leading, spacing: 4) {
-      ForEach(guardrailReport.presetDetails, id: \.self) { detail in
-        Label(detail, systemImage: "checkmark.circle")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .lineLimit(2)
+    if !guardrailReport.presetDetails.isEmpty {
+      ProfileEditInfoRow {
+        VStack(alignment: .leading, spacing: 4) {
+          ForEach(guardrailReport.presetDetails, id: \.self) { detail in
+            Label(detail, systemImage: "checkmark.circle")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .lineLimit(2)
+          }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
       }
     }
-    .frame(maxWidth: .infinity, alignment: .leading)
   }
 
   @ViewBuilder
   private var guardrailRisks: some View {
-    if guardrailReport.risks.isEmpty {
-      EmptyView()
-    } else {
-      VStack(alignment: .leading, spacing: 6) {
-        Text("Guardrails")
-          .font(.caption.weight(.semibold))
-          .foregroundStyle(.secondary)
-        ForEach(guardrailReport.risks) { risk in
-          HStack(alignment: .top, spacing: 8) {
-            Image(systemName: risk.severity == .danger ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill")
-              .foregroundStyle(risk.severity == .danger ? .red : .orange)
-              .frame(width: 16)
-            VStack(alignment: .leading, spacing: 2) {
-              Text("\(risk.source): \(risk.keyPath)")
-                .font(.caption.weight(.medium))
-                .lineLimit(1)
-              Text(risk.message)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
+    if !guardrailReport.risks.isEmpty {
+      ProfileEditInfoRow {
+        ProfileEditInfoPanel("Guardrails") {
+          ForEach(guardrailReport.risks) { risk in
+            HStack(alignment: .top, spacing: ProfileEditLayout.rowInnerSpacing) {
+              Image(systemName: risk.severity == .danger ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill")
+                .foregroundStyle(risk.severity == .danger ? .red : .orange)
+                .frame(width: 16)
+              VStack(alignment: .leading, spacing: 2) {
+                Text("\(risk.source): \(risk.keyPath)")
+                  .font(.caption.weight(.medium))
+                  .lineLimit(1)
+                Text(risk.message)
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+                  .lineLimit(2)
+              }
             }
           }
         }
       }
-      .padding(10)
-      .background(.quaternary, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
     }
   }
 
@@ -1139,32 +1235,29 @@ private struct SubscriptionProviderOptionsEditor: View {
     if visibleDiff.isEmpty {
       ProfileEditFootnote(verbatim: String(localized: "Runtime diff: no generated-template changes from the last working provider options."))
     } else {
-      VStack(alignment: .leading, spacing: 6) {
-        Text("Runtime Diff")
-          .font(.caption.weight(.semibold))
-          .foregroundStyle(.secondary)
-        ForEach(visibleDiff) { diff in
-          HStack(alignment: .top, spacing: 8) {
-            Text(diff.title)
-              .font(.caption)
-              .frame(width: 126, alignment: .leading)
-            Text(diff.before)
-              .font(.caption.monospaced())
-              .foregroundStyle(.secondary)
-              .lineLimit(1)
-              .truncationMode(.middle)
-            Image(systemName: "arrow.right")
-              .font(.caption2)
-              .foregroundStyle(.tertiary)
-            Text(diff.after)
-              .font(.caption.monospaced())
-              .lineLimit(1)
-              .truncationMode(.middle)
+      ProfileEditInfoRow {
+        ProfileEditInfoPanel("Runtime Diff") {
+          ForEach(visibleDiff) { diff in
+            HStack(alignment: .top, spacing: ProfileEditLayout.rowInnerSpacing) {
+              Text(diff.title)
+                .font(.caption)
+                .frame(width: 126, alignment: .leading)
+              Text(diff.before)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+              Image(systemName: "arrow.right")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+              Text(diff.after)
+                .font(.caption.monospaced())
+                .lineLimit(1)
+                .truncationMode(.middle)
+            }
           }
         }
       }
-      .padding(10)
-      .background(.quaternary, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
     }
   }
 
@@ -1178,44 +1271,27 @@ private struct SubscriptionProviderOptionsEditor: View {
     )
   }
 
-  private func yamlEditor(_ title: String, text: Binding<String>, minHeight: CGFloat) -> some View {
-    VStack(alignment: .leading, spacing: 6) {
-      Text(LocalizedStringKey(title))
-        .font(.caption)
-        .foregroundStyle(.secondary)
-      TextEditor(text: text)
-        .font(.system(.caption, design: .monospaced))
-        .frame(minHeight: minHeight)
-        .overlay {
-          RoundedRectangle(cornerRadius: 6, style: .continuous)
-            .strokeBorder(.quaternary, lineWidth: 1)
-        }
-    }
-  }
-
   private var customHeadersEditor: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      HStack {
-        Text("Custom Headers")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-        Spacer()
-        Button {
-          options.requestHeaders.append(SubscriptionRequestHeader())
-        } label: {
-          Image(systemName: "plus")
+    ProfileEditRow("Custom Headers", alignment: .top) {
+      VStack(alignment: .leading, spacing: ProfileEditLayout.rowInnerSpacing) {
+        HStack {
+          if options.requestHeaders.isEmpty {
+            Text("Empty")
+              .font(.caption)
+              .foregroundStyle(.tertiary)
+          }
+          Spacer()
+          Button {
+            options.requestHeaders.append(SubscriptionRequestHeader())
+          } label: {
+            Image(systemName: "plus")
+          }
+          .buttonStyle(.borderless)
+          .help("Add custom header")
         }
-        .buttonStyle(.borderless)
-        .help("Add custom header")
-      }
 
-      if options.requestHeaders.isEmpty {
-        Text("Empty")
-          .font(.caption)
-          .foregroundStyle(.tertiary)
-      } else {
         ForEach($options.requestHeaders) { $header in
-          HStack(spacing: 8) {
+          HStack(spacing: ProfileEditLayout.rowInnerSpacing) {
             TextField("Header", text: $header.name)
               .textFieldStyle(.roundedBorder)
             SecureField("Value", text: $header.value)
@@ -1234,11 +1310,11 @@ private struct SubscriptionProviderOptionsEditor: View {
   }
 
   private func validateAdvancedYAML() {
-    if let error = yamlValidationError(options.overrideYAML, label: "Provider override") {
+    if let error = yamlValidationError(options.overrideYAML, label: String(localized: "Provider Override YAML")) {
       validationError = error
       return
     }
-    if let error = yamlValidationError(options.runtimeMergeYAML, label: "Runtime merge") {
+    if let error = yamlValidationError(options.runtimeMergeYAML, label: String(localized: "Runtime Merge YAML")) {
       validationError = error
       return
     }
@@ -1251,11 +1327,11 @@ private struct SubscriptionProviderOptionsEditor: View {
     do {
       let loaded = try Yams.load(yaml: trimmed)
       guard loaded is [String: Any] else {
-        return "\(label) YAML must be a mapping."
+        return String(format: String(localized: "%@ YAML must be a mapping."), label)
       }
       return nil
     } catch {
-      return "\(label) YAML parse error: \(String(describing: error))"
+      return String(format: String(localized: "%@ YAML parse error: %@"), label, String(describing: error))
     }
   }
 }

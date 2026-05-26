@@ -1409,16 +1409,16 @@ struct ManagedRuleOverlayRule: Codable, Equatable, Identifiable, Sendable {
 
   var validationError: String? {
     if kind.requiresValue, normalizedValue.isEmpty {
-      return "Rule value cannot be empty."
+      return String(localized: "Rule value cannot be empty.")
     }
     if kind.requiresValue, !Self.isValidField(normalizedValue) {
-      return "Rule value cannot contain commas or line breaks."
+      return String(localized: "Rule value cannot contain commas or line breaks.")
     }
     if normalizedPolicy.isEmpty {
-      return "Rule policy cannot be empty."
+      return String(localized: "Rule policy cannot be empty.")
     }
     if !Self.isValidField(normalizedPolicy) {
-      return "Rule policy cannot contain commas or line breaks."
+      return String(localized: "Rule policy cannot contain commas or line breaks.")
     }
     return nil
   }
@@ -1480,13 +1480,13 @@ struct ManagedRuleDisableMatcher: Codable, Equatable, Identifiable, Sendable {
   var validationError: String? {
     let pattern = normalizedPattern
     if pattern.isEmpty {
-      return "Disabled rule pattern cannot be empty."
+      return String(localized: "Disabled rule pattern cannot be empty.")
     }
     if pattern.contains(where: \.isNewline) {
-      return "Disabled rule pattern cannot contain line breaks."
+      return String(localized: "Disabled rule pattern cannot contain line breaks.")
     }
     if mode == .regex, (try? NSRegularExpression(pattern: pattern)) == nil {
-      return "Disabled rule regex is invalid."
+      return String(localized: "Disabled rule regex is invalid.")
     }
     return nil
   }

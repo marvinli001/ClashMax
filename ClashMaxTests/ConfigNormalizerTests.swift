@@ -1311,7 +1311,10 @@ final class ConfigNormalizerTests: XCTestCase {
         overrides: overrides
       )
     ) { error in
-      XCTAssertEqual(String(describing: error), "Rule value cannot contain commas or line breaks.")
+      XCTAssertEqual(
+        String(describing: error),
+        String(localized: "Rule value cannot contain commas or line breaks.")
+      )
     }
   }
 
@@ -1330,7 +1333,10 @@ final class ConfigNormalizerTests: XCTestCase {
         overrides: overrides
       )
     ) { error in
-      XCTAssertEqual(String(describing: error), "Disabled rule regex is invalid.")
+      XCTAssertEqual(
+        String(describing: error),
+        String(localized: "Disabled rule regex is invalid.")
+      )
     }
   }
 
