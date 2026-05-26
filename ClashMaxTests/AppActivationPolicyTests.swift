@@ -101,4 +101,57 @@ final class AppActivationPolicyTests: XCTestCase {
 
     XCTAssertFalse(AppActivationPolicyResolver.shouldRefreshAfterClosing(window))
   }
+
+  func testNoWindowsNeedsNewMainWindow() {
+    XCTAssertTrue(AppActivationPolicyResolver.shouldOpenMainWindow(for: []))
+  }
+
+  func testVisibleMainWindowDoesNotNeedNewMainWindow() {
+    let windows = [
+      AppActivationPolicyWindowSnapshot(
+        canBecomeMain: true,
+        isVisible: true,
+        isMiniaturized: false
+      )
+    ]
+
+    XCTAssertFalse(AppActivationPolicyResolver.shouldOpenMainWindow(for: windows))
+  }
+
+  func testMiniaturizedMainWindowDoesNotNeedNewMainWindow() {
+    let windows = [
+      AppActivationPolicyWindowSnapshot(
+        canBecomeMain: true,
+        isVisible: false,
+        isMiniaturized: true
+      )
+    ]
+
+    XCTAssertFalse(AppActivationPolicyResolver.shouldOpenMainWindow(for: windows))
+  }
+
+  func testHiddenMainWindowDoesNotNeedNewMainWindow() {
+    let windows = [
+      AppActivationPolicyWindowSnapshot(
+        canBecomeMain: true,
+        isVisible: false,
+        isMiniaturized: false
+      )
+    ]
+
+    XCTAssertFalse(AppActivationPolicyResolver.shouldOpenMainWindow(for: windows))
+  }
+
+  func testMenuBarPanelNeedsNewMainWindow() {
+    let windows = [
+      AppActivationPolicyWindowSnapshot(
+        canBecomeMain: true,
+        isVisible: true,
+        isMiniaturized: false,
+        isPanel: true
+      )
+    ]
+
+    XCTAssertTrue(AppActivationPolicyResolver.shouldOpenMainWindow(for: windows))
+  }
 }

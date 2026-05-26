@@ -271,6 +271,12 @@ enum AppActivationPolicyResolver {
   static func shouldRefreshAfterClosing(_ window: AppActivationPolicyWindowSnapshot) -> Bool {
     window.isRegularAppWindow
   }
+
+  static func shouldOpenMainWindow(
+    for windows: [AppActivationPolicyWindowSnapshot]
+  ) -> Bool {
+    !windows.contains(where: \.isRegularAppWindow)
+  }
 }
 
 @MainActor
@@ -365,7 +371,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   @MainActor
   static func showMainWindow() {
     NSApp.setActivationPolicy(.regular)
-    sharedDelegate?.openMainWindow?()
+    let shouldOpenWindow = AppActivationPolicyResolver.shouldOpenMainWindow(
+      for: NSApp.windows.map(AppActivationPolicyWindowSnapshot.init(window:))
+    )
+    if shouldOpenWindow {
+      sharedDelegate?.openMainWindow?()
+    }
     sharedDelegate?.appModel?.resumeDeferredInitialTunHelperPromptAfterUserOpen()
     activateRegularWindows()
     DispatchQueue.main.async {
