@@ -1766,6 +1766,265 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     XCTAssertFalse(decoded.autoStartRuntime)
     XCTAssertTrue(settings.autoApplyEnabled)
+    XCTAssertEqual(settings.unmatchedBehavior, .keepCurrent)
+    XCTAssertEqual(NetworkPolicySettings.default.unmatchedBehavior, .restorePreviousState)
+  }
+
+  func testNetworkPolicyRestoresPreviousStateAfterLeavingMatchedSSID() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    let provider = MutableCurrentNetworkProvider(ssid: "corpnet")
+    let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+    let controller = SystemProxyController(commandRunner: commandRunner)
+    let rule = NetworkPolicyRule(
+      name: "Office Wi-Fi",
+      ssid: "CorpNet",
+      proxyRoutingMode: .systemProxy,
+      enableSystemProxy: true
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      systemProxyController: controller,
+      defaults: defaults,
+      currentNetworkProvider: provider
+    )
+    model.setProxyRoutingMode(.neProxy)
+    model.networkPolicySettings = NetworkPolicySettings(rules: [rule], autoApplyEnabled: true)
+
+    model.handleNetworkEnvironmentMayHaveChanged(reason: "path")
+    for _ in 0..<120 where !model.systemProxyEnabled {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+
+    XCTAssertEqual(model.lastAppliedNetworkPolicyID, rule.id)
+    XCTAssertEqual(model.proxyRoutingMode, .systemProxy)
+    XCTAssertTrue(model.systemProxyEnabled)
+
+    provider.ssid = "home"
+    model.handleNetworkEnvironmentMayHaveChanged(reason: "path")
+    for _ in 0..<120 where model.systemProxyEnabled || model.proxyRoutingMode != .neProxy {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+
+    XCTAssertNil(model.lastAppliedNetworkPolicyID)
+    XCTAssertEqual(model.proxyRoutingMode, .neProxy)
+    XCTAssertFalse(model.systemProxyEnabled)
+    XCTAssertTrue(model.networkPolicyStatusMessage?.localizedCaseInsensitiveContains("corpnet") == true)
+  }
+
+  func testManualApplyCurrentRestoresPreviousStateWhenNoSSIDMatches() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    let provider = MutableCurrentNetworkProvider(ssid: "corpnet")
+    let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+    let controller = SystemProxyController(commandRunner: commandRunner)
+    let rule = NetworkPolicyRule(
+      name: "Office Wi-Fi",
+      ssid: "CorpNet",
+      proxyRoutingMode: .systemProxy,
+      enableSystemProxy: true
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      systemProxyController: controller,
+      defaults: defaults,
+      currentNetworkProvider: provider
+    )
+    model.setProxyRoutingMode(.neProxy)
+    model.networkPolicySettings = NetworkPolicySettings(rules: [rule], autoApplyEnabled: true)
+
+    model.handleNetworkEnvironmentMayHaveChanged(reason: "path")
+    for _ in 0..<120 where !model.systemProxyEnabled {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+    XCTAssertEqual(model.lastAppliedNetworkPolicyID, rule.id)
+
+    provider.ssid = "home"
+    model.applyMatchingNetworkPolicyForCurrentNetwork()
+    for _ in 0..<120 where model.systemProxyEnabled || model.proxyRoutingMode != .neProxy {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+
+    XCTAssertNil(model.lastAppliedNetworkPolicyID)
+    XCTAssertEqual(model.proxyRoutingMode, .neProxy)
+    XCTAssertFalse(model.systemProxyEnabled)
+    XCTAssertTrue(model.networkPolicyStatusMessage?.localizedCaseInsensitiveContains("home") == true)
+  }
+
+  func testNetworkPolicyRestoreSnapshotSurvivesAutomaticRoutingRestart() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let launcher = CountingProcessLauncher()
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+    let provider = MutableCurrentNetworkProvider(ssid: "corpnet")
+    let proxyManager = RecordingTransparentProxyManager(startStatus: .connected)
+    let rule = NetworkPolicyRule(
+      name: "Office Wi-Fi",
+      ssid: "CorpNet",
+      proxyRoutingMode: .neProxy,
+      enableSystemProxy: false
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: SystemProxyController(commandRunner: commandRunner),
+      networkExtensionController: NetworkExtensionController(
+        systemExtensionRequester: StaticSystemExtensionRequester(activationState: .activated),
+        transparentProxyManager: proxyManager
+      ),
+      proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
+      defaults: try Self.makeIsolatedDefaults(),
+      currentNetworkProvider: provider,
+      bundledCoreURLProvider: { URL(fileURLWithPath: "/tmp/mihomo") }
+    )
+    model.networkPolicySettings = NetworkPolicySettings(rules: [rule], autoApplyEnabled: true)
+    model.start()
+    for _ in 0..<500 where !model.isRunning || !model.systemProxyEnabled {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    XCTAssertTrue(model.isRunning, model.lastError ?? model.statusSummary)
+    XCTAssertEqual(model.proxyRoutingMode, .systemProxy)
+    XCTAssertTrue(model.systemProxyEnabled)
+
+    model.handleNetworkEnvironmentMayHaveChanged(reason: "path")
+    for _ in 0..<1_000 where model.runtimeOwner != .networkExtension || model.startInFlight || model.lastAppliedNetworkPolicyID != rule.id {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(model.lastAppliedNetworkPolicyID, rule.id)
+    XCTAssertEqual(model.proxyRoutingMode, .neProxy)
+    XCTAssertFalse(model.systemProxyEnabled)
+    XCTAssertGreaterThanOrEqual(launcher.launchCount, 2)
+
+    provider.ssid = "home"
+    model.handleNetworkEnvironmentMayHaveChanged(reason: "path")
+    for _ in 0..<1_000 where model.lastAppliedNetworkPolicyID != nil || model.proxyRoutingMode != .systemProxy || !model.systemProxyEnabled || model.startInFlight {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertNil(model.lastAppliedNetworkPolicyID)
+    XCTAssertEqual(model.proxyRoutingMode, .systemProxy)
+    XCTAssertTrue(model.systemProxyEnabled)
+  }
+
+  func testNetworkPolicyRestoresOriginalStateAfterMovingBetweenMatchedSSIDs() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    let provider = MutableCurrentNetworkProvider(ssid: "corpnet")
+    let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+    let controller = SystemProxyController(commandRunner: commandRunner)
+    let officeRule = NetworkPolicyRule(
+      name: "Office Wi-Fi",
+      ssid: "CorpNet",
+      proxyRoutingMode: .systemProxy,
+      enableSystemProxy: true
+    )
+    let cafeRule = NetworkPolicyRule(
+      name: "Cafe Wi-Fi",
+      ssid: "CafeNet",
+      proxyRoutingMode: .systemProxy,
+      enableSystemProxy: true
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      systemProxyController: controller,
+      defaults: defaults,
+      currentNetworkProvider: provider
+    )
+    model.setProxyRoutingMode(.neProxy)
+    model.networkPolicySettings = NetworkPolicySettings(rules: [officeRule, cafeRule], autoApplyEnabled: true)
+
+    model.handleNetworkEnvironmentMayHaveChanged(reason: "path")
+    for _ in 0..<120 where !model.systemProxyEnabled || model.lastAppliedNetworkPolicyID != officeRule.id {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+
+    XCTAssertEqual(model.lastAppliedNetworkPolicyID, officeRule.id)
+    XCTAssertEqual(model.proxyRoutingMode, .systemProxy)
+    XCTAssertTrue(model.systemProxyEnabled)
+
+    provider.ssid = "CafeNet"
+    model.handleNetworkEnvironmentMayHaveChanged(reason: "path")
+    for _ in 0..<120 where model.lastAppliedNetworkPolicyID != cafeRule.id {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+
+    XCTAssertEqual(model.lastAppliedNetworkPolicyID, cafeRule.id)
+    XCTAssertEqual(model.proxyRoutingMode, .systemProxy)
+    XCTAssertTrue(model.systemProxyEnabled)
+
+    provider.ssid = "home"
+    model.handleNetworkEnvironmentMayHaveChanged(reason: "path")
+    for _ in 0..<120 where model.lastAppliedNetworkPolicyID != nil || model.systemProxyEnabled || model.proxyRoutingMode != .neProxy {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+
+    XCTAssertNil(model.lastAppliedNetworkPolicyID)
+    XCTAssertEqual(model.proxyRoutingMode, .neProxy)
+    XCTAssertFalse(model.systemProxyEnabled)
+  }
+
+  func testManualRoutingChangePreventsNetworkPolicyRestore() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let provider = MutableCurrentNetworkProvider(ssid: "corpnet")
+    let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+    let controller = SystemProxyController(commandRunner: commandRunner)
+    let rule = NetworkPolicyRule(
+      name: "Office Wi-Fi",
+      ssid: "CorpNet",
+      proxyRoutingMode: .systemProxy,
+      enableSystemProxy: true
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      systemProxyController: controller,
+      defaults: try Self.makeIsolatedDefaults(),
+      currentNetworkProvider: provider
+    )
+    model.networkPolicySettings = NetworkPolicySettings(rules: [rule], autoApplyEnabled: true)
+
+    model.handleNetworkEnvironmentMayHaveChanged(reason: "path")
+    for _ in 0..<120 where !model.systemProxyEnabled {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+
+    model.requestProxyRoutingMode(.neProxy)
+    for _ in 0..<40 where model.proxyRoutingMode != .neProxy {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    provider.ssid = "home"
+    model.handleNetworkEnvironmentMayHaveChanged(reason: "path")
+    try? await Task.sleep(nanoseconds: 800_000_000)
+
+    XCTAssertEqual(model.proxyRoutingMode, .neProxy)
+    XCTAssertFalse(model.systemProxyEnabled)
   }
 
   func testNetworkEnvironmentMonitorAppliesMatchingPolicyAfterDebounce() async throws {
@@ -5128,6 +5387,78 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertNil(model.appNotice)
   }
 
+  func testDeveloperModeOffPreventsGlobalShortcutRegistration() throws {
+    let paths = try Self.makeRuntimePaths()
+    let registrar = RecordingAppGlobalShortcutRegistrar()
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: try Self.makeIsolatedDefaults(),
+      globalShortcutRegistrar: registrar
+    )
+    let shortcut = try XCTUnwrap(KeyboardShortcutDescriptor(string: "cmd+shift+p"))
+
+    model.globalShortcutSettings = GlobalShortcutSettings(bindings: [
+      GlobalShortcutBinding(action: .startStop, shortcut: shortcut, enabled: true)
+    ])
+
+    XCTAssertFalse(model.developerMode)
+    XCTAssertTrue(registrar.registrations.isEmpty)
+    XCTAssertGreaterThanOrEqual(registrar.unregisterCount, 1)
+    XCTAssertNil(model.shortcutRegistrationStatus)
+  }
+
+  func testDeveloperModeToggleRegistersAndUnregistersGlobalShortcuts() throws {
+    let paths = try Self.makeRuntimePaths()
+    let registrar = RecordingAppGlobalShortcutRegistrar()
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: try Self.makeIsolatedDefaults(),
+      globalShortcutRegistrar: registrar
+    )
+    let shortcut = try XCTUnwrap(KeyboardShortcutDescriptor(string: "cmd+shift+p"))
+
+    model.globalShortcutSettings = GlobalShortcutSettings(bindings: [
+      GlobalShortcutBinding(action: .startStop, shortcut: shortcut, enabled: true)
+    ])
+    model.setDeveloperMode(true)
+
+    XCTAssertEqual(registrar.registrations.map(\.action), [.startStop])
+    XCTAssertEqual(model.shortcutRegistrationStatus?.registeredCount, 1)
+    XCTAssertTrue(model.shortcutRegistrationStatus?.failures.isEmpty == true)
+
+    model.setDeveloperMode(false)
+
+    XCTAssertTrue(registrar.registrations.isEmpty)
+    XCTAssertNil(model.shortcutRegistrationStatus)
+  }
+
+  func testGlobalShortcutRegistrationFailureUpdatesPublishedStatus() throws {
+    let paths = try Self.makeRuntimePaths()
+    let shortcut = try XCTUnwrap(KeyboardShortcutDescriptor(string: "cmd+shift+p"))
+    let failure = GlobalShortcutRegistrationFailure(
+      action: .startStop,
+      shortcut: shortcut,
+      osStatus: -9876
+    )
+    let registrar = RecordingAppGlobalShortcutRegistrar(failuresToReturn: [failure])
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: try Self.makeIsolatedDefaults(),
+      globalShortcutRegistrar: registrar
+    )
+
+    model.setDeveloperMode(true)
+    model.globalShortcutSettings = GlobalShortcutSettings(bindings: [
+      GlobalShortcutBinding(action: .startStop, shortcut: shortcut, enabled: true)
+    ])
+
+    XCTAssertEqual(model.shortcutRegistrationStatus?.failures, [failure])
+    XCTAssertTrue(model.shortcutRegistrationStatus?.errorMessage?.contains("OSStatus -9876") == true)
+  }
+
   func testNetworkExtensionRefreshClearsPublishedApprovalErrorAfterApproval() async throws {
     let paths = try Self.makeRuntimePaths()
     let requester = StaticSystemExtensionRequester(activationState: .requiresApproval)
@@ -6250,6 +6581,234 @@ final class DashboardRuntimeStateTests: XCTestCase {
     }
 
     XCTAssertEqual(model.tunHelperPreparationState, .registered(TunnelHelperClient.registeredMessage))
+  }
+
+  func testLaunchWarmupShowsInitialHelperPromptWithoutRegistering() throws {
+    let paths = try Self.makeRuntimePaths()
+    let service = StaticHelperService(status: .notRegistered, statusAfterRegister: .requiresApproval)
+    let helper = TunnelHelperClient(
+      transport: ReadyTunnelHelperTransport(),
+      service: service,
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      helperClient: helper,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    model.warmTunHelperRegistrationOnLaunch()
+
+    XCTAssertEqual(model.initialTunHelperPrompt?.primaryAction, .install)
+    XCTAssertEqual(model.initialTunHelperPrompt?.statusMessage, TunnelHelperClient.statusMessage(for: .notRegistered))
+    XCTAssertFalse(model.settings.initialTunHelperPromptHandled)
+    XCTAssertEqual(service.registerCount, 0)
+    XCTAssertEqual(service.openSettingsCount, 0)
+  }
+
+  func testSilentStartDefersInitialHelperPromptWithoutRegistering() throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    defaults.set(true, forKey: AppModel.silentStartDefaultsKey)
+    let service = StaticHelperService(status: .notRegistered, statusAfterRegister: .requiresApproval)
+    let helper = TunnelHelperClient(
+      transport: ReadyTunnelHelperTransport(),
+      service: service,
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      helperClient: helper,
+      defaults: defaults
+    )
+
+    model.warmTunHelperRegistrationOnLaunch()
+    model.evaluateInitialTunHelperPromptOnLaunch()
+
+    XCTAssertNil(model.initialTunHelperPrompt)
+    XCTAssertFalse(model.settings.initialTunHelperPromptHandled)
+    XCTAssertEqual(service.registerCount, 0)
+    XCTAssertEqual(service.openSettingsCount, 0)
+  }
+
+  func testOpeningMainWindowAfterSilentStartDeferralPresentsInitialHelperPrompt() throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    defaults.set(true, forKey: AppModel.silentStartDefaultsKey)
+    let service = StaticHelperService(status: .notRegistered, statusAfterRegister: .requiresApproval)
+    let helper = TunnelHelperClient(
+      transport: ReadyTunnelHelperTransport(),
+      service: service,
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      helperClient: helper,
+      defaults: defaults
+    )
+
+    model.warmTunHelperRegistrationOnLaunch()
+    model.resumeDeferredInitialTunHelperPromptAfterUserOpen()
+
+    XCTAssertEqual(model.initialTunHelperPrompt?.primaryAction, .install)
+    XCTAssertEqual(model.initialTunHelperPrompt?.statusMessage, TunnelHelperClient.statusMessage(for: .notRegistered))
+    XCTAssertFalse(model.settings.initialTunHelperPromptHandled)
+    XCTAssertEqual(service.registerCount, 0)
+    XCTAssertEqual(service.openSettingsCount, 0)
+  }
+
+  func testSelectingTunDuringSilentStartDeferralUsesHelperPreparationPath() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    defaults.set(true, forKey: AppModel.silentStartDefaultsKey)
+    let service = StaticHelperService(status: .notRegistered, statusAfterRegister: .requiresApproval)
+    let helper = TunnelHelperClient(
+      transport: ReadyTunnelHelperTransport(),
+      service: service,
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      helperClient: helper,
+      defaults: defaults
+    )
+
+    model.warmTunHelperRegistrationOnLaunch()
+    model.requestProxyRoutingMode(.tun)
+
+    for _ in 0..<40 where model.tunHelperPreparationState == .idle || model.tunHelperPreparationState == .checking {
+      await Task.yield()
+    }
+
+    XCTAssertEqual(model.proxyRoutingMode, .tun)
+    XCTAssertNil(model.initialTunHelperPrompt)
+    XCTAssertEqual(service.registerCount, 1)
+    XCTAssertEqual(service.openSettingsCount, 1)
+    XCTAssertEqual(
+      model.tunHelperPreparationState,
+      .requiresApproval(TunnelHelperClient.statusMessage(for: .requiresApproval))
+    )
+  }
+
+  func testInitialHelperInstallRegistersAndShowsApprovalPrompt() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let service = StaticHelperService(status: .notRegistered, statusAfterRegister: .requiresApproval)
+    let helper = TunnelHelperClient(
+      transport: ReadyTunnelHelperTransport(),
+      service: service,
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      helperClient: helper,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    model.warmTunHelperRegistrationOnLaunch()
+    model.installInitialTunHelper()
+
+    for _ in 0..<40 where model.initialTunHelperPromptActionInFlight || model.initialTunHelperPrompt?.primaryAction != .openSettings {
+      await Task.yield()
+    }
+
+    XCTAssertEqual(service.registerCount, 1)
+    XCTAssertEqual(service.openSettingsCount, 1)
+    XCTAssertEqual(model.initialTunHelperPrompt?.primaryAction, .openSettings)
+    XCTAssertEqual(model.initialTunHelperPrompt?.statusMessage, TunnelHelperClient.statusMessage(for: .requiresApproval))
+    XCTAssertFalse(model.settings.initialTunHelperPromptHandled)
+    XCTAssertNil(model.lastError)
+  }
+
+  func testDismissingInitialHelperPromptMarksHandledButTunFlowStillRegisters() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let service = StaticHelperService(status: .notRegistered, statusAfterRegister: .requiresApproval)
+    let helper = TunnelHelperClient(
+      transport: ReadyTunnelHelperTransport(),
+      service: service,
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      helperClient: helper,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    model.warmTunHelperRegistrationOnLaunch()
+    model.dismissInitialTunHelperPrompt()
+
+    XCTAssertNil(model.initialTunHelperPrompt)
+    XCTAssertTrue(model.settings.initialTunHelperPromptHandled)
+    XCTAssertEqual(service.registerCount, 0)
+
+    model.requestProxyRoutingMode(.tun)
+    for _ in 0..<40 where model.proxyRoutingMode != .tun || model.tunHelperPreparationState == .idle || model.tunHelperPreparationState == .checking {
+      await Task.yield()
+    }
+
+    XCTAssertEqual(service.registerCount, 1)
+    XCTAssertEqual(service.openSettingsCount, 1)
+    XCTAssertEqual(
+      model.tunHelperPreparationState,
+      .requiresApproval(TunnelHelperClient.statusMessage(for: .requiresApproval))
+    )
+  }
+
+  func testLaunchWarmupSkipsInitialPromptAndMarksHandledWhenHelperEnabled() throws {
+    let paths = try Self.makeRuntimePaths()
+    let service = StaticHelperService(status: .enabled)
+    let helper = TunnelHelperClient(
+      transport: ReadyTunnelHelperTransport(),
+      service: service,
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      helperClient: helper,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    model.warmTunHelperRegistrationOnLaunch()
+
+    XCTAssertNil(model.initialTunHelperPrompt)
+    XCTAssertTrue(model.settings.initialTunHelperPromptHandled)
+    XCTAssertEqual(service.registerCount, 0)
+  }
+
+  func testLaunchWarmupSkipsInitialPromptWhenHelperIsMissing() throws {
+    let paths = try Self.makeRuntimePaths()
+    let service = StaticHelperService(status: .notFound)
+    let helper = TunnelHelperClient(
+      transport: ReadyTunnelHelperTransport(),
+      service: service,
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      helperClient: helper,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    model.warmTunHelperRegistrationOnLaunch()
+
+    XCTAssertNil(model.initialTunHelperPrompt)
+    XCTAssertFalse(model.settings.initialTunHelperPromptHandled)
+    XCTAssertEqual(service.registerCount, 0)
   }
 
   func testRepairHelperRefreshesVisibleApprovalStateWithoutReregistering() async throws {
@@ -7453,6 +8012,30 @@ private actor RecordingTunRuntimeInspector: TunRuntimeInspecting {
 }
 
 @MainActor
+private final class RecordingAppGlobalShortcutRegistrar: GlobalShortcutRegistering {
+  let failuresToReturn: [GlobalShortcutRegistrationFailure]
+  private(set) var registrations: [GlobalShortcutRegistration] = []
+  private(set) var unregisterCount = 0
+
+  init(failuresToReturn: [GlobalShortcutRegistrationFailure] = []) {
+    self.failuresToReturn = failuresToReturn
+  }
+
+  func register(
+    _ registrations: [GlobalShortcutRegistration],
+    handler: @escaping @MainActor (GlobalShortcutAction) -> Void
+  ) -> [GlobalShortcutRegistrationFailure] {
+    self.registrations = registrations
+    return failuresToReturn
+  }
+
+  func unregisterAll() {
+    unregisterCount += 1
+    registrations = []
+  }
+}
+
+@MainActor
 private final class StaticHelperService: HelperServiceManaging {
   var status: SMAppService.Status
   let statusAfterRegister: SMAppService.Status
@@ -7788,6 +8371,32 @@ private final class ManualNetworkEnvironmentMonitor: NetworkEnvironmentMonitorin
 
 private struct StaticCurrentNetworkProvider: CurrentNetworkProviding {
   let ssid: String?
+
+  func currentSSID() -> String? {
+    ssid
+  }
+}
+
+private final class MutableCurrentNetworkProvider: CurrentNetworkProviding, @unchecked Sendable {
+  private let lock = NSLock()
+  private var value: String?
+
+  var ssid: String? {
+    get {
+      lock.lock()
+      defer { lock.unlock() }
+      return value
+    }
+    set {
+      lock.lock()
+      value = newValue
+      lock.unlock()
+    }
+  }
+
+  init(ssid: String?) {
+    value = ssid
+  }
 
   func currentSSID() -> String? {
     ssid

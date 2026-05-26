@@ -27,6 +27,8 @@ struct ClashXMigrationParser {
     var conflicts: [String] = []
     var unsupportedSettings: [String] = []
     var unknownKeys: [String] = []
+    var shortcutBindings: [MigratedShortcutBinding] = []
+    var menuBarMigrationSuggested = false
     var providerPaths = Set<String>()
 
     let initialFiles = candidateYAMLFiles(in: directoryURL)
@@ -53,6 +55,8 @@ struct ClashXMigrationParser {
         conflicts: &conflicts,
         unsupportedSettings: &unsupportedSettings,
         unknownKeys: &unknownKeys,
+        shortcutBindings: &shortcutBindings,
+        menuBarMigrationSuggested: &menuBarMigrationSuggested,
         providerPaths: &providerPaths
       )
     }
@@ -75,6 +79,8 @@ struct ClashXMigrationParser {
         conflicts: &conflicts,
         unsupportedSettings: &unsupportedSettings,
         unknownKeys: &unknownKeys,
+        shortcutBindings: &shortcutBindings,
+        menuBarMigrationSuggested: &menuBarMigrationSuggested,
         providerPaths: &providerPaths
       )
     }
@@ -100,7 +106,9 @@ struct ClashXMigrationParser {
       unsupportedSettings: unique(unsupportedSettings),
       unknownKeys: unique(unknownKeys).sorted(),
       inspectedFiles: inspectedFiles,
-      warnings: unique(warnings)
+      warnings: unique(warnings),
+      shortcutBindings: uniqueShortcutBindings(shortcutBindings),
+      menuBarMigrationSuggested: menuBarMigrationSuggested
     )
   }
 
@@ -119,6 +127,8 @@ struct ClashXMigrationParser {
     conflicts: inout [String],
     unsupportedSettings: inout [String],
     unknownKeys: inout [String],
+    shortcutBindings: inout [MigratedShortcutBinding],
+    menuBarMigrationSuggested: inout Bool,
     providerPaths: inout Set<String>
   ) {
     let standardizedPath = fileURL.standardizedFileURL.path
@@ -150,6 +160,15 @@ struct ClashXMigrationParser {
         ?? boolValue(root["cfw-system-proxy"])
         ?? boolValue(root["enable-system-proxy"])
         ?? systemProxyEnabled
+      extractShortcutBindings(
+        from: root,
+        fileLabel: fileLabel,
+        shortcutBindings: &shortcutBindings,
+        warnings: &warnings
+      )
+      if hasMenuBarMigrationHint(in: root) {
+        menuBarMigrationSuggested = true
+      }
       unsupportedSettings.append(contentsOf: unsupportedKeys(from: root).map { "\($0) in \(fileLabel)" })
       unknownKeys.append(contentsOf: unknownTopLevelKeys(from: root).map { "\($0) in \(fileLabel)" })
     } catch {
@@ -242,13 +261,82 @@ struct ClashXMigrationParser {
     }
   }
 
+  private func extractShortcutBindings(
+    from root: [String: Any],
+    fileLabel: String,
+    shortcutBindings: inout [MigratedShortcutBinding],
+    warnings: inout [String]
+  ) {
+    for key in ["shortcut", "shortcuts", "hotkey", "hotkeys"] {
+      guard let value = root[key] else { continue }
+      if let values = value as? [String: Any] {
+        for entry in values.sorted(by: { $0.key.localizedStandardCompare($1.key) == .orderedAscending }) {
+          addShortcutBinding(
+            sourceKey: entry.key,
+            value: entry.value,
+            fileLabel: fileLabel,
+            shortcutBindings: &shortcutBindings,
+            warnings: &warnings
+          )
+        }
+      } else if let values = value as? [[String: Any]] {
+        for (index, entry) in values.enumerated() {
+          let sourceKey = stringValue(entry["name"]) ?? stringValue(entry["action"]) ?? "\(key)[\(index)]"
+          let shortcutValue: Any
+          if let keyValue = stringValue(entry["key"]) ?? stringValue(entry["shortcut"]) ?? stringValue(entry["hotkey"]) {
+            shortcutValue = keyValue
+          } else {
+            shortcutValue = entry
+          }
+          addShortcutBinding(
+            sourceKey: sourceKey,
+            value: shortcutValue,
+            fileLabel: fileLabel,
+            shortcutBindings: &shortcutBindings,
+            warnings: &warnings
+          )
+        }
+      }
+    }
+  }
+
+  private func addShortcutBinding(
+    sourceKey: String,
+    value: Any,
+    fileLabel: String,
+    shortcutBindings: inout [MigratedShortcutBinding],
+    warnings: inout [String]
+  ) {
+    guard let shortcutString = stringValue(value),
+          let shortcut = KeyboardShortcutDescriptor(string: shortcutString)
+    else {
+      warnings.append("Shortcut \(sourceKey) in \(fileLabel) could not be parsed.")
+      return
+    }
+    guard let action = GlobalShortcutAction.clashXAction(for: sourceKey) else {
+      warnings.append("Shortcut \(sourceKey) in \(fileLabel) has no matching ClashMax action.")
+      return
+    }
+    shortcutBindings.append(
+      MigratedShortcutBinding(sourceKey: sourceKey, action: action, shortcut: shortcut)
+    )
+  }
+
+  private func hasMenuBarMigrationHint(in root: [String: Any]) -> Bool {
+    root.contains { key, value in
+      let normalized = key.lowercased()
+      guard normalized.contains("menu") || normalized.contains("tray") else { return false }
+      if let bool = boolValue(value) {
+        return bool
+      }
+      return true
+    }
+  }
+
   private func unsupportedKeys(from root: [String: Any]) -> [String] {
     root.keys.filter { key in
       let normalized = key.lowercased()
-      return normalized.contains("shortcut")
-        || normalized.contains("hotkey")
-        || normalized.contains("menu")
-        || normalized.contains("tray")
+      return normalized.contains("applescript")
     }
     .sorted()
   }
@@ -269,9 +357,12 @@ struct ClashXMigrationParser {
       "geodata-mode",
       "geo-auto-update",
       "geox-url",
+      "hotkey",
+      "hotkeys",
       "hosts",
       "ipv6",
       "log-level",
+      "menu",
       "mixed-port",
       "mode",
       "port",
@@ -285,14 +376,28 @@ struct ClashXMigrationParser {
       "rule-providers",
       "rules",
       "secret",
+      "shortcut",
+      "shortcuts",
       "socks-port",
       "subscriptions",
       "subscribes",
       "system-proxy",
       "tproxy-port",
+      "tray",
       "tun"
     ]
     return root.keys.filter { !known.contains($0.lowercased()) }.sorted()
+  }
+
+  private func uniqueShortcutBindings(_ values: [MigratedShortcutBinding]) -> [MigratedShortcutBinding] {
+    var seen = Set<String>()
+    var result: [MigratedShortcutBinding] = []
+    for value in values {
+      let key = "\(value.action.rawValue):\(value.shortcut.storageString)".lowercased()
+      guard seen.insert(key).inserted else { continue }
+      result.append(value)
+    }
+    return result
   }
 
   private func providerNameConflicts(_ entries: [(name: String?, url: String, file: String)]) -> [String] {

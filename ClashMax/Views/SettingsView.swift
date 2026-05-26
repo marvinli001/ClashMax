@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
   @EnvironmentObject private var appModel: AppModel
@@ -108,6 +109,15 @@ struct SettingsView: View {
             .help("Open System Settings > General > Login Items & Extensions.")
           }
 
+        }
+
+        if appModel.developerMode {
+          Section("Shortcuts") {
+            GlobalShortcutSettingsView(
+              settings: $settings.globalShortcutSettings,
+              registrationStatus: appModel.shortcutRegistrationStatus
+            )
+          }
         }
 
         Section("Runtime") {
@@ -651,6 +661,127 @@ struct SettingsView: View {
   }
 }
 
+private struct GlobalShortcutSettingsView: View {
+  @Binding var settings: GlobalShortcutSettings
+  let registrationStatus: GlobalShortcutRegistrationStatus?
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text("Configure global shortcuts for high-frequency proxy actions. Shortcuts are disabled until a key is set and enabled.")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+
+      LazyVStack(alignment: .leading, spacing: 8) {
+        ForEach(GlobalShortcutAction.allCases) { action in
+          GlobalShortcutBindingRow(action: action, settings: $settings)
+        }
+      }
+
+      if let error = settings.validationError {
+        Label(error, systemImage: "exclamationmark.triangle.fill")
+          .font(.caption)
+          .foregroundStyle(.orange)
+          .lineLimit(2)
+      }
+
+      if let error = registrationStatus?.errorMessage {
+        Label(error, systemImage: "exclamationmark.triangle.fill")
+          .font(.caption)
+          .foregroundStyle(.red)
+          .lineLimit(3)
+      }
+    }
+  }
+}
+
+private struct GlobalShortcutBindingRow: View {
+  let action: GlobalShortcutAction
+  @Binding var settings: GlobalShortcutSettings
+  @State private var draft = ""
+  @State private var parseError: String?
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      HStack(spacing: 10) {
+        Label(action.displayName, systemImage: action.symbolName)
+          .lineLimit(1)
+          .frame(maxWidth: .infinity, alignment: .leading)
+
+        TextField("cmd+shift+p", text: $draft)
+          .textFieldStyle(.roundedBorder)
+          .frame(width: 142)
+          .onSubmit(applyDraft)
+          .onAppear {
+            draft = binding.shortcut?.storageString ?? ""
+          }
+          .onChange(of: draft) { _, _ in
+            parseError = nil
+          }
+
+        Button {
+          applyDraft()
+        } label: {
+          Image(systemName: "checkmark")
+            .frame(width: 20, height: 20)
+        }
+        .buttonStyle(.borderless)
+        .help("Apply shortcut")
+
+        Button {
+          draft = ""
+          parseError = nil
+          settings.set(nil, for: action, enabled: false)
+        } label: {
+          Image(systemName: "xmark")
+            .frame(width: 20, height: 20)
+        }
+        .buttonStyle(.borderless)
+        .help("Clear shortcut")
+
+        Toggle("", isOn: Binding(
+          get: { binding.enabled },
+          set: { enabled in
+            settings.set(binding.shortcut, for: action, enabled: enabled)
+          }
+        ))
+        .labelsHidden()
+        .toggleStyle(.switch)
+        .disabled(binding.shortcut == nil)
+        .help("Enable global shortcut")
+      }
+
+      if let parseError {
+        Label(parseError, systemImage: "exclamationmark.triangle.fill")
+          .font(.caption2)
+          .foregroundStyle(.orange)
+          .lineLimit(2)
+      }
+    }
+    .font(.caption)
+  }
+
+  private var binding: GlobalShortcutBinding {
+    settings.mergedBindings.first { $0.action == action } ?? GlobalShortcutBinding(action: action)
+  }
+
+  private func applyDraft() {
+    let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+      settings.set(nil, for: action, enabled: false)
+      parseError = nil
+      return
+    }
+    guard let shortcut = KeyboardShortcutDescriptor(string: trimmed) else {
+      parseError = String(localized: "Shortcut must contain one key and at least one modifier.")
+      return
+    }
+    draft = shortcut.storageString
+    parseError = nil
+    settings.set(shortcut, for: action, enabled: true)
+  }
+}
+
 private struct NetworkPolicySettingsPopover: View {
   @Binding var settings: NetworkPolicySettings
   let currentSSID: String?
@@ -671,6 +802,17 @@ private struct NetworkPolicySettingsPopover: View {
 
       Toggle("Apply saved policies automatically on network changes", isOn: $settings.autoApplyEnabled)
         .toggleStyle(.checkbox)
+
+      Picker("When no SSID matches", selection: $settings.unmatchedBehavior) {
+        ForEach(NetworkPolicyUnmatchedBehavior.allCases) { behavior in
+          Text(behavior.displayName).tag(behavior)
+        }
+      }
+      .pickerStyle(.menu)
+      Text(settings.unmatchedBehavior.description)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
 
       HStack(spacing: 10) {
         Label(statusMessage ?? String(localized: "Current network not checked."), systemImage: currentSSID == nil ? "wifi.slash" : "wifi")
@@ -923,6 +1065,7 @@ struct RuleOverlaySettingsEditor: View {
   let showsHeader: Bool
   let showsEnableToggle: Bool
   @State private var position = RuleOverlayPosition.prepend
+  @State private var ruleCategory = RuleBuilderCategory.domain
   @State private var kind = ManagedRuleOverlayRule.Kind.domainSuffix
   @State private var value = ""
   @State private var policy = "DIRECT"
@@ -1000,12 +1143,31 @@ struct RuleOverlaySettingsEditor: View {
         }
         .pickerStyle(.segmented)
 
+        Picker("Rule Category", selection: $ruleCategory) {
+          ForEach(RuleBuilderCategory.allCases) { category in
+            Text(category.displayName).tag(category)
+          }
+        }
+        .pickerStyle(.segmented)
+        .onChange(of: ruleCategory) { _, category in
+          kind = category.defaultKind
+          if !kind.allowsNoResolve {
+            noResolve = false
+          }
+        }
+
         Picker("Rule Type", selection: $kind) {
-          ForEach(ManagedRuleOverlayRule.Kind.allCases) { kind in
+          ForEach(ruleCategory.kinds) { kind in
             Text(kind.displayName).tag(kind)
           }
         }
         .pickerStyle(.menu)
+        .onChange(of: kind) { _, nextKind in
+          ruleCategory = RuleBuilderCategory.category(for: nextKind)
+          if !nextKind.allowsNoResolve {
+            noResolve = false
+          }
+        }
 
         if kind.requiresValue {
           TextField("Rule Value", text: $value)
@@ -1014,6 +1176,12 @@ struct RuleOverlaySettingsEditor: View {
 
         TextField("Policy", text: $policy)
           .textFieldStyle(.roundedBorder)
+
+        Text("Runtime: \(draftRule.runtimeRule)")
+          .font(.system(.caption, design: .monospaced))
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+          .truncationMode(.middle)
 
         if kind.allowsNoResolve {
           Toggle("No Resolve", isOn: $noResolve)
@@ -1118,6 +1286,54 @@ private enum RuleOverlayPosition: String, CaseIterable, Identifiable {
   }
 }
 
+private enum RuleBuilderCategory: String, CaseIterable, Identifiable {
+  case domain
+  case ip
+  case process
+  case geo
+  case fallback
+
+  var id: String { rawValue }
+
+  var displayName: String {
+    switch self {
+    case .domain:
+      String(localized: "Domain")
+    case .ip:
+      String(localized: "IP")
+    case .process:
+      String(localized: "Process")
+    case .geo:
+      String(localized: "Geo")
+    case .fallback:
+      String(localized: "Fallback")
+    }
+  }
+
+  var kinds: [ManagedRuleOverlayRule.Kind] {
+    switch self {
+    case .domain:
+      [.domain, .domainSuffix, .domainKeyword]
+    case .ip:
+      [.ipCIDR, .ipCIDR6]
+    case .process:
+      [.processName, .processPath]
+    case .geo:
+      [.geoSite, .geoIP]
+    case .fallback:
+      [.match]
+    }
+  }
+
+  var defaultKind: ManagedRuleOverlayRule.Kind {
+    kinds[0]
+  }
+
+  static func category(for kind: ManagedRuleOverlayRule.Kind) -> RuleBuilderCategory {
+    allCases.first { $0.kinds.contains(kind) } ?? .domain
+  }
+}
+
 private struct RuleOverlayEditorSection<Content: View>: View {
   @Environment(\.colorScheme) private var colorScheme
   let title: String
@@ -1152,6 +1368,7 @@ private struct RuleOverlayEditorSection<Content: View>: View {
 private struct RuleOverlayRuleList: View {
   let title: String
   @Binding var rules: [ManagedRuleOverlayRule]
+  @State private var draggedRuleID: UUID?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -1165,44 +1382,26 @@ private struct RuleOverlayRuleList: View {
           .foregroundStyle(.tertiary)
       } else {
         ForEach(Array(rules.enumerated()), id: \.element.id) { index, rule in
-          HStack(spacing: 8) {
-            Text(rule.runtimeRule)
-              .font(.system(.caption, design: .monospaced))
-              .lineLimit(1)
-              .truncationMode(.middle)
-            Spacer()
-            Button {
-              moveRule(from: index, by: -1)
-            } label: {
-              Image(systemName: "arrow.up")
-                .frame(width: 20, height: 20)
-            }
-            .buttonStyle(.borderless)
-            .disabled(index == 0)
-            .help("Move rule up")
-
-            Button {
-              moveRule(from: index, by: 1)
-            } label: {
-              Image(systemName: "arrow.down")
-                .frame(width: 20, height: 20)
-            }
-            .buttonStyle(.borderless)
-            .disabled(index >= rules.count - 1)
-            .help("Move rule down")
-
-            Button {
-              rules.remove(at: index)
-            } label: {
-              Image(systemName: "trash")
-                .frame(width: 20, height: 20)
-            }
-            .buttonStyle(.borderless)
-            .help("Remove rule")
+          RuleOverlayEditableRuleRow(
+            rule: Binding(
+              get: { rules[index] },
+              set: { rules[index] = $0 }
+            ),
+            canMoveUp: index > 0,
+            canMoveDown: index < rules.count - 1,
+            onMoveUp: { moveRule(from: index, by: -1) },
+            onMoveDown: { moveRule(from: index, by: 1) },
+            onDuplicate: { duplicateRule(at: index) },
+            onDelete: { rules.remove(at: index) }
+          )
+          .onDrag {
+            draggedRuleID = rule.id
+            return NSItemProvider(object: rule.id.uuidString as NSString)
           }
-          .padding(.horizontal, 8)
-          .padding(.vertical, 6)
-          .ruleOverlayListRow()
+          .onDrop(
+            of: [UTType.text],
+            delegate: RuleOverlayRuleDropDelegate(target: rule, rules: $rules, draggedRuleID: $draggedRuleID)
+          )
         }
       }
     }
@@ -1214,10 +1413,18 @@ private struct RuleOverlayRuleList: View {
     guard rules.indices.contains(index), rules.indices.contains(destination) else { return }
     rules.swapAt(index, destination)
   }
+
+  private func duplicateRule(at index: Int) {
+    guard rules.indices.contains(index) else { return }
+    var copy = rules[index]
+    copy.id = UUID()
+    rules.insert(copy, at: index + 1)
+  }
 }
 
 private struct RuleDisableMatcherList: View {
   @Binding var matchers: [ManagedRuleDisableMatcher]
+  @State private var draggedMatcherID: UUID?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -1231,44 +1438,26 @@ private struct RuleDisableMatcherList: View {
           .foregroundStyle(.tertiary)
       } else {
         ForEach(Array(matchers.enumerated()), id: \.element.id) { index, matcher in
-          HStack(spacing: 8) {
-            Text("\(matcher.mode.displayName): \(matcher.normalizedPattern)")
-              .font(.system(.caption, design: .monospaced))
-              .lineLimit(1)
-              .truncationMode(.middle)
-            Spacer()
-            Button {
-              moveMatcher(from: index, by: -1)
-            } label: {
-              Image(systemName: "arrow.up")
-                .frame(width: 20, height: 20)
-            }
-            .buttonStyle(.borderless)
-            .disabled(index == 0)
-            .help("Move disabled rule matcher up")
-
-            Button {
-              moveMatcher(from: index, by: 1)
-            } label: {
-              Image(systemName: "arrow.down")
-                .frame(width: 20, height: 20)
-            }
-            .buttonStyle(.borderless)
-            .disabled(index >= matchers.count - 1)
-            .help("Move disabled rule matcher down")
-
-            Button {
-              matchers.remove(at: index)
-            } label: {
-              Image(systemName: "trash")
-                .frame(width: 20, height: 20)
-            }
-            .buttonStyle(.borderless)
-            .help("Remove disabled rule matcher")
+          RuleOverlayEditableMatcherRow(
+            matcher: Binding(
+              get: { matchers[index] },
+              set: { matchers[index] = $0 }
+            ),
+            canMoveUp: index > 0,
+            canMoveDown: index < matchers.count - 1,
+            onMoveUp: { moveMatcher(from: index, by: -1) },
+            onMoveDown: { moveMatcher(from: index, by: 1) },
+            onDuplicate: { duplicateMatcher(at: index) },
+            onDelete: { matchers.remove(at: index) }
+          )
+          .onDrag {
+            draggedMatcherID = matcher.id
+            return NSItemProvider(object: matcher.id.uuidString as NSString)
           }
-          .padding(.horizontal, 8)
-          .padding(.vertical, 6)
-          .ruleOverlayListRow()
+          .onDrop(
+            of: [UTType.text],
+            delegate: RuleOverlayMatcherDropDelegate(target: matcher, matchers: $matchers, draggedMatcherID: $draggedMatcherID)
+          )
         }
       }
     }
@@ -1279,6 +1468,211 @@ private struct RuleDisableMatcherList: View {
     let destination = index + offset
     guard matchers.indices.contains(index), matchers.indices.contains(destination) else { return }
     matchers.swapAt(index, destination)
+  }
+
+  private func duplicateMatcher(at index: Int) {
+    guard matchers.indices.contains(index) else { return }
+    var copy = matchers[index]
+    copy.id = UUID()
+    matchers.insert(copy, at: index + 1)
+  }
+}
+
+private struct RuleOverlayEditableRuleRow: View {
+  @Binding var rule: ManagedRuleOverlayRule
+  let canMoveUp: Bool
+  let canMoveDown: Bool
+  let onMoveUp: () -> Void
+  let onMoveDown: () -> Void
+  let onDuplicate: () -> Void
+  let onDelete: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(spacing: 8) {
+        Image(systemName: "line.3.horizontal")
+          .foregroundStyle(.tertiary)
+          .help("Drag to reorder")
+
+        Picker("Rule Type", selection: Binding(
+          get: { rule.kind },
+          set: { kind in
+            rule.kind = kind
+            if !kind.allowsNoResolve {
+              rule.noResolve = false
+            }
+          }
+        )) {
+          ForEach(ManagedRuleOverlayRule.Kind.allCases) { kind in
+            Text(kind.displayName).tag(kind)
+          }
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .frame(width: 128)
+
+        if rule.kind.requiresValue {
+          TextField("Rule Value", text: $rule.value)
+            .textFieldStyle(.roundedBorder)
+            .frame(minWidth: 96)
+        }
+
+        TextField("Policy", text: $rule.policy)
+          .textFieldStyle(.roundedBorder)
+          .frame(width: 92)
+
+        if rule.kind.allowsNoResolve {
+          Toggle("No Resolve", isOn: $rule.noResolve)
+            .toggleStyle(.checkbox)
+            .fixedSize()
+        }
+
+        Spacer(minLength: 4)
+
+        RuleOverlayRowButtons(
+          canMoveUp: canMoveUp,
+          canMoveDown: canMoveDown,
+          onMoveUp: onMoveUp,
+          onMoveDown: onMoveDown,
+          onDuplicate: onDuplicate,
+          onDelete: onDelete
+        )
+      }
+
+      Text(rule.runtimeRule)
+        .font(.system(.caption2, design: .monospaced))
+        .foregroundStyle(rule.validationError == nil ? Color.secondary : Color.red)
+        .lineLimit(1)
+        .truncationMode(.middle)
+    }
+    .padding(.horizontal, 8)
+    .padding(.vertical, 6)
+    .ruleOverlayListRow()
+  }
+}
+
+private struct RuleOverlayEditableMatcherRow: View {
+  @Binding var matcher: ManagedRuleDisableMatcher
+  let canMoveUp: Bool
+  let canMoveDown: Bool
+  let onMoveUp: () -> Void
+  let onMoveDown: () -> Void
+  let onDuplicate: () -> Void
+  let onDelete: () -> Void
+
+  var body: some View {
+    HStack(spacing: 8) {
+      Image(systemName: "line.3.horizontal")
+        .foregroundStyle(.tertiary)
+        .help("Drag to reorder")
+
+      Picker("Match", selection: $matcher.mode) {
+        ForEach(RuleDisableMatchMode.allCases) { mode in
+          Text(mode.displayName).tag(mode)
+        }
+      }
+      .labelsHidden()
+      .pickerStyle(.menu)
+      .frame(width: 92)
+
+      TextField("Rule pattern", text: $matcher.pattern)
+        .textFieldStyle(.roundedBorder)
+
+      RuleOverlayRowButtons(
+        canMoveUp: canMoveUp,
+        canMoveDown: canMoveDown,
+        onMoveUp: onMoveUp,
+        onMoveDown: onMoveDown,
+        onDuplicate: onDuplicate,
+        onDelete: onDelete
+      )
+    }
+    .padding(.horizontal, 8)
+    .padding(.vertical, 6)
+    .ruleOverlayListRow()
+  }
+}
+
+private struct RuleOverlayRowButtons: View {
+  let canMoveUp: Bool
+  let canMoveDown: Bool
+  let onMoveUp: () -> Void
+  let onMoveDown: () -> Void
+  let onDuplicate: () -> Void
+  let onDelete: () -> Void
+
+  var body: some View {
+    HStack(spacing: 3) {
+      Button(action: onMoveUp) {
+        Image(systemName: "arrow.up")
+          .frame(width: 18, height: 18)
+      }
+      .buttonStyle(.borderless)
+      .disabled(!canMoveUp)
+      .help("Move up")
+
+      Button(action: onMoveDown) {
+        Image(systemName: "arrow.down")
+          .frame(width: 18, height: 18)
+      }
+      .buttonStyle(.borderless)
+      .disabled(!canMoveDown)
+      .help("Move down")
+
+      Button(action: onDuplicate) {
+        Image(systemName: "plus.square.on.square")
+          .frame(width: 18, height: 18)
+      }
+      .buttonStyle(.borderless)
+      .help("Duplicate")
+
+      Button(action: onDelete) {
+        Image(systemName: "trash")
+          .frame(width: 18, height: 18)
+      }
+      .buttonStyle(.borderless)
+      .help("Remove")
+    }
+  }
+}
+
+private struct RuleOverlayRuleDropDelegate: DropDelegate {
+  let target: ManagedRuleOverlayRule
+  @Binding var rules: [ManagedRuleOverlayRule]
+  @Binding var draggedRuleID: UUID?
+
+  func dropEntered(info: DropInfo) {
+    guard let draggedRuleID,
+          draggedRuleID != target.id,
+          let from = rules.firstIndex(where: { $0.id == draggedRuleID }),
+          let to = rules.firstIndex(where: { $0.id == target.id })
+    else { return }
+    rules.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+  }
+
+  func performDrop(info: DropInfo) -> Bool {
+    draggedRuleID = nil
+    return true
+  }
+}
+
+private struct RuleOverlayMatcherDropDelegate: DropDelegate {
+  let target: ManagedRuleDisableMatcher
+  @Binding var matchers: [ManagedRuleDisableMatcher]
+  @Binding var draggedMatcherID: UUID?
+
+  func dropEntered(info: DropInfo) {
+    guard let draggedMatcherID,
+          draggedMatcherID != target.id,
+          let from = matchers.firstIndex(where: { $0.id == draggedMatcherID }),
+          let to = matchers.firstIndex(where: { $0.id == target.id })
+    else { return }
+    matchers.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+  }
+
+  func performDrop(info: DropInfo) -> Bool {
+    draggedMatcherID = nil
+    return true
   }
 }
 
@@ -1559,13 +1953,15 @@ private struct ExternalControlSettingsRow: View {
   @State private var originDraft = ""
   @State private var corsError: String?
   @State private var suppressControllerPresentation = false
-  @State private var controllerHealth = ""
+  @State private var controllerHealth = ExternalControlHealthResult.idle
+  @State private var dashboardHealth: [ExternalDashboardProfile.ID: ExternalControlHealthResult] = [:]
   @State private var isDashboardProfilesPresented = false
   @State private var dashboardNameDraft = ""
   @State private var dashboardURLDraft = "https://yacd.metacubex.one"
   @State private var dashboardReadOnlyDraft = true
   @State private var dashboardSecretDraft = ""
   @State private var dashboardError: String?
+  private let healthChecker = ExternalControlHealthChecker()
 
   var body: some View {
     HStack(alignment: .center, spacing: 16) {
@@ -1623,25 +2019,37 @@ private struct ExternalControlSettingsRow: View {
   private var dashboardMenu: some View {
     Menu {
       ForEach(settings.externalDashboardProfiles) { profile in
-        Button {
-          NSWorkspace.shared.open(appModel.externalDashboardURL(for: profile))
+        Menu {
+          Button {
+            NSWorkspace.shared.open(appModel.externalDashboardURL(for: profile))
+          } label: {
+            Label("Open Dashboard", systemImage: "safari")
+          }
+          Button {
+            runDashboardHealthCheck(profile)
+          } label: {
+            Label("Health Check", systemImage: "heart.text.square")
+          }
+          if let result = dashboardHealth[profile.id] {
+            Divider()
+            Label(result.displayMessage, systemImage: healthSymbol(for: result))
+          }
         } label: {
           Label(profile.name, systemImage: profile.readOnly ? "eye" : "pencil")
         }
       }
       Divider()
       Button {
-        controllerHealth = appModel.isRunning
-          ? String(localized: "Controller is running.")
-          : String(localized: "Controller is unavailable until the runtime starts.")
+        runControllerHealthCheck()
       } label: {
         Label("Health Check", systemImage: "heart.text.square")
       }
+      Label(controllerHealth.displayMessage, systemImage: healthSymbol(for: controllerHealth))
     } label: {
       Image(systemName: "safari")
         .frame(width: 22, height: 22)
     }
-    .help(controllerHealth.isEmpty ? "Open external dashboard" : controllerHealth)
+    .help(controllerHealth.displayMessage)
   }
 
   private var dashboardProfilesButton: some View {
@@ -1797,6 +2205,35 @@ private struct ExternalControlSettingsRow: View {
 
   private func deleteDashboardProfile(_ profile: ExternalDashboardProfile) {
     appModel.deleteExternalDashboardProfile(profile)
+    dashboardHealth[profile.id] = nil
+  }
+
+  private func runControllerHealthCheck() {
+    controllerHealth = .checking
+    let controllerSettings = settings.externalControllerSettings
+    Task { @MainActor in
+      controllerHealth = await healthChecker.checkController(settings: controllerSettings)
+    }
+  }
+
+  private func runDashboardHealthCheck(_ profile: ExternalDashboardProfile) {
+    dashboardHealth[profile.id] = .checking
+    Task { @MainActor in
+      dashboardHealth[profile.id] = await healthChecker.checkDashboard(baseURL: profile.url)
+    }
+  }
+
+  private func healthSymbol(for result: ExternalControlHealthResult) -> String {
+    switch result.status {
+    case .idle:
+      "heart"
+    case .checking:
+      "arrow.triangle.2.circlepath"
+    case .healthy:
+      "checkmark.circle.fill"
+    case .failed:
+      "exclamationmark.triangle.fill"
+    }
   }
 
   private static func parseAddress(_ value: String) -> (host: String, port: Int)? {

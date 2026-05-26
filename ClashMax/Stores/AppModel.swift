@@ -219,6 +219,25 @@ struct AppNotice: Equatable {
   }
 }
 
+struct InitialTunHelperPrompt: Equatable {
+  enum PrimaryAction: Equatable {
+    case install
+    case openSettings
+  }
+
+  var primaryAction: PrimaryAction
+  var statusMessage: String
+
+  var primaryButtonTitle: String {
+    switch primaryAction {
+    case .install:
+      return String(localized: "Install Helper")
+    case .openSettings:
+      return String(localized: "Open Settings")
+    }
+  }
+}
+
 struct RuntimeDiagnosticsReport: Equatable, Sendable {
   static let redactedSecret = "<redacted>"
 
@@ -373,6 +392,10 @@ final class AppModel: ObservableObject {
     get { settings.menuBarPinnedGroupSettings }
     set { settings.menuBarPinnedGroupSettings = newValue }
   }
+  var globalShortcutSettings: GlobalShortcutSettings {
+    get { settings.globalShortcutSettings }
+    set { settings.globalShortcutSettings = newValue }
+  }
   var externalDashboardProfiles: [ExternalDashboardProfile] {
     get { settings.externalDashboardProfiles }
     set { settings.externalDashboardProfiles = newValue }
@@ -449,6 +472,9 @@ final class AppModel: ObservableObject {
     get { runtimeData.logs }
   }
   @Published var helperLogs: [String] = []
+  @Published private(set) var initialTunHelperPrompt: InitialTunHelperPrompt?
+  @Published private(set) var initialTunHelperPromptActionInFlight = false
+  @Published private(set) var shortcutRegistrationStatus: GlobalShortcutRegistrationStatus?
   var trafficSample: TrafficSample {
     get { runtimeData.trafficSample }
     set { runtimeData.trafficSample = newValue }
@@ -524,6 +550,8 @@ final class AppModel: ObservableObject {
   private var pendingRoutingModeTask: Task<Void, Never>?
   private var tunHelperPreparationTask: Task<Void, Never>?
   private var didWarmTunHelperRegistrationOnLaunch = false
+  private var initialTunHelperPromptDeferredDuringSilentStart = false
+  private var didResumeInitialTunHelperPromptAfterUserOpen = false
   private var didWarmPreviewRuntimeOnLaunch = false
   private var modeUpdateTask: Task<Void, Never>?
   private var modeUpdateToken: UUID?
@@ -550,6 +578,7 @@ final class AppModel: ObservableObject {
   private var closeAllConnectionsToken: UUID?
   private var networkPolicyApplyTask: Task<Void, Never>?
   private var networkPolicyApplyToken: UUID?
+  private var networkPolicyRestoreSnapshot: NetworkPolicyRestoreSnapshot?
   private var networkEnvironmentTask: Task<Void, Never>?
   private var networkEnvironmentDebounceTask: Task<Void, Never>?
   private var runtimeReloadTask: Task<Void, Never>?
@@ -565,6 +594,7 @@ final class AppModel: ObservableObject {
   private let externalDashboardSecretStore: any SecretStoring
   private let currentNetworkProvider: any CurrentNetworkProviding
   private let networkEnvironmentMonitor: (any NetworkEnvironmentMonitoring)?
+  private let globalShortcutManager: GlobalShortcutManager
   private let bundledCoreURLProvider: () throws -> URL
   private let delayStateCacheTTL: TimeInterval
   static let publicIPRefreshInterval: TimeInterval = 300
@@ -615,6 +645,7 @@ final class AppModel: ObservableObject {
     externalDashboardSecretStore: any SecretStoring = KeychainStore(service: "\(AppConstants.bundleIdentifier).external-dashboards"),
     currentNetworkProvider: any CurrentNetworkProviding = CoreWLANCurrentNetworkProvider(),
     networkEnvironmentMonitor: (any NetworkEnvironmentMonitoring)? = nil,
+    globalShortcutRegistrar: (any GlobalShortcutRegistering)? = nil,
     bundledCoreURLProvider: (() throws -> URL)? = nil
   ) {
     self.paths = paths
@@ -622,6 +653,7 @@ final class AppModel: ObservableObject {
     self.externalDashboardSecretStore = externalDashboardSecretStore
     self.currentNetworkProvider = currentNetworkProvider
     self.networkEnvironmentMonitor = networkEnvironmentMonitor ?? NetworkEnvironmentMonitor(currentNetworkProvider: currentNetworkProvider)
+    self.globalShortcutManager = GlobalShortcutManager(registrar: globalShortcutRegistrar ?? CarbonGlobalShortcutRegistrar())
     self.bundledCoreURLProvider = bundledCoreURLProvider ?? Self.resolveBundledCoreURL
     self.profileStore = profileStore ?? ProfileStore(paths: paths)
     self.proxyPreview = ProxyPreviewStore(defaults: defaults)
@@ -689,6 +721,11 @@ final class AppModel: ObservableObject {
       .dropFirst()
       .sink { [weak self] _ in
         self?.profileCoordinator.rescheduleSubscriptionAutoUpdates()
+      }
+      .store(in: &storeCancellables)
+    settings.$globalShortcutSettings
+      .sink { [weak self] settings in
+        self?.installGlobalShortcuts(settings)
       }
       .store(in: &storeCancellables)
     profileCoordinator.objectWillChange
@@ -1050,6 +1087,62 @@ final class AppModel: ObservableObject {
       lastError = "Unsupported ClashMax command URL."
     }
     return true
+  }
+
+  private func installGlobalShortcuts(_ settings: GlobalShortcutSettings) {
+    guard developerMode else {
+      globalShortcutManager.stop()
+      shortcutRegistrationStatus = nil
+      return
+    }
+    guard settings.validationError == nil else {
+      globalShortcutManager.stop()
+      shortcutRegistrationStatus = nil
+      return
+    }
+    let registrationCount = settings.enabledBindings.count
+    let failures = globalShortcutManager.apply(settings) { [weak self] action in
+      self?.performGlobalShortcutAction(action)
+    }
+    shortcutRegistrationStatus = GlobalShortcutRegistrationStatus(
+      registeredCount: max(0, registrationCount - failures.count),
+      failures: failures
+    )
+  }
+
+  func performGlobalShortcutAction(_ action: GlobalShortcutAction) {
+    switch action {
+    case .startStop:
+      canStopRuntime ? stop() : start()
+    case .start:
+      start()
+    case .stop:
+      stop()
+    case .restart:
+      restart()
+    case .ruleMode:
+      requestMode(.rule)
+    case .globalMode:
+      requestMode(.global)
+    case .directMode:
+      requestMode(.direct)
+    case .toggleSystemProxy:
+      setSystemProxyEnabled(!systemProxyEnabled)
+    case .systemProxyRouting:
+      requestProxyRoutingMode(.systemProxy)
+    case .tunRouting:
+      requestProxyRoutingMode(.tun)
+    case .neProxyRouting:
+      requestProxyRoutingMode(.neProxy)
+    case .updateAllSubscriptions:
+      selectedSection = .profiles
+      updateAllSubscriptions()
+    case .applyCurrentNetworkPolicy:
+      selectedSection = .settings
+      applyMatchingNetworkPolicyForCurrentNetwork()
+    case .openMainWindow:
+      AppDelegate.showMainWindow()
+    }
   }
 
   private func commandURLAction(from url: URL) -> String {
@@ -1469,6 +1562,17 @@ final class AppModel: ObservableObject {
   }
 
   func start() {
+    start(userInitiated: true)
+  }
+
+  private func startFromNetworkPolicy() {
+    start(userInitiated: false)
+  }
+
+  private func start(userInitiated: Bool) {
+    if userInitiated {
+      clearNetworkPolicyRestoreSnapshotForUserChange()
+    }
     guard startTask == nil, !startInFlight else { return }
     if profileStore.activeProfile == nil {
       lastError = "No active profile selected."
@@ -1655,6 +1759,7 @@ final class AppModel: ObservableObject {
   }
 
   func stop() {
+    clearNetworkPolicyRestoreSnapshotForUserChange()
     startTask?.cancel()
     startTask = nil
     startInFlight = false
@@ -1667,6 +1772,13 @@ final class AppModel: ObservableObject {
   }
 
   func restart() {
+    restart(preserveNetworkPolicyRestoreSnapshot: false)
+  }
+
+  private func restart(preserveNetworkPolicyRestoreSnapshot: Bool) {
+    if !preserveNetworkPolicyRestoreSnapshot {
+      clearNetworkPolicyRestoreSnapshotForUserChange()
+    }
     startTask?.cancel()
     startTask = nil
     startInFlight = false
@@ -1675,11 +1787,14 @@ final class AppModel: ObservableObject {
       let result = await stopRuntimeCoordinated()
       handleStopResult(result)
       guard result.succeeded else { return }
-      start()
+      start(userInitiated: !preserveNetworkPolicyRestoreSnapshot)
     }
   }
 
-  func setProxyRoutingMode(_ mode: ProxyRoutingMode) {
+  func setProxyRoutingMode(
+    _ mode: ProxyRoutingMode,
+    preserveNetworkPolicyRestoreSnapshotOnRestart: Bool = false
+  ) {
     guard proxyRoutingMode != mode else { return }
     appNotice = nil
     let shouldRestart = isRunning || startInFlight
@@ -1697,16 +1812,21 @@ final class AppModel: ObservableObject {
     }
     proxyRoutingMode = mode
     if mode == .tun {
+      resumeInitialTunHelperPromptDeferralForExplicitAction()
       if tunHelperPreparationState.allowsStartAttempt, !shouldRestart {
         lastError = nil
       } else {
-        prepareTunHelperIfNeeded(force: true, restartWhenReady: shouldRestart)
+        prepareTunHelperIfNeeded(
+          force: true,
+          restartWhenReady: shouldRestart,
+          preserveNetworkPolicyRestoreSnapshotOnRestart: preserveNetworkPolicyRestoreSnapshotOnRestart
+        )
       }
     } else {
       cancelTunHelperPreparation(resetState: true)
     }
     if mode != .tun, shouldRestart {
-      restart()
+      restart(preserveNetworkPolicyRestoreSnapshot: preserveNetworkPolicyRestoreSnapshotOnRestart)
     }
   }
 
@@ -1714,6 +1834,10 @@ final class AppModel: ObservableObject {
     settings.developerMode = enabled
     if enabled {
       appNotice = nil
+      installGlobalShortcuts(settings.globalShortcutSettings)
+    } else {
+      globalShortcutManager.stop()
+      shortcutRegistrationStatus = nil
     }
   }
 
@@ -1884,6 +2008,7 @@ final class AppModel: ObservableObject {
   }
 
   func requestProxyRoutingMode(_ mode: ProxyRoutingMode) {
+    clearNetworkPolicyRestoreSnapshotForUserChange()
     pendingRoutingModeTask?.cancel()
     pendingRoutingModeTask = nil
     guard proxyRoutingMode != mode else { return }
@@ -1954,6 +2079,7 @@ final class AppModel: ObservableObject {
   }
 
   func applyNetworkPolicy(_ rule: NetworkPolicyRule) {
+    clearNetworkPolicyRestoreSnapshotForUserChange()
     applyNetworkPolicy(rule, trigger: "manual", matchedSSID: nil)
   }
 
@@ -1963,7 +2089,8 @@ final class AppModel: ObservableObject {
     guard let ssid else {
       let message = String(localized: "No Wi-Fi SSID detected.")
       networkPolicyStatusMessage = message
-      if trigger == "manual" {
+      let didScheduleRestore = restoreNetworkPolicyStateIfNeeded(reason: message)
+      if trigger == "manual", !didScheduleRestore {
         appNotice = AppNotice(message: message, tone: .info)
       }
       return
@@ -1971,7 +2098,8 @@ final class AppModel: ObservableObject {
     guard let rule = networkPolicySettings.matchingRule(ssid: ssid) else {
       let message = String(format: String(localized: "No saved policy matches %@."), ssid)
       networkPolicyStatusMessage = message
-      if trigger == "manual" {
+      let didScheduleRestore = restoreNetworkPolicyStateIfNeeded(reason: message)
+      if trigger == "manual", !didScheduleRestore {
         appNotice = AppNotice(message: message, tone: .info)
       }
       return
@@ -2016,9 +2144,25 @@ final class AppModel: ObservableObject {
       return
     }
 
-    setProxyRoutingMode(rule.proxyRoutingMode)
+    let automatic = trigger != "manual"
+    let policyStartedRuntime = rule.autoStartRuntime && !isRunning && !startInFlight
+    if automatic, networkPolicySettings.unmatchedBehavior == .restorePreviousState, networkPolicyRestoreSnapshot == nil {
+      networkPolicyRestoreSnapshot = NetworkPolicyRestoreSnapshot(
+        policyID: rule.id,
+        ssid: matchedSSID ?? rule.ssid,
+        proxyRoutingMode: proxyRoutingMode,
+        systemProxyEnabled: systemProxyEnabled,
+        runtimeWasRunning: isRunning || startInFlight || canStopRuntime,
+        policyStartedRuntime: policyStartedRuntime
+      )
+    }
+
+    setProxyRoutingMode(
+      rule.proxyRoutingMode,
+      preserveNetworkPolicyRestoreSnapshotOnRestart: automatic
+    )
     if rule.autoStartRuntime, !isRunning, !startInFlight {
-      start()
+      startFromNetworkPolicy()
       await waitForRuntimeStartAttempt()
     }
     if rule.proxyRoutingMode == .systemProxy, rule.enableSystemProxy {
@@ -2052,6 +2196,66 @@ final class AppModel: ObservableObject {
     )
   }
 
+  @discardableResult
+  private func restoreNetworkPolicyStateIfNeeded(reason: String) -> Bool {
+    guard networkPolicySettings.unmatchedBehavior == .restorePreviousState,
+          let snapshot = networkPolicyRestoreSnapshot
+    else { return false }
+    networkPolicyApplyTask?.cancel()
+    let token = UUID()
+    networkPolicyApplyToken = token
+    networkPolicyApplyTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer {
+        if self.networkPolicyApplyToken == token {
+          self.networkPolicyApplyTask = nil
+          self.networkPolicyApplyToken = nil
+        }
+      }
+      await self.restoreNetworkPolicyState(snapshot, reason: reason)
+    }
+    return true
+  }
+
+  private func restoreNetworkPolicyState(_ snapshot: NetworkPolicyRestoreSnapshot, reason: String) async {
+    setProxyRoutingMode(
+      snapshot.proxyRoutingMode,
+      preserveNetworkPolicyRestoreSnapshotOnRestart: true
+    )
+    do {
+      if systemProxyEnabled != snapshot.systemProxyEnabled {
+        try await applySystemProxyEnabledState(snapshot.systemProxyEnabled)
+      }
+      if snapshot.policyStartedRuntime, !snapshot.runtimeWasRunning, canStopRuntime {
+        let result = await stopRuntimeCoordinated()
+        handleStopResult(result)
+        guard result.succeeded else {
+          networkPolicyStatusMessage = result.userFacingMessage
+          lastError = result.userFacingMessage
+          return
+        }
+      }
+      networkPolicyRestoreSnapshot = nil
+      lastAppliedNetworkPolicyID = nil
+      let message = String(
+        format: String(localized: "%@ Restored previous network state after leaving %@."),
+        reason,
+        snapshot.ssid
+      )
+      networkPolicyStatusMessage = message
+      appNotice = AppNotice(message: message, tone: .info)
+      appendAppLog(level: "info", message: "Restored network policy state after leaving \(snapshot.ssid).")
+    } catch {
+      let message = UserFacingError.message(for: error)
+      networkPolicyStatusMessage = message
+      lastError = message
+    }
+  }
+
+  private func clearNetworkPolicyRestoreSnapshotForUserChange() {
+    networkPolicyRestoreSnapshot = nil
+  }
+
   private func waitForRuntimeStartAttempt() async {
     for _ in 0..<80 {
       guard startInFlight else { return }
@@ -2069,6 +2273,17 @@ final class AppModel: ObservableObject {
 
   func warmTunHelperRegistrationOnLaunch() {
     guard !didWarmTunHelperRegistrationOnLaunch else { return }
+    let serviceStatus = helperClient.serviceStatus
+    if shouldDeferInitialTunHelperPromptDuringSilentStart(serviceStatus) {
+      didWarmTunHelperRegistrationOnLaunch = true
+      deferInitialTunHelperPromptDuringSilentStart()
+      return
+    }
+    if shouldPresentInitialTunHelperPromptBeforeWarmup(serviceStatus) {
+      didWarmTunHelperRegistrationOnLaunch = true
+      presentInitialTunHelperPrompt(for: serviceStatus)
+      return
+    }
     didWarmTunHelperRegistrationOnLaunch = true
     Task { @MainActor [weak self] in
       guard let self else { return }
@@ -2088,6 +2303,158 @@ final class AppModel: ObservableObject {
           applyTunHelperPreparationState(state)
         }
       }
+    }
+  }
+
+  func evaluateInitialTunHelperPromptOnLaunch() {
+    guard !settings.initialTunHelperPromptHandled else {
+      initialTunHelperPrompt = nil
+      return
+    }
+    let serviceStatus = helperClient.serviceStatus
+    if shouldDeferInitialTunHelperPromptDuringSilentStart(serviceStatus) {
+      deferInitialTunHelperPromptDuringSilentStart()
+      return
+    }
+    presentInitialTunHelperPrompt(for: serviceStatus)
+  }
+
+  func resumeDeferredInitialTunHelperPromptAfterUserOpen() {
+    guard initialTunHelperPromptDeferredDuringSilentStart else { return }
+    didResumeInitialTunHelperPromptAfterUserOpen = true
+    initialTunHelperPromptDeferredDuringSilentStart = false
+    guard !settings.initialTunHelperPromptHandled else {
+      initialTunHelperPrompt = nil
+      return
+    }
+    presentInitialTunHelperPrompt(for: helperClient.serviceStatus)
+  }
+
+  func installInitialTunHelper() {
+    guard !initialTunHelperPromptActionInFlight else { return }
+    initialTunHelperPromptActionInFlight = true
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer {
+        initialTunHelperPromptActionInFlight = false
+      }
+      do {
+        lastError = nil
+        try await helperClient.register()
+        await updateTunHelperStatusDetail()
+        syncInitialTunHelperPromptAfterUserAction()
+      } catch {
+        let message = UserFacingError.message(for: error)
+        helperClient.statusMessage = message
+        lastError = message
+        if settings.initialTunHelperPromptHandled {
+          initialTunHelperPrompt = nil
+        } else {
+          initialTunHelperPrompt = InitialTunHelperPrompt(
+            primaryAction: .install,
+            statusMessage: message
+          )
+        }
+        await updateTunHelperStatusDetail()
+      }
+    }
+  }
+
+  func dismissInitialTunHelperPrompt() {
+    settings.markInitialTunHelperPromptHandled()
+    initialTunHelperPrompt = nil
+    initialTunHelperPromptActionInFlight = false
+  }
+
+  private func shouldPresentInitialTunHelperPromptBeforeWarmup(_ status: TunnelHelperServiceStatus) -> Bool {
+    guard !settings.initialTunHelperPromptHandled else { return false }
+    switch status {
+    case .notRegistered, .requiresApproval:
+      return true
+    case .enabled:
+      settings.markInitialTunHelperPromptHandled()
+      return false
+    case .notFound, .unknown:
+      return false
+    }
+  }
+
+  private func shouldDeferInitialTunHelperPromptDuringSilentStart(_ status: TunnelHelperServiceStatus) -> Bool {
+    guard settings.launchSettings.silentStart,
+          !didResumeInitialTunHelperPromptAfterUserOpen,
+          !settings.initialTunHelperPromptHandled
+    else { return false }
+    switch status {
+    case .notRegistered, .requiresApproval:
+      return true
+    case .enabled, .notFound, .unknown:
+      return false
+    }
+  }
+
+  private func deferInitialTunHelperPromptDuringSilentStart() {
+    initialTunHelperPromptDeferredDuringSilentStart = true
+    initialTunHelperPrompt = nil
+    initialTunHelperPromptActionInFlight = false
+  }
+
+  private func resumeInitialTunHelperPromptDeferralForExplicitAction() {
+    didResumeInitialTunHelperPromptAfterUserOpen = true
+    initialTunHelperPromptDeferredDuringSilentStart = false
+    initialTunHelperPrompt = nil
+  }
+
+  private func presentInitialTunHelperPrompt(for status: TunnelHelperServiceStatus) {
+    guard !settings.initialTunHelperPromptHandled else {
+      initialTunHelperPrompt = nil
+      return
+    }
+    switch status {
+    case .notRegistered:
+      initialTunHelperPrompt = InitialTunHelperPrompt(
+        primaryAction: .install,
+        statusMessage: TunnelHelperClient.statusMessage(for: .notRegistered)
+      )
+    case .requiresApproval:
+      initialTunHelperPrompt = InitialTunHelperPrompt(
+        primaryAction: .openSettings,
+        statusMessage: TunnelHelperClient.statusMessage(for: .requiresApproval)
+      )
+    case .enabled:
+      settings.markInitialTunHelperPromptHandled()
+      initialTunHelperPrompt = nil
+    case .notFound, .unknown:
+      initialTunHelperPrompt = nil
+    }
+  }
+
+  private func syncInitialTunHelperPromptAfterUserAction() {
+    guard !settings.initialTunHelperPromptHandled else {
+      initialTunHelperPrompt = nil
+      return
+    }
+    switch helperClient.serviceStatus {
+    case .enabled:
+      settings.markInitialTunHelperPromptHandled()
+      initialTunHelperPrompt = nil
+      if proxyRoutingMode == .tun {
+        refreshHelperRegistrationStatus()
+      }
+    case .requiresApproval:
+      initialTunHelperPrompt = InitialTunHelperPrompt(
+        primaryAction: .openSettings,
+        statusMessage: TunnelHelperClient.statusMessage(for: .requiresApproval)
+      )
+      if proxyRoutingMode == .tun {
+        refreshHelperRegistrationStatus()
+      }
+    case .notRegistered:
+      initialTunHelperPrompt = InitialTunHelperPrompt(
+        primaryAction: .install,
+        statusMessage: TunnelHelperClient.statusMessage(for: .notRegistered)
+      )
+    case .notFound, .unknown:
+      initialTunHelperPrompt = nil
     }
   }
 
@@ -2214,7 +2581,8 @@ final class AppModel: ObservableObject {
   private func prepareTunHelperIfNeeded(
     openSystemSettings: Bool = true,
     force: Bool,
-    restartWhenReady: Bool = false
+    restartWhenReady: Bool = false,
+    preserveNetworkPolicyRestoreSnapshotOnRestart: Bool = false
   ) {
     guard proxyRoutingMode == .tun else {
       cancelTunHelperPreparation(resetState: true)
@@ -2225,7 +2593,7 @@ final class AppModel: ObservableObject {
     }
     if !force, tunHelperPreparationState.allowsStartAttempt {
       if restartWhenReady {
-        restart()
+        restart(preserveNetworkPolicyRestoreSnapshot: preserveNetworkPolicyRestoreSnapshotOnRestart)
       }
       return
     }
@@ -2241,7 +2609,7 @@ final class AppModel: ObservableObject {
       await updateTunHelperStatusDetail()
       tunHelperPreparationTask = nil
       if finalState.isReady, restartWhenReady, proxyRoutingMode == .tun {
-        restart()
+        restart(preserveNetworkPolicyRestoreSnapshot: preserveNetworkPolicyRestoreSnapshotOnRestart)
       }
     }
   }
@@ -3037,6 +3405,7 @@ final class AppModel: ObservableObject {
   }
 
   func setSystemProxyEnabled(_ enabled: Bool) {
+    clearNetworkPolicyRestoreSnapshotForUserChange()
     Task { @MainActor [weak self] in
       guard let self else { return }
       do {

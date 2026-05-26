@@ -34,6 +34,34 @@ struct ContentView: View {
           }
         }
     }
+    .sheet(isPresented: initialTunHelperPromptPresented) {
+      if let prompt = appModel.initialTunHelperPrompt {
+        InitialTunHelperPromptSheet(
+          prompt: prompt,
+          actionInFlight: appModel.initialTunHelperPromptActionInFlight,
+          onPrimaryAction: {
+            appModel.installInitialTunHelper()
+          },
+          onLater: {
+            appModel.dismissInitialTunHelperPrompt()
+          }
+        )
+      }
+    }
+    .onAppear {
+      appModel.evaluateInitialTunHelperPromptOnLaunch()
+    }
+  }
+
+  private var initialTunHelperPromptPresented: Binding<Bool> {
+    Binding(
+      get: { appModel.initialTunHelperPrompt != nil },
+      set: { isPresented in
+        if !isPresented {
+          appModel.dismissInitialTunHelperPrompt()
+        }
+      }
+    )
   }
 
   private var toolbarRunTitle: String {
@@ -66,6 +94,67 @@ struct ContentView: View {
     case .settings:
       SettingsView()
     }
+  }
+}
+
+private struct InitialTunHelperPromptSheet: View {
+  let prompt: InitialTunHelperPrompt
+  let actionInFlight: Bool
+  let onPrimaryAction: () -> Void
+  let onLater: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 18) {
+      HStack(alignment: .top, spacing: 14) {
+        Image(systemName: "checkmark.shield")
+          .font(.system(size: 36, weight: .semibold))
+          .foregroundStyle(.blue)
+          .frame(width: 44, height: 44)
+
+        VStack(alignment: .leading, spacing: 8) {
+          Text("Install ClashMax Helper")
+            .font(.title3.weight(.semibold))
+          Text("ClashMax uses a privileged helper to enable TUN routing.")
+            .foregroundStyle(.primary)
+          Text("macOS will ask you to approve ClashMax in System Settings > General > Login Items & Extensions before TUN routing can start.")
+            .foregroundStyle(.secondary)
+          Text("System Proxy and Network Extension routing continue to work without this helper.")
+            .foregroundStyle(.secondary)
+          if prompt.primaryAction == .openSettings {
+            Text("Helper approval is pending.")
+              .font(.callout.weight(.medium))
+              .foregroundStyle(.orange)
+          }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+      }
+
+      Text(prompt.statusMessage)
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+
+      HStack {
+        Spacer()
+        Button("Later", action: onLater)
+          .keyboardShortcut(.cancelAction)
+
+        Button {
+          onPrimaryAction()
+        } label: {
+          if actionInFlight {
+            ProgressView()
+              .controlSize(.small)
+          } else {
+            Text(prompt.primaryButtonTitle)
+          }
+        }
+        .keyboardShortcut(.defaultAction)
+        .disabled(actionInFlight)
+      }
+    }
+    .padding(24)
+    .frame(width: 520, alignment: .topLeading)
   }
 }
 

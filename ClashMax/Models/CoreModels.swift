@@ -2676,6 +2676,362 @@ struct LaunchSettings: Equatable {
   )
 }
 
+enum GlobalShortcutAction: String, CaseIterable, Codable, Identifiable, Sendable {
+  case startStop
+  case start
+  case stop
+  case restart
+  case ruleMode
+  case globalMode
+  case directMode
+  case toggleSystemProxy
+  case systemProxyRouting
+  case tunRouting
+  case neProxyRouting
+  case updateAllSubscriptions
+  case applyCurrentNetworkPolicy
+  case openMainWindow
+
+  var id: String { rawValue }
+
+  var displayName: String {
+    switch self {
+    case .startStop:
+      String(localized: "Start / Stop Core")
+    case .start:
+      String(localized: "Start Core")
+    case .stop:
+      String(localized: "Stop Core")
+    case .restart:
+      String(localized: "Restart Core")
+    case .ruleMode:
+      String(localized: "Rule Mode")
+    case .globalMode:
+      String(localized: "Global Mode")
+    case .directMode:
+      String(localized: "Direct Mode")
+    case .toggleSystemProxy:
+      String(localized: "Toggle System Proxy")
+    case .systemProxyRouting:
+      String(localized: "System Proxy Routing")
+    case .tunRouting:
+      String(localized: "TUN Routing")
+    case .neProxyRouting:
+      String(localized: "NE Proxy Routing")
+    case .updateAllSubscriptions:
+      String(localized: "Update All Subscriptions")
+    case .applyCurrentNetworkPolicy:
+      String(localized: "Apply Current Network Policy")
+    case .openMainWindow:
+      String(localized: "Open Main Window")
+    }
+  }
+
+  var symbolName: String {
+    switch self {
+    case .startStop:
+      "power"
+    case .start:
+      "play.fill"
+    case .stop:
+      "stop.fill"
+    case .restart:
+      "arrow.clockwise"
+    case .ruleMode:
+      "list.bullet.rectangle"
+    case .globalMode:
+      "globe"
+    case .directMode:
+      "arrow.right.circle"
+    case .toggleSystemProxy:
+      "network.badge.shield.half.filled"
+    case .systemProxyRouting:
+      ProxyRoutingMode.systemProxy.symbolName
+    case .tunRouting:
+      ProxyRoutingMode.tun.symbolName
+    case .neProxyRouting:
+      ProxyRoutingMode.neProxy.symbolName
+    case .updateAllSubscriptions:
+      "arrow.triangle.2.circlepath"
+    case .applyCurrentNetworkPolicy:
+      "wifi.router"
+    case .openMainWindow:
+      "macwindow"
+    }
+  }
+
+  static func clashXAction(for key: String) -> GlobalShortcutAction? {
+    let normalized = key
+      .replacingOccurrences(of: "-", with: "")
+      .replacingOccurrences(of: "_", with: "")
+      .replacingOccurrences(of: " ", with: "")
+      .lowercased()
+    if normalized.contains("togglesystemproxy") || normalized.contains("systemproxy") {
+      return .toggleSystemProxy
+    }
+    if normalized.contains("toggleproxy") || normalized.contains("startstop") {
+      return .startStop
+    }
+    if normalized.contains("restart") || normalized.contains("reload") {
+      return .restart
+    }
+    if normalized.contains("start") {
+      return .start
+    }
+    if normalized.contains("stop") {
+      return .stop
+    }
+    if normalized.contains("rule") {
+      return .ruleMode
+    }
+    if normalized.contains("global") {
+      return .globalMode
+    }
+    if normalized.contains("direct") {
+      return .directMode
+    }
+    if normalized.contains("tun") {
+      return .tunRouting
+    }
+    if normalized.contains("neproxy") || normalized.contains("networkextension") {
+      return .neProxyRouting
+    }
+    if normalized.contains("update") || normalized.contains("subscription") || normalized.contains("refresh") {
+      return .updateAllSubscriptions
+    }
+    return nil
+  }
+}
+
+enum GlobalShortcutModifier: String, CaseIterable, Codable, Identifiable, Sendable {
+  case command
+  case option
+  case control
+  case shift
+
+  var id: String { rawValue }
+
+  var displayName: String {
+    switch self {
+    case .command: "Command"
+    case .option: "Option"
+    case .control: "Control"
+    case .shift: "Shift"
+    }
+  }
+
+  var glyph: String {
+    switch self {
+    case .command: "⌘"
+    case .option: "⌥"
+    case .control: "⌃"
+    case .shift: "⇧"
+    }
+  }
+}
+
+struct KeyboardShortcutDescriptor: Codable, Equatable, Hashable, Sendable {
+  let key: String
+  let modifiers: Set<GlobalShortcutModifier>
+
+  private enum CodingKeys: String, CodingKey {
+    case key
+    case modifiers
+  }
+
+  init(key: String, modifiers: Set<GlobalShortcutModifier>) {
+    self.key = Self.normalizedKey(key)
+    self.modifiers = modifiers
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    key = Self.normalizedKey(try container.decode(String.self, forKey: .key))
+    modifiers = try container.decode(Set<GlobalShortcutModifier>.self, forKey: .modifiers)
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(Self.normalizedKey(key), forKey: .key)
+    try container.encode(modifiers, forKey: .modifiers)
+  }
+
+  init?(string: String) {
+    let normalized = string
+      .replacingOccurrences(of: "⌘", with: "+cmd+")
+      .replacingOccurrences(of: "⌥", with: "+option+")
+      .replacingOccurrences(of: "⌃", with: "+control+")
+      .replacingOccurrences(of: "⇧", with: "+shift+")
+      .replacingOccurrences(of: "-", with: "+")
+      .replacingOccurrences(of: " ", with: "+")
+    let parts = normalized
+      .split(separator: "+")
+      .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+    var modifiers: Set<GlobalShortcutModifier> = []
+    var key: String?
+    for part in parts {
+      switch part.lowercased() {
+      case "cmd", "command", "meta":
+        modifiers.insert(.command)
+      case "opt", "option", "alt":
+        modifiers.insert(.option)
+      case "ctrl", "control", "ctl":
+        modifiers.insert(.control)
+      case "shift", "shft":
+        modifiers.insert(.shift)
+      default:
+        guard key == nil else { return nil }
+        key = part
+      }
+    }
+    guard let key = key.map(Self.normalizedKey), !key.isEmpty, !modifiers.isEmpty else {
+      return nil
+    }
+    self.key = key
+    self.modifiers = modifiers
+  }
+
+  var displayName: String {
+    let orderedModifiers: [GlobalShortcutModifier] = [.control, .option, .shift, .command]
+    return orderedModifiers
+      .filter { modifiers.contains($0) }
+      .map(\.glyph)
+      .joined() + key.uppercased()
+  }
+
+  var storageString: String {
+    let orderedModifiers: [GlobalShortcutModifier] = [.control, .option, .shift, .command]
+    let modifierString = orderedModifiers
+      .filter { modifiers.contains($0) }
+      .map(\.rawValue)
+      .joined(separator: "+")
+    return modifierString.isEmpty ? key : "\(modifierString)+\(key)"
+  }
+
+  var isSupportedGlobalShortcutKey: Bool {
+    Self.supportedGlobalShortcutKeys.contains(key)
+  }
+
+  static func normalizedKey(_ key: String) -> String {
+    let normalized = key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    switch normalized {
+    case "enter":
+      return "return"
+    case "esc":
+      return "escape"
+    default:
+      return normalized
+    }
+  }
+
+  private static let supportedGlobalShortcutKeys: Set<String> = {
+    var keys = Set("abcdefghijklmnopqrstuvwxyz".map { String($0) })
+    keys.formUnion((0...9).map(String.init))
+    keys.formUnion(["space", "return", "escape"])
+    keys.formUnion((1...12).map { "f\($0)" })
+    return keys
+  }()
+}
+
+struct GlobalShortcutBinding: Codable, Equatable, Identifiable, Sendable {
+  var action: GlobalShortcutAction
+  var shortcut: KeyboardShortcutDescriptor?
+  var enabled: Bool
+
+  var id: GlobalShortcutAction { action }
+
+  init(
+    action: GlobalShortcutAction,
+    shortcut: KeyboardShortcutDescriptor? = nil,
+    enabled: Bool = false
+  ) {
+    self.action = action
+    self.shortcut = shortcut
+    self.enabled = enabled
+  }
+
+  var displayValue: String {
+    shortcut?.displayName ?? String(localized: "Not Set")
+  }
+
+  var validationError: String? {
+    guard enabled else { return nil }
+    guard let shortcut else {
+      return String(localized: "Shortcut is enabled but not set.")
+    }
+    if shortcut.modifiers.count == 1, shortcut.modifiers.contains(.command) {
+      return String(localized: "Use at least one modifier besides Command for global shortcuts.")
+    }
+    if !shortcut.isSupportedGlobalShortcutKey {
+      return String(
+        format: String(localized: "Unsupported global shortcut key: %@"),
+        shortcut.key.uppercased()
+      )
+    }
+    return nil
+  }
+}
+
+struct GlobalShortcutSettings: Codable, Equatable, Sendable {
+  var bindings: [GlobalShortcutBinding]
+
+  init(bindings: [GlobalShortcutBinding] = []) {
+    self.bindings = bindings
+  }
+
+  static let `default` = GlobalShortcutSettings()
+
+  var mergedBindings: [GlobalShortcutBinding] {
+    GlobalShortcutAction.allCases.map { action in
+      bindings.first { $0.action == action } ?? GlobalShortcutBinding(action: action)
+    }
+  }
+
+  var enabledBindings: [GlobalShortcutBinding] {
+    mergedBindings.filter { $0.enabled && $0.shortcut != nil && $0.validationError == nil }
+  }
+
+  var conflictDescriptions: [String] {
+    let grouped = Dictionary(grouping: enabledBindings) { $0.shortcut?.storageString ?? "" }
+    return grouped.compactMap { shortcut, bindings in
+      guard bindings.count > 1 else { return nil }
+      let actions = bindings.map { $0.action.displayName }.joined(separator: ", ")
+      return "\(shortcut): \(actions)"
+    }
+    .sorted()
+  }
+
+  var validationError: String? {
+    if let bindingError = mergedBindings.compactMap(\.validationError).first {
+      return bindingError
+    }
+    if let conflict = conflictDescriptions.first {
+      return String(format: String(localized: "Shortcut conflict: %@"), conflict)
+    }
+    return nil
+  }
+
+  mutating func set(_ shortcut: KeyboardShortcutDescriptor?, for action: GlobalShortcutAction, enabled: Bool? = nil) {
+    var bindings = mergedBindings
+    guard let index = bindings.firstIndex(where: { $0.action == action }) else { return }
+    bindings[index].shortcut = shortcut
+    if let enabled {
+      bindings[index].enabled = enabled
+    } else if shortcut == nil {
+      bindings[index].enabled = false
+    }
+    self.bindings = bindings
+  }
+}
+
+struct MigratedShortcutBinding: Codable, Equatable, Identifiable, Sendable {
+  var id: String { "\(sourceKey):\(action.rawValue):\(shortcut.storageString)" }
+  var sourceKey: String
+  var action: GlobalShortcutAction
+  var shortcut: KeyboardShortcutDescriptor
+}
+
 struct CoreAPIEndpoint: Codable, Equatable, Sendable {
   var host: String
   var port: Int
@@ -3312,6 +3668,101 @@ struct ExternalDashboardProfile: Identifiable, Codable, Equatable, Sendable {
   }
 }
 
+enum ExternalControlHealthStatus: String, Codable, Equatable, Sendable {
+  case idle
+  case checking
+  case healthy
+  case failed
+
+  var displayName: String {
+    switch self {
+    case .idle:
+      String(localized: "Not Checked")
+    case .checking:
+      String(localized: "Checking")
+    case .healthy:
+      String(localized: "Reachable")
+    case .failed:
+      String(localized: "Unavailable")
+    }
+  }
+}
+
+struct ExternalControlHealthResult: Codable, Equatable, Sendable {
+  var status: ExternalControlHealthStatus
+  var message: String
+  var checkedAt: Date?
+  var httpStatus: Int?
+
+  init(
+    status: ExternalControlHealthStatus = .idle,
+    message: String = "",
+    checkedAt: Date? = nil,
+    httpStatus: Int? = nil
+  ) {
+    self.status = status
+    self.message = message
+    self.checkedAt = checkedAt
+    self.httpStatus = httpStatus
+  }
+
+  static let idle = ExternalControlHealthResult(
+    status: .idle,
+    message: String(localized: "Health check has not run.")
+  )
+
+  static let checking = ExternalControlHealthResult(
+    status: .checking,
+    message: String(localized: "Checking reachability.")
+  )
+
+  var displayMessage: String {
+    var components = [message]
+    if let httpStatus {
+      components.append("HTTP \(httpStatus).")
+    }
+    if let checkedAt {
+      let time = DateFormatter.localizedString(from: checkedAt, dateStyle: .none, timeStyle: .short)
+      components.append(String(format: String(localized: "Last checked %@."), time))
+    }
+    return components.joined(separator: " ")
+  }
+}
+
+enum NetworkPolicyUnmatchedBehavior: String, CaseIterable, Codable, Identifiable, Sendable {
+  case keepCurrent
+  case restorePreviousState
+
+  var id: String { rawValue }
+
+  var displayName: String {
+    switch self {
+    case .keepCurrent:
+      String(localized: "Keep Current State")
+    case .restorePreviousState:
+      String(localized: "Restore Previous State")
+    }
+  }
+
+  var description: String {
+    switch self {
+    case .keepCurrent:
+      String(localized: "Leave routing and system proxy unchanged when no saved SSID policy matches.")
+    case .restorePreviousState:
+      String(localized: "Restore the routing, system proxy, and policy-started runtime state from before the matched SSID policy.")
+    }
+  }
+}
+
+struct NetworkPolicyRestoreSnapshot: Codable, Equatable, Sendable {
+  var policyID: NetworkPolicyRule.ID
+  var ssid: String
+  var proxyRoutingMode: ProxyRoutingMode
+  var systemProxyEnabled: Bool
+  var runtimeWasRunning: Bool
+  var policyStartedRuntime: Bool
+}
+
 struct NetworkPolicyRule: Identifiable, Codable, Equatable, Sendable {
   var id: UUID
   var name: String
@@ -3391,22 +3842,34 @@ struct NetworkPolicyRule: Identifiable, Codable, Equatable, Sendable {
 struct NetworkPolicySettings: Codable, Equatable, Sendable {
   var rules: [NetworkPolicyRule]
   var autoApplyEnabled: Bool
+  var unmatchedBehavior: NetworkPolicyUnmatchedBehavior
 
   private enum CodingKeys: String, CodingKey {
     case rules
     case autoApplyEnabled
+    case unmatchedBehavior
   }
 
-  init(rules: [NetworkPolicyRule] = [], autoApplyEnabled: Bool = true) {
+  init(
+    rules: [NetworkPolicyRule] = [],
+    autoApplyEnabled: Bool = true,
+    unmatchedBehavior: NetworkPolicyUnmatchedBehavior = .restorePreviousState
+  ) {
     self.rules = rules
     self.autoApplyEnabled = autoApplyEnabled
+    self.unmatchedBehavior = unmatchedBehavior
   }
 
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     self.init(
       rules: container.decodeDefault([NetworkPolicyRule].self, forKey: .rules, default: []),
-      autoApplyEnabled: container.decodeDefault(Bool.self, forKey: .autoApplyEnabled, default: true)
+      autoApplyEnabled: container.decodeDefault(Bool.self, forKey: .autoApplyEnabled, default: true),
+      unmatchedBehavior: container.decodeDefault(
+        NetworkPolicyUnmatchedBehavior.self,
+        forKey: .unmatchedBehavior,
+        default: .keepCurrent
+      )
     )
   }
 
@@ -3439,6 +3902,8 @@ struct ClashXMigrationReport: Codable, Equatable, Sendable {
   var unknownKeys: [String]
   var inspectedFiles: [String]
   var warnings: [String]
+  var shortcutBindings: [MigratedShortcutBinding]
+  var menuBarMigrationSuggested: Bool
 
   private enum CodingKeys: String, CodingKey {
     case configDirectory
@@ -3455,6 +3920,8 @@ struct ClashXMigrationReport: Codable, Equatable, Sendable {
     case unknownKeys
     case inspectedFiles
     case warnings
+    case shortcutBindings
+    case menuBarMigrationSuggested
   }
 
   init(
@@ -3471,7 +3938,9 @@ struct ClashXMigrationReport: Codable, Equatable, Sendable {
     unsupportedSettings: [String] = [],
     unknownKeys: [String] = [],
     inspectedFiles: [String] = [],
-    warnings: [String] = []
+    warnings: [String] = [],
+    shortcutBindings: [MigratedShortcutBinding] = [],
+    menuBarMigrationSuggested: Bool = false
   ) {
     self.configDirectory = configDirectory
     self.subscriptionURLs = subscriptionURLs
@@ -3487,6 +3956,8 @@ struct ClashXMigrationReport: Codable, Equatable, Sendable {
     self.unknownKeys = unknownKeys
     self.inspectedFiles = inspectedFiles
     self.warnings = warnings
+    self.shortcutBindings = shortcutBindings
+    self.menuBarMigrationSuggested = menuBarMigrationSuggested
   }
 
   init(from decoder: Decoder) throws {
@@ -3505,7 +3976,13 @@ struct ClashXMigrationReport: Codable, Equatable, Sendable {
       unsupportedSettings: container.decodeDefault([String].self, forKey: .unsupportedSettings, default: []),
       unknownKeys: container.decodeDefault([String].self, forKey: .unknownKeys, default: []),
       inspectedFiles: container.decodeDefault([String].self, forKey: .inspectedFiles, default: []),
-      warnings: container.decodeDefault([String].self, forKey: .warnings, default: [])
+      warnings: container.decodeDefault([String].self, forKey: .warnings, default: []),
+      shortcutBindings: container.decodeDefault([MigratedShortcutBinding].self, forKey: .shortcutBindings, default: []),
+      menuBarMigrationSuggested: container.decodeDefault(
+        Bool.self,
+        forKey: .menuBarMigrationSuggested,
+        default: false
+      )
     )
   }
 

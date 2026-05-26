@@ -6,6 +6,7 @@ struct ClashMaxApp: App {
   @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
   @StateObject private var appModel = AppModel.bootstrap()
   @StateObject private var appUpdateController = AppUpdateController()
+  @Environment(\.openWindow) private var openWindow
   private let bundledCoreInfo = BundledCoreInfo()
 
   var body: some Scene {
@@ -23,6 +24,7 @@ struct ClashMaxApp: App {
         .frame(minWidth: 980, minHeight: 660)
         .onAppear {
           appDelegate.appModel = appModel
+          appDelegate.setMainWindowOpener { openWindow(id: "main") }
           appModel.startNetworkEnvironmentMonitoring()
           appModel.warmTunHelperRegistrationOnLaunch()
           appModel.warmPreviewRuntimeOnLaunch()
@@ -114,6 +116,7 @@ struct ClashMaxApp: App {
         .appThemeAppearance(appModel.settings.appTheme)
         .onAppear {
           appDelegate.appModel = appModel
+          appDelegate.setMainWindowOpener { openWindow(id: "main") }
           appModel.startNetworkEnvironmentMonitoring()
           appModel.warmTunHelperRegistrationOnLaunch()
           appModel.warmPreviewRuntimeOnLaunch()
@@ -136,6 +139,7 @@ struct ClashMaxApp: App {
         .appThemeAppearance(appModel.settings.appTheme)
         .onAppear {
           appDelegate.appModel = appModel
+          appDelegate.setMainWindowOpener { openWindow(id: "main") }
           appModel.startNetworkEnvironmentMonitoring()
           appModel.warmTunHelperRegistrationOnLaunch()
           appModel.warmPreviewRuntimeOnLaunch()
@@ -220,12 +224,65 @@ extension AppTheme {
   }
 }
 
+struct AppActivationPolicyWindowSnapshot {
+  let canBecomeMain: Bool
+  let isVisible: Bool
+  let isMiniaturized: Bool
+  let isPanel: Bool
+
+  init(
+    canBecomeMain: Bool,
+    isVisible: Bool,
+    isMiniaturized: Bool,
+    isPanel: Bool = false
+  ) {
+    self.canBecomeMain = canBecomeMain
+    self.isVisible = isVisible
+    self.isMiniaturized = isMiniaturized
+    self.isPanel = isPanel
+  }
+
+  @MainActor
+  init(window: NSWindow) {
+    self.init(
+      canBecomeMain: window.canBecomeMain,
+      isVisible: window.isVisible,
+      isMiniaturized: window.isMiniaturized,
+      isPanel: window is NSPanel
+    )
+  }
+
+  var keepsDockActive: Bool {
+    isRegularAppWindow && (isVisible || isMiniaturized)
+  }
+
+  var isRegularAppWindow: Bool {
+    canBecomeMain && !isPanel
+  }
+}
+
+enum AppActivationPolicyResolver {
+  static func policy(
+    for windows: [AppActivationPolicyWindowSnapshot]
+  ) -> NSApplication.ActivationPolicy {
+    windows.contains(where: \.keepsDockActive) ? .regular : .accessory
+  }
+
+  static func shouldRefreshAfterClosing(_ window: AppActivationPolicyWindowSnapshot) -> Bool {
+    window.isRegularAppWindow
+  }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+  private static weak var sharedDelegate: AppDelegate?
+
   weak var appModel: AppModel?
   private var terminationCleanupInFlight = false
+  private var openMainWindow: (() -> Void)?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    Self.sharedDelegate = self
     NSWorkspace.shared.notificationCenter.addObserver(
       self,
       selector: #selector(workspaceDidWake(_:)),
@@ -238,10 +295,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       name: NSApplication.didBecomeActiveNotification,
       object: nil
     )
-    NSApp.setActivationPolicy(.regular)
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(windowWillClose(_:)),
+      name: NSWindow.willCloseNotification,
+      object: nil
+    )
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(windowDidBecomeMain(_:)),
+      name: NSWindow.didBecomeMainNotification,
+      object: nil
+    )
     if UserDefaults.standard.bool(forKey: AppModel.silentStartDefaultsKey) {
       DispatchQueue.main.async {
         NSApp.windows.forEach { $0.orderOut(nil) }
+        Self.refreshActivationPolicyForCurrentWindows()
       }
     } else {
       Self.showMainWindow()
@@ -251,6 +320,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   deinit {
     NSWorkspace.shared.notificationCenter.removeObserver(self)
     NotificationCenter.default.removeObserver(self)
+  }
+
+  func setMainWindowOpener(_ opener: @escaping () -> Void) {
+    openMainWindow = opener
   }
 
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -275,12 +348,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     appModel?.handleNetworkEnvironmentMayHaveChanged(reason: "activation")
   }
 
+  @objc private func windowWillClose(_ notification: Notification) {
+    guard
+      let window = notification.object as? NSWindow,
+      AppActivationPolicyResolver.shouldRefreshAfterClosing(
+        AppActivationPolicyWindowSnapshot(window: window)
+      )
+    else { return }
+    Self.scheduleActivationPolicyRefresh()
+  }
+
+  @objc private func windowDidBecomeMain(_ notification: Notification) {
+    Self.refreshActivationPolicyForCurrentWindows()
+  }
+
   @MainActor
   static func showMainWindow() {
     NSApp.setActivationPolicy(.regular)
-    NSApp.activate(ignoringOtherApps: true)
-    for window in NSApp.windows where window.canBecomeMain {
+    sharedDelegate?.openMainWindow?()
+    sharedDelegate?.appModel?.resumeDeferredInitialTunHelperPromptAfterUserOpen()
+    activateRegularWindows()
+    DispatchQueue.main.async {
+      activateRegularWindows()
+    }
+  }
+
+  private static func activateRegularWindows() {
+    NSApp.setActivationPolicy(.regular)
+    NSApp.unhide(nil)
+    for window in NSApp.windows
+    where AppActivationPolicyWindowSnapshot(window: window).isRegularAppWindow {
+      if window.isMiniaturized {
+        window.deminiaturize(nil)
+      }
       window.makeKeyAndOrderFront(nil)
+    }
+    NSApp.activate()
+  }
+
+  @MainActor
+  static func refreshActivationPolicyForCurrentWindows() {
+    let snapshots = NSApp.windows.map(AppActivationPolicyWindowSnapshot.init(window:))
+    let policy = AppActivationPolicyResolver.policy(for: snapshots)
+    guard NSApp.activationPolicy() != policy else { return }
+    NSApp.setActivationPolicy(policy)
+  }
+
+  private static func scheduleActivationPolicyRefresh() {
+    DispatchQueue.main.async {
+      refreshActivationPolicyForCurrentWindows()
     }
   }
 }

@@ -130,8 +130,9 @@ struct ProfilesView: View {
       if let migrationReport {
         ClashXMigrationReportSheet(
           report: migrationReport,
+          developerMode: appModel.developerMode,
           onCancel: { self.migrationReport = nil },
-          onApply: { enableSystemProxy in applyMigrationReport(migrationReport, enableSystemProxy: enableSystemProxy) }
+          onApply: { options in applyMigrationReport(migrationReport, options: options) }
         )
         .frame(width: 560)
         .padding(20)
@@ -341,10 +342,16 @@ struct ProfilesView: View {
     migrationReport = ClashXMigrationParser().parse(directoryURL: url)
   }
 
-  private func applyMigrationReport(_ report: ClashXMigrationReport, enableSystemProxy: Bool) {
+  private func applyMigrationReport(_ report: ClashXMigrationReport, options: ClashXMigrationApplyOptions) {
     migrationReport = nil
     let configURL = URL(fileURLWithPath: report.configDirectory).appendingPathComponent("config.yaml")
-    applyMigrationRuntimeSettings(report, enableSystemProxy: enableSystemProxy)
+    applyMigrationRuntimeSettings(report, enableSystemProxy: options.enableSystemProxy)
+    if options.importShortcuts, appModel.developerMode {
+      applyMigrationShortcutSettings(report.shortcutBindings)
+    }
+    if options.enableSilentStart {
+      appModel.setSilentStart(true)
+    }
     Task { @MainActor in
       if FileManager.default.fileExists(atPath: configURL.path) {
         do {
@@ -389,13 +396,32 @@ struct ProfilesView: View {
       appModel.setSystemProxyEnabled(true)
     }
   }
+
+  private func applyMigrationShortcutSettings(_ bindings: [MigratedShortcutBinding]) {
+    guard appModel.developerMode else { return }
+    guard !bindings.isEmpty else { return }
+    var settings = appModel.globalShortcutSettings
+    for binding in bindings {
+      settings.set(binding.shortcut, for: binding.action, enabled: true)
+    }
+    appModel.globalShortcutSettings = settings
+  }
+}
+
+private struct ClashXMigrationApplyOptions {
+  var enableSystemProxy: Bool
+  var importShortcuts: Bool
+  var enableSilentStart: Bool
 }
 
 private struct ClashXMigrationReportSheet: View {
   let report: ClashXMigrationReport
+  let developerMode: Bool
   let onCancel: () -> Void
-  let onApply: (Bool) -> Void
+  let onApply: (ClashXMigrationApplyOptions) -> Void
   @State private var enableSystemProxy = false
+  @State private var importShortcuts = false
+  @State private var enableSilentStart = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
@@ -412,6 +438,7 @@ private struct ClashXMigrationReportSheet: View {
       migrationSection("Bypass", values: report.bypassDomains)
       migrationSection("Ports", values: report.ports.map { "\($0.key): \($0.value)" }.sorted())
       migrationSection("Runtime", values: runtimeValues)
+      migrationSection("Shortcuts", values: shortcutValues)
       migrationSection("Conflicts", values: report.conflicts)
       migrationSection("Unsupported", values: report.unsupportedSettings)
       migrationSection("Unknown Keys", values: report.unknownKeys)
@@ -423,6 +450,16 @@ private struct ClashXMigrationReportSheet: View {
         .disabled(report.systemProxyEnabled != true)
         .help("ClashMax only enables System Proxy during migration when this checkbox is selected.")
 
+      Toggle("Import global shortcuts", isOn: $importShortcuts)
+        .toggleStyle(.checkbox)
+        .disabled(!developerMode || report.shortcutBindings.isEmpty)
+        .help("Map ClashX shortcut and hotkey settings to ClashMax global shortcuts.")
+
+      Toggle("Enable Silent Start for menu bar workflow", isOn: $enableSilentStart)
+        .toggleStyle(.checkbox)
+        .disabled(!report.menuBarMigrationSuggested)
+        .help("Use the existing ClashMax menu bar extra and hide the main window on login start.")
+
       Divider()
 
       HStack {
@@ -430,7 +467,13 @@ private struct ClashXMigrationReportSheet: View {
         Button("Cancel", action: onCancel)
           .keyboardShortcut(.cancelAction)
         Button("Apply") {
-          onApply(enableSystemProxy)
+          onApply(
+            ClashXMigrationApplyOptions(
+              enableSystemProxy: enableSystemProxy,
+              importShortcuts: developerMode && importShortcuts,
+              enableSilentStart: enableSilentStart
+            )
+          )
         }
           .keyboardShortcut(.defaultAction)
       }
@@ -445,6 +488,12 @@ private struct ClashXMigrationReportSheet: View {
       report.systemProxyEnabled.map { "system proxy intent: \($0)" }
     ]
     .compactMap { $0 }
+  }
+
+  private var shortcutValues: [String] {
+    report.shortcutBindings.map { binding in
+      "\(binding.sourceKey): \(binding.action.displayName) \(binding.shortcut.displayName)"
+    }
   }
 
   private func migrationSection(_ title: String, values: [String]) -> some View {

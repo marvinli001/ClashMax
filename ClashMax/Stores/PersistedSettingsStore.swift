@@ -53,6 +53,11 @@ final class PersistedSettingsStore: ObservableObject {
       saveCodable(menuBarPinnedGroupSettings, forKey: Self.menuBarPinnedGroupSettingsDefaultsKey)
     }
   }
+  @Published var globalShortcutSettings = GlobalShortcutSettings.default {
+    didSet {
+      saveCodable(globalShortcutSettings, forKey: Self.globalShortcutSettingsDefaultsKey)
+    }
+  }
   @Published var externalDashboardProfiles: [ExternalDashboardProfile] = [] {
     didSet {
       saveCodable(externalDashboardProfiles, forKey: Self.externalDashboardProfilesDefaultsKey)
@@ -75,6 +80,7 @@ final class PersistedSettingsStore: ObservableObject {
     }
   }
   @Published private(set) var launchSettings = LaunchSettings.default
+  @Published private(set) var initialTunHelperPromptHandled: Bool
   @Published var developerMode = false {
     didSet {
       defaults.set(developerMode, forKey: Self.developerModeDefaultsKey)
@@ -85,6 +91,7 @@ final class PersistedSettingsStore: ObservableObject {
   private let loginItemService: any LoginItemManaging
 
   static let silentStartDefaultsKey = "io.github.clashmax.silentStart"
+  static let initialTunHelperPromptHandledDefaultsKey = "io.github.clashmax.initialTunHelperPromptHandled"
   private static let proxyRoutingModeDefaultsKey = "io.github.clashmax.proxyRoutingMode"
   private static let developerModeDefaultsKey = "io.github.clashmax.developerMode"
   private static let systemProxySettingsDefaultsKey = "io.github.clashmax.systemProxySettings"
@@ -97,6 +104,7 @@ final class PersistedSettingsStore: ObservableObject {
   private static let delayTestSettingsDefaultsKey = "io.github.clashmax.delayTestSettings"
   private static let subscriptionFetchSettingsDefaultsKey = "io.github.clashmax.subscriptionFetchSettings"
   private static let menuBarPinnedGroupSettingsDefaultsKey = "io.github.clashmax.menuBarPinnedGroupSettings"
+  private static let globalShortcutSettingsDefaultsKey = "io.github.clashmax.globalShortcutSettings"
   private static let externalDashboardProfilesDefaultsKey = "io.github.clashmax.externalDashboardProfiles"
   private static let networkPolicySettingsDefaultsKey = "io.github.clashmax.networkPolicySettings"
   private static let appThemeDefaultsKey = "io.github.clashmax.appTheme"
@@ -112,6 +120,7 @@ final class PersistedSettingsStore: ObservableObject {
     self.defaults = defaults
     overrides = RuntimeOverrides.defaultForLaunch()
     developerMode = defaults.bool(forKey: Self.developerModeDefaultsKey)
+    initialTunHelperPromptHandled = defaults.bool(forKey: Self.initialTunHelperPromptHandledDefaultsKey)
     let storedProxyRoutingMode = Self.loadCodable(
       ProxyRoutingMode.self,
       forKey: Self.proxyRoutingModeDefaultsKey,
@@ -153,6 +162,11 @@ final class PersistedSettingsStore: ObservableObject {
     menuBarPinnedGroupSettings = Self.loadCodable(
       MenuBarPinnedGroupSettings.self,
       forKey: Self.menuBarPinnedGroupSettingsDefaultsKey,
+      defaults: defaults
+    ) ?? .default
+    globalShortcutSettings = Self.loadCodable(
+      GlobalShortcutSettings.self,
+      forKey: Self.globalShortcutSettingsDefaultsKey,
       defaults: defaults
     ) ?? .default
     externalDashboardProfiles = Self.loadCodable(
@@ -215,6 +229,11 @@ final class PersistedSettingsStore: ObservableObject {
   func setSilentStart(_ enabled: Bool) {
     defaults.set(enabled, forKey: Self.silentStartDefaultsKey)
     refreshLaunchSettings()
+  }
+
+  func markInitialTunHelperPromptHandled() {
+    initialTunHelperPromptHandled = true
+    defaults.set(true, forKey: Self.initialTunHelperPromptHandledDefaultsKey)
   }
 
   func openLoginItemsSettings() {

@@ -273,6 +273,10 @@ final class TunnelHelperClient: ObservableObject {
     self.bootstrapStatusTimeoutSeconds = bootstrapStatusTimeoutSeconds
   }
 
+  var serviceStatus: TunnelHelperServiceStatus {
+    TunnelHelperServiceStatus(service.status)
+  }
+
   func register() async throws {
     let fingerprint = try fingerprintProvider.currentFingerprint()
     switch service.status {

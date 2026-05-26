@@ -51,19 +51,25 @@ final class URLProtocolRecorder: @unchecked Sendable {
   nonisolated(unsafe) private static var active: URLProtocolRecorder?
   private let lock = NSLock()
   private var recordedRequest: URLRequest?
+  private var recordedRequests: [URLRequest] = []
   private var recordedBody: Data?
   private let responseBody: String
   private let responseHeaders: [String: String]
   private let responseDelay: TimeInterval
+  private let statusCodes: [Int]
+  private var responseIndex = 0
 
   init(
     responseBody: String = #"{"delay":42}"#,
     responseHeaders: [String: String] = ["Content-Type": "application/json"],
-    responseDelay: TimeInterval = 0
+    responseDelay: TimeInterval = 0,
+    statusCode: Int = 200,
+    statusCodes: [Int]? = nil
   ) {
     self.responseBody = responseBody
     self.responseHeaders = responseHeaders
     self.responseDelay = responseDelay
+    self.statusCodes = statusCodes?.isEmpty == false ? statusCodes! : [statusCode]
   }
 
   var configuration: URLSessionConfiguration {
@@ -84,6 +90,12 @@ final class URLProtocolRecorder: @unchecked Sendable {
     return recordedRequest
   }
 
+  var requests: [URLRequest] {
+    lock.lock()
+    defer { lock.unlock() }
+    return recordedRequests
+  }
+
   var lastBody: Data? {
     lock.lock()
     defer { lock.unlock() }
@@ -93,6 +105,7 @@ final class URLProtocolRecorder: @unchecked Sendable {
   fileprivate func record(_ request: URLRequest, body: Data?) {
     lock.lock()
     recordedRequest = request
+    recordedRequests.append(request)
     recordedBody = body
     lock.unlock()
   }
@@ -107,6 +120,14 @@ final class URLProtocolRecorder: @unchecked Sendable {
 
   fileprivate func headerFields() -> [String: String] {
     responseHeaders
+  }
+
+  fileprivate func responseStatusCode() -> Int {
+    lock.lock()
+    defer { lock.unlock() }
+    let index = min(responseIndex, statusCodes.count - 1)
+    responseIndex += 1
+    return statusCodes[index]
   }
 
   fileprivate func delayResponseIfNeeded() {
@@ -126,7 +147,12 @@ final class RecordingURLProtocol: URLProtocol, @unchecked Sendable {
 
     URLProtocolRecorder.current()?.record(request, body: body)
     URLProtocolRecorder.current()?.delayResponseIfNeeded()
-    let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: URLProtocolRecorder.current()?.headerFields())!
+    let response = HTTPURLResponse(
+      url: request.url!,
+      statusCode: URLProtocolRecorder.current()?.responseStatusCode() ?? 200,
+      httpVersion: nil,
+      headerFields: URLProtocolRecorder.current()?.headerFields()
+    )!
     client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
     client?.urlProtocol(self, didLoad: URLProtocolRecorder.current()?.responseData() ?? Data())
     client?.urlProtocolDidFinishLoading(self)

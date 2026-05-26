@@ -18,6 +18,11 @@ final class ClashXMigrationParserTests: XCTestCase {
       - "*.local"
     shortcut:
       toggleProxy: cmd+shift+p
+      restartCore: cmd+shift+r
+      unknownAction: cmd+shift+u
+    hotkeys:
+      systemProxy: ctrl+option+s
+    tray: true
     unknown-clashx-key: value
     proxy-providers:
       Main:
@@ -57,11 +62,37 @@ final class ClashXMigrationParserTests: XCTestCase {
     XCTAssertEqual(report.mode, "global")
     XCTAssertEqual(report.logLevel, "debug")
     XCTAssertEqual(report.systemProxyEnabled, true)
-    XCTAssertTrue(report.unsupportedSettings.contains { $0.contains("shortcut") })
+    XCTAssertFalse(report.unsupportedSettings.contains { $0.contains("shortcut") })
+    XCTAssertEqual(
+      report.shortcutBindings.map { "\($0.sourceKey):\($0.action.rawValue):\($0.shortcut.storageString)" },
+      [
+        "restartCore:restart:shift+command+r",
+        "toggleProxy:startStop:shift+command+p",
+        "systemProxy:toggleSystemProxy:control+option+s"
+      ]
+    )
+    XCTAssertTrue(report.warnings.contains { $0.contains("unknownAction") })
+    XCTAssertTrue(report.menuBarMigrationSuggested)
     XCTAssertTrue(report.unknownKeys.contains { $0.contains("unknown-clashx-key") })
     XCTAssertTrue(report.conflicts.contains { $0.contains("Provider Main uses multiple URLs") })
     XCTAssertTrue(report.inspectedFiles.contains { $0.hasSuffix("config.yaml") })
     XCTAssertTrue(report.inspectedFiles.contains { $0.hasSuffix("providers/main.yaml") })
+  }
+
+  func testParserDeduplicatesShortcutAliasesByCanonicalStorage() throws {
+    let root = try makeTemporaryDirectory()
+    try """
+    shortcut:
+      toggleProxy: cmd+shift+enter
+    hotkeys:
+      toggleProxyAgain: cmd+shift+return
+    """.write(to: root.appendingPathComponent("config.yaml"), atomically: true, encoding: .utf8)
+
+    let report = ClashXMigrationParser().parse(directoryURL: root)
+
+    XCTAssertEqual(report.shortcutBindings.count, 1)
+    XCTAssertEqual(report.shortcutBindings.first?.action, .startStop)
+    XCTAssertEqual(report.shortcutBindings.first?.shortcut.storageString, "shift+command+return")
   }
 
   private func makeTemporaryDirectory() throws -> URL {

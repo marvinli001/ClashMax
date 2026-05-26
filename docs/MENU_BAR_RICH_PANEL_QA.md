@@ -9,7 +9,9 @@ ClashMax menu bar rich panel.
 - Open a SwiftUI `MenuBarExtra` window-style panel for daily runtime control.
 - Do not place full main-window workflows in the panel. Proxy groups,
   connections, rules, logs, and deep settings stay in the main window.
-- Keep the app as a regular Dock app with the main window behavior unchanged.
+- Keep the app in the Dock while a main or settings window is visible or
+  minimized; after the last regular window closes, leave the menu bar item
+  running and remove the Dock indicator.
 
 ## Layout Contract
 
