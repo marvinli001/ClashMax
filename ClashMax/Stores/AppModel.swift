@@ -26,9 +26,14 @@ private enum AppStartupAbort: Error {
   case waitingForTunHelper
 }
 
+private enum RuntimeSettingsApplyFailure: Error {
+  case followUpFailed(String)
+}
+
 private enum RuntimeStopPurpose {
   case userInitiated
   case safetyShutdown
+  case settingsApplyRestart
   case termination
 
   var continuesAfterNetworkExtensionStopFailure: Bool {
@@ -37,6 +42,10 @@ private enum RuntimeStopPurpose {
 
   var schedulesPreviewRestart: Bool {
     self == .userInitiated
+  }
+
+  var preservesRuntimeSettingsApplyTask: Bool {
+    self == .settingsApplyRestart
   }
 }
 
@@ -485,6 +494,7 @@ final class AppModel: ObservableObject {
   }
   var publicIPInfoState: PublicIPInfoState { publicIP.state }
   @Published private(set) var appNotice: AppNotice?
+  @Published private(set) var runtimeSettingsApplyState: RuntimeSettingsApplyState = .idle
   @Published var routingSimulationRequest: RoutingSimulationRequest?
   private var lastErrorOrigin: LastErrorOrigin?
   private var isPublishingNetworkExtensionLastError = false
@@ -538,6 +548,7 @@ final class AppModel: ObservableObject {
   private let pingTester: any PingTesting
   private let paths: RuntimePaths
   private let runtimeConfigMaterializer = RuntimeConfigMaterializer()
+  private var activeRuntimeConfigMaterialization: RuntimeConfigMaterializationResult?
   private var apiClient: (any MihomoAPIControlling)?
   private var startTask: Task<Void, Never>?
   private var previewTask: Task<Void, Never>?
@@ -557,6 +568,8 @@ final class AppModel: ObservableObject {
   private var modeUpdateToken: UUID?
   private var ipv6UpdateTask: Task<Void, Never>?
   private var ipv6UpdateToken: UUID?
+  private var runtimeSettingsApplyTask: Task<Void, Never>?
+  private var runtimeSettingsApplyToken: UUID?
   private var proxySelectionTasks: [ProxyGroup.ID: Task<Void, Never>] = [:]
   private var proxySelectionTokens: [ProxyGroup.ID: UUID] = [:]
   private var delayTestTasks: [ProxyNodeKey: Task<Void, Never>] = [:]
@@ -706,12 +719,15 @@ final class AppModel: ObservableObject {
       clearRuntimeProxyGroups: { [weak self] in
         self?.proxyGroups = []
       },
-      shouldRestartRuntimeAfterProfileSelection: { [weak self] in
+      shouldSyncRuntimeAfterProfileChange: { [weak self] in
         guard let self else { return false }
         return self.isRunning || self.startInFlight
       },
       restartRuntime: { [weak self] in
         self?.restart()
+      },
+      stopRuntime: { [weak self] in
+        self?.stop()
       }
     )
     settings.objectWillChange
@@ -789,6 +805,96 @@ final class AppModel: ObservableObject {
       || activeNetworkExtensionCoreCrashMessage != nil
       || runtimeOwner == .networkExtension
       || networkExtensionController.vpnStatus.isActive
+  }
+
+  var runtimeSettingsApplyStatusMessage: String? {
+    switch runtimeSettingsApplyState {
+    case .idle:
+      return nil
+    case .pending:
+      return String(localized: "Runtime settings pending.")
+    case .applying:
+      return String(localized: "Applying runtime settings.")
+    case let .failed(message):
+      return String(format: String(localized: "Runtime settings saved but not applied: %@"), message)
+    case let .appliedWithFollowUpFailure(message):
+      return String(
+        format: String(localized: "Runtime settings applied, but proxy readiness or system proxy setup failed: %@"),
+        message
+      )
+    }
+  }
+
+  var currentRuntimeOverrides: RuntimeOverrides {
+    if isRunning, let snapshot = settings.appliedRuntimeSettingsSnapshot {
+      return snapshot.overrides
+    }
+    return overrides
+  }
+
+  private var currentRuntimeMixedPort: Int {
+    currentRuntimeOverrides.mixedPort
+  }
+
+  private var canApplyRuntimeSettingsToCurrentRuntime: Bool {
+    guard !previewRuntimeActive else { return false }
+    return isRunning
+      || tunnelCoreRunning
+      || tunEnabled
+      || runtimeOwner == .networkExtension
+      || networkExtensionController.vpnStatus.isActive
+      || apiClient != nil
+  }
+
+  private var effectiveRuntimeOwnerForSettingsSnapshot: RuntimeOwner {
+    if runtimeOwner != .stopped {
+      return runtimeOwner
+    }
+    if tunnelCoreRunning || tunEnabled {
+      return .tunnel
+    }
+    if networkExtensionController.vpnStatus.isActive || proxyRoutingMode == .neProxy {
+      return .networkExtension
+    }
+    if apiClient != nil {
+      return .user
+    }
+    if isCoreRunning {
+      return .user
+    }
+    return .stopped
+  }
+
+  private func runtimeOverridesForSettingsSnapshot(owner: RuntimeOwner? = nil) -> RuntimeOverrides {
+    let owner = owner ?? effectiveRuntimeOwnerForSettingsSnapshot
+    var runtimeOverrides = overrides
+    runtimeOverrides.tunEnabled = owner == .tunnel || proxyRoutingMode == .tun
+    runtimeOverrides.tunSettings = tunSettings
+    return runtimeOverrides
+  }
+
+  private func makeRuntimeSettingsSnapshot(owner: RuntimeOwner? = nil) -> AppliedRuntimeSettingsSnapshot {
+    let owner = owner ?? effectiveRuntimeOwnerForSettingsSnapshot
+    return AppliedRuntimeSettingsSnapshot(
+      overrides: runtimeOverridesForSettingsSnapshot(owner: owner),
+      proxyRoutingMode: proxyRoutingMode,
+      systemProxySettings: systemProxySettings,
+      networkExtensionRoutingSettings: networkExtensionRoutingSettings,
+      runtimeOwner: owner,
+      appliedAt: Date()
+    )
+  }
+
+  private func seedAppliedRuntimeSettingsSnapshotIfNeeded() {
+    guard settings.appliedRuntimeSettingsSnapshot == nil else { return }
+    guard canApplyRuntimeSettingsToCurrentRuntime || startInFlight || systemProxyEnabled else { return }
+    settings.recordAppliedRuntimeSettingsSnapshot(makeRuntimeSettingsSnapshot())
+  }
+
+  private func recordAppliedRuntimeSettingsSnapshot(_ snapshot: AppliedRuntimeSettingsSnapshot) {
+    var snapshot = snapshot
+    snapshot.appliedAt = Date()
+    settings.recordAppliedRuntimeSettingsSnapshot(snapshot)
   }
 
   var dashboardRuntimeState: DashboardRuntimeState {
@@ -1519,7 +1625,7 @@ final class AppModel: ObservableObject {
   }
 
   private var subscriptionFetchOptions: SubscriptionFetchOptions {
-    settings.subscriptionFetchSettings.fetchOptions(currentMixedPort: overrides.mixedPort)
+    settings.subscriptionFetchSettings.fetchOptions(currentMixedPort: currentRuntimeMixedPort)
   }
 
   private func subscriptionFetchOptions(for profile: Profile) -> SubscriptionFetchOptions {
@@ -1539,13 +1645,15 @@ final class AppModel: ObservableObject {
       return
     }
     guard isCoreRunning else { return }
-    let runtimeConfig: URL
+    let materialization: RuntimeConfigMaterializationResult
     if proxyRoutingMode == .tun {
-      runtimeConfig = try await materializeTunRuntimeConfig(tunSettings)
+      materialization = try await materializeTunRuntimeConfig(tunSettings)
     } else {
-      runtimeConfig = try await materializeNonTunRuntimeConfig()
+      materialization = try await materializeNonTunRuntimeConfig()
     }
+    let runtimeConfig = materialization.runtimeConfigURL
     try await apiClient.reloadConfig(path: runtimeConfig.path, force: true)
+    activateRuntimeArtifacts(materialization)
     appendAppLog(level: "info", message: "\(logMessage) \(runtimeConfig.path).")
     reloadRuntimeData()
   }
@@ -1643,23 +1751,35 @@ final class AppModel: ObservableObject {
     let shouldUseNetworkExtension = routingMode == .neProxy
     let networkExtensionSettings = networkExtensionRoutingSettings
     settings.syncExternalControllerSettings()
-    overrides.tunEnabled = shouldUseTun
-    overrides.tunSettings = tunSettings
+    let runtimeOwnerForStart: RuntimeOwner = shouldUseTun ? .tunnel : (shouldUseNetworkExtension ? .networkExtension : .user)
+    var runtimeOverrides = overrides
+    runtimeOverrides.tunEnabled = shouldUseTun
+    runtimeOverrides.tunSettings = tunSettings
+    let startSnapshot = AppliedRuntimeSettingsSnapshot(
+      overrides: runtimeOverrides,
+      proxyRoutingMode: routingMode,
+      systemProxySettings: systemProxySettings,
+      networkExtensionRoutingSettings: networkExtensionSettings,
+      runtimeOwner: runtimeOwnerForStart,
+      appliedAt: Date()
+    )
     let runtimeConfigOptions = RuntimeConfigOptions(
       networkExtensionRoutingSettings: shouldUseNetworkExtension ? networkExtensionSettings : nil
     )
     systemProxyEnabled = false
     tunEnabled = false
     stopTunDiagnostics(clear: true)
-    let runtimeConfig = try await generateRuntimeConfig(
+    let materialization = try await generateRuntimeConfig(
       for: profile,
+      overrides: startSnapshot.overrides,
       selections: previewSelections,
       options: runtimeConfigOptions
     )
+    let runtimeConfig = materialization.runtimeConfigURL
     let coreURL = try bundledCoreURL()
     appendAppLog(level: "info", message: "Runtime config path: \(runtimeConfig.path)")
     appendAppLog(level: "info", message: "Mihomo core path: \(coreURL.path)")
-    let client = MihomoAPIClient(baseURL: try overrides.endpoint.baseURL, secret: overrides.secret)
+    let client = MihomoAPIClient(baseURL: try startSnapshot.overrides.endpoint.baseURL, secret: startSnapshot.overrides.secret)
     apiClient = client
     try Task.checkCancellation()
 
@@ -1675,7 +1795,7 @@ final class AppModel: ObservableObject {
         coreURL: coreURL,
         configURL: runtimeConfig,
         workDirectory: paths.runtime,
-        secret: overrides.secret
+        secret: startSnapshot.overrides.secret
       )
       try Task.checkCancellation()
       if !response.ok {
@@ -1686,10 +1806,10 @@ final class AppModel: ObservableObject {
       }
       tunHelperPID = response.pid > 0 ? response.pid : nil
       do {
-        let version = try await tunnelReadinessProbe.waitUntilReady(api: overrides.endpoint)
-        appendAppLog(level: "info", message: "TUN Mihomo controller ready: \(overrides.endpoint.host):\(overrides.endpoint.port), version \(version)")
-        if tunSettings.systemDNSOverrideEnabled {
-          try await applyTunSystemDNS(tunSettings)
+        let version = try await tunnelReadinessProbe.waitUntilReady(api: startSnapshot.overrides.endpoint)
+        appendAppLog(level: "info", message: "TUN Mihomo controller ready: \(startSnapshot.overrides.endpoint.host):\(startSnapshot.overrides.endpoint.port), version \(version)")
+        if startSnapshot.overrides.tunSettings.systemDNSOverrideEnabled {
+          try await applyTunSystemDNS(startSnapshot.overrides.tunSettings)
         } else {
           setTunSystemDNSState(.inactive)
         }
@@ -1705,7 +1825,8 @@ final class AppModel: ObservableObject {
       tunnelCoreRunning = true
       tunEnabled = true
       runtimeOwner = .tunnel
-      refreshTunDiagnostics(includeExternal: true)
+      activateRuntimeArtifacts(materialization)
+      refreshTunDiagnostics(includeExternal: true, runtimeOverrides: startSnapshot.overrides)
       let coreStopResult = await coreController.stop()
       if let error = coreStopResult.error {
         throw error
@@ -1716,16 +1837,17 @@ final class AppModel: ObservableObject {
         coreURL: coreURL,
         configURL: runtimeConfig,
         workDirectory: paths.runtime,
-        api: overrides.endpoint,
-        proxyPort: overrides.mixedPort
+        api: startSnapshot.overrides.endpoint,
+        proxyPort: startSnapshot.overrides.mixedPort
       )
+      activateRuntimeArtifacts(materialization)
       runtimeOwner = .user
       publishStartupDiagnostics()
     }
     try Task.checkCancellation()
 
     if shouldUseNetworkExtension {
-      try await proxyPortReadinessProbe.waitUntilReady(host: "127.0.0.1", port: overrides.mixedPort)
+      try await proxyPortReadinessProbe.waitUntilReady(host: "127.0.0.1", port: startSnapshot.overrides.mixedPort)
       if networkExtensionSettings.dnsCaptureEnabled {
         try await proxyPortReadinessProbe.waitUntilOpen(
           host: NetworkExtensionRoutingSettings.defaultDNSListenHost,
@@ -1735,7 +1857,7 @@ final class AppModel: ObservableObject {
       }
       appendAppLog(level: "info", message: "Starting NE transparent proxy; System Proxy off, TUN helper untouched.")
       try await networkExtensionController.startTransparentProxy(
-        configuration: .clashMax(overrides: overrides, routingSettings: networkExtensionSettings)
+        configuration: .clashMax(overrides: startSnapshot.overrides, routingSettings: networkExtensionSettings)
       )
       if networkExtensionSettings.systemDNSOverrideEnabled {
         try await applyNetworkExtensionSystemDNS(networkExtensionSettings)
@@ -1746,14 +1868,16 @@ final class AppModel: ObservableObject {
       startNetworkExtensionDiagnosticsPolling()
       appendAppLog(level: "info", message: "NE transparent proxy requested: \(networkExtensionController.vpnStatus.displayName)")
     } else if routingMode == .systemProxy {
-      try await applySystemProxySettings()
+      try await applySystemProxySettings(startSnapshot)
       systemProxyEnabled = true
-      try await activateSystemProxyGuardIfNeeded()
+      try await activateSystemProxyGuardIfNeeded(startSnapshot)
     }
     try Task.checkCancellation()
     sessionStartedAt = Date()
     await refreshProfilePreviewAndWait()
-    startStreams(client: client)
+    recordAppliedRuntimeSettingsSnapshot(startSnapshot)
+    runtimeSettingsApplyState = .idle
+    startStreams(client: client, logLevel: startSnapshot.overrides.logLevel)
     reloadRuntimeData(clearAfterConfirmation: !previewSelections.isEmpty)
     refreshPublicIPInfo()
   }
@@ -1841,8 +1965,212 @@ final class AppModel: ObservableObject {
     }
   }
 
+  func setMixedPort(_ port: Int) {
+    updateRuntimeOverridesForAutoApply(reason: "Mixed Port updated") { overrides in
+      overrides.mixedPort = port
+    }
+  }
+
+  func setAllowLAN(_ enabled: Bool) {
+    updateRuntimeOverridesForAutoApply(reason: "Allow LAN updated") { overrides in
+      overrides.allowLan = enabled
+    }
+  }
+
+  func setDNSOverrideEnabled(_ enabled: Bool) {
+    updateRuntimeOverridesForAutoApply(reason: "DNS override updated") { overrides in
+      overrides.dnsEnabled = enabled
+    }
+  }
+
+  func setLogLevel(_ level: String) {
+    updateRuntimeOverridesForAutoApply(reason: "Log Level updated") { overrides in
+      overrides.logLevel = level
+    }
+  }
+
+  @discardableResult
+  func updateExternalControllerSettings(_ newSettings: ExternalControllerSettings) -> Bool {
+    if let validationError = newSettings.validationError {
+      lastError = validationError
+      return false
+    }
+    seedAppliedRuntimeSettingsSnapshotIfNeeded()
+    externalControllerSettings = newSettings
+    scheduleRunningRuntimeSettingsApply(reason: "Controller settings updated")
+    return true
+  }
+
+  private func updateRuntimeOverridesForAutoApply(
+    reason: String,
+    update: (inout RuntimeOverrides) -> Void
+  ) {
+    seedAppliedRuntimeSettingsSnapshotIfNeeded()
+    var updated = overrides
+    update(&updated)
+    guard updated != overrides else { return }
+    overrides = updated
+    scheduleRunningRuntimeSettingsApply(reason: reason)
+  }
+
+  private func scheduleRunningRuntimeSettingsApply(reason: String) {
+    guard canApplyRuntimeSettingsToCurrentRuntime else {
+      runtimeSettingsApplyState = .idle
+      return
+    }
+    runtimeSettingsApplyTask?.cancel()
+    let token = UUID()
+    runtimeSettingsApplyToken = token
+    runtimeSettingsApplyState = .pending
+    runtimeSettingsApplyTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      do {
+        try await Task.sleep(nanoseconds: 50_000_000)
+      } catch {
+        return
+      }
+      guard self.runtimeSettingsApplyToken == token, !Task.isCancelled else { return }
+      self.runtimeSettingsApplyState = .applying
+      defer {
+        if self.runtimeSettingsApplyToken == token {
+          self.runtimeSettingsApplyTask = nil
+          self.runtimeSettingsApplyToken = nil
+        }
+      }
+      do {
+        try await self.applyRunningRuntimeSettings(reason: reason)
+        guard self.runtimeSettingsApplyToken == token, !Task.isCancelled else { return }
+        self.runtimeSettingsApplyState = .idle
+        self.lastError = nil
+      } catch is CancellationError {
+        return
+      } catch RuntimeSettingsApplyFailure.followUpFailed(let message) {
+        guard self.runtimeSettingsApplyToken == token else { return }
+        self.runtimeSettingsApplyState = .appliedWithFollowUpFailure(message)
+        self.lastError = String(
+          format: String(localized: "Runtime settings applied, but proxy readiness or system proxy setup failed: %@"),
+          message
+        )
+      } catch {
+        guard self.runtimeSettingsApplyToken == token else { return }
+        let message = UserFacingError.message(for: error)
+        self.runtimeSettingsApplyState = .failed(message)
+        self.lastError = String(
+          format: String(localized: "Runtime settings saved but could not be applied: %@"),
+          message
+        )
+      }
+    }
+  }
+
+  private func applyRunningRuntimeSettings(reason: String) async throws {
+    let target = makeRuntimeSettingsSnapshot()
+    switch target.runtimeOwner {
+    case .tunnel:
+      try await applyRunningTunSettings(
+        target.overrides.tunSettings,
+        runtimeOverrides: target.overrides,
+        reason: reason
+      )
+      recordAppliedRuntimeSettingsSnapshot(target)
+    case .networkExtension:
+      if networkExtensionRuntimeRestartRequired(for: target) {
+        try await restartRuntimeForSettingsApply(reason: reason)
+      } else {
+        try await applyRunningNonTunRuntimeSettings(target, reason: reason)
+      }
+    case .user:
+      try await applyRunningNonTunRuntimeSettings(target, reason: reason)
+    case .preview, .stopped:
+      return
+    }
+  }
+
+  private func networkExtensionRuntimeRestartRequired(for target: AppliedRuntimeSettingsSnapshot) -> Bool {
+    guard target.proxyRoutingMode == .neProxy || target.runtimeOwner == .networkExtension else {
+      return false
+    }
+    guard let applied = settings.appliedRuntimeSettingsSnapshot else {
+      return false
+    }
+    return applied.overrides.mixedPort != target.overrides.mixedPort
+      || applied.overrides.endpoint != target.overrides.endpoint
+  }
+
+  private func applyRunningNonTunRuntimeSettings(
+    _ target: AppliedRuntimeSettingsSnapshot,
+    reason: String
+  ) async throws {
+    guard let currentClient = apiClient else {
+      throw AppError.helperResponse(proxyRuntimeActionMessage)
+    }
+    let previouslyAppliedEndpoint = settings.appliedRuntimeSettingsSnapshot?.overrides.endpoint
+    let materialization = try await materializeNonTunRuntimeConfig(target)
+    let runtimeConfig = materialization.runtimeConfigURL
+    try await currentClient.reloadConfig(path: runtimeConfig.path, force: true)
+    activateRuntimeArtifacts(materialization)
+    recordAppliedRuntimeSettingsSnapshot(target)
+    appendAppLog(level: "info", message: "\(reason): Mihomo reloaded \(runtimeConfig.path).")
+
+    let clientForRuntime: any MihomoAPIControlling
+    if let appliedEndpoint = previouslyAppliedEndpoint,
+       appliedEndpoint != target.overrides.endpoint {
+      clientForRuntime = MihomoAPIClient(baseURL: try target.overrides.endpoint.baseURL, secret: target.overrides.secret)
+    } else {
+      clientForRuntime = currentClient
+    }
+    apiClient = clientForRuntime
+
+    do {
+      try await proxyPortReadinessProbe.waitUntilReady(host: "127.0.0.1", port: target.overrides.mixedPort)
+
+      if target.proxyRoutingMode == .systemProxy || systemProxyEnabled {
+        try await applySystemProxySettings(target)
+        systemProxyEnabled = true
+        try await activateSystemProxyGuardIfNeeded(target)
+      }
+
+      if target.runtimeOwner == .networkExtension,
+         target.networkExtensionRoutingSettings.dnsCaptureEnabled {
+        try await proxyPortReadinessProbe.waitUntilOpen(
+          host: NetworkExtensionRoutingSettings.defaultDNSListenHost,
+          port: target.networkExtensionRoutingSettings.normalizedDNSListenPort,
+          serviceName: "Mihomo DNS"
+        )
+      }
+    } catch {
+      let message = UserFacingError.message(for: error)
+      appendAppLog(level: "warn", message: "\(reason): post-reload setup failed: \(message)")
+      throw RuntimeSettingsApplyFailure.followUpFailed(message)
+    }
+
+    startStreams(client: clientForRuntime, logLevel: target.overrides.logLevel)
+    reloadRuntimeData()
+  }
+
+  private func restartRuntimeForSettingsApply(reason: String) async throws {
+    appendAppLog(level: "info", message: "\(reason): restarting runtime to apply controller or proxy port changes.")
+    let stopResult = await stopRuntimeCoordinated(.settingsApplyRestart)
+    handleStopResult(stopResult)
+    guard stopResult.succeeded else {
+      throw AppError.coreStopFailed(stopResult.userFacingMessage ?? "Could not stop runtime before applying settings.")
+    }
+    startInFlight = true
+    defer { startInFlight = false }
+    do {
+      try await withTimeout(seconds: Self.startWallClockSeconds) { @Sendable [weak self] in
+        guard let self else { return }
+        try await self.runStartSequence()
+      }
+    } catch {
+      handleStopResult(await stopRuntimeCoordinated())
+      throw error
+    }
+  }
+
   func setMode(_ mode: RunMode) {
     guard overrides.mode != mode else { return }
+    seedAppliedRuntimeSettingsSnapshotIfNeeded()
     overrides.mode = mode
     modeUpdateTask?.cancel()
     modeUpdateTask = nil
@@ -1864,6 +2192,8 @@ final class AppModel: ObservableObject {
       }
       do {
         try await apiClient.updateMode(mode)
+        guard modeUpdateToken == token, !Task.isCancelled else { return }
+        recordAppliedRuntimeSettingsSnapshot(makeRuntimeSettingsSnapshot())
       } catch is CancellationError {
         return
       } catch {
@@ -1875,6 +2205,7 @@ final class AppModel: ObservableObject {
 
   func setIPv6Enabled(_ enabled: Bool) {
     guard ipv6Enabled != enabled else { return }
+    seedAppliedRuntimeSettingsSnapshotIfNeeded()
     settings.ipv6Enabled = enabled
 
     guard isRunning else { return }
@@ -1901,6 +2232,8 @@ final class AppModel: ObservableObject {
       }
       do {
         try await applyRunningIPv6Setting(enabled, apiClient: apiClient)
+        guard ipv6UpdateToken == token, !Task.isCancelled else { return }
+        recordAppliedRuntimeSettingsSnapshot(makeRuntimeSettingsSnapshot())
       } catch is CancellationError {
         return
       } catch {
@@ -1915,8 +2248,10 @@ final class AppModel: ObservableObject {
       try await apiClient.updateIPv6(enabled)
       return
     }
-    let runtimeConfig = try await materializeNonTunRuntimeConfig()
+    let materialization = try await materializeNonTunRuntimeConfig()
+    let runtimeConfig = materialization.runtimeConfigURL
     try await apiClient.reloadConfig(path: runtimeConfig.path, force: true)
+    activateRuntimeArtifacts(materialization)
     appendAppLog(level: "info", message: "IPv6 setting updated: Mihomo reloaded \(runtimeConfig.path).")
   }
 
@@ -1931,15 +2266,21 @@ final class AppModel: ObservableObject {
     return networkExtensionRoutingSettings.dnsCaptureEnabled || networkExtensionRoutingSettings.dnsFakeIPEnabled
   }
 
-  private func materializeNonTunRuntimeConfig() async throws -> URL {
+  private func materializeNonTunRuntimeConfig(
+    _ snapshot: AppliedRuntimeSettingsSnapshot? = nil
+  ) async throws -> RuntimeConfigMaterializationResult {
     let profile = try requireActiveProfile()
-    var runtimeOverrides = overrides
+    var runtimeOverrides = snapshot?.overrides ?? overrides
     runtimeOverrides.tunEnabled = false
-    let isNetworkExtensionRuntime = proxyRoutingMode == .neProxy
+    let isNetworkExtensionRuntime = snapshot?.runtimeOwner == .networkExtension
+      || snapshot?.proxyRoutingMode == .neProxy
+      || proxyRoutingMode == .neProxy
       || runtimeOwner == .networkExtension
       || networkExtensionController.vpnStatus.isActive
     let options = RuntimeConfigOptions(
-      networkExtensionRoutingSettings: isNetworkExtensionRuntime ? networkExtensionRoutingSettings : nil
+      networkExtensionRoutingSettings: isNetworkExtensionRuntime
+        ? (snapshot?.networkExtensionRoutingSettings ?? networkExtensionRoutingSettings)
+        : nil
     )
     return try await generateRuntimeConfig(
       for: profile,
@@ -1969,7 +2310,7 @@ final class AppModel: ObservableObject {
   private func materializePreviewRuntimeConfig(
     for profile: Profile,
     overrides previewOverrides: RuntimeOverrides
-  ) async throws -> URL {
+  ) async throws -> RuntimeConfigMaterializationResult {
     try await generateRuntimeConfig(
       for: profile,
       overrides: previewOverrides,
@@ -1986,11 +2327,13 @@ final class AppModel: ObservableObject {
       appendAppLog(level: "debug", message: "\(logMessage) preview runtime reload skipped because preview settings are unavailable.")
       return
     }
-    let runtimeConfig = try await materializePreviewRuntimeConfig(
+    let materialization = try await materializePreviewRuntimeConfig(
       for: profile,
       overrides: previewOverrides
     )
+    let runtimeConfig = materialization.runtimeConfigURL
     try await apiClient.reloadConfig(path: runtimeConfig.path, force: true)
+    activateRuntimeArtifacts(materialization)
     appendAppLog(level: "debug", message: "\(logMessage) preview runtime reloaded \(runtimeConfig.path).")
     reloadRuntimeData()
   }
@@ -2805,7 +3148,10 @@ final class AppModel: ObservableObject {
     publicIP.refresh(isCoreRunning: isCoreRunning, force: force, now: now)
   }
 
-  func refreshTunDiagnostics(includeExternal: Bool = true) {
+  func refreshTunDiagnostics(
+    includeExternal: Bool = true,
+    runtimeOverrides: RuntimeOverrides? = nil
+  ) {
     tunDiagnosticsTask?.cancel()
     guard runtimeOwner == .tunnel || tunEnabled || tunnelCoreRunning else {
       tunDiagnostics = .empty
@@ -2813,8 +3159,9 @@ final class AppModel: ObservableObject {
       return
     }
 
-    let api = overrides.endpoint
-    let settings = tunSettings
+    let runtimeOverrides = runtimeOverrides ?? currentRuntimeOverrides
+    let api = runtimeOverrides.endpoint
+    let settings = runtimeOverrides.tunSettings
     let dnsState = tunSystemDNSState
     let helperClient = helperClient
     let inspector = tunRuntimeInspector
@@ -3418,10 +3765,12 @@ final class AppModel: ObservableObject {
 
   private func applySystemProxyEnabledState(_ enabled: Bool) async throws {
     if enabled {
+      seedAppliedRuntimeSettingsSnapshotIfNeeded()
       proxyRoutingMode = .systemProxy
       try await applySystemProxySettings()
       systemProxyEnabled = true
       try await activateSystemProxyGuardIfNeeded()
+      recordAppliedRuntimeSettingsSnapshot(makeRuntimeSettingsSnapshot(owner: effectiveRuntimeOwnerForSettingsSnapshot))
     } else {
       _ = try await restoreSystemProxyState(disableWhenNoSnapshot: true)
       systemProxyEnabled = false
@@ -3433,6 +3782,7 @@ final class AppModel: ObservableObject {
       lastError = validationError
       return false
     }
+    seedAppliedRuntimeSettingsSnapshotIfNeeded()
     systemProxySettings = settings
     if systemProxyEnabled {
       Task { @MainActor [weak self] in
@@ -3440,6 +3790,7 @@ final class AppModel: ObservableObject {
         do {
           try await applySystemProxySettings()
           try await activateSystemProxyGuardIfNeeded()
+          recordAppliedRuntimeSettingsSnapshot(makeRuntimeSettingsSnapshot())
           lastError = nil
         } catch {
           lastError = UserFacingError.message(for: error)
@@ -3455,6 +3806,7 @@ final class AppModel: ObservableObject {
       lastError = validationError
       return false
     }
+    seedAppliedRuntimeSettingsSnapshotIfNeeded()
     tunSettings = settings
     if proxyRoutingMode == .tun, isRunning {
       scheduleRunningTunSettingsApply(settings)
@@ -3477,6 +3829,7 @@ final class AppModel: ObservableObject {
       do {
         try await applyRunningTunSettings(settings, reason: "TUN settings updated")
         guard self.tunSettingsApplyToken == token, !Task.isCancelled else { return }
+        recordAppliedRuntimeSettingsSnapshot(makeRuntimeSettingsSnapshot(owner: .tunnel))
         lastError = nil
       } catch is CancellationError {
         return
@@ -3487,13 +3840,22 @@ final class AppModel: ObservableObject {
     }
   }
 
-  private func applyRunningTunSettings(_ settings: TunSettings, reason: String) async throws {
+  private func applyRunningTunSettings(
+    _ settings: TunSettings,
+    runtimeOverrides: RuntimeOverrides? = nil,
+    reason: String
+  ) async throws {
     guard runtimeOwner == .tunnel || tunEnabled || tunnelCoreRunning else { return }
-    let runtimeConfig = try await materializeTunRuntimeConfig(settings)
+    var effectiveOverrides = runtimeOverrides ?? runtimeOverridesForSettingsSnapshot(owner: .tunnel)
+    effectiveOverrides.tunEnabled = true
+    effectiveOverrides.tunSettings = settings
+    let materialization = try await materializeTunRuntimeConfig(settings, runtimeOverrides: effectiveOverrides)
+    let runtimeConfig = materialization.runtimeConfigURL
     var didRestartHelper = false
     if let apiClient {
       do {
         try await apiClient.reloadConfig(path: runtimeConfig.path, force: true)
+        activateRuntimeArtifacts(materialization)
         appendAppLog(level: "info", message: "\(reason): Mihomo reloaded \(runtimeConfig.path).")
       } catch is CancellationError {
         throw CancellationError()
@@ -3502,30 +3864,46 @@ final class AppModel: ObservableObject {
           level: "warn",
           message: "\(reason): Mihomo reload failed, restarting helper instead: \(UserFacingError.message(for: error))"
         )
-        try await restartRunningTunHelper(runtimeConfig: runtimeConfig, settings: settings, reason: reason)
+        try await restartRunningTunHelper(
+          runtimeConfig: runtimeConfig,
+          settings: settings,
+          runtimeOverrides: effectiveOverrides,
+          reason: reason
+        )
+        activateRuntimeArtifacts(materialization)
         didRestartHelper = true
       }
     } else {
       appendAppLog(level: "warn", message: "\(reason): controller unavailable, restarting helper instead.")
-      try await restartRunningTunHelper(runtimeConfig: runtimeConfig, settings: settings, reason: reason)
+      try await restartRunningTunHelper(
+        runtimeConfig: runtimeConfig,
+        settings: settings,
+        runtimeOverrides: effectiveOverrides,
+        reason: reason
+      )
+      activateRuntimeArtifacts(materialization)
       didRestartHelper = true
     }
     didRestartHelper = try await verifyRunningTunFacts(
       runtimeConfig: runtimeConfig,
       settings: settings,
+      runtimeOverrides: effectiveOverrides,
       reason: reason,
       didRestartHelper: didRestartHelper
     )
     if !didRestartHelper {
       try await reconcileTunSystemDNS(for: settings)
     }
-    refreshTunDiagnostics(includeExternal: false)
+    refreshTunDiagnostics(includeExternal: false, runtimeOverrides: effectiveOverrides)
     reloadRuntimeData()
   }
 
-  private func materializeTunRuntimeConfig(_ settings: TunSettings) async throws -> URL {
+  private func materializeTunRuntimeConfig(
+    _ settings: TunSettings,
+    runtimeOverrides: RuntimeOverrides? = nil
+  ) async throws -> RuntimeConfigMaterializationResult {
     let profile = try requireActiveProfile()
-    var runtimeOverrides = overrides
+    var runtimeOverrides = runtimeOverrides ?? overrides
     runtimeOverrides.tunEnabled = true
     runtimeOverrides.tunSettings = settings
     return try await generateRuntimeConfig(
@@ -3538,13 +3916,15 @@ final class AppModel: ObservableObject {
   private func restartRunningTunHelper(
     runtimeConfig: URL,
     settings: TunSettings,
+    runtimeOverrides: RuntimeOverrides? = nil,
     reason: String
   ) async throws {
+    let runtimeOverrides = runtimeOverrides ?? runtimeOverridesForSettingsSnapshot(owner: .tunnel)
     let response = try await helperClient.restartTunnel(
       coreURL: try bundledCoreURL(),
       configURL: runtimeConfig,
       workDirectory: paths.runtime,
-      secret: overrides.secret
+      secret: runtimeOverrides.secret
     )
     if !response.ok {
       throw AppError.helperResponse(response.userFacingMessage)
@@ -3553,7 +3933,7 @@ final class AppModel: ObservableObject {
       throw AppError.helperResponse("Helper reported restart success but TUN is not running.")
     }
     tunHelperPID = response.pid > 0 ? response.pid : nil
-    let version = try await tunnelReadinessProbe.waitUntilReady(api: overrides.endpoint)
+    let version = try await tunnelReadinessProbe.waitUntilReady(api: runtimeOverrides.endpoint)
     appendAppLog(level: "info", message: "\(reason): TUN helper restarted, controller ready with version \(version).")
     try await reconcileTunSystemDNS(for: settings)
     tunnelCoreRunning = true
@@ -3564,11 +3944,15 @@ final class AppModel: ObservableObject {
   private func verifyRunningTunFacts(
     runtimeConfig: URL,
     settings: TunSettings,
+    runtimeOverrides: RuntimeOverrides,
     reason: String,
     didRestartHelper: Bool
   ) async throws -> Bool {
     var didRestartHelper = didRestartHelper
-    let postReloadSnapshot = await inspectTunRuntimeNow(includeExternal: false)
+    let postReloadSnapshot = await inspectTunRuntimeNow(
+      includeExternal: false,
+      runtimeOverrides: runtimeOverrides
+    )
     guard postReloadSnapshot.hasRepairableRoutingIssue else {
       return didRestartHelper
     }
@@ -3578,9 +3962,17 @@ final class AppModel: ObservableObject {
         level: "warn",
         message: "\(reason): runtime diagnostics still report \(postReloadSnapshot.repairableRoutingIssueMessage), restarting helper instead."
       )
-      try await restartRunningTunHelper(runtimeConfig: runtimeConfig, settings: settings, reason: reason)
+      try await restartRunningTunHelper(
+        runtimeConfig: runtimeConfig,
+        settings: settings,
+        runtimeOverrides: runtimeOverrides,
+        reason: reason
+      )
       didRestartHelper = true
-      let postRestartSnapshot = await inspectTunRuntimeNow(includeExternal: false)
+      let postRestartSnapshot = await inspectTunRuntimeNow(
+        includeExternal: false,
+        runtimeOverrides: runtimeOverrides
+      )
       if postRestartSnapshot.hasRepairableRoutingIssue {
         throw AppError.helperResponse(
           "\(reason): TUN runtime diagnostics still report \(postRestartSnapshot.repairableRoutingIssueMessage) after helper restart."
@@ -3732,13 +4124,16 @@ final class AppModel: ObservableObject {
       guard let self else { return }
       do {
         if runtimeOwner == .tunnel || tunEnabled || tunnelCoreRunning {
-          try await reconcileTunSystemDNS(for: tunSettings)
+          let runtimeOverrides = runtimeOverridesForSettingsSnapshot(owner: .tunnel)
+          try await reconcileTunSystemDNS(for: runtimeOverrides.tunSettings)
+          refreshTunDiagnostics(includeExternal: false, runtimeOverrides: runtimeOverrides)
         } else if systemProxyController.hasManagedSystemDNSState {
           _ = try await restoreTunSystemDNS()
+          refreshTunDiagnostics(includeExternal: false)
         } else {
           setTunSystemDNSState(.inactive)
+          refreshTunDiagnostics(includeExternal: false)
         }
-        refreshTunDiagnostics(includeExternal: false)
         lastError = nil
       } catch {
         lastError = "Could not repair TUN DNS settings: \(UserFacingError.message(for: error))"
@@ -3751,12 +4146,21 @@ final class AppModel: ObservableObject {
       guard let self else { return }
       do {
         if runtimeOwner == .tunnel || tunEnabled || tunnelCoreRunning {
-          try await reconcileTunSystemDNS(for: tunSettings)
-          let runtimeConfig = try await materializeTunRuntimeConfig(tunSettings)
+          var runtimeOverrides = runtimeOverridesForSettingsSnapshot(owner: .tunnel)
+          let settings = runtimeOverrides.tunSettings
+          runtimeOverrides.tunEnabled = true
+          runtimeOverrides.tunSettings = settings
+          try await reconcileTunSystemDNS(for: settings)
+          let materialization = try await materializeTunRuntimeConfig(
+            settings,
+            runtimeOverrides: runtimeOverrides
+          )
+          let runtimeConfig = materialization.runtimeConfigURL
           var didRestartHelper = false
           if let apiClient {
             do {
               try await apiClient.reloadConfig(path: runtimeConfig.path, force: true)
+              activateRuntimeArtifacts(materialization)
               appendAppLog(level: "info", message: "TUN routing repair reloaded \(runtimeConfig.path).")
             } catch is CancellationError {
               throw CancellationError()
@@ -3767,29 +4171,41 @@ final class AppModel: ObservableObject {
               )
               try await restartRunningTunHelper(
                 runtimeConfig: runtimeConfig,
-                settings: tunSettings,
+                settings: settings,
+                runtimeOverrides: runtimeOverrides,
                 reason: "TUN routing repair"
               )
+              activateRuntimeArtifacts(materialization)
               didRestartHelper = true
             }
           } else {
             try await restartRunningTunHelper(
               runtimeConfig: runtimeConfig,
-              settings: tunSettings,
+              settings: settings,
+              runtimeOverrides: runtimeOverrides,
               reason: "TUN routing repair"
             )
+            activateRuntimeArtifacts(materialization)
             didRestartHelper = true
           }
 
-          let postReloadSnapshot = await inspectTunRuntimeNow(includeExternal: false)
+          let postReloadSnapshot = await inspectTunRuntimeNow(
+            includeExternal: false,
+            runtimeOverrides: runtimeOverrides
+          )
           if !didRestartHelper, postReloadSnapshot.hasRepairableRoutingIssue {
             try await restartRunningTunHelper(
               runtimeConfig: runtimeConfig,
-              settings: tunSettings,
+              settings: settings,
+              runtimeOverrides: runtimeOverrides,
               reason: "TUN routing repair"
             )
+            activateRuntimeArtifacts(materialization)
             didRestartHelper = true
-            let postRestartSnapshot = await inspectTunRuntimeNow(includeExternal: false)
+            let postRestartSnapshot = await inspectTunRuntimeNow(
+              includeExternal: false,
+              runtimeOverrides: runtimeOverrides
+            )
             if postRestartSnapshot.hasRepairableRoutingIssue {
               throw AppError.helperResponse(
                 "TUN routing repair still reports \(postRestartSnapshot.repairableRoutingIssueMessage) after helper restart."
@@ -3825,7 +4241,10 @@ final class AppModel: ObservableObject {
     }
   }
 
-  private func inspectTunRuntimeNow(includeExternal: Bool) async -> TunDiagnosticsSnapshot {
+  private func inspectTunRuntimeNow(
+    includeExternal: Bool,
+    runtimeOverrides: RuntimeOverrides? = nil
+  ) async -> TunDiagnosticsSnapshot {
     guard runtimeOwner == .tunnel || tunEnabled || tunnelCoreRunning else {
       tunDiagnostics = .empty
       return .empty
@@ -3833,10 +4252,11 @@ final class AppModel: ObservableObject {
     stopTunDiagnostics(clear: false)
     let helperStatus = await liveTunHelperStatus(using: helperClient)
     tunHelperPID = helperStatus.pid
+    let runtimeOverrides = runtimeOverrides ?? currentRuntimeOverrides
     let snapshot = await tunRuntimeInspector.inspect(
       TunRuntimeInspectionConfiguration(
-        api: overrides.endpoint,
-        tunSettings: tunSettings,
+        api: runtimeOverrides.endpoint,
+        tunSettings: runtimeOverrides.tunSettings,
         helperPID: helperStatus.pid,
         helperStatusMessage: helperStatus.message,
         systemDNSState: tunSystemDNSState,
@@ -3847,14 +4267,17 @@ final class AppModel: ObservableObject {
     return snapshot
   }
 
-  private func applySystemProxySettings() async throws {
-    try await systemProxy.apply(settings: systemProxySettings, mixedPort: overrides.mixedPort)
+  private func applySystemProxySettings(_ snapshot: AppliedRuntimeSettingsSnapshot? = nil) async throws {
+    try await systemProxy.apply(
+      settings: snapshot?.systemProxySettings ?? systemProxySettings,
+      mixedPort: snapshot?.overrides.mixedPort ?? overrides.mixedPort
+    )
   }
 
-  private func activateSystemProxyGuardIfNeeded() async throws {
+  private func activateSystemProxyGuardIfNeeded(_ snapshot: AppliedRuntimeSettingsSnapshot? = nil) async throws {
     try await systemProxy.activateGuardIfNeeded(
-      settings: systemProxySettings,
-      mixedPort: overrides.mixedPort,
+      settings: snapshot?.systemProxySettings ?? systemProxySettings,
+      mixedPort: snapshot?.overrides.mixedPort ?? overrides.mixedPort,
       onWarning: { [weak self] warning in
         self?.appendAppLog(level: "warn", message: warning)
         self?.appNotice = AppNotice(
@@ -4017,9 +4440,10 @@ final class AppModel: ObservableObject {
 
   @discardableResult
   private func restoreSystemProxyState(disableWhenNoSnapshot: Bool) async throws -> SystemProxyRestoreResult {
-    try await systemProxy.restore(
-      settings: systemProxySettings,
-      mixedPort: overrides.mixedPort,
+    let appliedSnapshot = settings.appliedRuntimeSettingsSnapshot
+    return try await systemProxy.restore(
+      settings: appliedSnapshot?.systemProxySettings ?? systemProxySettings,
+      mixedPort: appliedSnapshot?.overrides.mixedPort ?? overrides.mixedPort,
       disableWhenNoSnapshot: disableWhenNoSnapshot
     )
   }
@@ -4159,6 +4583,9 @@ final class AppModel: ObservableObject {
     previewRuntimeActive = false
     previewRuntimeOverrides = nil
     runtimeOwner = .stopped
+    if result.succeeded {
+      clearActiveRuntimeArtifacts()
+    }
     return result
   }
 
@@ -4167,10 +4594,11 @@ final class AppModel: ObservableObject {
     do {
       let profile = try requireActiveProfile()
       let previewOverrides = makePreviewRuntimeOverrides()
-      let runtimeConfig = try await materializePreviewRuntimeConfig(
+      let materialization = try await materializePreviewRuntimeConfig(
         for: profile,
         overrides: previewOverrides
       )
+      let runtimeConfig = materialization.runtimeConfigURL
       let client = MihomoAPIClient(baseURL: try previewOverrides.endpoint.baseURL, secret: previewOverrides.secret)
       previewRuntimeOverrides = previewOverrides
       previewRuntimeActive = true
@@ -4183,6 +4611,7 @@ final class AppModel: ObservableObject {
         api: previewOverrides.endpoint,
         proxyPort: previewOverrides.mixedPort
       )
+      activateRuntimeArtifacts(materialization)
       try Task.checkCancellation()
       apiClient = client
       try Task.checkCancellation()
@@ -4271,7 +4700,7 @@ final class AppModel: ObservableObject {
     appendAppLog(level: "error", message: message)
   }
 
-  private func cancelRuntimeActionTasks() {
+  private func cancelRuntimeActionTasks(preservingRuntimeSettingsApply: Bool = false) {
     modeUpdateTask?.cancel()
     modeUpdateTask = nil
     modeUpdateToken = nil
@@ -4279,6 +4708,12 @@ final class AppModel: ObservableObject {
     ipv6UpdateTask?.cancel()
     ipv6UpdateTask = nil
     ipv6UpdateToken = nil
+
+    if !preservingRuntimeSettingsApply {
+      runtimeSettingsApplyTask?.cancel()
+      runtimeSettingsApplyTask = nil
+      runtimeSettingsApplyToken = nil
+    }
 
     proxySelectionTasks.values.forEach { $0.cancel() }
     proxySelectionTasks.removeAll()
@@ -4340,7 +4775,7 @@ final class AppModel: ObservableObject {
 
   private func stopRuntime(purpose: RuntimeStopPurpose) async -> RuntimeStopResult {
     var result = RuntimeStopResult()
-    cancelRuntimeActionTasks()
+    cancelRuntimeActionTasks(preservingRuntimeSettingsApply: purpose.preservesRuntimeSettingsApplyTask)
     stopTunDiagnostics(clear: true)
     runtimeData.flushPendingLogs()
     let networkExtensionStopResult = await stopNetworkExtensionIfNeeded()
@@ -4409,6 +4844,11 @@ final class AppModel: ObservableObject {
       }
     }
     tunEnabled = false
+    if result.succeeded {
+      clearActiveRuntimeArtifacts()
+      settings.clearAppliedRuntimeSettingsSnapshot()
+      runtimeSettingsApplyState = .idle
+    }
     if result.succeeded, purpose.schedulesPreviewRestart {
       schedulePreviewRuntimeStartIfReady()
     }
@@ -4706,16 +5146,28 @@ final class AppModel: ObservableObject {
     settings.syncExternalControllerSettings()
   }
 
+  private var protectedRuntimeArtifactURLs: [URL] {
+    activeRuntimeConfigMaterialization?.artifactURLs ?? []
+  }
+
+  private func activateRuntimeArtifacts(_ materialization: RuntimeConfigMaterializationResult) {
+    activeRuntimeConfigMaterialization = materialization
+  }
+
+  private func clearActiveRuntimeArtifacts() {
+    activeRuntimeConfigMaterialization = nil
+  }
+
   private func generateRuntimeConfig(
     for profile: Profile,
     overrides: RuntimeOverrides? = nil,
     selections: [String: String] = [:],
     options: RuntimeConfigOptions = .default
-  ) async throws -> URL {
+  ) async throws -> RuntimeConfigMaterializationResult {
     let effectiveOverrides = overrides ?? self.overrides
     var effectiveOptions = options
     effectiveOptions.subscriptionProviderOptions = profile.subscriptionProviderOptions
-    return try await runtimeConfigMaterializer.materialize(
+    return try await runtimeConfigMaterializer.materializeResult(
       RuntimeConfigMaterializationRequest(
         profileName: profile.name,
         sourcePath: profile.originalConfigPath,
@@ -4723,7 +5175,8 @@ final class AppModel: ObservableObject {
         providerContentURL: paths.runtimeProviderContentURL(for: profile),
         overrides: effectiveOverrides,
         selectionOverrides: selections,
-        options: effectiveOptions
+        options: effectiveOptions,
+        protectedArtifactURLs: protectedRuntimeArtifactURLs
       )
     )
   }
@@ -4744,9 +5197,9 @@ final class AppModel: ObservableObject {
     return core
   }
 
-  private func startStreams(client: any MihomoAPIControlling) {
+  private func startStreams(client: any MihomoAPIControlling, logLevel: String? = nil) {
     streamTasks.forEach { $0.cancel() }
-    let logLevel = overrides.logLevel
+    let logLevel = logLevel ?? settings.appliedRuntimeSettingsSnapshot?.overrides.logLevel ?? overrides.logLevel
     streamTasks = [
       Task { [weak self] in
         do {
@@ -4838,6 +5291,9 @@ final class AppModel: ObservableObject {
       settingsProvider: { [weak self] in
         guard let self else {
           return (.default, RuntimeOverrides.defaultForLaunch().mixedPort)
+        }
+        if let snapshot = settings.appliedRuntimeSettingsSnapshot {
+          return (snapshot.systemProxySettings, snapshot.overrides.mixedPort)
         }
         return (systemProxySettings, overrides.mixedPort)
       },

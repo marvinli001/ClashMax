@@ -10,6 +10,7 @@ import Yams
 final class DashboardRuntimeStateTests: XCTestCase {
   private static let proxyRoutingModeDefaultsKey = "io.github.clashmax.proxyRoutingMode"
   private static let systemProxySettingsDefaultsKey = "io.github.clashmax.systemProxySettings"
+  private static let runtimeSettingsDefaultsKey = "io.github.clashmax.runtimeSettings"
   private static let tunSettingsDefaultsKey = "io.github.clashmax.tunSettings"
   private static let tunDNSDefaultsVersionKey = "io.github.clashmax.tunDNSDefaultsVersion"
   private static let networkExtensionRoutingSettingsDefaultsKey = "io.github.clashmax.networkExtensionRoutingSettings"
@@ -36,7 +37,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let paths = try Self.makeRuntimePaths()
     let model = AppModel(
       paths: paths,
-      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore())
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: try Self.makeIsolatedDefaults()
     )
 
     guard case let .blocked(reason) = model.dashboardRuntimeState else {
@@ -277,6 +279,76 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(store.profiles.first?.subscriptionProviderOptions, profile.subscriptionProviderOptions)
     let reloadRequestCount = await client.reloadRequestPaths().count
     XCTAssertEqual(reloadRequestCount, 1)
+    XCTAssertTrue(model.lastError?.contains("reload rejected") == true)
+  }
+
+  func testRuntimeReloadFailureKeepsPreviousActiveArtifactsProtected() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let source = """
+    vless://00000000-0000-0000-0000-000000000000@example.com:443?security=tls&sni=example.com#Provider%20Node
+    """
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    let profile = try await store.addSubscription(
+      name: "Remote",
+      url: URL(string: "https://example.com/sub")!,
+      session: URLSession(configuration: URLProtocolRecorder.configurationReturning(source))
+    )
+    let controller = CoreProcessController(
+      launcher: FakeProcessLauncher(),
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [],
+      testDelayResult: 0,
+      reloadFailureMessages: [nil, "reload rejected", "reload rejected", "reload rejected"]
+    )
+    let fakeCoreURL = paths.appSupport.appendingPathComponent("mihomo")
+    try """
+    #!/bin/sh
+    exit 0
+    """.write(to: fakeCoreURL, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeCoreURL.path)
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      apiClient: client,
+      defaults: try Self.makeIsolatedDefaults(),
+      bundledCoreURLProvider: { fakeCoreURL }
+    )
+    try await controller.startUserMode(
+      coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+      configURL: URL(fileURLWithPath: profile.originalConfigPath),
+      workDirectory: paths.runtime,
+      api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+    )
+
+    let firstOptions = SubscriptionProviderOptions(primaryGroupName: "Manual 1")
+    let didApplyFirstOptions = await model.updateSubscriptionProviderOptions(profile, options: firstOptions)
+    XCTAssertTrue(didApplyFirstOptions)
+    let reloadPathsAfterSuccess = await client.reloadRequestPaths()
+    let firstRuntimePath = try XCTUnwrap(reloadPathsAfterSuccess.first)
+    let firstRuntimeURL = URL(fileURLWithPath: firstRuntimePath)
+    let firstProviderPath = try Self.providerContentPath(in: firstRuntimeURL)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: firstRuntimeURL.path))
+    XCTAssertTrue(FileManager.default.fileExists(atPath: firstProviderPath))
+
+    for index in 2...4 {
+      let currentProfile = try XCTUnwrap(store.activeProfile)
+      let didUpdate = await model.updateSubscriptionProviderOptions(
+        currentProfile,
+        options: SubscriptionProviderOptions(primaryGroupName: "Manual \(index)")
+      )
+      XCTAssertFalse(didUpdate)
+    }
+
+    let reloadPathsAfterFailures = await client.reloadRequestPaths()
+    XCTAssertEqual(reloadPathsAfterFailures.count, 4)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: firstRuntimeURL.path))
+    XCTAssertTrue(FileManager.default.fileExists(atPath: firstProviderPath))
     XCTAssertTrue(model.lastError?.contains("reload rejected") == true)
   }
 
@@ -852,7 +924,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     firstModel.externalControllerSettings = settings
 
-    XCTAssertEqual(firstModel.overrides.externalControllerHost, "localhost")
+    XCTAssertEqual(firstModel.overrides.externalControllerHost, "127.0.0.1")
     XCTAssertEqual(firstModel.overrides.externalControllerPort, 19197)
     XCTAssertEqual(firstModel.overrides.secret, "saved-secret")
     XCTAssertFalse(firstModel.overrides.externalControllerCORS.enabled)
@@ -868,11 +940,28 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(secondModel.externalControllerSettings.port, settings.port)
     XCTAssertEqual(secondModel.externalControllerSettings.cors, settings.cors)
     XCTAssertNotEqual(secondModel.externalControllerSettings.secret, settings.secret)
-    XCTAssertEqual(secondModel.overrides.externalControllerHost, "localhost")
+    XCTAssertEqual(secondModel.overrides.externalControllerHost, "127.0.0.1")
     XCTAssertEqual(secondModel.overrides.externalControllerPort, 19197)
     XCTAssertNotEqual(secondModel.overrides.secret, "saved-secret")
     XCTAssertFalse(secondModel.overrides.secret.isEmpty)
     XCTAssertFalse(secondModel.overrides.externalControllerCORS.enabled)
+  }
+
+  func testExternalControllerSettingsValidationRequiresIPv4LoopbackHost() {
+    var settings = ExternalControllerSettings(host: "127.0.0.1", port: 9097, secret: "secret-token")
+
+    XCTAssertNil(settings.validationError)
+
+    for host in ["localhost", "::1", "", "0.0.0.0"] {
+      settings.host = host
+
+      XCTAssertEqual(settings.normalizedHost, "127.0.0.1")
+      XCTAssertEqual(settings.address, "127.0.0.1:9097")
+      XCTAssertEqual(
+        settings.validationError,
+        String(localized: "Controller host must stay on 127.0.0.1.")
+      )
+    }
   }
 
   func testRuntimeDiagnosticsReportRedactsControllerSecret() throws {
@@ -1218,7 +1307,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(model.externalControllerSettings.cors, .default)
     XCTAssertNotEqual(model.externalControllerSettings.secret, "saved-secret")
     XCTAssertFalse(model.externalControllerSettings.secret.isEmpty)
-    XCTAssertEqual(model.overrides.externalControllerHost, "localhost")
+    XCTAssertEqual(model.overrides.externalControllerHost, "127.0.0.1")
     XCTAssertEqual(model.overrides.externalControllerPort, 19197)
     XCTAssertFalse(model.overrides.externalControllerCORS.enabled)
   }
@@ -1307,6 +1396,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(model.externalControllerSettings.cors.allowPrivateNetwork, ExternalControllerCORSSettings.default.allowPrivateNetwork)
     XCTAssertEqual(model.externalControllerSettings.cors.allowedOrigins, ExternalControllerCORSSettings.default.allowedOrigins)
     XCTAssertNotEqual(model.externalControllerSettings.secret, "saved-secret")
+    XCTAssertEqual(model.overrides.externalControllerHost, "127.0.0.1")
     XCTAssertTrue(model.overrides.externalControllerCORS.enabled)
     XCTAssertEqual(model.overrides.externalControllerCORS.allowedOrigins, ExternalControllerCORSSettings.default.allowedOrigins)
   }
@@ -1330,7 +1420,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let decoded = try JSONDecoder().decode(RuntimeOverrides.self, from: data)
 
     XCTAssertEqual(decoded.mixedPort, 7891)
-    XCTAssertEqual(decoded.externalControllerHost, "localhost")
+    XCTAssertEqual(decoded.externalControllerHost, "127.0.0.1")
     XCTAssertEqual(decoded.externalControllerPort, 19197)
     XCTAssertEqual(decoded.secret, "secret-token")
     XCTAssertTrue(decoded.allowLan)
@@ -1536,6 +1626,15 @@ final class DashboardRuntimeStateTests: XCTestCase {
       )
     )
     try assertRoundTrip(
+      PersistedRuntimeSettings(
+        mixedPort: 7891,
+        allowLan: true,
+        dnsEnabled: true,
+        mode: .global,
+        logLevel: "debug"
+      )
+    )
+    try assertRoundTrip(
       ExternalControllerSettings(
         enabled: true,
         host: "localhost",
@@ -1584,7 +1683,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     try assertRoundTrip(
       RuntimeOverrides(
         mixedPort: 7891,
-        externalControllerHost: "localhost",
+        externalControllerHost: "127.0.0.1",
         externalControllerPort: 19197,
         secret: "secret-token",
         allowLan: true,
@@ -1607,6 +1706,103 @@ final class DashboardRuntimeStateTests: XCTestCase {
         )
       )
     )
+  }
+
+  func testRuntimeSettingsPersistAcrossStoreReloads() throws {
+    let defaults = try Self.makeIsolatedDefaults()
+    let first = PersistedSettingsStore(
+      loginItemService: FakeLoginItemService(status: .notRegistered),
+      defaults: defaults
+    )
+
+    first.overrides.mixedPort = 17_891
+    first.overrides.allowLan = true
+    first.overrides.dnsEnabled = true
+    first.overrides.logLevel = "debug"
+    first.overrides.mode = .global
+
+    let reloaded = PersistedSettingsStore(
+      loginItemService: FakeLoginItemService(status: .notRegistered),
+      defaults: defaults
+    )
+
+    XCTAssertEqual(reloaded.overrides.mixedPort, 17_891)
+    XCTAssertTrue(reloaded.overrides.allowLan)
+    XCTAssertEqual(reloaded.overrides.dnsEnabled, true)
+    XCTAssertEqual(reloaded.overrides.logLevel, "debug")
+    XCTAssertEqual(reloaded.overrides.mode, .global)
+  }
+
+  func testRuntimeSettingsPersistenceExcludesEphemeralRuntimeOverrides() throws {
+    let defaults = try Self.makeIsolatedDefaults()
+    let first = PersistedSettingsStore(
+      loginItemService: FakeLoginItemService(status: .notRegistered),
+      defaults: defaults
+    )
+
+    first.overrides.mixedPort = 17_892
+    first.overrides.secret = "must-not-persist"
+    first.overrides.tunEnabled = true
+
+    let persistedData = try XCTUnwrap(defaults.data(forKey: Self.runtimeSettingsDefaultsKey))
+    let persistedObject = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: persistedData) as? [String: Any]
+    )
+    XCTAssertEqual(persistedObject["mixedPort"] as? Int, 17_892)
+    XCTAssertNil(persistedObject["secret"])
+    XCTAssertNil(persistedObject["tunEnabled"])
+    XCTAssertNil(persistedObject["externalControllerHost"])
+
+    let reloaded = PersistedSettingsStore(
+      loginItemService: FakeLoginItemService(status: .notRegistered),
+      defaults: defaults
+    )
+
+    XCTAssertEqual(reloaded.overrides.mixedPort, 17_892)
+    XCTAssertNotEqual(reloaded.overrides.secret, "must-not-persist")
+    XCTAssertFalse(reloaded.overrides.secret.isEmpty)
+    XCTAssertFalse(reloaded.overrides.tunEnabled)
+  }
+
+  func testPartialRuntimeSettingsDecodeUsesLaunchDefaults() throws {
+    let data = try JSONSerialization.data(withJSONObject: ["mixedPort": 17_893])
+    let decoded = try JSONDecoder().decode(PersistedRuntimeSettings.self, from: data)
+
+    XCTAssertEqual(decoded.mixedPort, 17_893)
+    XCTAssertFalse(decoded.allowLan)
+    XCTAssertNil(decoded.dnsEnabled)
+    XCTAssertEqual(decoded.mode, .rule)
+    XCTAssertEqual(decoded.logLevel, "info")
+  }
+
+  func testAppModelRuntimeOverridesPersistAcrossModelReloads() throws {
+    let defaults = try Self.makeIsolatedDefaults()
+    let paths = try Self.makeRuntimePaths()
+    let first = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      loginItemService: FakeLoginItemService(status: .notRegistered),
+      defaults: defaults
+    )
+
+    first.overrides.mixedPort = 17_894
+    first.overrides.allowLan = true
+    first.overrides.dnsEnabled = true
+    first.overrides.logLevel = "warning"
+    first.setMode(.direct)
+
+    let reloaded = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      loginItemService: FakeLoginItemService(status: .notRegistered),
+      defaults: defaults
+    )
+
+    XCTAssertEqual(reloaded.overrides.mixedPort, 17_894)
+    XCTAssertTrue(reloaded.overrides.allowLan)
+    XCTAssertEqual(reloaded.overrides.dnsEnabled, true)
+    XCTAssertEqual(reloaded.overrides.logLevel, "warning")
+    XCTAssertEqual(reloaded.overrides.mode, .direct)
   }
 
   func testLaunchSettingsUseMainAppLoginServiceAndPersistSilentStart() async throws {
@@ -3450,6 +3646,301 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(dns["ipv6"] as? Bool, true)
   }
 
+  func testRunningRuntimeSettingsApplyReloadsRuntimeAndMovesSystemProxyUsingAppliedSnapshot() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 73)
+    let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+    let proxyReadiness = RecordingProxyPortReadinessProbe()
+    let controller = CoreProcessController(
+      launcher: FakeProcessLauncher(),
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let defaults = try Self.makeIsolatedDefaults()
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: SystemProxyController(commandRunner: commandRunner),
+      proxyPortReadinessProbe: proxyReadiness,
+      apiClient: client,
+      defaults: defaults
+    )
+    var proxySettings = SystemProxySettings.default
+    proxySettings.guardEnabled = true
+    model.systemProxySettings = proxySettings
+    model.systemProxyEnabled = true
+
+    try await controller.startUserMode(
+      coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+      configURL: configURL,
+      workDirectory: paths.runtime,
+      api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+    )
+
+    model.setMixedPort(17_891)
+    model.setAllowLAN(true)
+    model.setDNSOverrideEnabled(true)
+    model.setLogLevel("debug")
+
+    for _ in 0..<120 {
+      let paths = await client.reloadRequestPaths()
+      if !paths.isEmpty,
+         commandRunner.commands.contains("/usr/sbin/networksetup -setwebproxy Wi-Fi 127.0.0.1 17891"),
+         model.settings.appliedRuntimeSettingsSnapshot?.overrides.mixedPort == 17_891,
+         model.runtimeSettingsApplyState == .idle {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 2_000_000)
+    }
+
+    let reloadPaths = await client.reloadRequestPaths()
+    let reloadPath = try XCTUnwrap(reloadPaths.last)
+    let output = try String(contentsOfFile: reloadPath, encoding: .utf8)
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let dns = try XCTUnwrap(yaml["dns"] as? [String: Any])
+    let reloaded = PersistedSettingsStore(
+      loginItemService: FakeLoginItemService(status: .notRegistered),
+      defaults: defaults
+    )
+
+    XCTAssertEqual(yaml["mixed-port"] as? Int, 17_891)
+    XCTAssertEqual(yaml["allow-lan"] as? Bool, true)
+    XCTAssertEqual(yaml["log-level"] as? String, "debug")
+    XCTAssertEqual(dns["enable"] as? Bool, true)
+    XCTAssertEqual(model.settings.appliedRuntimeSettingsSnapshot?.overrides.mixedPort, 17_891)
+    XCTAssertEqual(model.settings.appliedRuntimeSettingsSnapshot?.overrides.allowLan, true)
+    XCTAssertEqual(model.settings.appliedRuntimeSettingsSnapshot?.overrides.dnsEnabled, true)
+    XCTAssertEqual(model.settings.appliedRuntimeSettingsSnapshot?.overrides.logLevel, "debug")
+    XCTAssertEqual(model.runtimeSettingsApplyState, .idle)
+    XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setwebproxy Wi-Fi 127.0.0.1 17891"))
+    XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setsecurewebproxy Wi-Fi 127.0.0.1 17891"))
+    XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setsocksfirewallproxy Wi-Fi 127.0.0.1 17891"))
+    XCTAssertEqual(proxyReadiness.requests.last, ProxyPortReadinessRequest(host: "127.0.0.1", port: 17_891))
+    XCTAssertEqual(reloaded.overrides.mixedPort, 17_891)
+    XCTAssertTrue(reloaded.overrides.allowLan)
+    XCTAssertEqual(reloaded.overrides.dnsEnabled, true)
+    XCTAssertEqual(reloaded.overrides.logLevel, "debug")
+  }
+
+  func testRuntimeSettingsApplyFailureKeepsPreviousAppliedSnapshot() async throws {
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [],
+      testDelayResult: 73,
+      reloadFailureMessage: "reload refused"
+    )
+    let model = try await makeRunningRuntimeModel(client: client)
+
+    XCTAssertTrue(model.canControlRuntimeProxies)
+    model.setDNSOverrideEnabled(true)
+    model.setLogLevel("debug")
+
+    for _ in 0..<120 {
+      if case .failed = model.runtimeSettingsApplyState {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 2_000_000)
+    }
+
+    XCTAssertEqual(model.settings.appliedRuntimeSettingsSnapshot?.overrides.dnsEnabled, nil)
+    XCTAssertEqual(model.settings.appliedRuntimeSettingsSnapshot?.overrides.logLevel, "info")
+    XCTAssertEqual(model.currentRuntimeOverrides.dnsEnabled, nil)
+    XCTAssertEqual(model.currentRuntimeOverrides.logLevel, "info")
+    guard case let .failed(message) = model.runtimeSettingsApplyState else {
+      return XCTFail("Expected failed runtime settings apply state, got \(model.runtimeSettingsApplyState).")
+    }
+    XCTAssertTrue(message.contains("reload refused"))
+    XCTAssertEqual(model.overrides.dnsEnabled, true)
+    XCTAssertEqual(model.overrides.logLevel, "debug")
+  }
+
+  func testRuntimeSettingsReloadSuccessKeepsAppliedSnapshotWhenReadinessFails() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 73)
+    let proxyReadiness = RecordingProxyPortReadinessProbe(
+      result: .failure(AppError.helperResponse("proxy readiness refused"))
+    )
+    let controller = CoreProcessController(
+      launcher: FakeProcessLauncher(),
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let defaults = try Self.makeIsolatedDefaults()
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: SystemProxyController(
+        commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+      ),
+      proxyPortReadinessProbe: proxyReadiness,
+      apiClient: client,
+      defaults: defaults
+    )
+
+    try await controller.startUserMode(
+      coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+      configURL: configURL,
+      workDirectory: paths.runtime,
+      api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+    )
+
+    model.setDNSOverrideEnabled(true)
+    model.setLogLevel("debug")
+
+    for _ in 0..<120 {
+      let reloadPaths = await client.reloadRequestPaths()
+      if !reloadPaths.isEmpty,
+         case .appliedWithFollowUpFailure = model.runtimeSettingsApplyState {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 2_000_000)
+    }
+
+    let reloadPaths = await client.reloadRequestPaths()
+    let reloadForces = await client.reloadRequestForces()
+    let reloadPath = try XCTUnwrap(reloadPaths.last)
+    let output = try String(contentsOfFile: reloadPath, encoding: .utf8)
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let dns = try XCTUnwrap(yaml["dns"] as? [String: Any])
+    let reloaded = PersistedSettingsStore(
+      loginItemService: FakeLoginItemService(status: .notRegistered),
+      defaults: defaults
+    )
+
+    XCTAssertEqual(reloadForces, [true])
+    XCTAssertEqual(yaml["log-level"] as? String, "debug")
+    XCTAssertEqual(dns["enable"] as? Bool, true)
+    XCTAssertEqual(model.settings.appliedRuntimeSettingsSnapshot?.overrides.dnsEnabled, true)
+    XCTAssertEqual(model.settings.appliedRuntimeSettingsSnapshot?.overrides.logLevel, "debug")
+    XCTAssertEqual(model.currentRuntimeOverrides.dnsEnabled, true)
+    XCTAssertEqual(model.currentRuntimeOverrides.logLevel, "debug")
+    guard case let .appliedWithFollowUpFailure(message) = model.runtimeSettingsApplyState else {
+      return XCTFail("Expected post-reload failure state, got \(model.runtimeSettingsApplyState).")
+    }
+    XCTAssertTrue(message.contains("proxy readiness refused"))
+    XCTAssertTrue(model.runtimeSettingsApplyStatusMessage?.contains("proxy readiness refused") == true)
+    XCTAssertEqual(model.overrides.dnsEnabled, true)
+    XCTAssertEqual(model.overrides.logLevel, "debug")
+    XCTAssertEqual(reloaded.overrides.dnsEnabled, true)
+    XCTAssertEqual(reloaded.overrides.logLevel, "debug")
+    XCTAssertEqual(proxyReadiness.requests.last, ProxyPortReadinessRequest(host: "127.0.0.1", port: 7_890))
+  }
+
+  func testAppliedRuntimeSnapshotPersistsRecoveryValuesWithoutRuntimeSecret() throws {
+    let defaults = try Self.makeIsolatedDefaults()
+    let store = PersistedSettingsStore(
+      loginItemService: FakeLoginItemService(status: .notRegistered),
+      defaults: defaults
+    )
+    var overrides = store.overrides
+    overrides.secret = "must-not-persist"
+    overrides.tunEnabled = true
+
+    store.recordAppliedRuntimeSettingsSnapshot(
+      AppliedRuntimeSettingsSnapshot(
+        overrides: overrides,
+        proxyRoutingMode: .systemProxy,
+        systemProxySettings: .default,
+        networkExtensionRoutingSettings: .default,
+        runtimeOwner: .user,
+        appliedAt: Date()
+      )
+    )
+
+    let persistedData = try XCTUnwrap(defaults.data(forKey: "io.github.clashmax.appliedRuntimeSettingsSnapshot"))
+    let persistedString = try XCTUnwrap(String(data: persistedData, encoding: .utf8))
+    XCTAssertFalse(persistedString.contains("must-not-persist"))
+
+    let reloaded = PersistedSettingsStore(
+      loginItemService: FakeLoginItemService(status: .notRegistered),
+      defaults: defaults
+    )
+
+    let snapshot = try XCTUnwrap(reloaded.appliedRuntimeSettingsSnapshot)
+    XCTAssertEqual(snapshot.overrides.mixedPort, overrides.mixedPort)
+    XCTAssertEqual(snapshot.overrides.tunEnabled, true)
+    XCTAssertEqual(snapshot.proxyRoutingMode, .systemProxy)
+    XCTAssertEqual(snapshot.runtimeOwner, .user)
+    XCTAssertNotEqual(snapshot.overrides.secret, "must-not-persist")
+    XCTAssertNotEqual(reloaded.overrides.secret, "must-not-persist")
+    XCTAssertFalse(reloaded.overrides.tunEnabled)
+  }
+
+  func testPersistedRuntimePreferencesApplyOnNextGeneratedRuntimeConfig() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let launcher = CountingProcessLauncher()
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let defaults = try Self.makeIsolatedDefaults()
+    let first = AppModel(
+      paths: paths,
+      profileStore: store,
+      defaults: defaults
+    )
+    first.overrides.mixedPort = 17_891
+    first.overrides.allowLan = true
+    first.overrides.dnsEnabled = true
+    first.overrides.logLevel = "debug"
+    first.setMode(.global)
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: SystemProxyController(
+        commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+      ),
+      defaults: defaults,
+      bundledCoreURLProvider: { URL(fileURLWithPath: "/tmp/mihomo") }
+    )
+
+    model.start()
+    for _ in 0..<160 where launcher.launchCount < 1 || !model.isRunning {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let runtimeConfigPath = try XCTUnwrap(launcher.launchedConfigPaths.last)
+    let runtimeConfig = try String(contentsOfFile: runtimeConfigPath, encoding: .utf8)
+    let yaml = try XCTUnwrap(Yams.load(yaml: runtimeConfig) as? [String: Any])
+    let dns = try XCTUnwrap(yaml["dns"] as? [String: Any])
+
+    XCTAssertEqual(model.overrides.mixedPort, 17_891)
+    XCTAssertTrue(model.overrides.allowLan)
+    XCTAssertEqual(model.overrides.dnsEnabled, true)
+    XCTAssertEqual(model.overrides.logLevel, "debug")
+    XCTAssertEqual(model.overrides.mode, .global)
+    XCTAssertEqual(yaml["mixed-port"] as? Int, 17_891)
+    XCTAssertEqual(yaml["allow-lan"] as? Bool, true)
+    XCTAssertEqual(yaml["log-level"] as? String, "debug")
+    XCTAssertEqual(yaml["mode"] as? String, "global")
+    XCTAssertEqual(dns["enable"] as? Bool, true)
+  }
+
   func testNetworkExtensionIPv6ToggleReloadsDNSCaptureConfig() async throws {
     let client = RecordingMihomoController(
       proxyGroupsResponse: [],
@@ -3487,6 +3978,67 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(dns["enable"] as? Bool, true)
     XCTAssertEqual(dns["listen"] as? String, "127.0.0.1:1053")
     XCTAssertEqual(dns["ipv6"] as? Bool, true)
+  }
+
+  func testNetworkExtensionMixedPortChangeUsesCoordinatedRestartAndUpdatesAppliedSnapshot() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let launcher = CountingProcessLauncher()
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let proxyReadiness = RecordingProxyPortReadinessProbe()
+    let proxyManager = RecordingTransparentProxyManager(startStatus: .connected)
+    let defaults = try Self.makeIsolatedDefaults()
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      networkExtensionController: NetworkExtensionController(
+        systemExtensionRequester: StaticSystemExtensionRequester(activationState: .activated),
+        transparentProxyManager: proxyManager
+      ),
+      proxyPortReadinessProbe: proxyReadiness,
+      defaults: defaults,
+      bundledCoreURLProvider: { URL(fileURLWithPath: "/tmp/mihomo") }
+    )
+    model.setProxyRoutingMode(.neProxy)
+    model.start()
+    for _ in 0..<160 where proxyManager.startConfigurations.count < 1 || model.startInFlight {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(proxyManager.startConfigurations.first?.socksPort, 7_890)
+    XCTAssertEqual(model.settings.appliedRuntimeSettingsSnapshot?.overrides.mixedPort, 7_890)
+
+    model.setMixedPort(17_891)
+
+    for _ in 0..<260 {
+      if proxyManager.startConfigurations.count >= 2, !model.startInFlight, model.runtimeSettingsApplyState == .idle {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 2_000_000)
+    }
+
+    XCTAssertEqual(proxyManager.stopIdentifiers, [NetworkExtensionController.providerBundleIdentifier])
+    XCTAssertEqual(launcher.launchCount, 2)
+    XCTAssertEqual(proxyManager.startConfigurations.count, 2)
+    XCTAssertEqual(proxyManager.startConfigurations.last?.socksPort, 17_891)
+    XCTAssertEqual(model.settings.appliedRuntimeSettingsSnapshot?.runtimeOwner, .networkExtension)
+    XCTAssertEqual(model.settings.appliedRuntimeSettingsSnapshot?.overrides.mixedPort, 17_891)
+    XCTAssertTrue(proxyReadiness.requests.contains(ProxyPortReadinessRequest(host: "127.0.0.1", port: 7_890)))
+    XCTAssertTrue(proxyReadiness.requests.contains(ProxyPortReadinessRequest(host: "127.0.0.1", port: 17_891)))
+    XCTAssertEqual(model.runtimeSettingsApplyState, .idle)
   }
 
   func testSelectingProxyUsesLatestRequestPerGroup() async throws {
@@ -5938,7 +6490,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     model.stop()
     for _ in 0..<160 {
       let currentStopCount = await helperTransport.stopCount()
-      if currentStopCount > 0 { break }
+      if currentStopCount > 0, !model.tunnelCoreRunning, !model.tunEnabled { break }
       await Task.yield()
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
@@ -5970,6 +6522,99 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let restartCount = await helperTransport.restartCount()
     XCTAssertEqual(reloadForces, [true])
     XCTAssertEqual(restartCount, 0)
+    XCTAssertNil(model.lastError)
+  }
+
+  func testRunningTunSettingsSaveInspectsTargetSettingsWhenAppliedSnapshotIsStale() async throws {
+    let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
+    let helperTransport = ReadyTunnelHelperTransport()
+    let inspector = RecordingTunRuntimeInspector(snapshots: [.empty, .empty])
+    let model = try await makeRunningTunnelModel(
+      client: client,
+      helperTransport: helperTransport,
+      tunRuntimeInspector: inspector
+    )
+    var staleSettings = TunSettings.default
+    staleSettings.device = "utun-old"
+    staleSettings.autoRoute = false
+    staleSettings.routeExcludeAddresses = ["10.0.0.0/8"]
+    staleSettings.dnsHijack = ["127.0.0.1:53"]
+    staleSettings.dnsFakeIPEnabled = false
+    staleSettings.systemDNSOverrideEnabled = false
+    recordAppliedTunnelSnapshot(on: model, tunSettings: staleSettings)
+    var targetSettings = TunSettings.default
+    targetSettings.device = "utun2048"
+    targetSettings.autoRoute = true
+    targetSettings.routeExcludeAddresses = ["192.0.2.0/24"]
+    targetSettings.dnsHijack = ["198.18.0.2:53"]
+    targetSettings.dnsFakeIPEnabled = true
+    targetSettings.systemDNSOverrideEnabled = false
+
+    XCTAssertTrue(model.updateTunSettings(targetSettings))
+    for _ in 0..<160 {
+      let reloadPaths = await client.reloadRequestPaths()
+      let configurations = await inspector.configurations()
+      if !reloadPaths.isEmpty, configurations.count >= 2 {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let configurations = await inspector.configurations()
+    XCTAssertEqual(configurations.count, 2)
+    XCTAssertTrue(configurations.allSatisfy { $0.tunSettings == targetSettings })
+    XCTAssertFalse(configurations.contains { $0.tunSettings == staleSettings })
+    let restartCount = await helperTransport.restartCount()
+    XCTAssertEqual(restartCount, 0)
+    XCTAssertNil(model.lastError)
+  }
+
+  func testRunningTunRuntimeOverrideChangeReloadsConfigAndUpdatesAppliedSnapshotAfterVerification() async throws {
+    let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
+    let helperTransport = ReadyTunnelHelperTransport()
+    let inspector = RecordingTunRuntimeInspector(snapshots: [.empty])
+    let defaults = try Self.makeIsolatedDefaults()
+    let model = try await makeRunningTunnelModel(
+      client: client,
+      helperTransport: helperTransport,
+      tunRuntimeInspector: inspector,
+      defaults: defaults
+    )
+
+    model.setAllowLAN(true)
+
+    for _ in 0..<160 {
+      let reloadPaths = await client.reloadRequestPaths()
+      let inspected = await inspector.configurations()
+      if !reloadPaths.isEmpty, !inspected.isEmpty, model.runtimeSettingsApplyState == .idle {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let reloadPaths = await client.reloadRequestPaths()
+    let reloadPath = try XCTUnwrap(reloadPaths.last)
+    let output = try String(contentsOfFile: reloadPath, encoding: .utf8)
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let reloadForces = await client.reloadRequestForces()
+    let restartCount = await helperTransport.restartCount()
+    let inspectionConfigurations = await inspector.configurations()
+    let reloaded = PersistedSettingsStore(
+      loginItemService: FakeLoginItemService(status: .notRegistered),
+      defaults: defaults
+    )
+
+    XCTAssertEqual(yaml["allow-lan"] as? Bool, true)
+    XCTAssertEqual(reloadForces, [true])
+    XCTAssertEqual(restartCount, 0)
+    XCTAssertFalse(inspectionConfigurations.isEmpty)
+    XCTAssertEqual(model.settings.appliedRuntimeSettingsSnapshot?.runtimeOwner, .tunnel)
+    XCTAssertEqual(model.settings.appliedRuntimeSettingsSnapshot?.overrides.allowLan, true)
+    XCTAssertEqual(model.runtimeSettingsApplyState, .idle)
+    XCTAssertTrue(model.overrides.allowLan)
+    XCTAssertTrue(reloaded.overrides.allowLan)
     XCTAssertNil(model.lastError)
   }
 
@@ -6136,6 +6781,66 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(reloadForces, [true])
     XCTAssertEqual(restartCount, 0)
     XCTAssertEqual(model.tunDiagnostics, snapshot)
+    XCTAssertNil(model.lastError)
+  }
+
+  func testRepairTunRoutingInspectsTargetSettingsWhenAppliedSnapshotIsStale() async throws {
+    let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
+    let helperTransport = ReadyTunnelHelperTransport()
+    let routeIssue = Self.tunDiagnosticsSnapshot(
+      checks: [
+        Self.nonRoutingControllerFailureCheck(),
+        TunDiagnosticCheck(id: "default-route", title: "Default Route", status: .fail, message: "stale")
+      ],
+      includeExternal: false,
+      time: 57
+    )
+    let repaired = Self.tunDiagnosticsSnapshot(
+      checks: [TunDiagnosticCheck(id: "default-route", title: "Default Route", status: .pass, message: "ok")],
+      includeExternal: false,
+      time: 58
+    )
+    let inspector = RecordingTunRuntimeInspector(snapshots: [routeIssue, repaired])
+    let model = try await makeRunningTunnelModel(
+      client: client,
+      helperTransport: helperTransport,
+      tunRuntimeInspector: inspector
+    )
+    var staleSettings = TunSettings.default
+    staleSettings.device = "utun-old"
+    staleSettings.autoRoute = false
+    staleSettings.routeExcludeAddresses = ["10.0.0.0/8"]
+    staleSettings.dnsHijack = ["127.0.0.1:53"]
+    staleSettings.dnsFakeIPEnabled = false
+    staleSettings.systemDNSOverrideEnabled = false
+    recordAppliedTunnelSnapshot(on: model, tunSettings: staleSettings)
+    var targetSettings = TunSettings.default
+    targetSettings.device = "utun2048"
+    targetSettings.autoRoute = true
+    targetSettings.routeExcludeAddresses = ["192.0.2.0/24"]
+    targetSettings.dnsHijack = ["198.18.0.2:53"]
+    targetSettings.dnsFakeIPEnabled = true
+    targetSettings.systemDNSOverrideEnabled = false
+    model.tunSettings = targetSettings
+
+    model.repairTunRouting()
+    for _ in 0..<160 {
+      let restartCount = await helperTransport.restartCount()
+      let configurations = await inspector.configurations()
+      if restartCount > 0, configurations.count >= 2 {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let configurations = await inspector.configurations()
+    XCTAssertEqual(configurations.count, 2)
+    XCTAssertTrue(configurations.allSatisfy { $0.tunSettings == targetSettings })
+    XCTAssertFalse(configurations.contains { $0.tunSettings == staleSettings })
+    let restartCount = await helperTransport.restartCount()
+    XCTAssertEqual(restartCount, 1)
+    XCTAssertEqual(model.tunDiagnostics, repaired)
     XCTAssertNil(model.lastError)
   }
 
@@ -6396,11 +7101,104 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(launcher.launchedConfigPaths.last?.contains(secondProfile.id.uuidString) == true)
   }
 
+  func testDeletingRunningActiveProfileRestartsRuntimeWithNextProfile() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let firstConfigURL = paths.appSupport.appendingPathComponent("first.yaml")
+    let secondConfigURL = paths.appSupport.appendingPathComponent("second.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: firstConfigURL)
+    try Self.writeProxyConfig(named: "Singapore", to: secondConfigURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    let firstProfile = try await store.importLocalConfig(from: firstConfigURL)
+    let secondProfile = try await store.importLocalConfig(from: secondConfigURL)
+    try await store.select(firstProfile)
+    let launcher = CountingProcessLauncher()
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    model.start()
+    for _ in 0..<160 where launcher.launchCount < 1 || !model.isRunning {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    XCTAssertEqual(launcher.launchCount, 1)
+    XCTAssertTrue(model.isRunning)
+
+    let didDelete = await model.deleteProfileAsync(firstProfile)
+
+    for _ in 0..<240 where launcher.launchCount < 2 {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertTrue(didDelete)
+    XCTAssertEqual(store.activeProfileID, secondProfile.id)
+    XCTAssertEqual(launcher.launchCount, 2)
+    XCTAssertTrue(launcher.launchedConfigPaths.first?.contains(firstProfile.id.uuidString) == true)
+    XCTAssertTrue(launcher.launchedConfigPaths.last?.contains(secondProfile.id.uuidString) == true)
+  }
+
+  func testDeletingOnlyRunningActiveProfileStopsRuntime() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    let profile = try await store.importLocalConfig(from: configURL)
+    let launcher = CountingProcessLauncher()
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    model.start()
+    for _ in 0..<160 where launcher.launchCount < 1 || !model.isRunning {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    XCTAssertEqual(launcher.launchCount, 1)
+    XCTAssertTrue(model.isRunning)
+
+    let didDelete = await model.deleteProfileAsync(profile)
+
+    for _ in 0..<240 where model.isRunning || model.startInFlight {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertTrue(didDelete)
+    XCTAssertNil(store.activeProfileID)
+    XCTAssertEqual(launcher.launchCount, 1)
+    XCTAssertFalse(model.isRunning)
+    XCTAssertNil(model.lastError)
+  }
+
   func testSettingCurrentModeDoesNotPublishChanges() throws {
     let paths = try Self.makeRuntimePaths()
     let model = AppModel(
       paths: paths,
-      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore())
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: try Self.makeIsolatedDefaults()
     )
     var changeCount = 0
     let cancellable = model.objectWillChange.sink { changeCount += 1 }
@@ -6415,7 +7213,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let paths = try Self.makeRuntimePaths()
     let model = AppModel(
       paths: paths,
-      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore())
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: try Self.makeIsolatedDefaults()
     )
     var changeCount = 0
     let cancellable = model.objectWillChange.sink { changeCount += 1 }
@@ -7122,6 +7921,14 @@ final class DashboardRuntimeStateTests: XCTestCase {
     """.write(to: url, atomically: true, encoding: .utf8)
   }
 
+  private static func providerContentPath(in runtimeConfigURL: URL) throws -> String {
+    let runtimeConfig = try String(contentsOf: runtimeConfigURL, encoding: .utf8)
+    let yaml = try XCTUnwrap(Yams.load(yaml: runtimeConfig) as? [String: Any])
+    let providers = try XCTUnwrap(yaml["proxy-providers"] as? [String: Any])
+    let provider = try XCTUnwrap(providers["clashmax-subscription-provider"] as? [String: Any])
+    return try XCTUnwrap(provider["path"] as? String)
+  }
+
   private static func defaultNetworkSetupOutputs() -> [String: String] {
     [
       "/usr/sbin/networksetup -listallnetworkservices": "Wi-Fi\n",
@@ -7233,7 +8040,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
   private func makeRunningRuntimeModel(
     client: any MihomoAPIControlling,
     initialProxyGroups: [ProxyGroup] = [],
-    delayStateCacheTTL: TimeInterval = 600
+    delayStateCacheTTL: TimeInterval = 600,
+    systemProxyController: SystemProxyController? = nil
   ) async throws -> AppModel {
     let paths = try Self.makeRuntimePaths()
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
@@ -7251,6 +8059,9 @@ final class DashboardRuntimeStateTests: XCTestCase {
       paths: paths,
       profileStore: store,
       coreController: controller,
+      systemProxyController: systemProxyController ?? SystemProxyController(
+        commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+      ),
       apiClient: client,
       defaults: try Self.makeIsolatedDefaults(),
       delayStateCacheTTL: delayStateCacheTTL
@@ -7272,13 +8083,20 @@ final class DashboardRuntimeStateTests: XCTestCase {
     helperTransport: any HelperXPCTransport,
     tunRuntimeInspector: any TunRuntimeInspecting = RecordingTunRuntimeInspector(snapshots: []),
     systemProxyController: SystemProxyController? = nil,
-    tunnelReadinessProbe: CoreReadinessProbing = RecordingCoreReadinessProbe()
+    tunnelReadinessProbe: CoreReadinessProbing = RecordingCoreReadinessProbe(),
+    defaults: UserDefaults? = nil
   ) async throws -> AppModel {
     let paths = try Self.makeRuntimePaths()
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
     try Self.writeProxyConfig(named: "Japan", to: configURL)
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
     _ = try await store.importLocalConfig(from: configURL)
+    let effectiveDefaults: UserDefaults
+    if let defaults {
+      effectiveDefaults = defaults
+    } else {
+      effectiveDefaults = try Self.makeIsolatedDefaults()
+    }
     let helper = TunnelHelperClient(
       transport: helperTransport,
       service: StaticHelperService(status: .enabled),
@@ -7295,12 +8113,31 @@ final class DashboardRuntimeStateTests: XCTestCase {
       tunnelReadinessProbe: tunnelReadinessProbe,
       tunRuntimeInspector: tunRuntimeInspector,
       apiClient: client,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: effectiveDefaults
     )
     model.proxyRoutingMode = .tun
     model.tunnelCoreRunning = true
     model.tunEnabled = true
     return model
+  }
+
+  private func recordAppliedTunnelSnapshot(
+    on model: AppModel,
+    tunSettings: TunSettings
+  ) {
+    var overrides = model.overrides
+    overrides.tunEnabled = true
+    overrides.tunSettings = tunSettings
+    model.settings.recordAppliedRuntimeSettingsSnapshot(
+      AppliedRuntimeSettingsSnapshot(
+        overrides: overrides,
+        proxyRoutingMode: .tun,
+        systemProxySettings: model.systemProxySettings,
+        networkExtensionRoutingSettings: model.networkExtensionRoutingSettings,
+        runtimeOwner: .tunnel,
+        appliedAt: Date()
+      )
+    )
   }
 
   private func assertSystemProxyRestoreIgnoresUnspecifiedRawProxyHost(
@@ -7460,6 +8297,7 @@ private actor RecordingMihomoController: MihomoAPIControlling {
   private let proxyProviderUpdateFailures: [String: String]
   private let ruleProviderUpdateFailures: [String: String]
   private let reloadFailureMessage: String?
+  private let reloadFailureMessages: [String?]
   private let restartFailureMessage: String?
   private let setTunEnabledFailureMessage: String?
   private let ignoreHealthCheckCancellation: Bool
@@ -7498,6 +8336,7 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     proxyProviderUpdateFailures: [String: String] = [:],
     ruleProviderUpdateFailures: [String: String] = [:],
     reloadFailureMessage: String? = nil,
+    reloadFailureMessages: [String?] = [],
     restartFailureMessage: String? = nil,
     setTunEnabledFailureMessage: String? = nil,
     ignoreHealthCheckCancellation: Bool = false,
@@ -7521,6 +8360,7 @@ private actor RecordingMihomoController: MihomoAPIControlling {
       proxyProviderUpdateFailures: proxyProviderUpdateFailures,
       ruleProviderUpdateFailures: ruleProviderUpdateFailures,
       reloadFailureMessage: reloadFailureMessage,
+      reloadFailureMessages: reloadFailureMessages,
       restartFailureMessage: restartFailureMessage,
       setTunEnabledFailureMessage: setTunEnabledFailureMessage,
       ignoreHealthCheckCancellation: ignoreHealthCheckCancellation,
@@ -7546,6 +8386,7 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     proxyProviderUpdateFailures: [String: String] = [:],
     ruleProviderUpdateFailures: [String: String] = [:],
     reloadFailureMessage: String? = nil,
+    reloadFailureMessages: [String?] = [],
     restartFailureMessage: String? = nil,
     setTunEnabledFailureMessage: String? = nil,
     ignoreHealthCheckCancellation: Bool = false,
@@ -7569,6 +8410,7 @@ private actor RecordingMihomoController: MihomoAPIControlling {
       proxyProviderUpdateFailures: proxyProviderUpdateFailures,
       ruleProviderUpdateFailures: ruleProviderUpdateFailures,
       reloadFailureMessage: reloadFailureMessage,
+      reloadFailureMessages: reloadFailureMessages,
       restartFailureMessage: restartFailureMessage,
       setTunEnabledFailureMessage: setTunEnabledFailureMessage,
       ignoreHealthCheckCancellation: ignoreHealthCheckCancellation,
@@ -7594,6 +8436,7 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     proxyProviderUpdateFailures: [String: String] = [:],
     ruleProviderUpdateFailures: [String: String] = [:],
     reloadFailureMessage: String? = nil,
+    reloadFailureMessages: [String?] = [],
     restartFailureMessage: String? = nil,
     setTunEnabledFailureMessage: String? = nil,
     ignoreHealthCheckCancellation: Bool = false,
@@ -7616,6 +8459,7 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     self.proxyProviderUpdateFailures = proxyProviderUpdateFailures
     self.ruleProviderUpdateFailures = ruleProviderUpdateFailures
     self.reloadFailureMessage = reloadFailureMessage
+    self.reloadFailureMessages = reloadFailureMessages
     self.restartFailureMessage = restartFailureMessage
     self.setTunEnabledFailureMessage = setTunEnabledFailureMessage
     self.ignoreHealthCheckCancellation = ignoreHealthCheckCancellation
@@ -7716,7 +8560,11 @@ private actor RecordingMihomoController: MihomoAPIControlling {
   }
 
   func reloadConfig(path: String, force: Bool) async throws {
+    let reloadIndex = reloadRequests.count
     reloadRequests.append((path, force))
+    if reloadIndex < reloadFailureMessages.count, let failureMessage = reloadFailureMessages[reloadIndex] {
+      throw AppError.helperResponse(failureMessage)
+    }
     if let reloadFailureMessage {
       throw AppError.helperResponse(reloadFailureMessage)
     }

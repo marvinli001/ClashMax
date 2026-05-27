@@ -221,7 +221,7 @@ private struct RunningHeaderCard: View {
 
     DashboardStatusPill(
       title: "Mode",
-      value: appModel.overrides.mode.displayName,
+      value: appModel.currentRuntimeOverrides.mode.displayName,
       symbolName: "switch.2",
       tint: .purple
     )
@@ -229,7 +229,7 @@ private struct RunningHeaderCard: View {
 
     DashboardStatusPill(
       title: "Controller",
-      value: "\(appModel.overrides.externalControllerHost):\(appModel.overrides.externalControllerPort)",
+      value: "\(appModel.currentRuntimeOverrides.externalControllerHost):\(appModel.currentRuntimeOverrides.externalControllerPort)",
       symbolName: "lock.shield",
       tint: .green
     )
@@ -305,7 +305,7 @@ private struct RunningHeaderCard: View {
     )
     DashboardMiniInfoItem(
       title: "Controller",
-      value: "\(appModel.overrides.externalControllerHost):\(appModel.overrides.externalControllerPort)",
+      value: "\(appModel.currentRuntimeOverrides.externalControllerHost):\(appModel.currentRuntimeOverrides.externalControllerPort)",
       symbolName: "lock.shield",
       tint: .purple
     )
@@ -605,7 +605,7 @@ private struct RunningStatusCard: View {
 
       RuntimeLine(title: "Core", value: appModel.statusSummary)
       RuntimeLine(title: "Profile", value: appModel.profileStore.activeProfile?.name ?? "None")
-      RuntimeLine(title: "Mixed Port", value: "\(appModel.overrides.mixedPort)")
+      RuntimeLine(title: "Mixed Port", value: "\(appModel.currentRuntimeOverrides.mixedPort)")
     }
     .padding(14)
     .frame(maxWidth: .infinity, minHeight: 210, alignment: .topLeading)
@@ -622,15 +622,18 @@ private struct NetworkStatusCard: View {
 
       HStack(spacing: 10) {
         RuntimeStat(title: "API", value: "Bearer", tint: .green)
-        RuntimeStat(title: "Mode", value: appModel.overrides.mode.displayName, tint: .purple)
-        RuntimeStat(title: "LAN", value: appModel.overrides.allowLan ? "On" : "Off", tint: .orange)
-        RuntimeStat(title: "IPv6", value: appModel.overrides.ipv6Enabled ? "On" : "Off", tint: .cyan)
+        RuntimeStat(title: "Mode", value: appModel.currentRuntimeOverrides.mode.displayName, tint: .purple)
+        RuntimeStat(title: "LAN", value: appModel.currentRuntimeOverrides.allowLan ? "On" : "Off", tint: .orange)
+        RuntimeStat(title: "IPv6", value: appModel.currentRuntimeOverrides.ipv6Enabled ? "On" : "Off", tint: .cyan)
       }
 
       Divider()
         .opacity(0.24)
 
-      RuntimeLine(title: "Controller", value: "\(appModel.overrides.externalControllerHost):\(appModel.overrides.externalControllerPort)")
+      RuntimeLine(
+        title: "Controller",
+        value: "\(appModel.currentRuntimeOverrides.externalControllerHost):\(appModel.currentRuntimeOverrides.externalControllerPort)"
+      )
       RuntimeLine(title: "Proxy", value: proxyRoutingDetail)
     }
     .padding(14)
@@ -641,7 +644,7 @@ private struct NetworkStatusCard: View {
   private var proxyRoutingDetail: String {
     switch appModel.proxyRoutingMode {
     case .systemProxy:
-      appModel.systemProxyEnabled ? "System Proxy 127.0.0.1:\(appModel.overrides.mixedPort)" : "System Proxy ready"
+      appModel.systemProxyEnabled ? "System Proxy 127.0.0.1:\(appModel.currentRuntimeOverrides.mixedPort)" : "System Proxy ready"
     case .tun:
       appModel.tunEnabled ? "TUN helper controlled" : "TUN ready"
     case .neProxy:
@@ -689,19 +692,27 @@ private struct TunDiagnosticsRuntimeCard: View {
 
       HStack(spacing: 10) {
         RuntimeStat(title: "Helper", value: helperPIDText, tint: appModel.tunEnabled ? .green : .secondary)
-        RuntimeStat(title: "Stack", value: appModel.tunSettings.stack.displayName, tint: .cyan)
+        RuntimeStat(title: "Stack", value: appModel.currentRuntimeOverrides.tunSettings.stack.displayName, tint: .cyan)
         RuntimeStat(title: "Checks", value: diagnosticCounterText, tint: diagnosticTint)
-        RuntimeStat(title: "DNS", value: appModel.tunSettings.dnsFakeIPEnabled ? "Fake IP" : "Profile", tint: .orange)
+        RuntimeStat(title: "DNS", value: appModel.currentRuntimeOverrides.tunSettings.dnsFakeIPEnabled ? "Fake IP" : "Profile", tint: .orange)
       }
 
       Divider()
         .opacity(0.24)
 
-      RuntimeLine(title: "Controller", value: "\(appModel.overrides.externalControllerHost):\(appModel.overrides.externalControllerPort)")
-      RuntimeLine(title: "Device", value: appModel.tunSettings.normalizedDevice)
-      RuntimeLine(title: "DNS Hijack", value: appModel.tunSettings.normalizedDNSHijack.joined(separator: ", "))
-      RuntimeLine(title: "Fake IP Range", value: appModel.tunSettings.dnsFakeIPEnabled ? appModel.tunSettings.normalizedFakeIPRange : "Off")
-      RuntimeLine(title: "System DNS", value: appModel.tunSettings.systemDNSOverrideEnabled ? appModel.tunSystemDNSState.displayName : "Off")
+      RuntimeLine(title: "Controller", value: "\(appModel.currentRuntimeOverrides.externalControllerHost):\(appModel.currentRuntimeOverrides.externalControllerPort)")
+      RuntimeLine(title: "Device", value: appModel.currentRuntimeOverrides.tunSettings.normalizedDevice)
+      RuntimeLine(title: "DNS Hijack", value: appModel.currentRuntimeOverrides.tunSettings.normalizedDNSHijack.joined(separator: ", "))
+      RuntimeLine(
+        title: "Fake IP Range",
+        value: appModel.currentRuntimeOverrides.tunSettings.dnsFakeIPEnabled
+          ? appModel.currentRuntimeOverrides.tunSettings.normalizedFakeIPRange
+          : "Off"
+      )
+      RuntimeLine(
+        title: "System DNS",
+        value: appModel.currentRuntimeOverrides.tunSettings.systemDNSOverrideEnabled ? appModel.tunSystemDNSState.displayName : "Off"
+      )
       if let dnsError = appModel.tunSystemDNSState.errorMessage {
         RuntimeLine(title: "DNS Repair", value: dnsError)
       }
@@ -1281,9 +1292,9 @@ private struct StatusRuntimeOverviewCard: View {
       }
 
       StatusFactGrid(minimumColumnWidth: 96) {
-        StatusFactTile(title: "Controller", value: "\(appModel.overrides.externalControllerHost):\(appModel.overrides.externalControllerPort)")
+        StatusFactTile(title: "Controller", value: "\(appModel.currentRuntimeOverrides.externalControllerHost):\(appModel.currentRuntimeOverrides.externalControllerPort)")
         StatusFactTile(title: "Controller Secret", value: RuntimeDiagnosticsReport.redactedSecret)
-        StatusFactTile(title: "Run Mode", value: appModel.overrides.mode.displayName)
+        StatusFactTile(title: "Run Mode", value: appModel.currentRuntimeOverrides.mode.displayName)
         StatusFactTile(title: "System Proxy", value: appModel.systemProxyEnabled ? "Enabled" : "Not Enabled")
         StatusFactTile(title: "TUN", value: appModel.tunEnabled ? "Enabled" : "Not Enabled")
         StatusFactTile(title: "NE Proxy", value: appModel.networkExtensionEnabled ? "Enabled" : "Not Enabled")
@@ -1327,12 +1338,24 @@ private struct StatusDNSCard: View {
 
       StatusFactGrid(minimumColumnWidth: 112) {
         StatusFactTile(title: "Routing", value: appModel.proxyRoutingMode.displayName)
-        StatusFactTile(title: "TUN DNS Mode", value: appModel.tunSettings.dnsFakeIPEnabled ? "Fake IP" : "Profile", tint: .orange)
-        StatusFactTile(title: "TUN System DNS", value: appModel.tunSettings.systemDNSOverrideEnabled ? appModel.tunSystemDNSState.displayName : "Off")
-        StatusFactTile(title: "DNS Hijack", value: appModel.tunSettings.normalizedDNSHijack.joined(separator: ", "), valueLineLimit: 2)
-        StatusFactTile(title: "Fake IP Range", value: appModel.tunSettings.dnsFakeIPEnabled ? appModel.tunSettings.normalizedFakeIPRange : "Off")
-        StatusFactTile(title: "Nameserver", value: summarized(appModel.tunSettings.dns.nameserver), valueLineLimit: 2)
-        StatusFactTile(title: "Fallback", value: summarized(appModel.tunSettings.dns.fallback), valueLineLimit: 2)
+        StatusFactTile(title: "TUN DNS Mode", value: appModel.currentRuntimeOverrides.tunSettings.dnsFakeIPEnabled ? "Fake IP" : "Profile", tint: .orange)
+        StatusFactTile(
+          title: "TUN System DNS",
+          value: appModel.currentRuntimeOverrides.tunSettings.systemDNSOverrideEnabled ? appModel.tunSystemDNSState.displayName : "Off"
+        )
+        StatusFactTile(
+          title: "DNS Hijack",
+          value: appModel.currentRuntimeOverrides.tunSettings.normalizedDNSHijack.joined(separator: ", "),
+          valueLineLimit: 2
+        )
+        StatusFactTile(
+          title: "Fake IP Range",
+          value: appModel.currentRuntimeOverrides.tunSettings.dnsFakeIPEnabled
+            ? appModel.currentRuntimeOverrides.tunSettings.normalizedFakeIPRange
+            : "Off"
+        )
+        StatusFactTile(title: "Nameserver", value: summarized(appModel.currentRuntimeOverrides.tunSettings.dns.nameserver), valueLineLimit: 2)
+        StatusFactTile(title: "Fallback", value: summarized(appModel.currentRuntimeOverrides.tunSettings.dns.fallback), valueLineLimit: 2)
         StatusFactTile(title: "NE System DNS", value: appModel.networkExtensionSystemDNSState.displayName)
         if let dnsError = appModel.tunSystemDNSState.errorMessage ?? appModel.networkExtensionSystemDNSState.errorMessage {
           StatusFactTile(title: "DNS Repair", value: dnsError, tint: .red, valueLineLimit: 2)
@@ -1538,17 +1561,29 @@ private struct StatusTunDiagnosticsCard: View {
 
       StatusFactGrid(minimumColumnWidth: 108) {
         StatusFactTile(title: "Helper", value: helperPIDText, tint: appModel.tunEnabled ? .green : .secondary, isProminent: true)
-        StatusFactTile(title: "Stack", value: appModel.tunSettings.stack.displayName, tint: .cyan, isProminent: true)
+        StatusFactTile(title: "Stack", value: appModel.currentRuntimeOverrides.tunSettings.stack.displayName, tint: .cyan, isProminent: true)
         StatusFactTile(title: "Checks", value: diagnosticCounterText, tint: diagnosticTint, isProminent: true)
-        StatusFactTile(title: "DNS", value: appModel.tunSettings.dnsFakeIPEnabled ? "Fake IP" : "Profile", tint: .orange, isProminent: true)
+        StatusFactTile(title: "DNS", value: appModel.currentRuntimeOverrides.tunSettings.dnsFakeIPEnabled ? "Fake IP" : "Profile", tint: .orange, isProminent: true)
       }
 
       StatusFactGrid {
-        StatusFactTile(title: "Controller", value: "\(appModel.overrides.externalControllerHost):\(appModel.overrides.externalControllerPort)")
-        StatusFactTile(title: "Device", value: appModel.tunSettings.normalizedDevice)
-        StatusFactTile(title: "DNS Hijack", value: appModel.tunSettings.normalizedDNSHijack.joined(separator: ", "), valueLineLimit: 2)
-        StatusFactTile(title: "Fake IP Range", value: appModel.tunSettings.dnsFakeIPEnabled ? appModel.tunSettings.normalizedFakeIPRange : "Off")
-        StatusFactTile(title: "System DNS", value: appModel.tunSettings.systemDNSOverrideEnabled ? appModel.tunSystemDNSState.displayName : "Off")
+        StatusFactTile(title: "Controller", value: "\(appModel.currentRuntimeOverrides.externalControllerHost):\(appModel.currentRuntimeOverrides.externalControllerPort)")
+        StatusFactTile(title: "Device", value: appModel.currentRuntimeOverrides.tunSettings.normalizedDevice)
+        StatusFactTile(
+          title: "DNS Hijack",
+          value: appModel.currentRuntimeOverrides.tunSettings.normalizedDNSHijack.joined(separator: ", "),
+          valueLineLimit: 2
+        )
+        StatusFactTile(
+          title: "Fake IP Range",
+          value: appModel.currentRuntimeOverrides.tunSettings.dnsFakeIPEnabled
+            ? appModel.currentRuntimeOverrides.tunSettings.normalizedFakeIPRange
+            : "Off"
+        )
+        StatusFactTile(
+          title: "System DNS",
+          value: appModel.currentRuntimeOverrides.tunSettings.systemDNSOverrideEnabled ? appModel.tunSystemDNSState.displayName : "Off"
+        )
         StatusFactTile(title: "Last Check", value: lastUpdateText)
         if let dnsError = appModel.tunSystemDNSState.errorMessage {
           StatusFactTile(title: "DNS Repair", value: dnsError, tint: .red, valueLineLimit: 2)

@@ -80,6 +80,33 @@ final class LocalizationTests: XCTestCase {
     XCTAssertEqual(zhBundle.localizedString(forKey: "China Optimized", value: nil, table: nil), "中国优化")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Profile DNS", value: nil, table: nil), "配置 DNS")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Global Secure", value: nil, table: nil), "全局安全")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Runtime settings pending.", value: nil, table: nil), "运行时设置待应用。")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Applying runtime settings.", value: nil, table: nil), "正在应用运行时设置。")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Controller host must stay on 127.0.0.1.", value: nil, table: nil), "控制器主机必须保持为 127.0.0.1。")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "API secret cannot be empty.", value: nil, table: nil), "API 密钥不能为空。")
+    XCTAssertEqual(
+      zhBundle.localizedString(
+        forKey: "Listen address must use 127.0.0.1:<port>, for example 127.0.0.1:9097.",
+        value: nil,
+        table: nil
+      ),
+      "监听地址必须使用 127.0.0.1:<端口>，例如 127.0.0.1:9097。"
+    )
+
+    let controllerPortFormat = zhBundle.localizedString(forKey: "Controller port must be between %lld and %lld.", value: nil, table: nil)
+    XCTAssertEqual(String(format: controllerPortFormat, Int64(1024), Int64(65535)), "控制器端口必须介于 1024 和 65535 之间。")
+    let invalidOriginFormat = zhBundle.localizedString(forKey: "Invalid origin: %@", value: nil, table: nil)
+    XCTAssertEqual(String(format: invalidOriginFormat, "bad origin"), "无效来源：bad origin")
+    let savedNotAppliedFormat = zhBundle.localizedString(forKey: "Runtime settings saved but not applied: %@", value: nil, table: nil)
+    XCTAssertEqual(String(format: savedNotAppliedFormat, "reload refused"), "运行时设置已保存但未应用：reload refused")
+    let savedCouldNotApplyFormat = zhBundle.localizedString(forKey: "Runtime settings saved but could not be applied: %@", value: nil, table: nil)
+    XCTAssertEqual(String(format: savedCouldNotApplyFormat, "reload refused"), "运行时设置已保存但无法应用：reload refused")
+    let followUpFailureFormat = zhBundle.localizedString(
+      forKey: "Runtime settings applied, but proxy readiness or system proxy setup failed: %@",
+      value: nil,
+      table: nil
+    )
+    XCTAssertEqual(String(format: followUpFailureFormat, "proxy refused"), "运行时设置已应用，但代理就绪检查或系统代理设置失败：proxy refused")
   }
 
   func testSimplifiedChineseStringCatalogProvidesMenuBarKeys() throws {

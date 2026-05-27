@@ -274,7 +274,14 @@ private struct LaunchControlDeck: View {
       Text("Mixed Port")
         .font(.caption2)
         .foregroundStyle(.secondary)
-      Stepper("\(appModel.overrides.mixedPort)", value: $appModel.overrides.mixedPort, in: 1024...65535)
+      Stepper(
+        "\(appModel.overrides.mixedPort)",
+        value: Binding(
+          get: { appModel.overrides.mixedPort },
+          set: { appModel.setMixedPort($0) }
+        ),
+        in: 1024...65535
+      )
         .frame(width: DashboardLayoutMetrics.launchMixedPortControlWidth, alignment: .leading)
     }
     .frame(width: DashboardLayoutMetrics.launchMixedPortControlWidth, alignment: .leading)

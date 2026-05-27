@@ -369,19 +369,19 @@ struct ProfilesView: View {
   private func applyMigrationRuntimeSettings(_ report: ClashXMigrationReport, enableSystemProxy: Bool) {
     if let mixedPort = report.ports["mixed-port"] ?? report.ports["port"] {
       let normalizedPort = min(max(mixedPort, 1), 65_535)
-      appModel.overrides.mixedPort = normalizedPort
+      appModel.setMixedPort(normalizedPort)
     }
 
     if let allowLan = report.allowLan {
-      appModel.overrides.allowLan = allowLan
+      appModel.setAllowLAN(allowLan)
     }
 
     if let mode = report.mode.flatMap(RunMode.init(rawValue:)) {
-      appModel.overrides.mode = mode
+      appModel.setMode(mode)
     }
 
     if let logLevel = report.logLevel {
-      appModel.overrides.logLevel = logLevel
+      appModel.setLogLevel(logLevel)
     }
 
     if !report.bypassDomains.isEmpty {

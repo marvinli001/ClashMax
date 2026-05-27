@@ -124,17 +124,30 @@ struct SettingsView: View {
           PortControl(
             title: "Mixed Port",
             description: "HTTP and SOCKS inbound port used by Mihomo.",
-            value: $settings.overrides.mixedPort
+            value: Binding(
+              get: { settings.overrides.mixedPort },
+              set: { appModel.setMixedPort($0) }
+            )
           )
           PortControl(
             title: "Controller Port",
             description: "Local controller API port bound to 127.0.0.1.",
-            value: $settings.externalControllerSettings.port
+            value: Binding(
+              get: { settings.externalControllerSettings.port },
+              set: { port in
+                var controllerSettings = settings.externalControllerSettings
+                controllerSettings.port = port
+                _ = appModel.updateExternalControllerSettings(controllerSettings)
+              }
+            )
           )
           SettingsToggleRow(
             "Allow LAN",
             description: "Allow devices on this LAN to use the proxy port.",
-            isOn: $settings.overrides.allowLan
+            isOn: Binding(
+              get: { settings.overrides.allowLan },
+              set: { appModel.setAllowLAN($0) }
+            )
           )
           SettingsToggleRow(
             "IPv6",
@@ -149,7 +162,7 @@ struct SettingsView: View {
             description: "Write app-managed DNS options into the runtime profile.",
             isOn: Binding(
               get: { settings.overrides.dnsEnabled ?? false },
-              set: { settings.overrides.dnsEnabled = $0 }
+              set: { appModel.setDNSOverrideEnabled($0) }
             )
           )
           SettingsControlRow("Delay Test Mode", description: settings.delayTestSettings.mode.description) {
@@ -171,7 +184,10 @@ struct SettingsView: View {
             ExternalControlSettingsRow()
           }
           SettingsControlRow("Log Level", description: "Runtime logging verbosity.") {
-            Picker("Log Level", selection: $settings.overrides.logLevel) {
+            Picker("Log Level", selection: Binding(
+              get: { settings.overrides.logLevel },
+              set: { appModel.setLogLevel($0) }
+            )) {
               Text("Info").tag("info")
               Text("Warning").tag("warning")
               Text("Error").tag("error")
@@ -180,6 +196,12 @@ struct SettingsView: View {
             .labelsHidden()
             .pickerStyle(.menu)
             .frame(width: 120, alignment: .trailing)
+          }
+          if let message = appModel.runtimeSettingsApplyStatusMessage {
+            Text(message)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .frame(maxWidth: .infinity, alignment: .leading)
           }
         }
 
@@ -2145,7 +2167,7 @@ private struct ExternalControlSettingsRow: View {
 
   private func save() {
     guard let parsed = Self.parseAddress(addressDraft) else {
-      error = "Listen address must use host:port, for example 127.0.0.1:9097."
+      error = String(localized: "Listen address must use 127.0.0.1:<port>, for example 127.0.0.1:9097.")
       return
     }
     draft.host = parsed.host
@@ -2157,7 +2179,10 @@ private struct ExternalControlSettingsRow: View {
       error = validationError
       return
     }
-    settings.externalControllerSettings = draft
+    guard appModel.updateExternalControllerSettings(draft) else {
+      error = appModel.lastError
+      return
+    }
     isControllerPresented = false
   }
 
@@ -2170,7 +2195,10 @@ private struct ExternalControlSettingsRow: View {
     var controllerSettings = settings.externalControllerSettings
     corsDraft.enabled = controllerSettings.enabled
     controllerSettings.cors = corsDraft
-    settings.externalControllerSettings = controllerSettings
+    guard appModel.updateExternalControllerSettings(controllerSettings) else {
+      corsError = appModel.lastError
+      return
+    }
     isCORSPresented = false
   }
 
@@ -2240,26 +2268,14 @@ private struct ExternalControlSettingsRow: View {
     let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return nil }
 
-    if trimmed.hasPrefix("["),
-       let closeBracket = trimmed.firstIndex(of: "]") {
-      let hostStart = trimmed.index(after: trimmed.startIndex)
-      let host = String(trimmed[hostStart..<closeBracket])
-      let portStart = trimmed.index(after: closeBracket)
-      guard portStart < trimmed.endIndex, trimmed[portStart] == ":" else { return nil }
-      let numberStart = trimmed.index(after: portStart)
-      guard numberStart < trimmed.endIndex, let port = Int(trimmed[numberStart...]) else { return nil }
-      return (host, port)
-    }
-
     let parts = trimmed.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
-    if parts.count == 2, let port = Int(parts[1]) {
-      return (parts[0], port)
+    guard parts.count == 2,
+          ExternalControllerSettings.isAllowedControllerHost(parts[0]),
+          let port = Int(parts[1].trimmingCharacters(in: .whitespacesAndNewlines))
+    else {
+      return nil
     }
-    if parts.count > 2, let portText = parts.last, let port = Int(portText) {
-      let host = parts.dropLast().joined(separator: ":")
-      return (host, port)
-    }
-    return nil
+    return (ExternalControllerSettings.defaultHost, port)
   }
 }
 
@@ -2354,7 +2370,7 @@ private struct ExternalControlCORSSettingsPopover: View {
     let trimmed = originDraft.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return }
     guard ExternalControllerCORSSettings.isValidOrigin(trimmed) else {
-      error = "Invalid origin: \(trimmed)"
+      error = ExternalControllerCORSSettings.invalidOriginMessage(trimmed)
       return
     }
     draft.allowedOrigins = ExternalControllerCORSSettings.normalizedOrigins(draft.allowedOrigins + [trimmed])

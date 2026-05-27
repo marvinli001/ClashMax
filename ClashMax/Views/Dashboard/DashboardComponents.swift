@@ -109,7 +109,7 @@ struct ProxyRoutingSettingsButton: View {
       SystemProxySettingsPopover(
         settings: $systemDraft,
         isActive: appModel.systemProxyEnabled,
-        serviceAddress: "\(systemDraft.normalizedProxyHost):\(appModel.overrides.mixedPort)",
+        serviceAddress: "\(systemDraft.normalizedProxyHost):\(appModel.currentRuntimeOverrides.mixedPort)",
         error: settingsError,
         onCancel: { isPresented = false },
         onSave: saveSystemProxySettings

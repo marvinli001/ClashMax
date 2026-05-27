@@ -31,8 +31,9 @@ final class ProfileCoordinator: ObservableObject {
     appendAppLog: @escaping (String, String) -> Void,
     notifySubscriptionUpdateFailure: @escaping (String, String) -> Void,
     clearRuntimeProxyGroups: @escaping () -> Void,
-    shouldRestartRuntimeAfterProfileSelection: @escaping () -> Bool,
-    restartRuntime: @escaping () -> Void
+    shouldSyncRuntimeAfterProfileChange: @escaping () -> Bool,
+    restartRuntime: @escaping () -> Void,
+    stopRuntime: @escaping () -> Void
   ) {
     hooks = ProfileCoordinatorHooks(
       automaticSubscriptionUpdatesEnabled: automaticSubscriptionUpdatesEnabled,
@@ -43,8 +44,9 @@ final class ProfileCoordinator: ObservableObject {
       appendAppLog: appendAppLog,
       notifySubscriptionUpdateFailure: notifySubscriptionUpdateFailure,
       clearRuntimeProxyGroups: clearRuntimeProxyGroups,
-      shouldRestartRuntimeAfterProfileSelection: shouldRestartRuntimeAfterProfileSelection,
-      restartRuntime: restartRuntime
+      shouldSyncRuntimeAfterProfileChange: shouldSyncRuntimeAfterProfileChange,
+      restartRuntime: restartRuntime,
+      stopRuntime: stopRuntime
     )
   }
 
@@ -272,19 +274,31 @@ final class ProfileCoordinator: ObservableObject {
   }
 
   private func deleteProfile(_ profile: Profile, deletedSelectionID: Profile.ID?) async throws {
+    let isDeletingActiveProfile = profileStore.activeProfileID == profile.id
+    let shouldSyncRuntime = isDeletingActiveProfile && hooks.shouldSyncRuntimeAfterProfileChange()
     try await profileStore.delete(profile)
     message = "Deleted profile \(profile.name)."
     proxyPreview.previewSelections = [:]
     proxyPreview.saveSelections(for: deletedSelectionID)
+    if shouldSyncRuntime {
+      hooks.clearRuntimeProxyGroups()
+    }
     await refreshPreviewAndWait()
     loadSelectionsForActiveProfile()
+    if shouldSyncRuntime {
+      if profileStore.activeProfile != nil {
+        hooks.restartRuntime()
+      } else {
+        hooks.stopRuntime()
+      }
+    }
     rescheduleSubscriptionAutoUpdates()
   }
 
   func selectProfile(_ profile: Profile) async throws -> Bool {
     let isChangingProfile = profileStore.activeProfileID != profile.id
     guard isChangingProfile else { return false }
-    let shouldRestart = hooks.shouldRestartRuntimeAfterProfileSelection()
+    let shouldRestart = hooks.shouldSyncRuntimeAfterProfileChange()
     try await profileStore.select(profile)
     hooks.clearRuntimeProxyGroups()
     await refreshPreviewAndWait()
@@ -495,8 +509,9 @@ private struct ProfileCoordinatorHooks {
   var appendAppLog: (String, String) -> Void = { _, _ in }
   var notifySubscriptionUpdateFailure: (String, String) -> Void = { _, _ in }
   var clearRuntimeProxyGroups: () -> Void = {}
-  var shouldRestartRuntimeAfterProfileSelection: () -> Bool = { false }
+  var shouldSyncRuntimeAfterProfileChange: () -> Bool = { false }
   var restartRuntime: () -> Void = {}
+  var stopRuntime: () -> Void = {}
 }
 
 @MainActor

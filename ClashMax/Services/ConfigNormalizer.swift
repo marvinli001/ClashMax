@@ -61,7 +61,8 @@ struct ConfigNormalizer {
     }
 
     root["mixed-port"] = overrides.mixedPort
-    root["external-controller"] = "\(overrides.externalControllerHost):\(overrides.externalControllerPort)"
+    let controllerHost = RuntimeOverrides.normalizedExternalControllerHost(overrides.externalControllerHost)
+    root["external-controller"] = "\(controllerHost):\(overrides.externalControllerPort)"
     root["secret"] = overrides.secret
     root["allow-lan"] = overrides.allowLan
     root["ipv6"] = overrides.ipv6Enabled

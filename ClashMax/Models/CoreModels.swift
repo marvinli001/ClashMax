@@ -1185,9 +1185,13 @@ struct ExternalControllerCORSSettings: Codable, Equatable, Sendable {
 
   var validationError: String? {
     if let invalid = allowedOrigins.first(where: { !Self.isValidOrigin($0) }) {
-      return "Invalid origin: \(invalid)"
+      return Self.invalidOriginMessage(invalid)
     }
     return nil
+  }
+
+  static func invalidOriginMessage(_ origin: String) -> String {
+    String(format: String(localized: "Invalid origin: %@"), origin)
   }
 
   static func normalizedOrigins(_ origins: [String]) -> [String] {
@@ -1273,8 +1277,7 @@ struct ExternalControllerSettings: Codable, Equatable, Sendable {
   }
 
   var normalizedHost: String {
-    let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
-    return trimmed.isEmpty ? Self.defaultHost : trimmed
+    Self.normalizedRuntimeHost(host)
   }
 
   var normalizedPort: Int {
@@ -1294,22 +1297,30 @@ struct ExternalControllerSettings: Codable, Equatable, Sendable {
   }
 
   var validationError: String? {
-    let host = normalizedHost
-    guard Self.isLoopbackHost(host) else {
-      return "Controller host must stay on localhost, 127.0.0.1, or ::1."
+    guard Self.isAllowedControllerHost(host) else {
+      return String(localized: "Controller host must stay on 127.0.0.1.")
     }
     guard Self.portRange.contains(port) else {
-      return "Controller port must be between \(Self.portRange.lowerBound) and \(Self.portRange.upperBound)."
+      return String(
+        format: String(localized: "Controller port must be between %lld and %lld."),
+        Int64(Self.portRange.lowerBound),
+        Int64(Self.portRange.upperBound)
+      )
     }
     guard !secret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-      return "API secret cannot be empty."
+      return String(localized: "API secret cannot be empty.")
     }
     return cors.validationError
   }
 
-  static func isLoopbackHost(_ host: String) -> Bool {
+  static func isAllowedControllerHost(_ host: String) -> Bool {
     let normalized = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    return ["127.0.0.1", "localhost", "::1"].contains(normalized)
+    return normalized == defaultHost
+  }
+
+  static func normalizedRuntimeHost(_ host: String) -> String {
+    let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+    return isAllowedControllerHost(trimmed) ? trimmed : defaultHost
   }
 
   static func generateSecret() -> String {
@@ -1626,9 +1637,90 @@ extension RuleOverlaySettings {
   }
 }
 
+struct PersistedRuntimeSettings: Codable, Equatable, Sendable {
+  var mixedPort: Int
+  var allowLan: Bool
+  var dnsEnabled: Bool?
+  var mode: RunMode
+  var logLevel: String
+
+  private enum CodingKeys: String, CodingKey {
+    case mixedPort
+    case allowLan
+    case dnsEnabled
+    case mode
+    case logLevel
+  }
+
+  init(
+    mixedPort: Int,
+    allowLan: Bool,
+    dnsEnabled: Bool?,
+    mode: RunMode,
+    logLevel: String
+  ) {
+    self.mixedPort = mixedPort
+    self.allowLan = allowLan
+    self.dnsEnabled = dnsEnabled
+    self.mode = mode
+    self.logLevel = logLevel
+  }
+
+  init(overrides: RuntimeOverrides) {
+    self.init(
+      mixedPort: overrides.mixedPort,
+      allowLan: overrides.allowLan,
+      dnsEnabled: overrides.dnsEnabled,
+      mode: overrides.mode,
+      logLevel: overrides.logLevel
+    )
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    let defaults = RuntimeOverrides.defaultForLaunch()
+    self.init(
+      mixedPort: container.decodeDefault(Int.self, forKey: .mixedPort, default: defaults.mixedPort),
+      allowLan: container.decodeDefault(Bool.self, forKey: .allowLan, default: defaults.allowLan),
+      dnsEnabled: container.decodeDefault(Bool?.self, forKey: .dnsEnabled, default: defaults.dnsEnabled),
+      mode: container.decodeDefault(RunMode.self, forKey: .mode, default: defaults.mode),
+      logLevel: container.decodeDefault(String.self, forKey: .logLevel, default: defaults.logLevel)
+    )
+  }
+
+  func apply(to overrides: inout RuntimeOverrides) {
+    overrides.mixedPort = mixedPort
+    overrides.allowLan = allowLan
+    overrides.dnsEnabled = dnsEnabled
+    overrides.mode = mode
+    overrides.logLevel = logLevel
+  }
+}
+
+struct AppliedRuntimeSettingsSnapshot: Codable, Equatable, Sendable {
+  var overrides: RuntimeOverrides
+  var proxyRoutingMode: ProxyRoutingMode
+  var systemProxySettings: SystemProxySettings
+  var networkExtensionRoutingSettings: NetworkExtensionRoutingSettings
+  var runtimeOwner: RuntimeOwner
+  var appliedAt: Date
+}
+
+enum RuntimeSettingsApplyState: Equatable {
+  case idle
+  case pending
+  case applying
+  case failed(String)
+  case appliedWithFollowUpFailure(String)
+}
+
 struct RuntimeOverrides: Codable, Equatable, Sendable {
   var mixedPort: Int
-  var externalControllerHost: String
+  var externalControllerHost: String {
+    didSet {
+      externalControllerHost = Self.normalizedExternalControllerHost(externalControllerHost)
+    }
+  }
   var externalControllerPort: Int
   var secret: String
   var allowLan: Bool
@@ -1676,7 +1768,7 @@ struct RuntimeOverrides: Codable, Equatable, Sendable {
     tunSettings: TunSettings = .default
   ) {
     self.mixedPort = mixedPort
-    self.externalControllerHost = externalControllerHost
+    self.externalControllerHost = Self.normalizedExternalControllerHost(externalControllerHost)
     self.externalControllerPort = externalControllerPort
     self.secret = secret
     self.allowLan = allowLan
@@ -1714,10 +1806,12 @@ struct RuntimeOverrides: Codable, Equatable, Sendable {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     let defaults = Self.defaultForLaunch()
     mixedPort = container.decodeDefault(Int.self, forKey: .mixedPort, default: defaults.mixedPort)
-    externalControllerHost = container.decodeDefault(
-      String.self,
-      forKey: .externalControllerHost,
-      default: defaults.externalControllerHost
+    externalControllerHost = Self.normalizedExternalControllerHost(
+      container.decodeDefault(
+        String.self,
+        forKey: .externalControllerHost,
+        default: defaults.externalControllerHost
+      )
     )
     externalControllerPort = container.decodeDefault(
       Int.self,
@@ -1746,7 +1840,15 @@ struct RuntimeOverrides: Codable, Equatable, Sendable {
   }
 
   var endpoint: CoreAPIEndpoint {
-    CoreAPIEndpoint(host: externalControllerHost, port: externalControllerPort, secret: secret)
+    CoreAPIEndpoint(
+      host: Self.normalizedExternalControllerHost(externalControllerHost),
+      port: externalControllerPort,
+      secret: secret
+    )
+  }
+
+  static func normalizedExternalControllerHost(_ host: String) -> String {
+    ExternalControllerSettings.normalizedRuntimeHost(host)
   }
 }
 

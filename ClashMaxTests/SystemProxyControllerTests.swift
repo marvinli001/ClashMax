@@ -217,6 +217,19 @@ final class SystemProxyControllerTests: XCTestCase {
     XCTAssertTrue(didExit)
   }
 
+  func testProcessCommandRunnerBlocksMutatingNetworkSetupCommandsDuringTests() async throws {
+    let runner = ProcessCommandRunner(timeout: 1)
+
+    do {
+      _ = try await runner.run("/usr/sbin/networksetup", ["-setwebproxy", "Wi-Fi", "127.0.0.1", "7890"])
+      XCTFail("Expected mutating networksetup command to be blocked under XCTest.")
+    } catch {
+      XCTAssertTrue(
+        UserFacingError.message(for: error).contains("Refusing to run mutating networksetup command inside XCTest")
+      )
+    }
+  }
+
   func testSystemPingTesterUsesFixedExecutableAndParsesLatency() async throws {
     let runner = RecordingCommandRunner(outputs: [
       "/sbin/ping -c 1 -W 5000 example.com": "64 bytes from 93.184.216.34: icmp_seq=0 ttl=56 time=12.4 ms"

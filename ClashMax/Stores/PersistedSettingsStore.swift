@@ -3,7 +3,11 @@ import ServiceManagement
 
 @MainActor
 final class PersistedSettingsStore: ObservableObject {
-  @Published var overrides: RuntimeOverrides
+  @Published var overrides: RuntimeOverrides {
+    didSet {
+      saveRuntimeSettings(overrides)
+    }
+  }
   @Published var proxyRoutingMode: ProxyRoutingMode = .systemProxy {
     didSet {
       saveCodable(proxyRoutingMode, forKey: Self.proxyRoutingModeDefaultsKey)
@@ -79,6 +83,7 @@ final class PersistedSettingsStore: ObservableObject {
       saveExternalControllerSettings(externalControllerSettings)
     }
   }
+  @Published private(set) var appliedRuntimeSettingsSnapshot: AppliedRuntimeSettingsSnapshot?
   @Published private(set) var launchSettings = LaunchSettings.default
   @Published private(set) var initialTunHelperPromptHandled: Bool
   @Published var developerMode = false {
@@ -95,6 +100,7 @@ final class PersistedSettingsStore: ObservableObject {
   private static let proxyRoutingModeDefaultsKey = "io.github.clashmax.proxyRoutingMode"
   private static let developerModeDefaultsKey = "io.github.clashmax.developerMode"
   private static let systemProxySettingsDefaultsKey = "io.github.clashmax.systemProxySettings"
+  private static let runtimeSettingsDefaultsKey = "io.github.clashmax.runtimeSettings"
   private static let ipv6EnabledDefaultsKey = "io.github.clashmax.ipv6Enabled"
   private static let tunSettingsDefaultsKey = "io.github.clashmax.tunSettings"
   private static let tunDNSDefaultsVersionKey = "io.github.clashmax.tunDNSDefaultsVersion"
@@ -110,6 +116,7 @@ final class PersistedSettingsStore: ObservableObject {
   private static let appThemeDefaultsKey = "io.github.clashmax.appTheme"
   private static let externalControllerSettingsDefaultsKey = "io.github.clashmax.externalControllerSettings"
   private static let externalControllerCORSSettingsDefaultsKey = "io.github.clashmax.externalControllerCORSSettings"
+  private static let appliedRuntimeSettingsSnapshotDefaultsKey = "io.github.clashmax.appliedRuntimeSettingsSnapshot"
   private static let persistedSecretPlaceholder = "__clashmax_per_run_secret__"
 
   init(
@@ -118,7 +125,15 @@ final class PersistedSettingsStore: ObservableObject {
   ) {
     self.loginItemService = loginItemService
     self.defaults = defaults
-    overrides = RuntimeOverrides.defaultForLaunch()
+    var launchOverrides = RuntimeOverrides.defaultForLaunch()
+    if let runtimeSettings = Self.loadCodable(
+      PersistedRuntimeSettings.self,
+      forKey: Self.runtimeSettingsDefaultsKey,
+      defaults: defaults
+    ) {
+      runtimeSettings.apply(to: &launchOverrides)
+    }
+    overrides = launchOverrides
     developerMode = defaults.bool(forKey: Self.developerModeDefaultsKey)
     initialTunHelperPromptHandled = defaults.bool(forKey: Self.initialTunHelperPromptHandledDefaultsKey)
     let storedProxyRoutingMode = Self.loadCodable(
@@ -196,6 +211,11 @@ final class PersistedSettingsStore: ObservableObject {
       defaults: defaults,
       migratedCORSSettings: migratedCORSSettings
     )
+    appliedRuntimeSettingsSnapshot = Self.loadCodable(
+      AppliedRuntimeSettingsSnapshot.self,
+      forKey: Self.appliedRuntimeSettingsSnapshotDefaultsKey,
+      defaults: defaults
+    )
     overrides.tunSettings = tunSettings
     overrides.ruleOverlay = ruleOverlaySettings
     overrides.ipv6Enabled = ipv6Enabled
@@ -252,10 +272,35 @@ final class PersistedSettingsStore: ObservableObject {
     overrides.externalControllerCORS = settings.runtimeCORS
   }
 
+  func recordAppliedRuntimeSettingsSnapshot(_ snapshot: AppliedRuntimeSettingsSnapshot) {
+    appliedRuntimeSettingsSnapshot = snapshot
+    saveCodable(
+      sanitizedAppliedRuntimeSettingsSnapshot(snapshot),
+      forKey: Self.appliedRuntimeSettingsSnapshotDefaultsKey
+    )
+  }
+
+  func clearAppliedRuntimeSettingsSnapshot() {
+    appliedRuntimeSettingsSnapshot = nil
+    defaults.removeObject(forKey: Self.appliedRuntimeSettingsSnapshotDefaultsKey)
+  }
+
   private func saveExternalControllerSettings(_ settings: ExternalControllerSettings) {
     var sanitized = settings
     sanitized.secret = Self.persistedSecretPlaceholder
     saveCodable(sanitized, forKey: Self.externalControllerSettingsDefaultsKey)
+  }
+
+  private func saveRuntimeSettings(_ overrides: RuntimeOverrides) {
+    saveCodable(PersistedRuntimeSettings(overrides: overrides), forKey: Self.runtimeSettingsDefaultsKey)
+  }
+
+  private func sanitizedAppliedRuntimeSettingsSnapshot(
+    _ snapshot: AppliedRuntimeSettingsSnapshot
+  ) -> AppliedRuntimeSettingsSnapshot {
+    var sanitized = snapshot
+    sanitized.overrides.secret = Self.persistedSecretPlaceholder
+    return sanitized
   }
 
   private static func loadExternalControllerSettings(

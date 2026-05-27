@@ -948,6 +948,8 @@ struct ProcessCommandRunner: CommandRunning {
   }
 
   func run(_ executable: String, _ arguments: [String]) async throws -> String {
+    try Self.assertCommandIsSafeForCurrentProcess(executable: executable, arguments: arguments)
+
     let process = Process()
     let pipe = Pipe()
     process.executableURL = URL(fileURLWithPath: executable)
@@ -986,5 +988,28 @@ struct ProcessCommandRunner: CommandRunning {
       )
     }
     return result.output
+  }
+
+  private static func assertCommandIsSafeForCurrentProcess(executable: String, arguments: [String]) throws {
+    guard isRunningUnderXCTest else { return }
+    guard URL(fileURLWithPath: executable).lastPathComponent == "networksetup" else { return }
+    guard arguments.contains(where: { $0.hasPrefix("-set") }) else { return }
+
+    let command = ([executable] + arguments).joined(separator: " ")
+    throw NSError(
+      domain: "ClashMax.CommandRunner",
+      code: Int(EPERM),
+      userInfo: [
+        NSLocalizedDescriptionKey: "Refusing to run mutating networksetup command inside XCTest: \(command). Inject a test CommandRunning double instead."
+      ]
+    )
+  }
+
+  private static var isRunningUnderXCTest: Bool {
+    let environment = ProcessInfo.processInfo.environment
+    return environment["XCTestConfigurationFilePath"] != nil
+      || environment["XCTestBundlePath"] != nil
+      || NSClassFromString("XCTest.XCTestCase") != nil
+      || Bundle.allBundles.contains { $0.bundlePath.hasSuffix(".xctest") }
   }
 }

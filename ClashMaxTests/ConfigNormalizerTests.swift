@@ -601,28 +601,31 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertNil(yaml["external-controller-cors"])
   }
 
-  func testRuntimeConfigUsesSavedExternalControllerAddressAndSecret() throws {
+  func testRuntimeConfigNormalizesLegacyExternalControllerHostAndPreservesPortSecret() throws {
     let source = """
     proxies:
       - name: DIRECT
         type: direct
     """
-    var overrides = RuntimeOverrides.defaultForLaunch(secret: "ignored")
-    overrides.externalControllerHost = "localhost"
-    overrides.externalControllerPort = 19197
-    overrides.secret = "saved-secret"
-    overrides.externalControllerCORS = ExternalControllerCORSSettings(
-      enabled: false,
-      allowPrivateNetwork: false,
-      allowedOrigins: ["https://yacd.metacubex.one"]
-    )
+    for staleHost in ["localhost", "::1"] {
+      var overrides = RuntimeOverrides.defaultForLaunch(secret: "ignored")
+      overrides.externalControllerHost = staleHost
+      overrides.externalControllerPort = 19197
+      overrides.secret = "saved-secret"
+      overrides.externalControllerCORS = ExternalControllerCORSSettings(
+        enabled: false,
+        allowPrivateNetwork: false,
+        allowedOrigins: ["https://yacd.metacubex.one"]
+      )
 
-    let output = try ConfigNormalizer().runtimeConfig(from: source, overrides: overrides)
-    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+      let output = try ConfigNormalizer().runtimeConfig(from: source, overrides: overrides)
+      let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
 
-    XCTAssertEqual(yaml["external-controller"] as? String, "localhost:19197")
-    XCTAssertEqual(yaml["secret"] as? String, "saved-secret")
-    XCTAssertNil(yaml["external-controller-cors"])
+      XCTAssertEqual(overrides.externalControllerHost, "127.0.0.1")
+      XCTAssertEqual(yaml["external-controller"] as? String, "127.0.0.1:19197")
+      XCTAssertEqual(yaml["secret"] as? String, "saved-secret")
+      XCTAssertNil(yaml["external-controller-cors"])
+    }
   }
 
   func testRuntimeConfigMaterializerWritesUniqueRuntimeAndProviderFiles() async throws {
@@ -679,6 +682,72 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertTrue(FileManager.default.fileExists(atPath: firstProviderPath))
     XCTAssertEqual(try posixPermissions(at: firstURL), SecureFileIO.privateFilePermissions)
     XCTAssertEqual(try posixPermissions(at: URL(fileURLWithPath: firstProviderPath)), SecureFileIO.privateFilePermissions)
+  }
+
+  func testRuntimeConfigMaterializerRetainsProtectedActiveAndNewestGenerations() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxRuntimeRetentionTests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let sourceURL = root.appendingPathComponent("source.txt")
+    try """
+    vless://00000000-0000-0000-0000-000000000000@example.com:443?security=tls&sni=example.com#Provider%20Node
+    """.write(to: sourceURL, atomically: true, encoding: .utf8)
+
+    let runtimeURL = root.appendingPathComponent("profile.runtime.yaml")
+    let providerURL = root.appendingPathComponent("profile.provider.txt")
+    let unmanagedURLs = [
+      runtimeURL,
+      providerURL,
+      root.appendingPathComponent("profile.runtime.not-a-uuid.yaml"),
+      root.appendingPathComponent("profile.provider.not-a-uuid.txt"),
+      root.appendingPathComponent(".profile.runtime.\(UUID().uuidString).yaml.tmp"),
+      root.appendingPathComponent("other-profile.runtime.\(UUID().uuidString).yaml")
+    ]
+    for url in unmanagedURLs {
+      try "unmanaged".write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    let materializer = RuntimeConfigMaterializer()
+    var results: [RuntimeConfigMaterializationResult] = []
+    for index in 0..<5 {
+      var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-\(index)")
+      overrides.mixedPort = 7890 + index
+      let protectedURLs = results.first?.artifactURLs ?? []
+      let result = try await materializer.materializeResult(
+        RuntimeConfigMaterializationRequest(
+          profileName: "Provider",
+          sourcePath: sourceURL.path,
+          runtimeConfigURL: runtimeURL,
+          providerContentURL: providerURL,
+          overrides: overrides,
+          selectionOverrides: [:],
+          protectedArtifactURLs: protectedURLs,
+          retainedGenerationCount: 2
+        )
+      )
+      try setModificationDate(Date(timeIntervalSince1970: TimeInterval(index + 1)), for: result.artifactURLs)
+      results.append(result)
+    }
+
+    let retainedResults = [results[0], results[3], results[4]]
+    for result in retainedResults {
+      XCTAssertTrue(FileManager.default.fileExists(atPath: result.runtimeConfigURL.path))
+      let providerContentURL = try XCTUnwrap(result.providerContentURL)
+      XCTAssertTrue(FileManager.default.fileExists(atPath: providerContentURL.path))
+      XCTAssertEqual(try posixPermissions(at: result.runtimeConfigURL), SecureFileIO.privateFilePermissions)
+      XCTAssertEqual(try posixPermissions(at: providerContentURL), SecureFileIO.privateFilePermissions)
+      XCTAssertEqual(try providerContentPath(in: result.runtimeConfigURL), providerContentURL.path)
+    }
+
+    for result in [results[1], results[2]] {
+      XCTAssertFalse(FileManager.default.fileExists(atPath: result.runtimeConfigURL.path))
+      if let providerContentURL = result.providerContentURL {
+        XCTAssertFalse(FileManager.default.fileExists(atPath: providerContentURL.path))
+      }
+    }
+    for url in unmanagedURLs {
+      XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "\(url.lastPathComponent) should not be removed")
+    }
   }
 
   func testURIProviderContentBuildsRuntimeConfigWithFileProvider() throws {
@@ -1520,5 +1589,19 @@ final class ConfigNormalizerTests: XCTestCase {
   private func posixPermissions(at url: URL) throws -> Int {
     let value = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber)
     return value.intValue & 0o777
+  }
+
+  private func providerContentPath(in runtimeConfigURL: URL) throws -> String {
+    let output = try String(contentsOf: runtimeConfigURL, encoding: .utf8)
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let providers = try XCTUnwrap(yaml["proxy-providers"] as? [String: Any])
+    let provider = try XCTUnwrap(providers["clashmax-subscription-provider"] as? [String: Any])
+    return try XCTUnwrap(provider["path"] as? String)
+  }
+
+  private func setModificationDate(_ date: Date, for urls: [URL]) throws {
+    for url in urls {
+      try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: url.path)
+    }
   }
 }
