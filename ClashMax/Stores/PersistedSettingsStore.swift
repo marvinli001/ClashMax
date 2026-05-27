@@ -57,6 +57,11 @@ final class PersistedSettingsStore: ObservableObject {
       saveCodable(menuBarPinnedGroupSettings, forKey: Self.menuBarPinnedGroupSettingsDefaultsKey)
     }
   }
+  @Published var proxyPageSettings = ProxyPageSettings.default {
+    didSet {
+      saveCodable(proxyPageSettings, forKey: Self.proxyPageSettingsDefaultsKey)
+    }
+  }
   @Published var globalShortcutSettings = GlobalShortcutSettings.default {
     didSet {
       saveCodable(globalShortcutSettings, forKey: Self.globalShortcutSettingsDefaultsKey)
@@ -110,6 +115,7 @@ final class PersistedSettingsStore: ObservableObject {
   private static let delayTestSettingsDefaultsKey = "io.github.clashmax.delayTestSettings"
   private static let subscriptionFetchSettingsDefaultsKey = "io.github.clashmax.subscriptionFetchSettings"
   private static let menuBarPinnedGroupSettingsDefaultsKey = "io.github.clashmax.menuBarPinnedGroupSettings"
+  private static let proxyPageSettingsDefaultsKey = "io.github.clashmax.proxyPageSettings"
   private static let globalShortcutSettingsDefaultsKey = "io.github.clashmax.globalShortcutSettings"
   private static let externalDashboardProfilesDefaultsKey = "io.github.clashmax.externalDashboardProfiles"
   private static let networkPolicySettingsDefaultsKey = "io.github.clashmax.networkPolicySettings"
@@ -177,6 +183,11 @@ final class PersistedSettingsStore: ObservableObject {
     menuBarPinnedGroupSettings = Self.loadCodable(
       MenuBarPinnedGroupSettings.self,
       forKey: Self.menuBarPinnedGroupSettingsDefaultsKey,
+      defaults: defaults
+    ) ?? .default
+    proxyPageSettings = Self.loadCodable(
+      ProxyPageSettings.self,
+      forKey: Self.proxyPageSettingsDefaultsKey,
       defaults: defaults
     ) ?? .default
     globalShortcutSettings = Self.loadCodable(
@@ -258,6 +269,59 @@ final class PersistedSettingsStore: ObservableObject {
 
   func openLoginItemsSettings() {
     loginItemService.openSystemSettingsLoginItems()
+  }
+
+  func backupSnapshot() -> BackupSettingsSnapshot {
+    BackupSettingsSnapshot(
+      runtimeSettings: PersistedRuntimeSettings(overrides: overrides),
+      proxyRoutingMode: proxyRoutingMode,
+      systemProxySettings: systemProxySettings,
+      ipv6Enabled: ipv6Enabled,
+      tunSettings: tunSettings,
+      networkExtensionRoutingSettings: networkExtensionRoutingSettings,
+      ruleOverlaySettings: ruleOverlaySettings,
+      delayTestSettings: delayTestSettings,
+      subscriptionFetchSettings: subscriptionFetchSettings,
+      menuBarPinnedGroupSettings: menuBarPinnedGroupSettings,
+      proxyPageSettings: proxyPageSettings,
+      globalShortcutSettings: globalShortcutSettings,
+      externalDashboardProfiles: externalDashboardProfiles,
+      networkPolicySettings: networkPolicySettings,
+      appTheme: appTheme,
+      externalControllerSettings: BackupExternalControllerSettings(settings: externalControllerSettings)
+    )
+  }
+
+  func applyBackupSnapshot(_ snapshot: BackupSettingsSnapshot) {
+    proxyRoutingMode = snapshot.proxyRoutingMode
+    systemProxySettings = snapshot.systemProxySettings
+    ipv6Enabled = snapshot.ipv6Enabled
+    tunSettings = snapshot.tunSettings
+    networkExtensionRoutingSettings = snapshot.networkExtensionRoutingSettings
+    ruleOverlaySettings = snapshot.ruleOverlaySettings
+    delayTestSettings = snapshot.delayTestSettings
+    subscriptionFetchSettings = snapshot.subscriptionFetchSettings
+    menuBarPinnedGroupSettings = snapshot.menuBarPinnedGroupSettings
+    proxyPageSettings = snapshot.proxyPageSettings
+    globalShortcutSettings = snapshot.globalShortcutSettings
+    externalDashboardProfiles = snapshot.externalDashboardProfiles
+    networkPolicySettings = snapshot.networkPolicySettings
+    appTheme = snapshot.appTheme
+    externalControllerSettings = snapshot.externalControllerSettings.restoredSettings()
+
+    var restoredOverrides = overrides
+    snapshot.runtimeSettings.apply(to: &restoredOverrides)
+    restoredOverrides.ipv6Enabled = ipv6Enabled
+    restoredOverrides.tunSettings = tunSettings
+    restoredOverrides.ruleOverlay = ruleOverlaySettings
+    restoredOverrides.unifiedDelay = delayTestSettings.unifiedDelay
+    restoredOverrides.externalControllerHost = externalControllerSettings.normalizedHost
+    restoredOverrides.externalControllerPort = externalControllerSettings.normalizedPort
+    restoredOverrides.secret = externalControllerSettings.normalizedSecret
+    restoredOverrides.externalControllerCORS = externalControllerSettings.runtimeCORS
+    overrides = restoredOverrides
+    clearAppliedRuntimeSettingsSnapshot()
+    refreshLaunchSettings()
   }
 
   func updateTunSettings(_ settings: TunSettings) {

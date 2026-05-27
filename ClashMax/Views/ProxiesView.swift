@@ -5,16 +5,12 @@ struct ProxiesView: View {
   @EnvironmentObject private var runtimeData: RuntimeDataStore
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var searchText = ""
-  @State private var sortOrder: ProxyNodeSort = .name
   @State private var expandedGroupIDs: Set<String>?
   @State private var selectedGroupID: ProxyGroup.ID?
-  @State private var viewMode: ProxyPageViewMode = .groupDetail
-  @State private var nodePresentation: ProxyNodePresentation = .grid
-  @State private var showsNodeDetails = true
-  @State private var closesOldConnectionsAfterSwitch = false
-  @State private var customDelayTestURLByGroup: [ProxyGroup.ID: String] = [:]
+  @State private var showsBatchFailureDetails = false
 
   var body: some View {
+    let pageSettings = appModel.proxyPageSettings
     let runtimeGroups = appModel.visibleProxyGroups
     let unfilteredGroups = ResolvedProxyCatalog(
       groups: runtimeGroups,
@@ -34,7 +30,7 @@ struct ProxiesView: View {
       groups: groups,
       expandedGroupIDs: visibleExpandedGroupIDs,
       searchQuery: searchQuery.rawValue,
-      sortOrder: sortOrder
+      sortOrder: pageSettings.sortOrder
     )
     let isStarting = appModel.dashboardRuntimeState.isStarting
     let canStart = ProxiesPageActionState.canStart(
@@ -151,6 +147,18 @@ struct ProxiesView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
 
+      if let progress = appModel.proxyDelayBatchProgress {
+        Divider()
+        ProxyDelayBatchProgressStrip(
+          progress: progress,
+          showsFailureDetails: $showsBatchFailureDetails
+        ) {
+          appModel.cancelProxyDelayBatch()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+      }
+
       if let notice = ProxyPreviewNoticeKind.resolve(
         developerMode: appModel.developerMode,
         previewRuntimeActive: appModel.previewRuntimeActive,
@@ -171,14 +179,15 @@ struct ProxiesView: View {
 
       Divider()
 
-      if viewMode == .allGroups {
+      if appModel.proxyPageSettings.viewMode == .allGroups {
         ScrollView {
           LazyVStack(alignment: .leading, spacing: 10) {
             ForEach(groups) { group in
               ProxyGroupCard(
                 group: group,
-                showsDeveloperDetails: appModel.developerMode || showsNodeDetails,
-                closesOldConnectionsAfterSwitch: closesOldConnectionsAfterSwitch,
+                customDelayTestURL: appModel.customDelayTestURL(forGroupName: group.name),
+                showsDeveloperDetails: appModel.developerMode || appModel.proxyPageSettings.showsNodeDetails,
+                closesOldConnectionsAfterSwitch: appModel.proxyPageSettings.closesOldConnectionsAfterSwitch,
                 isExpanded: visibleExpandedGroupIDs.contains(group.id),
                 isSearchActive: !searchQuery.isEmpty
               ) {
@@ -195,9 +204,9 @@ struct ProxiesView: View {
         ProxyGroupSplitView(
           groups: groups,
           selectedGroupID: $selectedGroupID,
-          nodePresentation: nodePresentation,
-          showsNodeDetails: showsNodeDetails,
-          closesOldConnectionsAfterSwitch: closesOldConnectionsAfterSwitch,
+          nodePresentation: appModel.proxyPageSettings.nodePresentation,
+          showsNodeDetails: appModel.proxyPageSettings.showsNodeDetails,
+          closesOldConnectionsAfterSwitch: appModel.proxyPageSettings.closesOldConnectionsAfterSwitch,
           customDelayTestURLText: customDelayTestURLBinding(for: selectedGroupID)
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -260,22 +269,28 @@ struct ProxiesView: View {
     } label: {
       Label("Test All", systemImage: "waveform.path.ecg")
     }
-    .disabled(!appModel.canControlRuntimeProxies || appModel.visibleProxyGroups.isEmpty)
+    .disabled(!appModel.canControlRuntimeProxies || appModel.visibleProxyGroups.isEmpty || appModel.isProxyDelayBatchRunning)
     .help("Test delay for every selectable node")
   }
 
   private var nodeDetailsButton: some View {
     Button {
-      showsNodeDetails.toggle()
+      appModel.updateProxyPageSettings { settings in
+        settings.showsNodeDetails.toggle()
+      }
     } label: {
-      Image(systemName: showsNodeDetails ? "list.bullet.rectangle.portrait.fill" : "list.bullet.rectangle.portrait")
+      Image(
+        systemName: appModel.proxyPageSettings.showsNodeDetails
+          ? "list.bullet.rectangle.portrait.fill"
+          : "list.bullet.rectangle.portrait"
+      )
     }
     .buttonStyle(.borderless)
-    .help(showsNodeDetails ? "Hide node details" : "Show node details")
+    .help(appModel.proxyPageSettings.showsNodeDetails ? "Hide node details" : "Show node details")
   }
 
   private var closeOldConnectionsToggle: some View {
-    Toggle(isOn: $closesOldConnectionsAfterSwitch) {
+    Toggle(isOn: closeOldConnectionsBinding) {
       Label("Close Old", systemImage: "xmark.circle")
     }
     .toggleStyle(.checkbox)
@@ -284,7 +299,7 @@ struct ProxiesView: View {
   }
 
   private var viewModePicker: some View {
-    Picker("View", selection: $viewMode) {
+    Picker("View", selection: viewModeBinding) {
       ForEach(ProxyPageViewMode.allCases) { mode in
         Text(mode.displayName).tag(mode)
       }
@@ -294,7 +309,7 @@ struct ProxiesView: View {
   }
 
   private var sortPicker: some View {
-    Picker("Sort", selection: $sortOrder) {
+    Picker("Sort", selection: sortOrderBinding) {
       ForEach(ProxyNodeSort.allCases) { order in
         Text(order.displayName).tag(order)
       }
@@ -304,7 +319,7 @@ struct ProxiesView: View {
   }
 
   private var nodePresentationPicker: some View {
-    Picker("Layout", selection: $nodePresentation) {
+    Picker("Layout", selection: nodePresentationBinding) {
       ForEach(ProxyNodePresentation.allCases) { presentation in
         Image(systemName: presentation.systemImage).tag(presentation)
       }
@@ -313,6 +328,50 @@ struct ProxiesView: View {
     .frame(width: 88)
     .fixedSize(horizontal: true, vertical: false)
     .help("Switch node layout")
+  }
+
+  private var viewModeBinding: Binding<ProxyPageViewMode> {
+    Binding(
+      get: { appModel.proxyPageSettings.viewMode },
+      set: { value in
+        appModel.updateProxyPageSettings { settings in
+          settings.viewMode = value
+        }
+      }
+    )
+  }
+
+  private var sortOrderBinding: Binding<ProxyNodeSort> {
+    Binding(
+      get: { appModel.proxyPageSettings.sortOrder },
+      set: { value in
+        appModel.updateProxyPageSettings { settings in
+          settings.sortOrder = value
+        }
+      }
+    )
+  }
+
+  private var nodePresentationBinding: Binding<ProxyNodePresentation> {
+    Binding(
+      get: { appModel.proxyPageSettings.nodePresentation },
+      set: { value in
+        appModel.updateProxyPageSettings { settings in
+          settings.nodePresentation = value
+        }
+      }
+    )
+  }
+
+  private var closeOldConnectionsBinding: Binding<Bool> {
+    Binding(
+      get: { appModel.proxyPageSettings.closesOldConnectionsAfterSwitch },
+      set: { value in
+        appModel.updateProxyPageSettings { settings in
+          settings.closesOldConnectionsAfterSwitch = value
+        }
+      }
+    )
   }
 
   private func sortedGroups(from groups: [ProxyGroup]) -> [ProxyGroup] {
@@ -338,7 +397,7 @@ struct ProxiesView: View {
   }
 
   private func sortedNodes(_ nodes: [ProxyNode]) -> [ProxyNode] {
-    switch sortOrder {
+    switch appModel.proxyPageSettings.sortOrder {
     case .name:
       return nodes.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     case .delay:
@@ -376,11 +435,13 @@ struct ProxiesView: View {
     Binding(
       get: {
         guard let groupID else { return "" }
-        return customDelayTestURLByGroup[groupID] ?? ""
+        return appModel.proxyPageSettings.customDelayTestURLText(forGroupName: groupID)
       },
       set: { value in
         guard let groupID else { return }
-        customDelayTestURLByGroup[groupID] = value
+        appModel.updateProxyPageSettings { settings in
+          settings.setCustomDelayTestURLText(value, forGroupName: groupID)
+        }
       }
     )
   }
@@ -394,50 +455,6 @@ struct ProxiesView: View {
     )
     withAnimation(ProxyInteractionAnimation.expansion(reduceMotion: reduceMotion)) {
       expandedGroupIDs = ProxyGroupExpansionPolicy.toggled(groupID: group.id, in: currentExpansion)
-    }
-  }
-}
-
-private enum ProxyNodeSort: String, CaseIterable, Equatable, Identifiable {
-  case name
-  case delay
-  case type
-
-  var id: String { rawValue }
-
-  var displayName: String {
-    switch self {
-    case .name: String(localized: "Name")
-    case .delay: String(localized: "Delay")
-    case .type: String(localized: "Type")
-    }
-  }
-}
-
-private enum ProxyPageViewMode: String, CaseIterable, Equatable, Identifiable {
-  case groupDetail
-  case allGroups
-
-  var id: String { rawValue }
-
-  var displayName: String {
-    switch self {
-    case .groupDetail: String(localized: "Split")
-    case .allGroups: String(localized: "All Groups")
-    }
-  }
-}
-
-private enum ProxyNodePresentation: String, CaseIterable, Equatable, Identifiable {
-  case grid
-  case list
-
-  var id: String { rawValue }
-
-  var systemImage: String {
-    switch self {
-    case .grid: "square.grid.2x2"
-    case .list: "list.bullet"
     }
   }
 }
@@ -1012,14 +1029,14 @@ private struct ProxyGroupDetailPane: View {
       HStack(spacing: 10) {
         groupSummary
         Spacer(minLength: 12)
-        customDelayURLField
+        customDelayURLControl
         detailActions
       }
 
       VStack(alignment: .leading, spacing: 8) {
         groupSummary
         HStack(spacing: 10) {
-          customDelayURLField
+          customDelayURLControl
           detailActions
         }
       }
@@ -1040,11 +1057,19 @@ private struct ProxyGroupDetailPane: View {
     }
   }
 
-  private var customDelayURLField: some View {
-    TextField("Custom delay URL", text: $customDelayTestURLText)
-      .textFieldStyle(.roundedBorder)
-      .frame(minWidth: 180, idealWidth: 250, maxWidth: 320)
-      .help("Optional URL for this group's Mihomo delay test")
+  private var customDelayURLControl: some View {
+    VStack(alignment: .leading, spacing: 3) {
+      TextField("Custom delay URL", text: $customDelayTestURLText)
+        .textFieldStyle(.roundedBorder)
+        .help("Optional URL for this group's Mihomo delay test")
+      if hasInvalidCustomDelayTestURL {
+        Text("Invalid custom delay URL. Falling back to default delay URL.")
+          .font(.caption2)
+          .foregroundStyle(.orange)
+          .lineLimit(1)
+      }
+    }
+    .frame(minWidth: 180, idealWidth: 250, maxWidth: 320)
   }
 
   private var detailActions: some View {
@@ -1063,7 +1088,11 @@ private struct ProxyGroupDetailPane: View {
         Label("Test Group", systemImage: "waveform.path.ecg")
           .labelStyle(.titleAndIcon)
       }
-      .disabled(!appModel.canControlRuntimeProxies || !group.nodes.contains(where: \.isSelectable))
+      .disabled(
+        !appModel.canControlRuntimeProxies
+          || !group.nodes.contains(where: \.isSelectable)
+          || appModel.isProxyDelayBatchRunning
+      )
       .help("Test delay for this group")
 
       Button {
@@ -1080,13 +1109,196 @@ private struct ProxyGroupDetailPane: View {
   }
 
   private var parsedCustomDelayTestURL: URL? {
-    let trimmed = customDelayTestURLText.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty,
-          let url = URL(string: trimmed),
-          let scheme = url.scheme?.lowercased(),
-          ["http", "https"].contains(scheme)
-    else { return nil }
-    return url
+    appModel.customDelayTestURL(forGroupName: group.name)
+  }
+
+  private var hasInvalidCustomDelayTestURL: Bool {
+    appModel.proxyPageSettings.hasInvalidCustomDelayTestURL(forGroupName: group.name)
+  }
+}
+
+private struct ProxyDelayBatchProgressStrip: View {
+  let progress: ProxyDelayBatchProgress
+  @Binding var showsFailureDetails: Bool
+  let onCancel: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      ViewThatFits(in: .horizontal) {
+        HStack(spacing: 10) {
+          leadingStatus
+          ProgressView(value: progress.progressFraction)
+            .frame(minWidth: 120, idealWidth: 180, maxWidth: 260)
+          metrics
+          Spacer(minLength: 8)
+          cancelButton
+        }
+
+        VStack(alignment: .leading, spacing: 8) {
+          HStack(spacing: 10) {
+            leadingStatus
+            Spacer(minLength: 8)
+            cancelButton
+          }
+          ProgressView(value: progress.progressFraction)
+          metrics
+        }
+      }
+
+      if progress.hasFailures {
+        failureToggle
+        if showsFailureDetails {
+          failureDetails
+        }
+      }
+    }
+  }
+
+  private var leadingStatus: some View {
+    Label(statusTitle, systemImage: progress.isRunning ? "waveform.path.ecg" : statusIcon)
+      .font(.caption.weight(.semibold))
+      .foregroundStyle(progress.wasCancelled ? .orange : .secondary)
+      .lineLimit(1)
+  }
+
+  private var statusTitle: String {
+    if progress.isRunning {
+      return String(localized: "Batch delay testing")
+    }
+    if progress.wasCancelled {
+      return String(localized: "Batch delay cancelled")
+    }
+    return String(localized: "Batch delay complete")
+  }
+
+  private var statusIcon: String {
+    progress.wasCancelled ? "xmark.circle" : "checkmark.circle"
+  }
+
+  private var metrics: some View {
+    HStack(spacing: 8) {
+      ProxyDelayBatchMetric(
+        text: String.localizedStringWithFormat(
+          NSLocalizedString("%lld/%lld tested", comment: ""),
+          Int64(progress.completed),
+          Int64(progress.total)
+        ),
+        systemImage: "speedometer",
+        color: .secondary
+      )
+      ProxyDelayBatchMetric(
+        text: "\(progress.succeeded)",
+        systemImage: "checkmark.circle.fill",
+        color: .green
+      )
+      ProxyDelayBatchMetric(
+        text: "\(progress.timedOut)",
+        systemImage: ProxyDelayFailureKind.timeout.systemImage,
+        color: .orange
+      )
+      ProxyDelayBatchMetric(
+        text: "\(progress.failed)",
+        systemImage: ProxyDelayFailureKind.other.systemImage,
+        color: .red
+      )
+      if progress.cancelled > 0 {
+        ProxyDelayBatchMetric(
+          text: "\(progress.cancelled)",
+          systemImage: ProxyDelayFailureKind.cancelled.systemImage,
+          color: .orange
+        )
+      }
+    }
+    .fixedSize(horizontal: true, vertical: false)
+  }
+
+  @ViewBuilder
+  private var cancelButton: some View {
+    if progress.isRunning {
+      Button {
+        onCancel()
+      } label: {
+        Label("Cancel", systemImage: "xmark.circle")
+      }
+      .controlSize(.small)
+      .help("Cancel batch delay testing")
+    }
+  }
+
+  private var failureToggle: some View {
+    Button {
+      showsFailureDetails.toggle()
+    } label: {
+      Label(
+        showsFailureDetails ? "Hide Failures" : "Show Failures",
+        systemImage: showsFailureDetails ? "chevron.down" : "chevron.right"
+      )
+    }
+    .buttonStyle(.borderless)
+    .controlSize(.small)
+  }
+
+  private var failureDetails: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      if progress.cancelled > 0 {
+        failureCategoryRow(
+          kind: .cancelled,
+          count: progress.cancelled,
+          failures: []
+        )
+      }
+      ForEach(failureGroups) { group in
+        failureCategoryRow(kind: group.kind, count: group.failures.count, failures: group.failures)
+      }
+    }
+    .padding(.leading, 2)
+  }
+
+  private var failureGroups: [ProxyDelayFailureGroup] {
+    ProxyDelayFailureKind.allCases.compactMap { kind in
+      guard kind != .cancelled else { return nil }
+      let failures = progress.failures.filter { $0.kind == kind }
+      guard !failures.isEmpty else { return nil }
+      return ProxyDelayFailureGroup(kind: kind, failures: failures)
+    }
+  }
+
+  private func failureCategoryRow(
+    kind: ProxyDelayFailureKind,
+    count: Int,
+    failures: [ProxyDelayBatchFailure]
+  ) -> some View {
+    VStack(alignment: .leading, spacing: 3) {
+      Label("\(kind.displayName) \(count)", systemImage: kind.systemImage)
+        .font(.caption)
+        .foregroundStyle(kind == .timeout || kind == .cancelled ? .orange : .red)
+      ForEach(failures.prefix(3)) { failure in
+        Text("\(failure.displayName): \(failure.message)")
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+      }
+    }
+  }
+}
+
+private struct ProxyDelayFailureGroup: Identifiable {
+  var kind: ProxyDelayFailureKind
+  var failures: [ProxyDelayBatchFailure]
+
+  var id: ProxyDelayFailureKind { kind }
+}
+
+private struct ProxyDelayBatchMetric: View {
+  let text: String
+  let systemImage: String
+  let color: Color
+
+  var body: some View {
+    Label(text, systemImage: systemImage)
+      .font(.caption.monospacedDigit())
+      .foregroundStyle(color)
+      .lineLimit(1)
   }
 }
 
@@ -1194,6 +1406,7 @@ private struct ProxyGroupCard: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.colorScheme) private var colorScheme
   let group: ProxyGroup
+  let customDelayTestURL: URL?
   let showsDeveloperDetails: Bool
   let closesOldConnectionsAfterSwitch: Bool
   let isExpanded: Bool
@@ -1237,7 +1450,7 @@ private struct ProxyGroupCard: View {
           ProxyNodeCard(
             group: group,
             node: node,
-            customDelayTestURL: nil,
+            customDelayTestURL: customDelayTestURL,
             showsDetails: showsDeveloperDetails,
             closesOldConnectionsAfterSwitch: closesOldConnectionsAfterSwitch
           )
@@ -1362,7 +1575,7 @@ private struct ProxyNodeCard: View {
     let canSelect = group.allowsManualProxySelection
       && node.isSelectable
       && (appModel.canControlRuntimeProxies || appModel.canSelectProxyOffline)
-    let canTest = node.isSelectable && appModel.canControlRuntimeProxies
+    let canTest = node.isSelectable && appModel.canControlRuntimeProxies && !appModel.isProxyDelayBatchRunning
     let delayDisplay = ProxyDelayDisplay(state: node.resolvedDelayState)
     let isSelected = group.selected == node.name
 
@@ -1394,17 +1607,7 @@ private struct ProxyNodeCard: View {
             Spacer(minLength: 20)
           }
 
-          HStack(spacing: 8) {
-            ProxyTypeBadge(text: node.type, isSelectable: node.isSelectable)
-            if let providerName = node.providerName {
-              ProxyTypeBadge(text: providerName, isSelectable: node.isSelectable)
-            }
-            ForEach(node.capabilityLabels, id: \.self) { label in
-              ProxyTypeBadge(text: label, isSelectable: node.isSelectable)
-            }
-            Spacer(minLength: 8)
-            DelayChip(display: delayDisplay)
-          }
+          ProxyNodeMetadataRow(node: node, delayDisplay: delayDisplay)
 
           if showsDetails, let endpoint = node.endpointSummary {
             Label(endpoint, systemImage: "network")
@@ -1423,7 +1626,11 @@ private struct ProxyNodeCard: View {
       .help(selectionHelp(canSelect: canSelect))
 
       Button {
-        appModel.testDelay(in: group, for: node, testURL: customDelayTestURL)
+        appModel.testDelay(
+          in: group,
+          for: node,
+          testURL: customDelayTestURL ?? appModel.customDelayTestURL(forGroupName: group.name)
+        )
       } label: {
         DelayActionIcon(state: node.resolvedDelayState)
       }
@@ -1495,6 +1702,53 @@ private struct ProxyNodeCard: View {
       .updating($isPressing) { _, state, _ in
         state = isEnabled
       }
+  }
+}
+
+private struct ProxyNodeMetadataRow: View {
+  let node: ProxyNode
+  let delayDisplay: ProxyDelayDisplay
+
+  var body: some View {
+    ViewThatFits(in: .horizontal) {
+      HStack(spacing: 8) {
+        allBadges
+        Spacer(minLength: 8)
+        DelayChip(display: delayDisplay)
+      }
+
+      VStack(alignment: .leading, spacing: 6) {
+        allBadges
+        DelayChip(display: delayDisplay)
+      }
+
+      HStack(spacing: 8) {
+        coreBadges
+        Spacer(minLength: 8)
+        DelayChip(display: delayDisplay)
+      }
+
+      DelayChip(display: delayDisplay)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private var allBadges: some View {
+    HStack(spacing: 8) {
+      coreBadges
+      ForEach(node.capabilityLabels, id: \.self) { label in
+        ProxyTypeBadge(text: label, isSelectable: node.isSelectable)
+      }
+    }
+  }
+
+  private var coreBadges: some View {
+    HStack(spacing: 8) {
+      ProxyTypeBadge(text: node.type, isSelectable: node.isSelectable)
+      if let providerName = node.providerName {
+        ProxyTypeBadge(text: providerName, isSelectable: node.isSelectable)
+      }
+    }
   }
 }
 
@@ -1674,6 +1928,8 @@ private struct DelayChip: View {
       .padding(.horizontal, 7)
       .padding(.vertical, 3)
       .background(display.tone.color.opacity(0.10), in: Capsule())
+      .layoutPriority(10)
+      .fixedSize(horizontal: true, vertical: false)
   }
 }
 

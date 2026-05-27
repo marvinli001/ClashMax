@@ -38,6 +38,10 @@ struct RuntimePaths: Sendable {
     appSupport.appendingPathComponent("profiles.json")
   }
 
+  var runtimeSnippetLibraryURL: URL {
+    appSupport.appendingPathComponent("runtime-snippets.json")
+  }
+
   func runtimeConfigURL(for profile: Profile) -> URL {
     runtime.appendingPathComponent("\(profile.id.uuidString).runtime.yaml")
   }

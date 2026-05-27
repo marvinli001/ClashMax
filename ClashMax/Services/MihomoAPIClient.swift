@@ -436,6 +436,7 @@ struct MihomoAPIClient: Sendable {
         sourcePort: Self.intValue(for: ["sourcePort", "source-port", "srcPort"], in: metadata),
         destinationIP: Self.stringValue(for: ["destinationIP", "destination-ip", "dstIP"], in: metadata),
         destinationPort: Self.intValue(for: ["destinationPort", "destination-port", "dstPort"], in: metadata),
+        inboundPort: Self.intValue(for: ["inboundPort", "inbound-port", "inPort"], in: metadata),
         processName: Self.stringValue(for: ["process", "processName", "process-name"], in: metadata),
         processPath: Self.stringValue(for: ["processPath", "process-path"], in: metadata),
         upload: item["upload"] as? Int ?? 0,

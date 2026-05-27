@@ -55,6 +55,13 @@ final class LocalizationTests: XCTestCase {
     XCTAssertEqual(zhBundle.localizedString(forKey: "Rule Overlay", value: nil, table: nil), "规则覆盖")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Profile Rule Overlay", value: nil, table: nil), "配置规则覆盖")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Runtime Merge YAML", value: nil, table: nil), "运行时合并 YAML")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Legacy Runtime Merge YAML", value: nil, table: nil), "旧版运行时合并 YAML")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Snippet Library", value: nil, table: nil), "片段库")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "New Rule Snippet", value: nil, table: nil), "新建规则片段")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "New DNS Patch", value: nil, table: nil), "新建 DNS 补丁")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "All Profiles", value: nil, table: nil), "全部配置")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Selected Profiles", value: nil, table: nil), "所选配置")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "DNS Patch", value: nil, table: nil), "DNS 补丁")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Result", value: nil, table: nil), "结果")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Detail", value: nil, table: nil), "详情")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Default Subscription Interval", value: nil, table: nil), "默认订阅间隔")
@@ -165,6 +172,14 @@ final class LocalizationTests: XCTestCase {
     XCTAssertEqual(zhBundle.localizedString(forKey: "Empty", value: nil, table: nil), "空")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Search rules, type=, policy=, provider=", value: nil, table: nil), "搜索规则，支持 type=、policy=、provider=")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Preview core is running on loopback for delay testing. Hit Start on Home to redirect traffic.", value: nil, table: nil), "预览核心正在本机回环地址运行，用于延迟测试。到首页点击启动即可接管流量。")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Batch delay testing", value: nil, table: nil), "批量测速中")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Batch delay cancelled", value: nil, table: nil), "批量测速已取消")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Batch delay complete", value: nil, table: nil), "批量测速完成")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Show Failures", value: nil, table: nil), "显示失败")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Hide Failures", value: nil, table: nil), "隐藏失败")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Invalid custom delay URL. Falling back to default delay URL.", value: nil, table: nil), "自定义测速 URL 无效，已回退到默认测速 URL。")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Missing endpoint", value: nil, table: nil), "缺少端点")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Controller unavailable", value: nil, table: nil), "控制器不可用")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Update Due", value: nil, table: nil), "更新到期项")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Import ClashX", value: nil, table: nil), "导入 ClashX")
 
@@ -176,5 +191,11 @@ final class LocalizationTests: XCTestCase {
 
     let filteredRulesFormat = zhBundle.localizedString(forKey: "%lld of %lld", value: nil, table: nil)
     XCTAssertEqual(String(format: filteredRulesFormat, Int64(0), Int64(0)), "0 / 0")
+
+    let batchProgressFormat = zhBundle.localizedString(forKey: "%lld/%lld tested", value: nil, table: nil)
+    XCTAssertEqual(String(format: batchProgressFormat, Int64(3), Int64(8)), "已测 3/8")
+
+    let batchFailureFormat = zhBundle.localizedString(forKey: "Batch delay test finished with %lld failures.", value: nil, table: nil)
+    XCTAssertEqual(String(format: batchFailureFormat, Int64(2)), "批量测速完成，2 个失败。")
   }
 }

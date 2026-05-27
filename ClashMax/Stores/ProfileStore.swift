@@ -590,6 +590,207 @@ final class ProfileStore: ObservableObject {
     return subscriptionURLCache[id]
   }
 
+  func backupExport(includeSecrets: Bool) async throws -> BackupProfileExport {
+    await waitForManifestLoad()
+    var backupProfiles: [Profile] = []
+    var profileSources: [BackupProfileSource] = []
+    var subscriptionSecrets: [BackupSubscriptionSecrets] = []
+    var omittedSummary = BackupSecretSummary()
+
+    for profile in profiles {
+      let source = try await diskIO.readProfileSource(atPath: profile.originalConfigPath)
+      try ProfileConfigValidator.validateProfileSource(source, allowProviderContent: profile.isSubscription)
+      profileSources.append(
+        BackupProfileSource(
+          profileID: profile.id,
+          fileName: "\(profile.id.uuidString).yaml",
+          source: source
+        )
+      )
+
+      let secretSnapshot = try await backupSecrets(for: profile)
+      omittedSummary.subscriptionURLCount += secretSnapshot.subscriptionURL == nil ? 0 : 1
+      omittedSummary.requestHeaderValueCount += secretSnapshot.requestHeaders.count
+      omittedSummary.runtimeMergeYAMLCount += secretSnapshot.runtimeMergeYAML == nil ? 0 : 1
+      if includeSecrets, secretSnapshot.hasSecrets {
+        subscriptionSecrets.append(secretSnapshot)
+      }
+
+      backupProfiles.append(Self.sanitizedBackupProfile(profile))
+    }
+
+    return BackupProfileExport(
+      manifest: ProfileManifest(profiles: backupProfiles, activeProfileID: activeProfileID),
+      profileSources: profileSources,
+      secrets: BackupSecretsBundle(subscriptions: subscriptionSecrets),
+      omittedSecretSummary: omittedSummary
+    )
+  }
+
+  func rollbackSnapshot() async throws -> ProfileStoreRollbackSnapshot {
+    await waitForManifestLoad()
+    return try await withMutationLock {
+      var sourceByProfileID: [Profile.ID: String] = [:]
+      var secretsByProfileID: [Profile.ID: BackupSubscriptionSecrets] = [:]
+
+      for profile in profiles {
+        sourceByProfileID[profile.id] = try await diskIO.readProfileSource(atPath: profile.originalConfigPath)
+        guard profile.isSubscription else { continue }
+        secretsByProfileID[profile.id] = try await backupSecrets(for: profile)
+      }
+
+      return ProfileStoreRollbackSnapshot(
+        manifest: ProfileManifest(profiles: profiles, activeProfileID: activeProfileID),
+        profileSources: sourceByProfileID,
+        subscriptionSecrets: secretsByProfileID,
+        subscriptionURLCache: subscriptionURLCache
+      )
+    }
+  }
+
+  func restoreRollbackSnapshot(_ snapshot: ProfileStoreRollbackSnapshot) async throws {
+    await waitForManifestLoad()
+    try await withMutationLock {
+      let snapshotProfileIDs = Set(snapshot.manifest.profiles.map(\.id))
+      for profile in profiles where !snapshotProfileIDs.contains(profile.id) {
+        try? await diskIO.removeProfileConfig(atPath: profile.originalConfigPath)
+        await deleteStoredSubscriptionSecrets(for: profile)
+      }
+
+      for profile in snapshot.manifest.profiles {
+        guard let source = snapshot.profileSources[profile.id] else { continue }
+        try await diskIO.writeProfileSource(source, to: URL(fileURLWithPath: profile.originalConfigPath))
+      }
+
+      subscriptionURLCache = snapshot.subscriptionURLCache
+      for profile in snapshot.manifest.profiles {
+        try await restoreStoredSubscriptionSecrets(snapshot.subscriptionSecrets[profile.id], for: profile)
+      }
+
+      try await saveManifest(
+        profiles: snapshot.manifest.profiles,
+        activeProfileID: snapshot.manifest.activeProfileID
+      )
+      profiles = snapshot.manifest.profiles
+      activeProfileID = snapshot.manifest.activeProfileID
+    }
+  }
+
+  func mergeRestoreBackup(
+    manifest: ProfileManifest,
+    profileSources: [BackupProfileSource],
+    secrets: BackupSecretsBundle?
+  ) async throws -> BackupProfileRestoreResult {
+    await waitForManifestLoad()
+    return try await withMutationLock {
+      try Self.validateUniqueBackupProfileIDs(manifest.profiles.map(\.id))
+      let sourceByProfileID = try Self.backupProfileSourceIndex(profileSources)
+      let secretsByProfileID = try Self.backupSecretsIndex(secrets?.subscriptions ?? [])
+      var usedIDs = Set(profiles.map(\.id))
+      var idMap: [Profile.ID: Profile.ID] = [:]
+      var restoredProfiles: [Profile] = []
+      var writtenProfileURLs: [URL] = []
+      var writtenSecretAccounts: [String] = []
+      var restoredSecretCount = 0
+      var restoredSubscriptionURLCache: [Profile.ID: String] = [:]
+
+      do {
+        for backupProfile in manifest.profiles {
+          guard let sourceEntry = sourceByProfileID[backupProfile.id] else {
+            throw BackupRestoreError.missingProfileSource(backupProfile.id)
+          }
+          try ProfileConfigValidator.validateProfileSource(
+            sourceEntry.source,
+            allowProviderContent: backupProfile.isSubscription
+          )
+
+          let restoredID = Self.restoredID(for: backupProfile.id, usedIDs: &usedIDs)
+          idMap[backupProfile.id] = restoredID
+          let destination = paths.profiles.appendingPathComponent("\(restoredID.uuidString).yaml")
+          try await diskIO.writeProfileSource(sourceEntry.source, to: destination)
+          writtenProfileURLs.append(destination)
+
+          var restoredProfile = Self.restoredBackupProfile(
+            backupProfile,
+            restoredID: restoredID,
+            destination: destination
+          )
+          if let subscriptionSecrets = secretsByProfileID[backupProfile.id] {
+            restoredSecretCount += try await applyBackupSecrets(
+              subscriptionSecrets,
+              to: &restoredProfile,
+              restoredID: restoredID,
+              writtenAccounts: &writtenSecretAccounts,
+              subscriptionURLCache: &restoredSubscriptionURLCache
+            )
+          }
+          restoredProfiles.append(restoredProfile)
+        }
+
+        let nextProfiles = profiles + restoredProfiles
+        let restoredActiveProfileID = manifest.activeProfileID.flatMap { idMap[$0] }
+          ?? activeProfileID
+          ?? nextProfiles.first?.id
+        try await saveManifest(profiles: nextProfiles, activeProfileID: restoredActiveProfileID)
+        profiles = nextProfiles
+        activeProfileID = restoredActiveProfileID
+        for (id, url) in restoredSubscriptionURLCache {
+          subscriptionURLCache[id] = url
+        }
+
+        return BackupProfileRestoreResult(
+          importedProfileCount: restoredProfiles.count,
+          activeProfileID: restoredActiveProfileID,
+          idMap: idMap,
+          restoredSecretCount: restoredSecretCount
+        )
+      } catch {
+        for url in writtenProfileURLs {
+          try? await diskIO.removeProfileConfig(atPath: url.path)
+        }
+        for account in writtenSecretAccounts {
+          try? await secretIO.delete(account: account)
+        }
+        throw error
+      }
+    }
+  }
+
+  private static func validateUniqueBackupProfileIDs(_ ids: [Profile.ID]) throws {
+    var seen = Set<Profile.ID>()
+    for id in ids {
+      guard seen.insert(id).inserted else {
+        throw BackupRestoreError.invalidBackup("Profile manifest contains duplicate profile IDs.")
+      }
+    }
+  }
+
+  private static func backupProfileSourceIndex(
+    _ profileSources: [BackupProfileSource]
+  ) throws -> [Profile.ID: BackupProfileSource] {
+    var index: [Profile.ID: BackupProfileSource] = [:]
+    for profileSource in profileSources {
+      guard index[profileSource.profileID] == nil else {
+        throw BackupRestoreError.invalidBackup("Profile sources contain duplicate profile IDs.")
+      }
+      index[profileSource.profileID] = profileSource
+    }
+    return index
+  }
+
+  private static func backupSecretsIndex(
+    _ subscriptions: [BackupSubscriptionSecrets]
+  ) throws -> [Profile.ID: BackupSubscriptionSecrets] {
+    var index: [Profile.ID: BackupSubscriptionSecrets] = [:]
+    for subscription in subscriptions {
+      guard index[subscription.profileID] == nil else {
+        throw BackupRestoreError.invalidBackup("Subscription secrets contain duplicate profile IDs.")
+      }
+      index[subscription.profileID] = subscription
+    }
+    return index
+  }
+
   private func updateSubscriptionUpdateStatus(
     profileID: Profile.ID,
     transform: (SubscriptionUpdateStatus) -> SubscriptionUpdateStatus
@@ -616,6 +817,188 @@ final class ProfileStore: ObservableObject {
 
   nonisolated private static func subscriptionRuntimeMergeAccount(subscriptionID: UUID) -> String {
     "subscription.\(subscriptionID.uuidString).runtimeMergeYAML"
+  }
+
+  private func backupSecrets(for profile: Profile) async throws -> BackupSubscriptionSecrets {
+    guard case let .subscription(subscriptionID) = profile.source else {
+      return BackupSubscriptionSecrets(
+        profileID: profile.id,
+        subscriptionURL: nil,
+        requestHeaders: [],
+        runtimeMergeYAML: nil
+      )
+    }
+
+    let subscriptionURL = try await storedSubscriptionURL(for: subscriptionID)
+    let requestHeaders = profile.subscriptionProviderOptions.requestHeaders.compactMap { header in
+      let value = header.normalizedValue
+      return value.isEmpty ? nil : BackupRequestHeaderSecret(headerID: header.id, value: value)
+    }
+    let runtimeMergeYAML = profile.subscriptionProviderOptions.runtimeMergeYAML
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .isEmpty
+      ? nil
+      : profile.subscriptionProviderOptions.runtimeMergeYAML
+    return BackupSubscriptionSecrets(
+      profileID: profile.id,
+      subscriptionURL: subscriptionURL,
+      requestHeaders: requestHeaders,
+      runtimeMergeYAML: runtimeMergeYAML
+    )
+  }
+
+  private static func sanitizedBackupProfile(_ profile: Profile) -> Profile {
+    var sanitized = profile
+    sanitized.originalConfigPath = "Profiles/\(profile.id.uuidString).yaml"
+    if case .localFile = sanitized.source {
+      sanitized.source = .localFile(originalPath: nil)
+    }
+    sanitized.subscriptionProviderOptions = sanitizedProviderOptions(sanitized.subscriptionProviderOptions)
+    return sanitized
+  }
+
+  private static func restoredBackupProfile(
+    _ profile: Profile,
+    restoredID: Profile.ID,
+    destination: URL
+  ) -> Profile {
+    var restored = profile
+    restored.id = restoredID
+    restored.originalConfigPath = destination.path
+    switch restored.source {
+    case .localFile:
+      restored.source = .localFile(originalPath: nil)
+    case .subscription:
+      restored.source = .subscription(id: restoredID)
+    }
+    restored.subscriptionProviderOptions = sanitizedProviderOptions(restored.subscriptionProviderOptions)
+    return restored
+  }
+
+  private static func sanitizedProviderOptions(_ options: SubscriptionProviderOptions) -> SubscriptionProviderOptions {
+    var sanitized = options
+    sanitized.runtimeMergeYAML = ""
+    sanitized.requestHeaders = sanitized.requestHeaders.map { header in
+      SubscriptionRequestHeader(id: header.id, name: header.name, value: "")
+    }
+    return sanitized
+  }
+
+  private static func restoredID(for id: Profile.ID, usedIDs: inout Set<Profile.ID>) -> Profile.ID {
+    if !usedIDs.contains(id) {
+      usedIDs.insert(id)
+      return id
+    }
+    var replacement = UUID()
+    while usedIDs.contains(replacement) {
+      replacement = UUID()
+    }
+    usedIDs.insert(replacement)
+    return replacement
+  }
+
+  private func applyBackupSecrets(
+    _ secrets: BackupSubscriptionSecrets,
+    to profile: inout Profile,
+    restoredID: Profile.ID,
+    writtenAccounts: inout [String],
+    subscriptionURLCache: inout [Profile.ID: String]
+  ) async throws -> Int {
+    guard profile.isSubscription else { return 0 }
+    var restoredCount = 0
+
+    if let subscriptionURL = secrets.subscriptionURL {
+      let account = Self.subscriptionAccount(for: restoredID)
+      try await secretIO.save(subscriptionURL, account: account)
+      writtenAccounts.append(account)
+      subscriptionURLCache[restoredID] = subscriptionURL
+      restoredCount += 1
+    }
+
+    if !secrets.requestHeaders.isEmpty {
+      let profileHeaderIDs = Set(profile.subscriptionProviderOptions.requestHeaders.map(\.id))
+      var headerValues: [SubscriptionRequestHeader.ID: String] = [:]
+      for header in secrets.requestHeaders {
+        guard headerValues[header.headerID] == nil else {
+          throw BackupRestoreError.invalidBackup("Subscription secrets contain duplicate request header IDs.")
+        }
+        guard profileHeaderIDs.contains(header.headerID) else {
+          throw BackupRestoreError.invalidBackup("Subscription secrets reference an unknown request header.")
+        }
+        headerValues[header.headerID] = header.value
+      }
+      profile.subscriptionProviderOptions.requestHeaders = profile.subscriptionProviderOptions.requestHeaders.map { header in
+        guard let value = headerValues[header.id] else { return header }
+        return SubscriptionRequestHeader(id: header.id, name: header.name, value: value)
+      }
+      for header in profile.subscriptionProviderOptions.requestHeaders {
+        guard let value = headerValues[header.id] else { continue }
+        let account = Self.subscriptionHeaderAccount(subscriptionID: restoredID, headerID: header.id)
+        try await secretIO.save(value, account: account)
+        writtenAccounts.append(account)
+        restoredCount += 1
+      }
+    }
+
+    if let runtimeMergeYAML = secrets.runtimeMergeYAML {
+      let account = Self.subscriptionRuntimeMergeAccount(subscriptionID: restoredID)
+      profile.subscriptionProviderOptions.runtimeMergeYAML = runtimeMergeYAML
+      try await secretIO.save(runtimeMergeYAML, account: account)
+      writtenAccounts.append(account)
+      restoredCount += 1
+    }
+
+    return restoredCount
+  }
+
+  private func deleteStoredSubscriptionSecrets(for profile: Profile) async {
+    guard case let .subscription(subscriptionID) = profile.source else { return }
+    try? await secretIO.delete(account: Self.subscriptionAccount(for: subscriptionID))
+    for header in profile.subscriptionProviderOptions.requestHeaders {
+      try? await secretIO.delete(
+        account: Self.subscriptionHeaderAccount(subscriptionID: subscriptionID, headerID: header.id)
+      )
+    }
+    try? await secretIO.delete(account: Self.subscriptionRuntimeMergeAccount(subscriptionID: subscriptionID))
+    subscriptionURLCache.removeValue(forKey: subscriptionID)
+  }
+
+  private func restoreStoredSubscriptionSecrets(
+    _ secrets: BackupSubscriptionSecrets?,
+    for profile: Profile
+  ) async throws {
+    guard case let .subscription(subscriptionID) = profile.source else { return }
+    guard let secrets else {
+      await deleteStoredSubscriptionSecrets(for: profile)
+      return
+    }
+
+    if let subscriptionURL = secrets.subscriptionURL {
+      try await secretIO.save(subscriptionURL, account: Self.subscriptionAccount(for: subscriptionID))
+      subscriptionURLCache[subscriptionID] = subscriptionURL
+    } else {
+      try? await secretIO.delete(account: Self.subscriptionAccount(for: subscriptionID))
+      subscriptionURLCache.removeValue(forKey: subscriptionID)
+    }
+
+    let headerValues = secrets.requestHeaders.reduce(into: [SubscriptionRequestHeader.ID: String]()) { result, header in
+      result[header.headerID] = header.value
+    }
+    for header in profile.subscriptionProviderOptions.requestHeaders {
+      let account = Self.subscriptionHeaderAccount(subscriptionID: subscriptionID, headerID: header.id)
+      if let value = headerValues[header.id] {
+        try await secretIO.save(value, account: account)
+      } else {
+        try? await secretIO.delete(account: account)
+      }
+    }
+
+    let runtimeMergeAccount = Self.subscriptionRuntimeMergeAccount(subscriptionID: subscriptionID)
+    if let runtimeMergeYAML = secrets.runtimeMergeYAML {
+      try await secretIO.save(runtimeMergeYAML, account: runtimeMergeAccount)
+    } else {
+      try? await secretIO.delete(account: runtimeMergeAccount)
+    }
   }
 
   private func fetchSubscription(

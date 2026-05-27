@@ -9,6 +9,8 @@ struct SettingsView: View {
   private let bundledCoreInfo: BundledCoreInfo
   @State private var isRuleOverlayPresented = false
   @State private var isNetworkPoliciesPresented = false
+  @State private var isBackupExportPresented = false
+  @State private var isBackupRestorePresented = false
 
   init(bundledCoreInfo: BundledCoreInfo = BundledCoreInfo()) {
     self.bundledCoreInfo = bundledCoreInfo
@@ -61,6 +63,26 @@ struct SettingsView: View {
               Label("Open Language & Region", systemImage: "globe")
             }
             .help("Open System Settings > General > Language & Region.")
+          }
+        }
+
+        Section("Backup & Restore") {
+          SettingsControlRow("Local Backup", description: backupRestoreDescription) {
+            HStack(spacing: 8) {
+              Button {
+                isBackupExportPresented = true
+              } label: {
+                Label("Export", systemImage: "square.and.arrow.up")
+              }
+
+              Button {
+                isBackupRestorePresented = true
+              } label: {
+                Label("Restore", systemImage: "arrow.clockwise")
+              }
+              .disabled(appModel.isCoreRunning)
+              .help("Stop the core before restoring a backup.")
+            }
           }
         }
 
@@ -472,6 +494,43 @@ struct SettingsView: View {
         appModel.refreshLaunchSettings()
       }
     }
+    .sheet(isPresented: $isBackupExportPresented) {
+      BackupExportSheet(
+        onCancel: { isBackupExportPresented = false },
+        onExport: { includeSecrets, password, passwordConfirmation in
+          isBackupExportPresented = false
+          appModel.exportBackup(
+            includeSecrets: includeSecrets,
+            password: password,
+            passwordConfirmation: passwordConfirmation
+          )
+        }
+      )
+    }
+    .sheet(isPresented: $isBackupRestorePresented, onDismiss: {
+      appModel.clearPendingBackupRestore()
+    }) {
+      BackupRestoreSheet(
+        onCancel: {
+          appModel.clearPendingBackupRestore()
+          isBackupRestorePresented = false
+        },
+        onRestoreFinished: {
+          isBackupRestorePresented = false
+        }
+      )
+      .environmentObject(appModel)
+    }
+  }
+
+  private var backupRestoreDescription: String {
+    if appModel.isCoreRunning {
+      return String(localized: "Export is available. Stop the core before restoring.")
+    }
+    if let message = appModel.backupRestoreStatusMessage {
+      return message
+    }
+    return String(localized: "Export or merge-restore profiles, settings, rules, provider options, and proxy selections.")
   }
 
   private var isHelperBusy: Bool {
@@ -680,6 +739,165 @@ struct SettingsView: View {
       }
       .disabled(!appModel.canRepairNetworkExtensionDNS)
     }
+  }
+}
+
+private struct BackupExportSheet: View {
+  @State private var includeSecrets = false
+  @State private var password = ""
+  @State private var passwordConfirmation = ""
+  let onCancel: () -> Void
+  let onExport: (Bool, String?, String?) -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      Label("Export ClashMax Backup", systemImage: "square.and.arrow.up")
+        .font(.headline)
+
+      Toggle("Include encrypted secrets", isOn: $includeSecrets)
+
+      Text(
+        includeSecrets
+          ? "The password protects subscription secrets and full profile YAML. The backup also contains redacted YAML for compatibility."
+          : "Profile YAML may contain proxy passwords, UUIDs, tokens, and provider URLs. Passwordless exports redact detected YAML credentials."
+      )
+      .font(.caption)
+      .foregroundStyle(.secondary)
+
+      if includeSecrets {
+        SecureField("Backup Password", text: $password)
+          .textFieldStyle(.roundedBorder)
+        SecureField("Confirm Password", text: $passwordConfirmation)
+          .textFieldStyle(.roundedBorder)
+        if let passwordError {
+          Label(passwordError, systemImage: "exclamationmark.triangle.fill")
+            .font(.caption)
+            .foregroundStyle(.red)
+        }
+      }
+
+      HStack {
+        Spacer()
+        Button("Cancel", action: onCancel)
+        Button("Export") {
+          onExport(includeSecrets, includeSecrets ? password : nil, includeSecrets ? passwordConfirmation : nil)
+        }
+        .keyboardShortcut(.defaultAction)
+        .disabled(passwordError != nil)
+      }
+    }
+    .padding(20)
+    .frame(width: 380)
+  }
+
+  private var passwordError: String? {
+    guard includeSecrets else { return nil }
+    if password.isEmpty {
+      return String(localized: "Password is required for encrypted secret export.")
+    }
+    if password != passwordConfirmation {
+      return String(localized: "Passwords do not match.")
+    }
+    return nil
+  }
+}
+
+private struct BackupRestoreSheet: View {
+  @EnvironmentObject private var appModel: AppModel
+  @State private var password = ""
+  @State private var isRestoring = false
+  let onCancel: () -> Void
+  let onRestoreFinished: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      Label("Restore ClashMax Backup", systemImage: "arrow.clockwise")
+        .font(.headline)
+
+      if let preview = appModel.pendingBackupRestorePreview {
+        backupPreview(preview)
+      } else {
+        CenteredUnavailableState(
+          title: "No backup selected",
+          systemImage: "externaldrive.badge.plus",
+          message: "Choose a .clashmax-backup file to preview before restore."
+        )
+        Button {
+          appModel.chooseBackupForRestore()
+        } label: {
+          Label("Choose Backup", systemImage: "folder")
+        }
+      }
+
+      if let preview = appModel.pendingBackupRestorePreview, preview.hasEncryptedSecrets {
+        SecureField("Backup Password", text: $password)
+          .textFieldStyle(.roundedBorder)
+        Text("Leave blank to restore without encrypted secrets.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+
+      HStack {
+        Spacer()
+        Button("Cancel", action: onCancel)
+        Button {
+          appModel.chooseBackupForRestore()
+        } label: {
+          Label("Choose", systemImage: "folder")
+        }
+        Button("Restore") {
+          restore()
+        }
+        .keyboardShortcut(.defaultAction)
+        .disabled(appModel.pendingBackupRestorePreview == nil || appModel.isCoreRunning || isRestoring)
+      }
+    }
+    .padding(20)
+    .frame(width: 430)
+  }
+
+  private func backupPreview(_ preview: BackupRestorePreview) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text(preview.fileName)
+        .font(.subheadline.weight(.semibold))
+        .lineLimit(1)
+      BackupRestoreFactRow(title: "Profiles", value: "\(preview.profileCount)")
+      BackupRestoreFactRow(title: "Settings", value: preview.hasSettings ? String(localized: "Included") : String(localized: "Missing"))
+      BackupRestoreFactRow(title: "Proxy Selections", value: "\(preview.proxySelectionProfileCount)")
+      BackupRestoreFactRow(
+        title: "Secrets",
+        value: preview.hasEncryptedSecrets
+          ? String(localized: "Encrypted")
+          : String(format: String(localized: "%lld omitted"), Int64(preview.omittedSecretSummary.totalCount))
+      )
+    }
+  }
+
+  private func restore() {
+    isRestoring = true
+    Task { @MainActor in
+      let restored = await appModel.restorePendingBackup(password: password.isEmpty ? nil : password)
+      isRestoring = false
+      if restored {
+        onRestoreFinished()
+      }
+    }
+  }
+}
+
+private struct BackupRestoreFactRow: View {
+  let title: String
+  let value: String
+
+  var body: some View {
+    HStack {
+      Text(localizedSettingsText(title))
+        .foregroundStyle(.secondary)
+      Spacer()
+      Text(value)
+        .fontWeight(.medium)
+    }
+    .font(.callout)
   }
 }
 
@@ -1170,12 +1388,10 @@ struct RuleOverlaySettingsEditor: View {
             Text(category.displayName).tag(category)
           }
         }
-        .pickerStyle(.segmented)
+        .pickerStyle(.menu)
         .onChange(of: ruleCategory) { _, category in
           kind = category.defaultKind
-          if !kind.allowsNoResolve {
-            noResolve = false
-          }
+          prepareDraftForKind(kind)
         }
 
         Picker("Rule Type", selection: $kind) {
@@ -1186,17 +1402,17 @@ struct RuleOverlaySettingsEditor: View {
         .pickerStyle(.menu)
         .onChange(of: kind) { _, nextKind in
           ruleCategory = RuleBuilderCategory.category(for: nextKind)
-          if !nextKind.allowsNoResolve {
-            noResolve = false
-          }
+          prepareDraftForKind(nextKind)
         }
 
-        if kind.requiresValue {
-          TextField("Rule Value", text: $value)
+        if kind == .subRule {
+          SubRuleConditionPicker(condition: $value)
+        } else if kind.requiresValue {
+          TextField(LocalizedStringKey(kind.valuePlaceholder), text: $value)
             .textFieldStyle(.roundedBorder)
         }
 
-        TextField("Policy", text: $policy)
+        TextField(LocalizedStringKey(kind.policyPlaceholder), text: $policy)
           .textFieldStyle(.roundedBorder)
 
         Text("Runtime: \(draftRule.runtimeRule)")
@@ -1282,6 +1498,9 @@ struct RuleOverlaySettingsEditor: View {
     if !kind.allowsNoResolve {
       noResolve = false
     }
+    if kind == .subRule {
+      value = "NETWORK,tcp"
+    }
   }
 
   private func addDisabledRuleMatcher() {
@@ -1289,6 +1508,20 @@ struct RuleOverlaySettingsEditor: View {
     guard matcher.validationError == nil else { return }
     settings.disabledRuleMatchers.append(matcher)
     disabledRulePattern = ""
+  }
+
+  private func prepareDraftForKind(_ nextKind: ManagedRuleOverlayRule.Kind) {
+    if !nextKind.allowsNoResolve {
+      noResolve = false
+    }
+    if nextKind == .subRule {
+      let candidate = ManagedRuleOverlayRule(kind: .subRule, value: value, policy: policy)
+      if candidate.validationError != nil {
+        value = "NETWORK,tcp"
+      }
+    } else if value.contains(",") {
+      value = ""
+    }
   }
 }
 
@@ -1311,6 +1544,9 @@ private enum RuleOverlayPosition: String, CaseIterable, Identifiable {
 private enum RuleBuilderCategory: String, CaseIterable, Identifiable {
   case domain
   case ip
+  case source
+  case port
+  case provider
   case process
   case geo
   case fallback
@@ -1323,6 +1559,12 @@ private enum RuleBuilderCategory: String, CaseIterable, Identifiable {
       String(localized: "Domain")
     case .ip:
       String(localized: "IP")
+    case .source:
+      String(localized: "Source")
+    case .port:
+      String(localized: "Port")
+    case .provider:
+      String(localized: "Provider")
     case .process:
       String(localized: "Process")
     case .geo:
@@ -1338,6 +1580,12 @@ private enum RuleBuilderCategory: String, CaseIterable, Identifiable {
       [.domain, .domainSuffix, .domainKeyword]
     case .ip:
       [.ipCIDR, .ipCIDR6]
+    case .source:
+      [.srcGeoIP, .srcIPASN, .srcIPCIDR, .srcIPSuffix]
+    case .port:
+      [.dstPort, .srcPort, .inPort]
+    case .provider:
+      [.ruleSet, .subRule]
     case .process:
       [.processName, .processPath]
     case .geo:
@@ -1353,6 +1601,62 @@ private enum RuleBuilderCategory: String, CaseIterable, Identifiable {
 
   static func category(for kind: ManagedRuleOverlayRule.Kind) -> RuleBuilderCategory {
     allCases.first { $0.kinds.contains(kind) } ?? .domain
+  }
+}
+
+private struct SubRuleConditionPicker: View {
+  @Binding var condition: String
+
+  var body: some View {
+    Picker("Condition", selection: networkBinding) {
+      ForEach(SubRuleNetworkCondition.allCases) { condition in
+        Text(condition.displayName).tag(condition)
+      }
+    }
+    .pickerStyle(.segmented)
+  }
+
+  private var networkBinding: Binding<SubRuleNetworkCondition> {
+    Binding(
+      get: {
+        SubRuleNetworkCondition(condition: condition) ?? .tcp
+      },
+      set: { nextValue in
+        condition = nextValue.ruleCondition
+      }
+    )
+  }
+}
+
+private enum SubRuleNetworkCondition: String, CaseIterable, Identifiable {
+  case tcp
+  case udp
+
+  var id: String { rawValue }
+
+  init?(condition: String) {
+    let parts = condition
+      .split(separator: ",", omittingEmptySubsequences: false)
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+    guard parts.count == 2,
+          parts[0].caseInsensitiveCompare("NETWORK") == .orderedSame
+    else {
+      return nil
+    }
+    self.init(rawValue: parts[1].lowercased())
+  }
+
+  var displayName: String {
+    switch self {
+    case .tcp:
+      return String(localized: "Network TCP")
+    case .udp:
+      return String(localized: "Network UDP")
+    }
+  }
+
+  var ruleCondition: String {
+    "NETWORK,\(rawValue)"
   }
 }
 
@@ -1523,6 +1827,13 @@ private struct RuleOverlayEditableRuleRow: View {
             if !kind.allowsNoResolve {
               rule.noResolve = false
             }
+            if kind == .subRule {
+              if SubRuleNetworkCondition(condition: rule.value) == nil {
+                rule.value = "NETWORK,tcp"
+              }
+            } else if rule.value.contains(",") {
+              rule.value = ""
+            }
           }
         )) {
           ForEach(ManagedRuleOverlayRule.Kind.allCases) { kind in
@@ -1533,13 +1844,16 @@ private struct RuleOverlayEditableRuleRow: View {
         .pickerStyle(.menu)
         .frame(width: 128)
 
-        if rule.kind.requiresValue {
-          TextField("Rule Value", text: $rule.value)
+        if rule.kind == .subRule {
+          SubRuleConditionPicker(condition: $rule.value)
+            .frame(width: 150)
+        } else if rule.kind.requiresValue {
+          TextField(LocalizedStringKey(rule.kind.valuePlaceholder), text: $rule.value)
             .textFieldStyle(.roundedBorder)
             .frame(minWidth: 96)
         }
 
-        TextField("Policy", text: $rule.policy)
+        TextField(LocalizedStringKey(rule.kind.policyPlaceholder), text: $rule.policy)
           .textFieldStyle(.roundedBorder)
           .frame(width: 92)
 

@@ -332,6 +332,7 @@ final class MihomoAPIClientTests: XCTestCase {
             "sourcePort": "53000",
             "destinationIP": "93.184.216.34",
             "destinationPort": 443,
+            "inboundPort": "7890",
             "processName": "Safari",
             "processPath": "/Applications/Safari.app"
           }
@@ -349,6 +350,7 @@ final class MihomoAPIClientTests: XCTestCase {
     XCTAssertEqual(connection.processPath, "/Applications/Safari.app")
     XCTAssertEqual(connection.sourceAddress, "192.168.1.2:53000")
     XCTAssertEqual(connection.destinationAddress, "93.184.216.34:443")
+    XCTAssertEqual(connection.inboundPort, 7890)
     XCTAssertEqual(connection.ruleSummary, "DOMAIN-SUFFIX example.com")
     XCTAssertEqual(connection.chain, ["Proxy", "Japan"])
   }

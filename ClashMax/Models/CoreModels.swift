@@ -1082,6 +1082,160 @@ struct DelayTestSettings: Codable, Equatable, Sendable {
   }
 }
 
+enum ProxyNodeSort: String, Codable, CaseIterable, Equatable, Identifiable, Sendable {
+  case name
+  case delay
+  case type
+
+  var id: String { rawValue }
+
+  var displayName: String {
+    switch self {
+    case .name:
+      return String(localized: "Name")
+    case .delay:
+      return String(localized: "Delay")
+    case .type:
+      return String(localized: "Type")
+    }
+  }
+}
+
+enum ProxyPageViewMode: String, Codable, CaseIterable, Equatable, Identifiable, Sendable {
+  case groupDetail
+  case allGroups
+
+  var id: String { rawValue }
+
+  var displayName: String {
+    switch self {
+    case .groupDetail:
+      return String(localized: "Split")
+    case .allGroups:
+      return String(localized: "All Groups")
+    }
+  }
+}
+
+enum ProxyNodePresentation: String, Codable, CaseIterable, Equatable, Identifiable, Sendable {
+  case grid
+  case list
+
+  var id: String { rawValue }
+
+  var systemImage: String {
+    switch self {
+    case .grid:
+      return "square.grid.2x2"
+    case .list:
+      return "list.bullet"
+    }
+  }
+}
+
+struct ProxyPageSettings: Codable, Equatable, Sendable {
+  var viewMode: ProxyPageViewMode
+  var sortOrder: ProxyNodeSort
+  var nodePresentation: ProxyNodePresentation
+  var showsNodeDetails: Bool
+  var closesOldConnectionsAfterSwitch: Bool
+  var customDelayTestURLsByGroupName: [String: String]
+
+  private enum CodingKeys: String, CodingKey {
+    case viewMode
+    case sortOrder
+    case nodePresentation
+    case showsNodeDetails
+    case closesOldConnectionsAfterSwitch
+    case customDelayTestURLsByGroupName
+  }
+
+  init(
+    viewMode: ProxyPageViewMode = .groupDetail,
+    sortOrder: ProxyNodeSort = .name,
+    nodePresentation: ProxyNodePresentation = .grid,
+    showsNodeDetails: Bool = true,
+    closesOldConnectionsAfterSwitch: Bool = false,
+    customDelayTestURLsByGroupName: [String: String] = [:]
+  ) {
+    self.viewMode = viewMode
+    self.sortOrder = sortOrder
+    self.nodePresentation = nodePresentation
+    self.showsNodeDetails = showsNodeDetails
+    self.closesOldConnectionsAfterSwitch = closesOldConnectionsAfterSwitch
+    self.customDelayTestURLsByGroupName = Self.normalizedCustomDelayTestURLs(customDelayTestURLsByGroupName)
+  }
+
+  static let `default` = ProxyPageSettings()
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    let defaults = Self.default
+    viewMode = container.decodeDefault(ProxyPageViewMode.self, forKey: .viewMode, default: defaults.viewMode)
+    sortOrder = container.decodeDefault(ProxyNodeSort.self, forKey: .sortOrder, default: defaults.sortOrder)
+    nodePresentation = container.decodeDefault(
+      ProxyNodePresentation.self,
+      forKey: .nodePresentation,
+      default: defaults.nodePresentation
+    )
+    showsNodeDetails = container.decodeDefault(Bool.self, forKey: .showsNodeDetails, default: defaults.showsNodeDetails)
+    closesOldConnectionsAfterSwitch = container.decodeDefault(
+      Bool.self,
+      forKey: .closesOldConnectionsAfterSwitch,
+      default: defaults.closesOldConnectionsAfterSwitch
+    )
+    customDelayTestURLsByGroupName = Self.normalizedCustomDelayTestURLs(
+      container.decodeDefault(
+        [String: String].self,
+        forKey: .customDelayTestURLsByGroupName,
+        default: defaults.customDelayTestURLsByGroupName
+      )
+    )
+  }
+
+  func customDelayTestURLText(forGroupName groupName: String) -> String {
+    customDelayTestURLsByGroupName[Self.normalizedGroupName(groupName)] ?? ""
+  }
+
+  func customDelayTestURL(forGroupName groupName: String) -> URL? {
+    let value = customDelayTestURLText(forGroupName: groupName)
+    guard !value.isEmpty,
+          let url = URL(string: value),
+          let scheme = url.scheme?.lowercased(),
+          ["http", "https"].contains(scheme)
+    else { return nil }
+    return url
+  }
+
+  func hasInvalidCustomDelayTestURL(forGroupName groupName: String) -> Bool {
+    let value = customDelayTestURLText(forGroupName: groupName)
+    return !value.isEmpty && customDelayTestURL(forGroupName: groupName) == nil
+  }
+
+  mutating func setCustomDelayTestURLText(_ value: String, forGroupName groupName: String) {
+    let key = Self.normalizedGroupName(groupName)
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    if key.isEmpty || trimmed.isEmpty {
+      customDelayTestURLsByGroupName.removeValue(forKey: key)
+    } else {
+      customDelayTestURLsByGroupName[key] = trimmed
+    }
+  }
+
+  private static func normalizedCustomDelayTestURLs(_ values: [String: String]) -> [String: String] {
+    values.reduce(into: [String: String]()) { result, element in
+      let key = normalizedGroupName(element.key)
+      let value = element.value.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !key.isEmpty, !value.isEmpty else { return }
+      result[key] = value
+    }
+  }
+
+  private static func normalizedGroupName(_ value: String) -> String {
+    value.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+}
+
 struct ProxyNodeKey: Identifiable, Hashable, Codable, Sendable {
   var profileID: String?
   var groupName: String
@@ -1128,6 +1282,153 @@ enum ProxyDelayState: Codable, Equatable, Sendable {
       return delay
     }
     return nil
+  }
+}
+
+enum ProxyDelayFailureKind: String, Codable, CaseIterable, Equatable, Identifiable, Sendable {
+  case timeout
+  case missingEndpoint
+  case controllerUnavailable
+  case cancelled
+  case other
+
+  var id: String { rawValue }
+
+  var displayName: String {
+    switch self {
+    case .timeout:
+      return String(localized: "Timeout")
+    case .missingEndpoint:
+      return String(localized: "Missing endpoint")
+    case .controllerUnavailable:
+      return String(localized: "Controller unavailable")
+    case .cancelled:
+      return String(localized: "Cancelled")
+    case .other:
+      return String(localized: "Error")
+    }
+  }
+
+  var systemImage: String {
+    switch self {
+    case .timeout:
+      return "clock.badge.exclamationmark"
+    case .missingEndpoint:
+      return "network.slash"
+    case .controllerUnavailable:
+      return "server.rack"
+    case .cancelled:
+      return "xmark.circle"
+    case .other:
+      return "exclamationmark.triangle"
+    }
+  }
+}
+
+struct ProxyDelayBatchFailure: Identifiable, Equatable, Sendable {
+  var nodeKey: ProxyNodeKey
+  var groupName: String
+  var nodeName: String
+  var providerName: String?
+  var kind: ProxyDelayFailureKind
+  var message: String
+
+  var id: String {
+    "\(nodeKey.id)::\(kind.rawValue)"
+  }
+
+  var displayName: String {
+    if let providerName, !providerName.isEmpty {
+      return "\(groupName) / \(providerName) / \(nodeName)"
+    }
+    return "\(groupName) / \(nodeName)"
+  }
+}
+
+struct ProxyDelayBatchProgress: Equatable, Sendable {
+  var id: UUID
+  var startedAt: Date
+  var finishedAt: Date?
+  var total: Int
+  var succeeded: Int
+  var timedOut: Int
+  var failed: Int
+  var cancelled: Int
+  var failures: [ProxyDelayBatchFailure]
+
+  init(
+    id: UUID = UUID(),
+    startedAt: Date = Date(),
+    finishedAt: Date? = nil,
+    total: Int,
+    succeeded: Int = 0,
+    timedOut: Int = 0,
+    failed: Int = 0,
+    cancelled: Int = 0,
+    failures: [ProxyDelayBatchFailure] = []
+  ) {
+    self.id = id
+    self.startedAt = startedAt
+    self.finishedAt = finishedAt
+    self.total = total
+    self.succeeded = succeeded
+    self.timedOut = timedOut
+    self.failed = failed
+    self.cancelled = cancelled
+    self.failures = failures
+  }
+
+  var isRunning: Bool {
+    finishedAt == nil
+  }
+
+  var completed: Int {
+    min(total, succeeded + timedOut + failed + cancelled)
+  }
+
+  var failureCount: Int {
+    timedOut + failed
+  }
+
+  var progressFraction: Double {
+    guard total > 0 else { return 0 }
+    return min(1, Double(completed) / Double(total))
+  }
+
+  var wasCancelled: Bool {
+    cancelled > 0 && !isRunning
+  }
+
+  var hasFailures: Bool {
+    !failures.isEmpty || cancelled > 0
+  }
+
+  static func started(total: Int, at date: Date = Date()) -> ProxyDelayBatchProgress {
+    ProxyDelayBatchProgress(startedAt: date, total: total)
+  }
+
+  mutating func recordSuccess() {
+    succeeded += 1
+  }
+
+  mutating func recordFailure(_ failure: ProxyDelayBatchFailure) {
+    switch failure.kind {
+    case .timeout:
+      timedOut += 1
+    case .cancelled:
+      cancelled += 1
+    case .missingEndpoint, .controllerUnavailable, .other:
+      failed += 1
+    }
+    failures.append(failure)
+  }
+
+  mutating func recordCancelled(count: Int) {
+    cancelled += max(0, count)
+  }
+
+  mutating func finish(at date: Date = Date()) {
+    finishedAt = date
   }
 }
 
@@ -1337,6 +1638,15 @@ struct ManagedRuleOverlayRule: Codable, Equatable, Identifiable, Sendable {
     case ipCIDR6 = "IP-CIDR6"
     case geoIP = "GEOIP"
     case geoSite = "GEOSITE"
+    case ruleSet = "RULE-SET"
+    case subRule = "SUB-RULE"
+    case srcGeoIP = "SRC-GEOIP"
+    case srcIPASN = "SRC-IP-ASN"
+    case srcIPCIDR = "SRC-IP-CIDR"
+    case srcIPSuffix = "SRC-IP-SUFFIX"
+    case dstPort = "DST-PORT"
+    case srcPort = "SRC-PORT"
+    case inPort = "IN-PORT"
     case processName = "PROCESS-NAME"
     case processPath = "PROCESS-PATH"
     case match = "MATCH"
@@ -1352,8 +1662,50 @@ struct ManagedRuleOverlayRule: Codable, Equatable, Identifiable, Sendable {
       switch self {
       case .ipCIDR, .ipCIDR6, .geoIP:
         return true
-      case .domain, .domainSuffix, .domainKeyword, .geoSite, .processName, .processPath, .match:
+      case .domain, .domainSuffix, .domainKeyword, .geoSite, .ruleSet, .subRule,
+           .srcGeoIP, .srcIPASN, .srcIPCIDR, .srcIPSuffix, .dstPort, .srcPort,
+           .inPort, .processName, .processPath, .match:
         return false
+      }
+    }
+
+    var valuePlaceholder: String {
+      switch self {
+      case .ruleSet:
+        return String(localized: "Provider name")
+      case .subRule:
+        return String(localized: "Condition, for example NETWORK,tcp")
+      case .srcGeoIP, .geoIP:
+        return String(localized: "Country code")
+      case .srcIPASN:
+        return String(localized: "ASN")
+      case .srcIPCIDR, .ipCIDR, .ipCIDR6:
+        return String(localized: "CIDR")
+      case .srcIPSuffix:
+        return String(localized: "IP suffix")
+      case .dstPort, .srcPort, .inPort:
+        return String(localized: "Port or range")
+      case .processName:
+        return String(localized: "Process name")
+      case .processPath:
+        return String(localized: "Process path")
+      case .domain, .domainSuffix, .domainKeyword, .geoSite:
+        return String(localized: "Rule value")
+      case .match:
+        return String(localized: "Rule value")
+      }
+    }
+
+    var policyPlaceholder: String {
+      switch self {
+      case .subRule:
+        return String(localized: "Sub-rule name")
+      case .ruleSet:
+        return String(localized: "Policy")
+      case .domain, .domainSuffix, .domainKeyword, .ipCIDR, .ipCIDR6, .geoIP,
+           .geoSite, .srcGeoIP, .srcIPASN, .srcIPCIDR, .srcIPSuffix, .dstPort,
+           .srcPort, .inPort, .processName, .processPath, .match:
+        return String(localized: "Policy")
       }
     }
   }
@@ -1400,7 +1752,9 @@ struct ManagedRuleOverlayRule: Codable, Equatable, Identifiable, Sendable {
 
   var runtimeRule: String {
     var components = [kind.rawValue]
-    if kind.requiresValue {
+    if kind == .subRule {
+      components.append("(\(normalizedSubRuleCondition))")
+    } else if kind.requiresValue {
       components.append(normalizedValue)
     }
     components.append(normalizedPolicy)
@@ -1418,12 +1772,34 @@ struct ManagedRuleOverlayRule: Codable, Equatable, Identifiable, Sendable {
     policy.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
+  var normalizedSubRuleCondition: String {
+    guard kind == .subRule else { return normalizedValue }
+    let parts = normalizedValue
+      .split(separator: ",", omittingEmptySubsequences: false)
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+    guard parts.count == 2,
+          parts[0].caseInsensitiveCompare("NETWORK") == .orderedSame
+    else {
+      return normalizedValue
+    }
+    return "NETWORK,\(parts[1].lowercased())"
+  }
+
   var validationError: String? {
     if kind.requiresValue, normalizedValue.isEmpty {
       return String(localized: "Rule value cannot be empty.")
     }
-    if kind.requiresValue, !Self.isValidField(normalizedValue) {
+    if kind == .subRule, !Self.isValidSubRuleCondition(normalizedValue) {
+      return String(localized: "Sub-rule condition must be NETWORK,tcp or NETWORK,udp.")
+    }
+    if kind != .subRule, kind.requiresValue, !Self.isValidField(normalizedValue) {
       return String(localized: "Rule value cannot contain commas or line breaks.")
+    }
+    if kind == .srcIPCIDR, !Self.isValidCIDR(normalizedValue) {
+      return String(localized: "Source IP CIDR must be a valid CIDR range.")
+    }
+    if kind.isPortRule, !Self.isValidPortRange(normalizedValue) {
+      return String(localized: "Port rule value must be a port or range between 1 and 65535.")
     }
     if normalizedPolicy.isEmpty {
       return String(localized: "Rule policy cannot be empty.")
@@ -1436,6 +1812,50 @@ struct ManagedRuleOverlayRule: Codable, Equatable, Identifiable, Sendable {
 
   private static func isValidField(_ value: String) -> Bool {
     !value.contains(",") && !value.contains(where: \.isNewline)
+  }
+
+  private static func isValidSubRuleCondition(_ value: String) -> Bool {
+    guard !value.contains(where: \.isNewline) else { return false }
+    let parts = value
+      .split(separator: ",", omittingEmptySubsequences: false)
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+    guard parts.count == 2,
+          parts[0].caseInsensitiveCompare("NETWORK") == .orderedSame
+    else {
+      return false
+    }
+    let network = parts[1].lowercased()
+    return network == "tcp" || network == "udp"
+  }
+
+  private static func isValidCIDR(_ value: String) -> Bool {
+    (try? NetworkExtensionRouteCIDR(value)) != nil
+  }
+
+  private static func isValidPortRange(_ value: String) -> Bool {
+    let parts = value
+      .split(separator: "-", omittingEmptySubsequences: false)
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+    guard parts.count == 1 || parts.count == 2 else { return false }
+    guard let first = Int(parts[0]), (1...65_535).contains(first) else { return false }
+    if parts.count == 1 {
+      return true
+    }
+    guard let last = Int(parts[1]), (1...65_535).contains(last) else { return false }
+    return first <= last
+  }
+}
+
+private extension ManagedRuleOverlayRule.Kind {
+  var isPortRule: Bool {
+    switch self {
+    case .dstPort, .srcPort, .inPort:
+      return true
+    case .domain, .domainSuffix, .domainKeyword, .ipCIDR, .ipCIDR6, .geoIP,
+         .geoSite, .ruleSet, .subRule, .srcGeoIP, .srcIPASN, .srcIPCIDR,
+         .srcIPSuffix, .processName, .processPath, .match:
+      return false
+    }
   }
 }
 
@@ -3359,6 +3779,7 @@ struct ConnectionSnapshot: Identifiable, Codable, Equatable, Sendable {
   var sourcePort: Int?
   var destinationIP: String?
   var destinationPort: Int?
+  var inboundPort: Int?
   var processName: String?
   var processPath: String?
   var upload: Int
@@ -3378,6 +3799,7 @@ struct ConnectionSnapshot: Identifiable, Codable, Equatable, Sendable {
     sourcePort: Int? = nil,
     destinationIP: String? = nil,
     destinationPort: Int? = nil,
+    inboundPort: Int? = nil,
     processName: String? = nil,
     processPath: String? = nil,
     upload: Int,
@@ -3396,6 +3818,7 @@ struct ConnectionSnapshot: Identifiable, Codable, Equatable, Sendable {
     self.sourcePort = sourcePort
     self.destinationIP = destinationIP?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     self.destinationPort = destinationPort
+    self.inboundPort = inboundPort
     self.processName = processName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     self.processPath = processPath?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     self.upload = upload
@@ -3467,6 +3890,188 @@ struct RuntimeRule: Identifiable, Codable, Equatable, Sendable {
   }
 }
 
+enum RuntimeRuleSource: String, Codable, Equatable, Sendable {
+  case globalPrepend
+  case profilePrepend
+  case runtimeSnippetPrepend
+  case runtimeProfile
+  case profileAppend
+  case globalAppend
+  case runtimeSnippetAppend
+
+  var displayName: String {
+    switch self {
+    case .globalPrepend:
+      return String(localized: "Global before profile")
+    case .profilePrepend:
+      return String(localized: "Profile before rules")
+    case .runtimeSnippetPrepend:
+      return String(localized: "Snippet before rules")
+    case .runtimeProfile:
+      return String(localized: "Runtime profile")
+    case .profileAppend:
+      return String(localized: "Profile after rules")
+    case .globalAppend:
+      return String(localized: "Global after profile")
+    case .runtimeSnippetAppend:
+      return String(localized: "Snippet after rules")
+    }
+  }
+}
+
+struct RuntimeRuleCandidate: Equatable, Sendable {
+  var rule: RuntimeRule
+  var source: RuntimeRuleSource
+}
+
+struct RuntimeRuleCandidateBuilder {
+  static func runtimeCandidates(runtimeRules: [RuntimeRule]) -> [RuntimeRuleCandidate] {
+    runtimeRules.enumerated().map { offset, rule in
+      var runtimeRule = rule
+      runtimeRule.index = offset + 1
+      return RuntimeRuleCandidate(rule: runtimeRule, source: .runtimeProfile)
+    }
+  }
+
+  static func candidates(
+    globalOverlay: RuleOverlaySettings,
+    profileOverlay: RuleOverlaySettings,
+    snippetOverlay: RuleOverlaySettings,
+    runtimeRules: [RuntimeRule]
+  ) -> [RuntimeRuleCandidate] {
+    let combinedOverlay = globalOverlay
+      .combined(withProfileOverlay: profileOverlay)
+      .combined(withRuntimeSnippetOverlay: snippetOverlay)
+    var candidates: [RuntimeRuleCandidate] = []
+    var index = 1
+
+    appendRuntimeRules(globalOverlay.runtimePrependRules, source: .globalPrepend, to: &candidates, nextIndex: &index)
+    appendRuntimeRules(profileOverlay.runtimePrependRules, source: .profilePrepend, to: &candidates, nextIndex: &index)
+    appendRuntimeRules(snippetOverlay.runtimePrependRules, source: .runtimeSnippetPrepend, to: &candidates, nextIndex: &index)
+
+    for rule in runtimeRules where !combinedOverlay.disablesRule(rule.raw) {
+      var runtimeRule = rule
+      runtimeRule.index = index
+      candidates.append(RuntimeRuleCandidate(rule: runtimeRule, source: .runtimeProfile))
+      index += 1
+    }
+
+    appendRuntimeRules(profileOverlay.runtimeAppendRules, source: .profileAppend, to: &candidates, nextIndex: &index)
+    appendRuntimeRules(globalOverlay.runtimeAppendRules, source: .globalAppend, to: &candidates, nextIndex: &index)
+    appendRuntimeRules(snippetOverlay.runtimeAppendRules, source: .runtimeSnippetAppend, to: &candidates, nextIndex: &index)
+    return candidates
+  }
+
+  private static func appendRuntimeRules(
+    _ rawRules: [String],
+    source: RuntimeRuleSource,
+    to candidates: inout [RuntimeRuleCandidate],
+    nextIndex: inout Int
+  ) {
+    for rawRule in rawRules {
+      let rule = RuntimeRuleParser.parse(raw: rawRule, index: nextIndex)
+      candidates.append(RuntimeRuleCandidate(rule: rule, source: source))
+      nextIndex += 1
+    }
+  }
+}
+
+struct RuntimeRuleParser {
+  static func parse(raw: String, index: Int, providerName: String? = nil) -> RuntimeRule {
+    let components = topLevelComponents(in: raw)
+    let type = components.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let normalizedType = type.uppercased()
+    let payload: String
+    let policy: String
+
+    if normalizedType == "MATCH" {
+      payload = ""
+      policy = components.dropFirst().first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    } else {
+      payload = normalizedPayload(
+        components.dropFirst().first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      )
+      policy = components.dropFirst(2).first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    return RuntimeRule(
+      index: index,
+      type: type,
+      payload: payload,
+      policy: policy,
+      providerName: providerName,
+      raw: raw
+    )
+  }
+
+  private static func normalizedPayload(_ payload: String) -> String {
+    var payload = payload.trimmingCharacters(in: .whitespacesAndNewlines)
+    if payload.hasPrefix("("), payload.hasSuffix(")") {
+      payload.removeFirst()
+      payload.removeLast()
+      payload = payload.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    return payload
+  }
+
+  private static func topLevelComponents(in raw: String) -> [String] {
+    var components: [String] = []
+    var current = ""
+    var depth = 0
+    for character in raw {
+      switch character {
+      case "," where depth == 0:
+        components.append(current)
+        current = ""
+      case "(":
+        depth += 1
+        current.append(character)
+      case ")":
+        depth = max(0, depth - 1)
+        current.append(character)
+      default:
+        current.append(character)
+      }
+    }
+    components.append(current)
+    return components
+  }
+}
+
+struct RuleMatchSimulationInput: Equatable, Sendable {
+  var destination: String
+  var sourceIP: String
+  var destinationPort: String
+  var sourcePort: String
+  var inboundPort: String
+  var process: String
+
+  init(
+    destination: String = "",
+    sourceIP: String = "",
+    destinationPort: String = "",
+    sourcePort: String = "",
+    inboundPort: String = "",
+    process: String = ""
+  ) {
+    self.destination = destination
+    self.sourceIP = sourceIP
+    self.destinationPort = destinationPort
+    self.sourcePort = sourcePort
+    self.inboundPort = inboundPort
+    self.process = process
+  }
+
+  static func legacyTarget(_ target: String) -> RuleMatchSimulationInput {
+    RuleMatchSimulationInput(destination: target, process: target)
+  }
+
+  var isEmpty: Bool {
+    [destination, sourceIP, destinationPort, sourcePort, inboundPort, process]
+      .allSatisfy { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+  }
+}
+
 enum RuleMatchSimulationOutcome: Equatable, Sendable {
   case matched(RuntimeRule)
   case mihomoOnly(String)
@@ -3495,71 +4100,140 @@ enum RuleMatchSimulationOutcome: Equatable, Sendable {
   }
 }
 
+struct RuleMatchSimulationTrace: Equatable, Sendable {
+  var outcome: RuleMatchSimulationOutcome
+  var source: RuntimeRuleSource?
+  var rule: RuntimeRule?
+  var provider: String?
+  var policy: String?
+  var detail: String
+
+  static let noMatch = RuleMatchSimulationTrace(
+    outcome: .noMatch,
+    source: nil,
+    rule: nil,
+    provider: nil,
+    policy: nil,
+    detail: String(localized: "No supported local rule matched. Runtime provider and geodata rules may still match inside Mihomo.")
+  )
+
+  var title: String {
+    outcome.title
+  }
+
+  var sourceSummary: String {
+    source?.displayName ?? String(localized: "None")
+  }
+
+  var ruleSummary: String {
+    rule?.raw ?? "-"
+  }
+
+  var policySummary: String {
+    policy?.nilIfEmpty ?? "-"
+  }
+
+  var providerSummary: String {
+    provider?.nilIfEmpty ?? "-"
+  }
+}
+
 struct RuleMatchSimulator: Sendable {
   func simulate(target: String, rules: [RuntimeRule]) -> RuleMatchSimulationOutcome {
-    let normalizedTarget = target.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !normalizedTarget.isEmpty else { return .noMatch }
+    simulate(
+      input: .legacyTarget(target),
+      candidates: rules.map { RuntimeRuleCandidate(rule: $0, source: .runtimeProfile) }
+    ).outcome
+  }
 
-    for rule in rules.sorted(by: { $0.index < $1.index }) {
-      switch match(rule: rule, target: normalizedTarget) {
+  func simulate(input: RuleMatchSimulationInput, candidates: [RuntimeRuleCandidate]) -> RuleMatchSimulationTrace {
+    guard !input.isEmpty else { return .noMatch }
+
+    for candidate in candidates.sorted(by: { $0.rule.index < $1.rule.index }) {
+      switch match(rule: candidate.rule, input: input) {
       case true:
-        return .matched(rule)
+        return RuleMatchSimulationTrace(
+          outcome: .matched(candidate.rule),
+          source: candidate.source,
+          rule: candidate.rule,
+          provider: provider(for: candidate.rule),
+          policy: candidate.rule.policy,
+          detail: candidate.rule.raw
+        )
       case false:
         continue
       case nil:
-        return .mihomoOnly(String(localized: "This rule type depends on provider, geodata, or runtime-only Mihomo matching."))
+        let reason = String(localized: "This rule type depends on provider, geodata, or runtime-only Mihomo matching.")
+        return RuleMatchSimulationTrace(
+          outcome: .mihomoOnly(reason),
+          source: candidate.source,
+          rule: candidate.rule,
+          provider: provider(for: candidate.rule),
+          policy: candidate.rule.policy,
+          detail: reason
+        )
       }
     }
     return .noMatch
   }
 
-  private func match(rule: RuntimeRule, target: String) -> Bool? {
+  private func match(rule: RuntimeRule, input: RuleMatchSimulationInput) -> Bool? {
     let type = rule.type.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
     let payload = rule.payload.trimmingCharacters(in: .whitespacesAndNewlines)
-    let target = target.trimmingCharacters(in: .whitespacesAndNewlines)
+    let destination = input.destination.trimmingCharacters(in: .whitespacesAndNewlines)
+    let sourceIP = input.sourceIP.trimmingCharacters(in: .whitespacesAndNewlines)
+    let process = input.process.trimmingCharacters(in: .whitespacesAndNewlines)
     switch type {
     case "DOMAIN":
-      return target.caseInsensitiveCompare(payload) == .orderedSame
+      return destination.caseInsensitiveCompare(payload) == .orderedSame
     case "DOMAIN-SUFFIX":
-      let lowerTarget = target.lowercased()
+      let lowerTarget = destination.lowercased()
       let lowerPayload = payload.lowercased()
       return lowerTarget == lowerPayload || lowerTarget.hasSuffix(".\(lowerPayload)")
     case "DOMAIN-KEYWORD":
-      return target.localizedCaseInsensitiveContains(payload)
+      return destination.localizedCaseInsensitiveContains(payload)
     case "IP-CIDR":
-      return matchCIDR(payload: payload, target: target, family: .ipv4)
+      return matchCIDR(payload: payload, target: destination, family: .ipv4)
     case "IP-CIDR6":
-      return matchCIDR(payload: payload, target: target, family: .ipv6)
+      return matchCIDR(payload: payload, target: destination, family: .ipv6)
+    case "SRC-IP-CIDR":
+      return matchCIDR(payload: payload, target: sourceIP, family: nil)
+    case "DST-PORT":
+      return matchPort(payload: payload, input: input.destinationPort)
+    case "SRC-PORT":
+      return matchPort(payload: payload, input: input.sourcePort)
+    case "IN-PORT":
+      return matchPort(payload: payload, input: input.inboundPort)
     case "PROCESS-NAME":
-      let processNameURL = URL(fileURLWithPath: target)
+      let processNameURL = URL(fileURLWithPath: process)
       let processName = processNameURL.lastPathComponent
       let processNameWithoutExtension = processNameURL.deletingPathExtension().lastPathComponent
-      return target.caseInsensitiveCompare(payload) == .orderedSame
+      return process.caseInsensitiveCompare(payload) == .orderedSame
         || processName.caseInsensitiveCompare(payload) == .orderedSame
         || processNameWithoutExtension.caseInsensitiveCompare(payload) == .orderedSame
     case "PROCESS-PATH":
-      return target.caseInsensitiveCompare(payload) == .orderedSame
+      return process.caseInsensitiveCompare(payload) == .orderedSame
     case "MATCH":
       return true
-    case "GEOSITE", "GEOIP", "RULE-SET":
+    case "GEOSITE", "GEOIP", "RULE-SET", "SUB-RULE", "SRC-GEOIP", "SRC-IP-ASN", "SRC-IP-SUFFIX":
       return nil
     default:
-      return target.localizedCaseInsensitiveContains(payload)
+      return destination.localizedCaseInsensitiveContains(payload)
     }
   }
 
   private func matchCIDR(
     payload: String,
     target: String,
-    family: NetworkExtensionRouteCIDR.AddressFamily
+    family: NetworkExtensionRouteCIDR.AddressFamily?
   ) -> Bool {
     guard let cidr = try? NetworkExtensionRouteCIDR(payload),
-          cidr.family == family
+          family == nil || cidr.family == family
     else {
       return false
     }
 
-    switch family {
+    switch cidr.family {
     case .ipv4:
       guard let targetValue = ipv4Value(target),
             let cidrValue = ipv4Value(cidr.address)
@@ -3576,6 +4250,42 @@ struct RuleMatchSimulator: Sendable {
       }
       return ipv6(targetBytes, matches: cidrBytes, prefix: cidr.prefix)
     }
+  }
+
+  private func matchPort(payload: String, input: String) -> Bool {
+    guard let port = Int(input.trimmingCharacters(in: .whitespacesAndNewlines)),
+          (1...65_535).contains(port)
+    else {
+      return false
+    }
+    let parts = payload
+      .split(separator: "-", omittingEmptySubsequences: false)
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+    guard parts.count == 1 || parts.count == 2,
+          let first = Int(parts[0]),
+          (1...65_535).contains(first)
+    else {
+      return false
+    }
+    if parts.count == 1 {
+      return port == first
+    }
+    guard let last = Int(parts[1]),
+          (1...65_535).contains(last)
+    else {
+      return false
+    }
+    return first <= port && port <= last
+  }
+
+  private func provider(for rule: RuntimeRule) -> String? {
+    if let provider = rule.providerName?.nilIfEmpty {
+      return provider
+    }
+    if rule.type.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare("RULE-SET") == .orderedSame {
+      return rule.payload.nilIfEmpty
+    }
+    return nil
   }
 
   private func ipv4Value(_ value: String) -> UInt32? {
@@ -3615,6 +4325,7 @@ struct RuleMatchSimulator: Sendable {
 struct RuleExplanation: Equatable, Sendable {
   var connectionID: ConnectionSnapshot.ID
   var target: String
+  var simulationInput: RuleMatchSimulationInput
   var reportedRule: String?
   var reportedRulePayload: String?
   var chosenPolicy: String?
@@ -3641,17 +4352,20 @@ struct RoutingSimulationRequest: Identifiable, Equatable, Sendable {
   var id: UUID
   var connectionID: ConnectionSnapshot.ID
   var target: String
+  var input: RuleMatchSimulationInput
   var explanation: RuleExplanation
 
   init(
     id: UUID = UUID(),
     connectionID: ConnectionSnapshot.ID,
     target: String,
+    input: RuleMatchSimulationInput? = nil,
     explanation: RuleExplanation
   ) {
     self.id = id
     self.connectionID = connectionID
     self.target = target
+    self.input = input ?? .legacyTarget(target)
     self.explanation = explanation
   }
 }
@@ -3660,13 +4374,17 @@ struct RuleExplanationBuilder: Sendable {
   private let simulator = RuleMatchSimulator()
 
   func explanation(for connection: ConnectionSnapshot, rules: [RuntimeRule]) -> RuleExplanation {
-    let candidates = simulationTargets(for: connection)
-    let fallbackTarget = candidates.first ?? connection.host.trimmingCharacters(in: .whitespacesAndNewlines)
-    let evaluated = candidates.map { target in
-      (target: target, outcome: simulator.simulate(target: target, rules: rules))
+    let inputs = simulationInputs(for: connection)
+    let fallbackInput = inputs.first ?? RuleMatchSimulationInput(destination: connection.host)
+    let ruleCandidates = RuntimeRuleCandidateBuilder.runtimeCandidates(runtimeRules: rules)
+    let evaluated = inputs.map { input in
+      (input: input, outcome: simulator.simulate(input: input, candidates: ruleCandidates).outcome)
     }
     let selected = selectedEvaluation(from: evaluated)
-      ?? (target: fallbackTarget, outcome: simulator.simulate(target: fallbackTarget, rules: rules))
+      ?? (
+        input: fallbackInput,
+        outcome: simulator.simulate(input: fallbackInput, candidates: ruleCandidates).outcome
+      )
     let matchedPolicy: String?
     switch selected.outcome {
     case let .matched(rule):
@@ -3676,7 +4394,8 @@ struct RuleExplanationBuilder: Sendable {
     }
     return RuleExplanation(
       connectionID: connection.id,
-      target: selected.target,
+      target: Self.targetSummary(for: selected.input),
+      simulationInput: selected.input,
       reportedRule: connection.rule,
       reportedRulePayload: connection.rulePayload,
       chosenPolicy: matchedPolicy,
@@ -3686,8 +4405,8 @@ struct RuleExplanationBuilder: Sendable {
   }
 
   private func selectedEvaluation(
-    from evaluations: [(target: String, outcome: RuleMatchSimulationOutcome)]
-  ) -> (target: String, outcome: RuleMatchSimulationOutcome)? {
+    from evaluations: [(input: RuleMatchSimulationInput, outcome: RuleMatchSimulationOutcome)]
+  ) -> (input: RuleMatchSimulationInput, outcome: RuleMatchSimulationOutcome)? {
     if let specificMatch = evaluations.first(where: { evaluation in
       if case let .matched(rule) = evaluation.outcome {
         return rule.type.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() != "MATCH"
@@ -3715,20 +4434,58 @@ struct RuleExplanationBuilder: Sendable {
     return evaluations.first
   }
 
-  private func simulationTargets(for connection: ConnectionSnapshot) -> [String] {
+  private func simulationInputs(for connection: ConnectionSnapshot) -> [RuleMatchSimulationInput] {
     let ruleType = connection.rule?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() ?? ""
     let processTargets = [connection.processPath, connection.processName].compactMap(Self.normalized)
     let ipTargets = [connection.destinationIP, connection.host].compactMap(Self.normalized)
     let hostTargets = [connection.host, connection.destinationIP].compactMap(Self.normalized)
-    let ordered: [String]
-    if ruleType.hasPrefix("PROCESS") {
-      ordered = processTargets + hostTargets
-    } else if ruleType.hasPrefix("IP-CIDR") || ruleType == "GEOIP" {
-      ordered = ipTargets + processTargets
+    let destinations: [String]
+    if ruleType.hasPrefix("IP-CIDR") || ruleType == "GEOIP" {
+      destinations = Self.unique(ipTargets + hostTargets)
     } else {
-      ordered = hostTargets + processTargets
+      destinations = Self.unique(hostTargets + ipTargets)
     }
-    return Self.unique(ordered)
+    let destinationValues = destinations.isEmpty ? [""] : destinations
+    let processValues = Self.unique(processTargets)
+    let orderedProcesses = processValues.isEmpty ? [""] : processValues
+    let sourceIP = Self.normalized(connection.sourceIP) ?? ""
+    let sourcePort = connection.sourcePort.map(String.init) ?? ""
+    let destinationPort = connection.destinationPort.map(String.init) ?? ""
+    let inboundPort = connection.inboundPort.map(String.init) ?? ""
+
+    var inputs: [RuleMatchSimulationInput] = []
+    if ruleType.hasPrefix("PROCESS") {
+      for process in orderedProcesses {
+        for destination in destinationValues {
+          inputs.append(
+            RuleMatchSimulationInput(
+              destination: destination,
+              sourceIP: sourceIP,
+              destinationPort: destinationPort,
+              sourcePort: sourcePort,
+              inboundPort: inboundPort,
+              process: process
+            )
+          )
+        }
+      }
+    } else {
+      for destination in destinationValues {
+        for process in orderedProcesses {
+          inputs.append(
+            RuleMatchSimulationInput(
+              destination: destination,
+              sourceIP: sourceIP,
+              destinationPort: destinationPort,
+              sourcePort: sourcePort,
+              inboundPort: inboundPort,
+              process: process
+            )
+          )
+        }
+      }
+    }
+    return Self.unique(inputs)
   }
 
   private static func normalized(_ value: String?) -> String? {
@@ -3745,6 +4502,39 @@ struct RuleExplanationBuilder: Sendable {
       result.append(value)
     }
     return result
+  }
+
+  private static func unique(_ values: [RuleMatchSimulationInput]) -> [RuleMatchSimulationInput] {
+    var seen = Set<String>()
+    var result: [RuleMatchSimulationInput] = []
+    for value in values {
+      let key = [
+        value.destination,
+        value.sourceIP,
+        value.destinationPort,
+        value.sourcePort,
+        value.inboundPort,
+        value.process
+      ]
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+      .joined(separator: "\u{1F}")
+      guard seen.insert(key).inserted else { continue }
+      result.append(value)
+    }
+    return result
+  }
+
+  private static func targetSummary(for input: RuleMatchSimulationInput) -> String {
+    [
+      input.destination,
+      input.process,
+      input.sourceIP,
+      input.destinationPort,
+      input.sourcePort,
+      input.inboundPort
+    ]
+    .compactMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty }
+    .first ?? ""
   }
 }
 

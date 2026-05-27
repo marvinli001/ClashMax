@@ -1,0 +1,18 @@
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Pacific/Auckland"
+    open-pull-requests-limit: 2
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+# Swift package versions currently live in XcodeGen's project.yml rather than
+# a SwiftPM manifest or lockfile. Add a "swift" ecosystem entry here if the
+# repository later gains Package.swift or Package.resolved.

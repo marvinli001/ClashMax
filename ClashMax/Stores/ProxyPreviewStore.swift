@@ -77,6 +77,42 @@ final class ProxyPreviewStore: ObservableObject {
     defaults.set(store, forKey: Self.previewSelectionsDefaultsKey)
   }
 
+  func backupSelections() -> [String: [String: String]] {
+    defaults.dictionary(forKey: Self.previewSelectionsDefaultsKey) as? [String: [String: String]] ?? [:]
+  }
+
+  func rollbackSnapshot() -> ProxyPreviewRollbackSnapshot {
+    ProxyPreviewRollbackSnapshot(
+      storedSelections: backupSelections(),
+      previewSelections: previewSelections
+    )
+  }
+
+  func restoreRollbackSnapshot(_ snapshot: ProxyPreviewRollbackSnapshot) {
+    defaults.set(snapshot.storedSelections, forKey: Self.previewSelectionsDefaultsKey)
+    previewSelections = snapshot.previewSelections
+  }
+
+  func mergeBackupSelections(
+    _ selections: [String: [String: String]],
+    idMap: [Profile.ID: Profile.ID],
+    activeProfileID: Profile.ID?
+  ) {
+    var store = backupSelections()
+    for (profileIDString, groupSelections) in selections {
+      guard let profileID = UUID(uuidString: profileIDString),
+            let restoredID = idMap[profileID]
+      else { continue }
+      if groupSelections.isEmpty {
+        store.removeValue(forKey: restoredID.uuidString)
+      } else {
+        store[restoredID.uuidString] = groupSelections
+      }
+    }
+    defaults.set(store, forKey: Self.previewSelectionsDefaultsKey)
+    loadSelections(for: activeProfileID)
+  }
+
   func mergedPreviewSelections(into groups: [ProxyGroup]) -> [ProxyGroup] {
     guard !previewSelections.isEmpty else { return groups }
     return groups.map { group in

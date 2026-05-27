@@ -1,6 +1,6 @@
 import Foundation
 
-struct ProfileManifest: Codable, Sendable {
+struct ProfileManifest: Codable, Equatable, Sendable {
   var profiles: [Profile]
   var activeProfileID: Profile.ID?
 }

@@ -4,6 +4,7 @@ import Yams
 struct RuntimeConfigOptions: Equatable, Sendable {
   var networkExtensionRoutingSettings: NetworkExtensionRoutingSettings?
   var subscriptionProviderOptions: SubscriptionProviderOptions = .default
+  var runtimeSnippets: [RuntimeSnippet] = []
 
   static let `default` = RuntimeConfigOptions()
 }
@@ -58,6 +59,18 @@ struct ConfigNormalizer {
       .trimmingCharacters(in: .whitespacesAndNewlines)
     if !runtimeMergeYAML.isEmpty {
       root = try runtimeMergedRoot(base: root, mergeYAML: runtimeMergeYAML)
+    }
+
+    let snippetApplication = RuntimeSnippetApplication(snippets: options.runtimeSnippets)
+    for dnsPatch in snippetApplication.dnsPatches {
+      if let validationError = dnsPatch.validationError {
+        throw NormalizerError.invalidProfile(validationError)
+      }
+      var dns = root["dns"] as? [String: Any] ?? [:]
+      applyTunDNSOverlay(dnsPatch, to: &dns)
+      if !dns.isEmpty {
+        root["dns"] = dns
+      }
     }
 
     root["mixed-port"] = overrides.mixedPort
@@ -148,6 +161,7 @@ struct ConfigNormalizer {
     let ruleOverlay = overrides.ruleOverlay.combined(
       withProfileOverlay: options.subscriptionProviderOptions.ruleOverlay
     )
+    .combined(withRuntimeSnippetOverlay: snippetApplication.ruleOverlay)
     if ruleOverlay.hasRuntimeOverlay {
       if let validationError = ruleOverlay.validationError {
         throw NormalizerError.invalidProfile(validationError)

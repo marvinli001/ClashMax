@@ -523,6 +523,44 @@ final class ProfileStoreTests: XCTestCase {
     XCTAssertEqual(reloaded.profiles.first?.subscriptionProviderOptions, .default)
   }
 
+  func testRuleOverlayProviderOptionsPreflightFailureDoesNotPersist() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let secrets = InMemorySecretStore()
+    let store = ProfileStore(paths: fixture.paths, keychain: secrets)
+    let profile = try await store.addSubscription(
+      name: "Remote",
+      url: URL(string: "https://example.com/sub")!,
+      session: URLSession(configuration: URLProtocolRecorder.configurationReturning(
+        "proxies:\n  - name: DIRECT\n    type: direct\nrules:\n  - MATCH,DIRECT\n"
+      ))
+    )
+    let rejectedOptions = SubscriptionProviderOptions(
+      ruleOverlay: RuleOverlaySettings(
+        enabled: true,
+        prependRules: [
+          ManagedRuleOverlayRule(kind: .ruleSet, value: "RemoteRules", policy: "Proxy")
+        ]
+      )
+    )
+    let validator = RecordingSubscriptionPreflightValidator(
+      result: .failure(NSError(domain: "RuleOverlayPreflight", code: 1))
+    )
+
+    await XCTAssertThrowsErrorAsync {
+      try await store.updateSubscriptionProviderOptions(
+        profile,
+        options: rejectedOptions,
+        preflightValidator: validator
+      )
+    }
+
+    XCTAssertEqual(validator.validatedProviderOptions, [rejectedOptions])
+    XCTAssertEqual(store.profiles.first?.subscriptionProviderOptions, .default)
+    let reloaded = ProfileStore(paths: fixture.paths, keychain: secrets)
+    await reloaded.waitForManifestLoad()
+    XCTAssertEqual(reloaded.profiles.first?.subscriptionProviderOptions, .default)
+  }
+
   func testSubscriptionSourceAndProviderOptionsPersistAsSingleFinalProfile() async throws {
     let fixture = try TemporaryProfileFixture()
     let secrets = InMemorySecretStore()

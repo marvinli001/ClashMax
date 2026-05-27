@@ -389,6 +389,10 @@ final class AppModel: ObservableObject {
     get { settings.delayTestSettings }
     set { settings.delayTestSettings = newValue }
   }
+  var proxyPageSettings: ProxyPageSettings {
+    get { settings.proxyPageSettings }
+    set { settings.proxyPageSettings = newValue }
+  }
   var appTheme: AppTheme {
     get { settings.appTheme }
     set { settings.appTheme = newValue }
@@ -495,6 +499,7 @@ final class AppModel: ObservableObject {
   var publicIPInfoState: PublicIPInfoState { publicIP.state }
   @Published private(set) var appNotice: AppNotice?
   @Published private(set) var runtimeSettingsApplyState: RuntimeSettingsApplyState = .idle
+  @Published private(set) var proxyDelayBatchProgress: ProxyDelayBatchProgress?
   @Published var routingSimulationRequest: RoutingSimulationRequest?
   private var lastErrorOrigin: LastErrorOrigin?
   private var isPublishingNetworkExtensionLastError = false
@@ -508,6 +513,8 @@ final class AppModel: ObservableObject {
   @Published private(set) var currentNetworkSSID: String?
   @Published private(set) var networkPolicyStatusMessage: String?
   @Published private(set) var lastAppliedNetworkPolicyID: NetworkPolicyRule.ID?
+  @Published private(set) var backupRestoreStatusMessage: String?
+  @Published private(set) var pendingBackupRestorePreview: BackupRestorePreview?
   var updatingProfileIDs: Set<Profile.ID> { profileCoordinator.updatingProfileIDs }
   var profileOperationMessage: String? { profileCoordinator.message }
   var profilePreviewGroups: [ProxyGroup] {
@@ -542,6 +549,7 @@ final class AppModel: ObservableObject {
   var systemProxyController: SystemProxyController { systemProxy.controller }
   let helperClient: TunnelHelperClient
   let networkExtensionController: NetworkExtensionController
+  let runtimeSnippetLibrary: RuntimeSnippetLibraryStore
   private let tunnelReadinessProbe: CoreReadinessProbing
   private let proxyPortReadinessProbe: any ProxyPortReadinessProbing
   private let tunRuntimeInspector: any TunRuntimeInspecting
@@ -575,6 +583,8 @@ final class AppModel: ObservableObject {
   private var delayTestTasks: [ProxyNodeKey: Task<Void, Never>] = [:]
   private var delayTestTokens: [ProxyNodeKey: UUID] = [:]
   private var delayStateCache: [ProxyNodeKey: ProxyDelayCacheEntry] = [:]
+  private var proxyDelayBatchTask: Task<Void, Never>?
+  private var proxyDelayBatchToken: UUID?
   private var providerHealthCheckTasks: [ProxyProvider.ID: Task<Void, Never>] = [:]
   private var providerHealthCheckTokens: [ProxyProvider.ID: UUID] = [:]
   private var proxyProviderUpdateTasks: [ProxyProvider.ID: Task<Void, Never>] = [:]
@@ -608,6 +618,7 @@ final class AppModel: ObservableObject {
   private let currentNetworkProvider: any CurrentNetworkProviding
   private let networkEnvironmentMonitor: (any NetworkEnvironmentMonitoring)?
   private let globalShortcutManager: GlobalShortcutManager
+  private let backupRestoreService = BackupRestoreService()
   private let bundledCoreURLProvider: () throws -> URL
   private let delayStateCacheTTL: TimeInterval
   static let publicIPRefreshInterval: TimeInterval = 300
@@ -615,6 +626,7 @@ final class AppModel: ObservableObject {
   static let startWallClockSeconds: TimeInterval = 22
   private static let previewRuntimeMixedPort = 17_890
   private static let previewRuntimeControllerPort = 19_097
+  private static let proxyDelayBatchConcurrencyLimit = 6
   private static let tunHelperApprovalPollingAttempts = 8
   private static let tunHelperApprovalPollingIntervalNanoseconds: UInt64 = 1_000_000_000
   private static let tunControllerCleanupTimeoutSeconds: TimeInterval = 2
@@ -656,6 +668,7 @@ final class AppModel: ObservableObject {
     defaults: UserDefaults = .standard,
     delayStateCacheTTL: TimeInterval = 600,
     externalDashboardSecretStore: any SecretStoring = KeychainStore(service: "\(AppConstants.bundleIdentifier).external-dashboards"),
+    runtimeSnippetLibrary: RuntimeSnippetLibraryStore? = nil,
     currentNetworkProvider: any CurrentNetworkProviding = CoreWLANCurrentNetworkProvider(),
     networkEnvironmentMonitor: (any NetworkEnvironmentMonitoring)? = nil,
     globalShortcutRegistrar: (any GlobalShortcutRegistering)? = nil,
@@ -669,6 +682,7 @@ final class AppModel: ObservableObject {
     self.globalShortcutManager = GlobalShortcutManager(registrar: globalShortcutRegistrar ?? CarbonGlobalShortcutRegistrar())
     self.bundledCoreURLProvider = bundledCoreURLProvider ?? Self.resolveBundledCoreURL
     self.profileStore = profileStore ?? ProfileStore(paths: paths)
+    self.runtimeSnippetLibrary = runtimeSnippetLibrary ?? RuntimeSnippetLibraryStore(paths: paths)
     self.proxyPreview = ProxyPreviewStore(defaults: defaults)
     self.profileCoordinator = ProfileCoordinator(profileStore: self.profileStore, proxyPreview: self.proxyPreview)
     self.coreController = coreController
@@ -756,6 +770,17 @@ final class AppModel: ObservableObject {
       }
       .store(in: &storeCancellables)
     self.profileStore.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &storeCancellables)
+    self.profileStore.$profiles
+      .dropFirst()
+      .sink { [weak self] profiles in
+        Task { [weak self] in
+          await self?.pruneRuntimeSnippetProfileBindings(validProfileIDs: Set(profiles.map(\.id)))
+        }
+      }
+      .store(in: &storeCancellables)
+    self.runtimeSnippetLibrary.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
       .store(in: &storeCancellables)
     systemProxy.objectWillChange
@@ -995,6 +1020,10 @@ final class AppModel: ObservableObject {
     isCoreRunning && apiClient != nil
   }
 
+  var isProxyDelayBatchRunning: Bool {
+    proxyDelayBatchProgress?.isRunning == true
+  }
+
   var canSelectProxyOffline: Bool {
     !isCoreRunning && profileStore.activeProfile != nil && !profilePreviewGroups.isEmpty
   }
@@ -1051,6 +1080,7 @@ final class AppModel: ObservableObject {
     routingSimulationRequest = RoutingSimulationRequest(
       connectionID: connection.id,
       target: explanation.target,
+      input: explanation.simulationInput,
       explanation: explanation
     )
     selectedSection = .routing
@@ -1108,6 +1138,144 @@ final class AppModel: ObservableObject {
         lastError = UserFacingError.message(for: error)
       }
     }
+  }
+
+  func exportBackup(includeSecrets: Bool, password: String?, passwordConfirmation: String?) {
+    if includeSecrets {
+      guard let password, !password.isEmpty else {
+        lastError = BackupRestoreError.passwordRequired.localizedDescription
+        return
+      }
+      guard password == passwordConfirmation else {
+        lastError = BackupRestoreError.passwordConfirmationMismatch.localizedDescription
+        return
+      }
+    }
+
+    let panel = NSSavePanel()
+    panel.allowedContentTypes = [.clashMaxBackup]
+    panel.canCreateDirectories = true
+    panel.nameFieldStringValue = Self.defaultBackupFileName()
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      do {
+        let summary = try await backupRestoreService.exportBackup(
+          to: url,
+          profileStore: profileStore,
+          settings: settings,
+          proxyPreview: proxyPreview,
+          runtimeSnippetLibrary: runtimeSnippetLibrary,
+          includeSecrets: includeSecrets,
+          password: password
+        )
+        backupRestoreStatusMessage = Self.exportBackupStatusMessage(summary: summary, fileName: url.lastPathComponent)
+        lastError = nil
+      } catch {
+        backupRestoreStatusMessage = nil
+        lastError = UserFacingError.message(for: error)
+      }
+    }
+  }
+
+  func chooseBackupForRestore() {
+    guard !isCoreRunning else {
+      lastError = BackupRestoreError.cannotRestoreWhileRunning.localizedDescription
+      return
+    }
+    let panel = NSOpenPanel()
+    panel.allowedContentTypes = [.clashMaxBackup, .json]
+    panel.allowsMultipleSelection = false
+    panel.canChooseDirectories = false
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+
+    do {
+      pendingBackupRestorePreview = try backupRestoreService.previewBackup(at: url)
+      backupRestoreStatusMessage = nil
+      lastError = nil
+    } catch {
+      pendingBackupRestorePreview = nil
+      backupRestoreStatusMessage = nil
+      lastError = UserFacingError.message(for: error)
+    }
+  }
+
+  func clearPendingBackupRestore() {
+    pendingBackupRestorePreview = nil
+  }
+
+  @discardableResult
+  func restorePendingBackup(password: String?) async -> Bool {
+    guard !isCoreRunning else {
+      lastError = BackupRestoreError.cannotRestoreWhileRunning.localizedDescription
+      return false
+    }
+    guard let preview = pendingBackupRestorePreview else { return false }
+
+    do {
+      let summary = try await backupRestoreService.restoreBackup(
+        from: preview.url,
+        password: password,
+        profileStore: profileStore,
+        settings: settings,
+        proxyPreview: proxyPreview,
+        runtimeSnippetLibrary: runtimeSnippetLibrary
+      )
+      profileCoordinator.clearMessage()
+      proxyGroups = []
+      await refreshProfilePreviewAndWait()
+      loadPreviewSelectionsForActiveProfile()
+      profileCoordinator.rescheduleSubscriptionAutoUpdates()
+      pendingBackupRestorePreview = nil
+      backupRestoreStatusMessage = Self.restoreBackupStatusMessage(summary: summary, fileName: preview.fileName)
+      lastError = nil
+      return true
+    } catch {
+      backupRestoreStatusMessage = nil
+      lastError = UserFacingError.message(for: error)
+      return false
+    }
+  }
+
+  private static func defaultBackupFileName(now: Date = Date()) -> String {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    let stamp = formatter.string(from: now)
+      .replacingOccurrences(of: ":", with: "-")
+    return "ClashMax-\(stamp).clashmax-backup"
+  }
+
+  private static func exportBackupStatusMessage(summary: BackupRestoreSummary, fileName: String) -> String {
+    if summary.skippedSecretCount > 0 {
+      return String(
+        format: String(localized: "Exported %@ with %lld profile(s). %lld secret(s) were not included."),
+        fileName,
+        Int64(summary.importedProfileCount),
+        Int64(summary.skippedSecretCount)
+      )
+    }
+    return String(
+      format: String(localized: "Exported %@ with %lld profile(s)."),
+      fileName,
+      Int64(summary.importedProfileCount)
+    )
+  }
+
+  private static func restoreBackupStatusMessage(summary: BackupRestoreSummary, fileName: String) -> String {
+    if summary.skippedSecretCount > 0 {
+      return String(
+        format: String(localized: "Restored %@ with %lld profile(s). %lld secret(s) were skipped."),
+        fileName,
+        Int64(summary.importedProfileCount),
+        Int64(summary.skippedSecretCount)
+      )
+    }
+    return String(
+      format: String(localized: "Restored %@ with %lld profile(s)."),
+      fileName,
+      Int64(summary.importedProfileCount)
+    )
   }
 
   @discardableResult
@@ -1385,6 +1553,14 @@ final class AppModel: ObservableObject {
       lastError = validationError
       return false
     }
+    if let activeProfile = profileStore.activeProfile {
+      do {
+        try await preflightGlobalRuleOverlay(overlay, activeProfile: activeProfile)
+      } catch {
+        lastError = UserFacingError.message(for: error)
+        return false
+      }
+    }
     ruleOverlaySettings = overlay
     guard let profileID = profileStore.activeProfileID, isRunning else {
       lastError = nil
@@ -1397,6 +1573,115 @@ final class AppModel: ObservableObject {
     } catch {
       lastError = UserFacingError.message(for: error)
       return false
+    }
+  }
+
+  private func preflightGlobalRuleOverlay(_ overlay: RuleOverlaySettings, activeProfile: Profile) async throws {
+    guard let coreURL = try? bundledCoreURL() else { return }
+    let preflightDirectory = paths.runtime.appendingPathComponent(
+      "rule-overlay-preflight-\(UUID().uuidString)",
+      isDirectory: true
+    )
+    try SecureFileIO.createPrivateDirectory(at: preflightDirectory)
+    defer {
+      try? FileManager.default.removeItem(at: preflightDirectory)
+    }
+
+    var preflightOverrides = overrides
+    preflightOverrides.ruleOverlay = overlay
+    preflightOverrides.tunEnabled = false
+    var options = RuntimeConfigOptions.default
+    options.subscriptionProviderOptions = activeProfile.subscriptionProviderOptions
+    await runtimeSnippetLibrary.waitForLoad()
+    options.runtimeSnippets = runtimeSnippetLibrary.snippets(applyingTo: activeProfile.id)
+
+    let materialization = try await runtimeConfigMaterializer.materializeResult(
+      RuntimeConfigMaterializationRequest(
+        profileName: activeProfile.name,
+        sourcePath: activeProfile.originalConfigPath,
+        runtimeConfigURL: preflightDirectory.appendingPathComponent("runtime.yaml"),
+        providerContentURL: preflightDirectory.appendingPathComponent("provider.txt"),
+        overrides: preflightOverrides,
+        selectionOverrides: previewSelections,
+        options: options,
+        retainedGenerationCount: 0
+      )
+    )
+    try await MihomoRuntimeConfigValidator().validate(
+      coreURL: coreURL,
+      configURL: materialization.runtimeConfigURL,
+      workDirectory: preflightDirectory
+    )
+  }
+
+  @discardableResult
+  func saveRuntimeSnippet(_ snippet: RuntimeSnippet) async -> Bool {
+    await mutateRuntimeSnippetLibrary(logMessage: "Runtime snippet updated") {
+      try await runtimeSnippetLibrary.saveSnippet(snippet)
+    }
+  }
+
+  @discardableResult
+  func deleteRuntimeSnippet(_ snippet: RuntimeSnippet) async -> Bool {
+    await mutateRuntimeSnippetLibrary(logMessage: "Runtime snippet deleted") {
+      try await runtimeSnippetLibrary.deleteSnippet(id: snippet.id)
+    }
+  }
+
+  @discardableResult
+  func setRuntimeSnippet(_ snippet: RuntimeSnippet, enabled: Bool) async -> Bool {
+    await mutateRuntimeSnippetLibrary(logMessage: "Runtime snippet toggled") {
+      try await runtimeSnippetLibrary.setSnippetEnabled(id: snippet.id, enabled: enabled)
+    }
+  }
+
+  @discardableResult
+  func moveRuntimeSnippet(fromOffsets source: IndexSet, toOffset destination: Int) async -> Bool {
+    await mutateRuntimeSnippetLibrary(logMessage: "Runtime snippets reordered") {
+      try await runtimeSnippetLibrary.moveSnippet(fromOffsets: source, toOffset: destination)
+    }
+  }
+
+  private func mutateRuntimeSnippetLibrary(
+    logMessage: String,
+    mutation: () async throws -> Void
+  ) async -> Bool {
+    await runtimeSnippetLibrary.waitForLoad()
+    let activeProfileID = profileStore.activeProfileID
+    let beforeSnippets = runtimeSnippetLibrary.snippets
+    let beforeActiveSnippets = activeProfileID.map { runtimeSnippetLibrary.snippets(applyingTo: $0) } ?? []
+    do {
+      try await mutation()
+      let afterActiveSnippets = activeProfileID.map { runtimeSnippetLibrary.snippets(applyingTo: $0) } ?? []
+      if isRunning, let activeProfileID, beforeActiveSnippets != afterActiveSnippets {
+        do {
+          try await reloadActiveRuntimeConfigIfNeeded(for: activeProfileID, logMessage: logMessage)
+        } catch {
+          do {
+            try await runtimeSnippetLibrary.replaceSnippets(beforeSnippets)
+          } catch {
+            appendAppLog(
+              level: "error",
+              message: "Runtime snippet rollback failed: \(UserFacingError.message(for: error))"
+            )
+          }
+          throw error
+        }
+      }
+      lastError = nil
+      return true
+    } catch {
+      lastError = UserFacingError.message(for: error)
+      return false
+    }
+  }
+
+  private func pruneRuntimeSnippetProfileBindings(validProfileIDs: Set<Profile.ID>) async {
+    await runtimeSnippetLibrary.waitForLoad()
+    do {
+      _ = try await runtimeSnippetLibrary.removeMissingProfileBindings(validProfileIDs: validProfileIDs)
+    } catch {
+      appendAppLog(level: "warn", message: "Runtime snippet profile binding cleanup failed: \(UserFacingError.message(for: error))")
     }
   }
 
@@ -3393,16 +3678,22 @@ final class AppModel: ObservableObject {
   }
 
   func testDelayForAllProxyGroups(testURL: URL? = nil) {
-    let groups = visibleProxyGroups.filter { group in
-      group.nodes.contains(where: \.isSelectable)
-    }
-    guard !groups.isEmpty else {
-      lastError = "No selectable proxy groups to test."
-      return
-    }
-    for group in groups {
-      testDelay(in: group, testURL: testURL)
-    }
+    startProxyDelayBatch(overrideTestURL: testURL)
+  }
+
+  func cancelProxyDelayBatch() {
+    guard proxyDelayBatchProgress?.isRunning == true else { return }
+    proxyDelayBatchTask?.cancel()
+  }
+
+  func updateProxyPageSettings(_ update: (inout ProxyPageSettings) -> Void) {
+    var nextSettings = proxyPageSettings
+    update(&nextSettings)
+    proxyPageSettings = nextSettings
+  }
+
+  func customDelayTestURL(forGroupName groupName: String) -> URL? {
+    proxyPageSettings.customDelayTestURL(forGroupName: groupName)
   }
 
   func testDelay(in group: ProxyGroup, for node: ProxyNode, testURL: URL? = nil) {
@@ -3421,7 +3712,7 @@ final class AppModel: ObservableObject {
     }
     guard let apiClient = runtimeAPIClientForProxyAction() else { return }
     let settings = delayTestSettings
-    let effectiveTestURL = testURL ?? AppConstants.defaultDelayTestURL
+    let effectiveTestURL = testURL ?? customDelayTestURL(forGroupName: group.name) ?? AppConstants.defaultDelayTestURL
     let nodeKey = proxyNodeKey(group: group, node: node, testURL: effectiveTestURL)
     let taskKey = proxyDelayTaskKey(group: group, node: node)
     delayTestTasks[taskKey]?.cancel()
@@ -3451,6 +3742,158 @@ final class AppModel: ObservableObject {
         lastError = UserFacingError.message(for: error)
       }
     }
+  }
+
+  private func startProxyDelayBatch(overrideTestURL: URL?) {
+    guard let apiClient = runtimeAPIClientForProxyAction() else { return }
+    guard proxyDelayBatchTask == nil else { return }
+    let items = visibleProxyGroups.flatMap { group in
+      group.nodes.filter(\.isSelectable).map { node in
+        let effectiveTestURL = overrideTestURL
+          ?? customDelayTestURL(forGroupName: group.name)
+          ?? AppConstants.defaultDelayTestURL
+        return ProxyDelayBatchItem(
+          groupName: group.name,
+          node: node,
+          nodeKey: proxyNodeKey(group: group, node: node, testURL: effectiveTestURL),
+          taskKey: proxyDelayTaskKey(group: group, node: node),
+          testURL: effectiveTestURL,
+          previousState: node.resolvedDelayState,
+          nativePingHost: nativePingHost(for: node)
+        )
+      }
+    }
+    guard !items.isEmpty else {
+      lastError = "No selectable proxy groups to test."
+      return
+    }
+
+    let settings = delayTestSettings
+    let pingTester = pingTester
+    let token = UUID()
+    proxyDelayBatchToken = token
+    proxyDelayBatchProgress = .started(total: items.count)
+    for item in items {
+      cancelDelayTestTask(for: item.taskKey)
+      applyDelayState(.testing, to: item.nodeKey)
+    }
+
+    proxyDelayBatchTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      await self.runProxyDelayBatch(
+        items: items,
+        apiClient: apiClient,
+        settings: settings,
+        pingTester: pingTester,
+        token: token
+      )
+    }
+  }
+
+  private func runProxyDelayBatch(
+    items: [ProxyDelayBatchItem],
+    apiClient: any MihomoAPIControlling,
+    settings: DelayTestSettings,
+    pingTester: any PingTesting,
+    token: UUID
+  ) async {
+    var completedKeys = Set<ProxyNodeKey>()
+    defer {
+      if proxyDelayBatchToken == token {
+        proxyDelayBatchTask = nil
+        proxyDelayBatchToken = nil
+      }
+    }
+
+    await withTaskGroup(of: ProxyDelayBatchItemResult.self) { taskGroup in
+      var nextIndex = 0
+      let initialCount = min(Self.proxyDelayBatchConcurrencyLimit, items.count)
+      for _ in 0..<initialCount {
+        let item = items[nextIndex]
+        nextIndex += 1
+        taskGroup.addTask {
+          await Self.measureBatchDelay(
+            item: item,
+            apiClient: apiClient,
+            settings: settings,
+            pingTester: pingTester
+          )
+        }
+      }
+
+      while let result = await taskGroup.next() {
+        guard proxyDelayBatchToken == token else {
+          taskGroup.cancelAll()
+          break
+        }
+        guard !Task.isCancelled else {
+          taskGroup.cancelAll()
+          break
+        }
+
+        switch result.outcome {
+        case let .success(delay):
+          completedKeys.insert(result.item.nodeKey)
+          applyDelayState(.measured(delay), to: result.item.nodeKey)
+          updateProxyDelayBatchProgress(token: token) { progress in
+            progress.recordSuccess()
+          }
+        case let .failure(kind, message):
+          guard kind != .cancelled else {
+            restoreDelayStateAfterCancelledBatchItem(result.item)
+            continue
+          }
+          completedKeys.insert(result.item.nodeKey)
+          applyDelayState(delayState(kind: kind, message: message), to: result.item.nodeKey)
+          updateProxyDelayBatchProgress(token: token) { progress in
+            progress.recordFailure(
+              ProxyDelayBatchFailure(
+                nodeKey: result.item.nodeKey,
+                groupName: result.item.groupName,
+                nodeName: result.item.node.name,
+                providerName: result.item.node.providerName,
+                kind: kind,
+                message: message
+              )
+            )
+          }
+        }
+
+        if nextIndex < items.count {
+          let item = items[nextIndex]
+          nextIndex += 1
+          taskGroup.addTask {
+            await Self.measureBatchDelay(
+              item: item,
+              apiClient: apiClient,
+              settings: settings,
+              pingTester: pingTester
+            )
+          }
+        }
+      }
+    }
+
+    guard proxyDelayBatchToken == token else { return }
+    if Task.isCancelled {
+      restoreCancelledBatchItems(items, completedKeys: completedKeys)
+      let cancelledCount = items.count - completedKeys.count
+      updateProxyDelayBatchProgress(token: token) { progress in
+        progress.recordCancelled(count: cancelledCount)
+        progress.finish()
+      }
+    } else {
+      updateProxyDelayBatchProgress(token: token) { progress in
+        progress.finish()
+      }
+      if let progress = proxyDelayBatchProgress, progress.failureCount > 0 {
+        lastError = String.localizedStringWithFormat(
+          NSLocalizedString("Batch delay test finished with %lld failures.", comment: ""),
+          Int64(progress.failureCount)
+        )
+      }
+    }
+    reloadRuntimeData()
   }
 
   func healthCheckProvider(_ provider: ProxyProvider) {
@@ -3684,6 +4127,78 @@ final class AppModel: ObservableObject {
       }
       return try await pingTester.ping(host: host, timeoutMilliseconds: settings.normalizedTimeoutMilliseconds)
     }
+  }
+
+  private static func measureBatchDelay(
+    item: ProxyDelayBatchItem,
+    apiClient: any MihomoAPIControlling,
+    settings: DelayTestSettings,
+    pingTester: any PingTesting
+  ) async -> ProxyDelayBatchItemResult {
+    do {
+      let delay = try await measureBatchDelayValue(
+        item: item,
+        apiClient: apiClient,
+        settings: settings,
+        pingTester: pingTester
+      )
+      guard !Task.isCancelled else {
+        return ProxyDelayBatchItemResult(item: item, outcome: .failure(.cancelled, "Cancelled"))
+      }
+      return ProxyDelayBatchItemResult(item: item, outcome: .success(delay))
+    } catch is CancellationError {
+      return ProxyDelayBatchItemResult(item: item, outcome: .failure(.cancelled, "Cancelled"))
+    } catch {
+      let message = UserFacingError.message(for: error)
+      return ProxyDelayBatchItemResult(
+        item: item,
+        outcome: .failure(delayFailureKind(for: error, message: message), message)
+      )
+    }
+  }
+
+  private static func measureBatchDelayValue(
+    item: ProxyDelayBatchItem,
+    apiClient: any MihomoAPIControlling,
+    settings: DelayTestSettings,
+    pingTester: any PingTesting
+  ) async throws -> Int {
+    let attempts = settings.unifiedDelay ? 2 : 1
+    var lastDelay: Int?
+    var lastError: Error?
+
+    for _ in 0..<attempts {
+      do {
+        switch settings.mode {
+        case .mihomoURL:
+          lastDelay = try await apiClient.testDelay(
+            proxy: item.node.name,
+            testURL: item.testURL,
+            timeout: settings.normalizedTimeoutMilliseconds
+          )
+        case .nativePing:
+          let trimmedHost = item.nativePingHost?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+          guard !trimmedHost.isEmpty else {
+            throw DelayTestError.missingServerHost(item.node.name)
+          }
+          lastDelay = try await pingTester.ping(
+            host: trimmedHost,
+            timeoutMilliseconds: settings.normalizedTimeoutMilliseconds
+          )
+        }
+        lastError = nil
+      } catch {
+        lastError = error
+        if !settings.unifiedDelay {
+          throw error
+        }
+      }
+    }
+
+    if let lastDelay {
+      return lastDelay
+    }
+    throw lastError ?? DelayTestError.noResult(item.node.name)
   }
 
   func closeConnection(_ connection: ConnectionSnapshot) {
@@ -4722,6 +5237,12 @@ final class AppModel: ObservableObject {
     delayTestTasks.values.forEach { $0.cancel() }
     delayTestTasks.removeAll()
     delayTestTokens.removeAll()
+    proxyDelayBatchTask?.cancel()
+    proxyDelayBatchTask = nil
+    proxyDelayBatchToken = nil
+    if proxyDelayBatchProgress?.isRunning == true {
+      proxyDelayBatchProgress = nil
+    }
 
     providerHealthCheckTasks.values.forEach { $0.cancel() }
     providerHealthCheckTasks.removeAll()
@@ -4955,6 +5476,23 @@ final class AppModel: ObservableObject {
     return false
   }
 
+  private func cancelDelayTestTask(for taskKey: ProxyNodeKey) {
+    delayTestTasks[taskKey]?.cancel()
+    delayTestTasks[taskKey] = nil
+    delayTestTokens[taskKey] = nil
+  }
+
+  private func updateProxyDelayBatchProgress(
+    token: UUID,
+    _ update: (inout ProxyDelayBatchProgress) -> Void
+  ) {
+    guard proxyDelayBatchToken == token,
+          var progress = proxyDelayBatchProgress
+    else { return }
+    update(&progress)
+    proxyDelayBatchProgress = progress
+  }
+
   private func recordDelayState(_ state: ProxyDelayState, for key: ProxyNodeKey, now: Date = Date()) {
     if state == .unknown {
       delayStateCache.removeValue(forKey: key)
@@ -4981,6 +5519,57 @@ final class AppModel: ObservableObject {
       return .timeout
     }
     return .error(message)
+  }
+
+  private func delayState(kind: ProxyDelayFailureKind, message: String) -> ProxyDelayState {
+    switch kind {
+    case .timeout:
+      return .timeout
+    case .cancelled:
+      return .unknown
+    case .missingEndpoint, .controllerUnavailable, .other:
+      return .error(message)
+    }
+  }
+
+  private static func delayFailureKind(for error: Error, message: String) -> ProxyDelayFailureKind {
+    if error is CancellationError {
+      return .cancelled
+    }
+    if let delayError = error as? DelayTestError {
+      switch delayError {
+      case .missingServerHost:
+        return .missingEndpoint
+      case .noResult:
+        break
+      }
+    }
+
+    let normalized = message.lowercased()
+    if normalized.contains("timeout") || normalized.contains("timed out") {
+      return .timeout
+    }
+    if normalized.contains("mihomo controller")
+      || normalized.contains("controller")
+      || normalized.contains("could not connect to the server")
+      || normalized.contains("cannot connect to the server")
+      || normalized.contains("unable to connect to the server")
+      || normalized.contains("无法连接服务器")
+      || normalized.contains("127.0.0.1:9097") {
+      return .controllerUnavailable
+    }
+    return .other
+  }
+
+  private func restoreCancelledBatchItems(_ items: [ProxyDelayBatchItem], completedKeys: Set<ProxyNodeKey>) {
+    for item in items where !completedKeys.contains(item.nodeKey) {
+      restoreDelayStateAfterCancelledBatchItem(item)
+    }
+  }
+
+  private func restoreDelayStateAfterCancelledBatchItem(_ item: ProxyDelayBatchItem) {
+    let restoredState: ProxyDelayState = item.previousState == .testing ? .unknown : item.previousState
+    applyDelayState(restoredState, to: item.nodeKey)
   }
 
   private func proxyNodeKey(group: ProxyGroup, node: ProxyNode, testURL: URL = AppConstants.defaultDelayTestURL) -> ProxyNodeKey {
@@ -5167,6 +5756,8 @@ final class AppModel: ObservableObject {
     let effectiveOverrides = overrides ?? self.overrides
     var effectiveOptions = options
     effectiveOptions.subscriptionProviderOptions = profile.subscriptionProviderOptions
+    await runtimeSnippetLibrary.waitForLoad()
+    effectiveOptions.runtimeSnippets = runtimeSnippetLibrary.snippets(applyingTo: profile.id)
     return try await runtimeConfigMaterializer.materializeResult(
       RuntimeConfigMaterializationRequest(
         profileName: profile.name,
@@ -5380,6 +5971,10 @@ private extension ProcessInfo {
 }
 
 extension UTType {
+  static var clashMaxBackup: UTType {
+    UTType(filenameExtension: "clashmax-backup") ?? .json
+  }
+
   static var yaml: UTType {
     UTType(filenameExtension: "yaml") ?? .text
   }
@@ -5418,6 +6013,26 @@ private extension Array where Element == ProxyGroup {
 private struct ProxyDelayCacheEntry {
   var state: ProxyDelayState
   var recordedAt: Date
+}
+
+private struct ProxyDelayBatchItem: Sendable {
+  var groupName: String
+  var node: ProxyNode
+  var nodeKey: ProxyNodeKey
+  var taskKey: ProxyNodeKey
+  var testURL: URL
+  var previousState: ProxyDelayState
+  var nativePingHost: String?
+}
+
+private struct ProxyDelayBatchItemResult: Sendable {
+  var item: ProxyDelayBatchItem
+  var outcome: ProxyDelayBatchItemOutcome
+}
+
+private enum ProxyDelayBatchItemOutcome: Sendable {
+  case success(Int)
+  case failure(ProxyDelayFailureKind, String)
 }
 
 private extension ProxyNodeKey {

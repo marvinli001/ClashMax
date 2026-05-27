@@ -1191,6 +1191,108 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertFalse(source.contains("corp.example"))
   }
 
+  func testRuntimeConfigRendersFocusedManagedRuleTypes() throws {
+    let source = """
+    proxies:
+      - name: Direct
+        type: direct
+    proxy-groups:
+      - name: Proxy
+        type: select
+        proxies: [Direct, DIRECT]
+    rules:
+      - MATCH,DIRECT
+    """
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.ruleOverlay = RuleOverlaySettings(
+      enabled: true,
+      prependRules: [
+        ManagedRuleOverlayRule(kind: .ruleSet, value: "RemoteRules", policy: "Proxy"),
+        ManagedRuleOverlayRule(kind: .subRule, value: "NETWORK,tcp", policy: "tcp-sub"),
+        ManagedRuleOverlayRule(kind: .srcGeoIP, value: "CN", policy: "DIRECT"),
+        ManagedRuleOverlayRule(kind: .srcIPASN, value: "9808", policy: "DIRECT"),
+        ManagedRuleOverlayRule(kind: .srcIPCIDR, value: "192.168.1.0/24", policy: "DIRECT"),
+        ManagedRuleOverlayRule(kind: .srcIPSuffix, value: "192.168.1.1/24", policy: "DIRECT"),
+        ManagedRuleOverlayRule(kind: .dstPort, value: "443", policy: "Proxy"),
+        ManagedRuleOverlayRule(kind: .srcPort, value: "50000-50100", policy: "DIRECT"),
+        ManagedRuleOverlayRule(kind: .inPort, value: "7890", policy: "Proxy")
+      ]
+    )
+
+    let output = try ConfigNormalizer().runtimeConfig(from: source, overrides: overrides)
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+
+    XCTAssertEqual(
+      yaml["rules"] as? [String],
+      [
+        "RULE-SET,RemoteRules,Proxy",
+        "SUB-RULE,(NETWORK,tcp),tcp-sub",
+        "SRC-GEOIP,CN,DIRECT",
+        "SRC-IP-ASN,9808,DIRECT",
+        "SRC-IP-CIDR,192.168.1.0/24,DIRECT",
+        "SRC-IP-SUFFIX,192.168.1.1/24,DIRECT",
+        "DST-PORT,443,Proxy",
+        "SRC-PORT,50000-50100,DIRECT",
+        "IN-PORT,7890,Proxy",
+        "MATCH,DIRECT"
+      ]
+    )
+    XCTAssertFalse(source.contains("RemoteRules"))
+  }
+
+  func testRuntimeConfigRejectsInvalidFocusedRuleValues() throws {
+    var invalidCIDR = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    invalidCIDR.ruleOverlay = RuleOverlaySettings(
+      enabled: true,
+      prependRules: [
+        ManagedRuleOverlayRule(kind: .srcIPCIDR, value: "192.168.1.1", policy: "DIRECT")
+      ]
+    )
+    XCTAssertThrowsError(
+      try ConfigNormalizer().runtimeConfig(
+        from: "proxies: []\nproxy-groups: []\nrules: []\n",
+        overrides: invalidCIDR
+      )
+    ) { error in
+      XCTAssertEqual(String(describing: error), String(localized: "Source IP CIDR must be a valid CIDR range."))
+    }
+
+    var invalidPort = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    invalidPort.ruleOverlay = RuleOverlaySettings(
+      enabled: true,
+      prependRules: [
+        ManagedRuleOverlayRule(kind: .dstPort, value: "70000", policy: "Proxy")
+      ]
+    )
+    XCTAssertThrowsError(
+      try ConfigNormalizer().runtimeConfig(
+        from: "proxies: []\nproxy-groups: []\nrules: []\n",
+        overrides: invalidPort
+      )
+    ) { error in
+      XCTAssertEqual(
+        String(describing: error),
+        String(localized: "Port rule value must be a port or range between 1 and 65535.")
+      )
+    }
+
+    var invalidSubRule = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    invalidSubRule.ruleOverlay = RuleOverlaySettings(
+      enabled: true,
+      prependRules: [
+        ManagedRuleOverlayRule(kind: .subRule, value: "DOMAIN,example.com", policy: "sub")
+      ]
+    )
+    XCTAssertThrowsError(
+      try ConfigNormalizer().runtimeConfig(
+        from: "proxies: []\nproxy-groups: []\nrules: []\n",
+        overrides: invalidSubRule
+      )
+    ) { error in
+      XCTAssertEqual(String(describing: error), String(localized: "Sub-rule condition must be NETWORK,tcp or NETWORK,udp."))
+    }
+  }
+
   func testRuntimeConfigCanDisableProfileRulesBeforeAddingManagedRules() throws {
     let source = """
     proxies:
@@ -1292,6 +1394,197 @@ final class ConfigNormalizerTests: XCTestCase {
         "DOMAIN-SUFFIX,global-after.example,Proxy"
       ]
     )
+  }
+
+  func testRuntimeConfigAppliesEnabledRuntimeSnippetsInOrder() throws {
+    let source = """
+    proxies:
+      - name: Direct
+        type: direct
+    proxy-groups:
+      - name: Proxy
+        type: select
+        proxies: [Direct, DIRECT]
+    dns:
+      nameserver:
+        - https://existing.example/dns-query
+    rules:
+      - DOMAIN-SUFFIX,ads.example,REJECT
+      - MATCH,DIRECT
+    """
+    var options = RuntimeConfigOptions.default
+    options.runtimeSnippets = [
+      RuntimeSnippet(
+        name: "Disabled",
+        enabled: false,
+        payload: .rules(
+          RuleOverlaySettings(
+            enabled: true,
+            prependRules: [
+              ManagedRuleOverlayRule(kind: .domainSuffix, value: "disabled.example", policy: "DIRECT")
+            ]
+          )
+        )
+      ),
+      RuntimeSnippet(
+        name: "DNS",
+        payload: .dnsPatch(
+          TunDNSSettings(
+            fakeIPFilter: ["*.local"],
+            nameserver: ["https://dns.example/dns-query"]
+          )
+        )
+      ),
+      RuntimeSnippet(
+        name: "Rules A",
+        payload: .rules(
+          RuleOverlaySettings(
+            enabled: true,
+            prependRules: [
+              ManagedRuleOverlayRule(kind: .domainSuffix, value: "a.example", policy: "DIRECT")
+            ],
+            appendRules: [
+              ManagedRuleOverlayRule(kind: .match, policy: "Proxy")
+            ],
+            disabledRuleMatchers: [
+              ManagedRuleDisableMatcher(mode: .contains, pattern: "ads.example")
+            ]
+          )
+        )
+      ),
+      RuntimeSnippet(
+        name: "Rules B",
+        payload: .rules(
+          RuleOverlaySettings(
+            enabled: true,
+            prependRules: [
+              ManagedRuleOverlayRule(kind: .domainSuffix, value: "b.example", policy: "Proxy")
+            ]
+          )
+        )
+      )
+    ]
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: source,
+      overrides: .defaultForLaunch(secret: "secret-token"),
+      options: options
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let dns = try XCTUnwrap(yaml["dns"] as? [String: Any])
+
+    XCTAssertEqual(
+      yaml["rules"] as? [String],
+      [
+        "DOMAIN-SUFFIX,a.example,DIRECT",
+        "DOMAIN-SUFFIX,b.example,Proxy",
+        "MATCH,DIRECT",
+        "MATCH,Proxy"
+      ]
+    )
+    XCTAssertEqual(dns["nameserver"] as? [String], ["https://existing.example/dns-query", "https://dns.example/dns-query"])
+    XCTAssertEqual(dns["fake-ip-filter"] as? [String], ["*.local"])
+  }
+
+  func testRuntimeConfigKeepsAppManagedLaunchSettingsAfterRuntimeSnippets() throws {
+    let source = """
+    proxies:
+      - name: Direct
+        type: direct
+    proxy-groups:
+      - name: Proxy
+        type: select
+        proxies: [Direct, DIRECT]
+    tun:
+      enable: false
+      auto-redirect: true
+    rules:
+      - MATCH,DIRECT
+    """
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.tunEnabled = true
+    var options = RuntimeConfigOptions.default
+    options.subscriptionProviderOptions = SubscriptionProviderOptions(
+      runtimeMergeYAML: """
+      external-controller: 0.0.0.0:9999
+      secret: leaked
+      tun:
+        auto-redirect: true
+      dns:
+        listen: 0.0.0.0:53
+      """
+    )
+    options.runtimeSnippets = [
+      RuntimeSnippet(
+        name: "DNS Patch",
+        payload: .dnsPatch(
+          TunDNSSettings(
+            respectRules: true,
+            nameserver: ["https://dns.example/dns-query"]
+          )
+        )
+      )
+    ]
+
+    let output = try ConfigNormalizer().runtimeConfig(from: source, overrides: overrides, options: options)
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let dns = try XCTUnwrap(yaml["dns"] as? [String: Any])
+    let tun = try XCTUnwrap(yaml["tun"] as? [String: Any])
+
+    XCTAssertEqual(yaml["external-controller"] as? String, "127.0.0.1:9097")
+    XCTAssertEqual(yaml["secret"] as? String, "secret-token")
+    XCTAssertEqual(tun["enable"] as? Bool, true)
+    XCTAssertNil(tun["auto-redirect"])
+    XCTAssertEqual(
+      dns["nameserver"] as? [String],
+      ["https://dns.example/dns-query", "https://dns.alidns.com/dns-query", "https://doh.pub/dns-query"]
+    )
+    XCTAssertEqual(dns["respect-rules"] as? Bool, true)
+  }
+
+  func testRuntimeSnippetYAMLPatchParserAcceptsOnlyDNSWhitelist() throws {
+    let settings = try RuntimeSnippetYAMLPatchParser.dnsPatch(
+      from: """
+      dns:
+        respect-rules: true
+        use-system-hosts: false
+        fake-ip-filter:
+          - "*.local"
+        nameserver:
+          - https://dns.example/dns-query
+        nameserver-policy:
+          "+.corp.example": https://corp.example/dns-query
+        hosts:
+          printer.local: 192.168.1.50
+        fallback-filter:
+          geoip: true
+          geoip-code: CN
+          domain:
+            - "+.blocked.example"
+      """
+    )
+
+    XCTAssertEqual(settings.respectRules, true)
+    XCTAssertEqual(settings.useSystemHosts, false)
+    XCTAssertEqual(settings.fakeIPFilter, ["*.local"])
+    XCTAssertEqual(settings.nameserver, ["https://dns.example/dns-query"])
+    XCTAssertEqual(settings.nameserverPolicy["+.corp.example"], "https://corp.example/dns-query")
+    XCTAssertEqual(settings.hosts["printer.local"], "192.168.1.50")
+    XCTAssertEqual(settings.fallbackFilter.geoIP, true)
+    XCTAssertEqual(settings.fallbackFilter.geoIPCode, "CN")
+
+    for unsafePatch in [
+      "script: {}\n",
+      "listeners: []\n",
+      "mixed-port: 9999\n",
+      "proxies: []\n",
+      "proxy-groups: []\n",
+      "tun:\n  enable: true\n",
+      "dns:\n  listen: 0.0.0.0:53\n",
+      "dns:\n  fallback-filter:\n    script: true\n"
+    ] {
+      XCTAssertThrowsError(try RuntimeSnippetYAMLPatchParser.dnsPatch(from: unsafePatch))
+    }
   }
 
   func testRuntimeConfigAppliesSubscriptionRuntimeMergeBeforeAppOverrides() throws {
@@ -1465,6 +1758,170 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(rule.policy, "DIRECT")
   }
 
+  func testRuleMatchSimulatorSupportsSourceCIDRAndPortRules() throws {
+    let candidates = [
+      RuntimeRuleCandidate(
+        rule: RuntimeRule(index: 1, type: "SRC-IP-CIDR", payload: "192.168.1.0/24", policy: "DIRECT"),
+        source: .globalPrepend
+      ),
+      RuntimeRuleCandidate(
+        rule: RuntimeRule(index: 2, type: "DST-PORT", payload: "443", policy: "Proxy"),
+        source: .profilePrepend
+      ),
+      RuntimeRuleCandidate(
+        rule: RuntimeRule(index: 3, type: "SRC-PORT", payload: "50000-50100", policy: "DIRECT"),
+        source: .runtimeProfile
+      ),
+      RuntimeRuleCandidate(
+        rule: RuntimeRule(index: 4, type: "IN-PORT", payload: "7890", policy: "Proxy"),
+        source: .profileAppend
+      ),
+      RuntimeRuleCandidate(
+        rule: RuntimeRule(index: 5, type: "MATCH", payload: "", policy: "Fallback"),
+        source: .globalAppend
+      )
+    ]
+    let simulator = RuleMatchSimulator()
+
+    let sourceTrace = simulator.simulate(
+      input: RuleMatchSimulationInput(destination: "example.com", sourceIP: "192.168.1.44"),
+      candidates: candidates
+    )
+    let destinationPortTrace = simulator.simulate(
+      input: RuleMatchSimulationInput(destination: "example.com", destinationPort: "443"),
+      candidates: Array(candidates.dropFirst())
+    )
+    let sourcePortTrace = simulator.simulate(
+      input: RuleMatchSimulationInput(destination: "example.com", sourcePort: "50010"),
+      candidates: Array(candidates.dropFirst(2))
+    )
+    let inboundPortTrace = simulator.simulate(
+      input: RuleMatchSimulationInput(destination: "example.com", inboundPort: "7890"),
+      candidates: Array(candidates.dropFirst(3))
+    )
+
+    guard case let .matched(sourceRule) = sourceTrace.outcome else { return XCTFail("Expected source CIDR match") }
+    guard case let .matched(destinationPortRule) = destinationPortTrace.outcome else { return XCTFail("Expected destination port match") }
+    guard case let .matched(sourcePortRule) = sourcePortTrace.outcome else { return XCTFail("Expected source port match") }
+    guard case let .matched(inboundPortRule) = inboundPortTrace.outcome else { return XCTFail("Expected inbound port match") }
+
+    XCTAssertEqual(sourceRule.type, "SRC-IP-CIDR")
+    XCTAssertEqual(sourceTrace.source, .globalPrepend)
+    XCTAssertEqual(destinationPortRule.type, "DST-PORT")
+    XCTAssertEqual(destinationPortTrace.source, .profilePrepend)
+    XCTAssertEqual(sourcePortRule.type, "SRC-PORT")
+    XCTAssertEqual(inboundPortRule.type, "IN-PORT")
+  }
+
+  func testRuleCandidateBuilderPreservesOverlaySources() throws {
+    let globalOverlay = RuleOverlaySettings(
+      enabled: true,
+      prependRules: [
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "global-pre.example", policy: "DIRECT")
+      ],
+      appendRules: [
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "global-append.example", policy: "DIRECT")
+      ]
+    )
+    let profileOverlay = RuleOverlaySettings(
+      enabled: true,
+      prependRules: [
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "profile-pre.example", policy: "Proxy")
+      ],
+      appendRules: [
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "profile-append.example", policy: "Proxy")
+      ]
+    )
+    let snippetOverlay = RuleOverlaySettings(
+      enabled: true,
+      prependRules: [
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "snippet-pre.example", policy: "DIRECT")
+      ],
+      appendRules: [
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "snippet-append.example", policy: "DIRECT")
+      ]
+    )
+    let runtimeRule = RuntimeRule(
+      index: 99,
+      type: "DOMAIN-SUFFIX",
+      payload: "runtime.example",
+      policy: "Proxy",
+      raw: "DOMAIN-SUFFIX,runtime.example,Proxy"
+    )
+
+    let candidates = RuntimeRuleCandidateBuilder.candidates(
+      globalOverlay: globalOverlay,
+      profileOverlay: profileOverlay,
+      snippetOverlay: snippetOverlay,
+      runtimeRules: [runtimeRule]
+    )
+
+    XCTAssertEqual(
+      candidates.map(\.source),
+      [
+        .globalPrepend,
+        .profilePrepend,
+        .runtimeSnippetPrepend,
+        .runtimeProfile,
+        .profileAppend,
+        .globalAppend,
+        .runtimeSnippetAppend
+      ]
+    )
+    XCTAssertEqual(candidates.map(\.rule.index), [1, 2, 3, 4, 5, 6, 7])
+
+    let simulator = RuleMatchSimulator()
+    let matches: [(String, RuntimeRuleSource)] = [
+      ("api.global-pre.example", .globalPrepend),
+      ("api.profile-pre.example", .profilePrepend),
+      ("api.snippet-pre.example", .runtimeSnippetPrepend),
+      ("api.runtime.example", .runtimeProfile),
+      ("api.profile-append.example", .profileAppend),
+      ("api.global-append.example", .globalAppend),
+      ("api.snippet-append.example", .runtimeSnippetAppend)
+    ]
+    for (destination, expectedSource) in matches {
+      let trace = simulator.simulate(
+        input: RuleMatchSimulationInput(destination: destination),
+        candidates: candidates
+      )
+      guard case .matched = trace.outcome else {
+        return XCTFail("Expected \(destination) to match a local candidate.")
+      }
+      XCTAssertEqual(trace.source, expectedSource)
+    }
+  }
+
+  func testRuleMatchSimulatorTracesMihomoEvaluatedProvidersAndSubRules() throws {
+    let ruleSet = RuntimeRuleCandidate(
+      rule: RuntimeRule(index: 1, type: "RULE-SET", payload: "RemoteRules", policy: "Proxy"),
+      source: .profilePrepend
+    )
+    let subRule = RuntimeRuleCandidate(
+      rule: RuntimeRuleParser.parse(raw: "SUB-RULE,(NETWORK,tcp),tcp-sub", index: 2),
+      source: .profileAppend
+    )
+    let simulator = RuleMatchSimulator()
+
+    let providerTrace = simulator.simulate(
+      input: RuleMatchSimulationInput(destination: "chat.openai.com"),
+      candidates: [ruleSet]
+    )
+    let subRuleTrace = simulator.simulate(
+      input: RuleMatchSimulationInput(destination: "example.com"),
+      candidates: [subRule]
+    )
+
+    guard case .mihomoOnly = providerTrace.outcome else { return XCTFail("Expected RULE-SET to be Mihomo-evaluated") }
+    guard case .mihomoOnly = subRuleTrace.outcome else { return XCTFail("Expected SUB-RULE to be Mihomo-evaluated") }
+    XCTAssertEqual(providerTrace.source, .profilePrepend)
+    XCTAssertEqual(providerTrace.provider, "RemoteRules")
+    XCTAssertEqual(providerTrace.policy, "Proxy")
+    XCTAssertEqual(subRuleTrace.rule?.payload, "NETWORK,tcp")
+    XCTAssertEqual(subRuleTrace.policy, "tcp-sub")
+    XCTAssertEqual(subRuleTrace.source, .profileAppend)
+  }
+
   func testRuleExplanationBuilderExplainsDomainCIDRProcessProviderAndMatchRules() throws {
     let rules = [
       RuntimeRule(index: 1, type: "DOMAIN-SUFFIX", payload: "example.com", policy: "Proxy"),
@@ -1511,6 +1968,78 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(cidrRule.type, "IP-CIDR")
     XCTAssertEqual(processRule.type, "PROCESS-NAME")
     XCTAssertEqual(matchRule.type, "MATCH")
+  }
+
+  func testRuleExplanationBuilderUsesConnectionSourceAndPortInputs() throws {
+    let builder = RuleExplanationBuilder()
+    let connection = ConnectionSnapshot(
+      id: "ports",
+      network: "tcp",
+      host: "api.example.com",
+      sourceIP: "192.168.1.44",
+      sourcePort: 50_010,
+      destinationIP: "93.184.216.34",
+      destinationPort: 443,
+      inboundPort: 7890,
+      processName: "Safari",
+      upload: 0,
+      download: 0,
+      chain: ["Proxy"],
+      rule: "DST-PORT",
+      rulePayload: "443"
+    )
+
+    let destinationPort = builder.explanation(
+      for: connection,
+      rules: [
+        RuntimeRule(index: 1, type: "DST-PORT", payload: "443", policy: "Proxy"),
+        RuntimeRule(index: 2, type: "MATCH", payload: "", policy: "Fallback")
+      ]
+    )
+    let sourcePort = builder.explanation(
+      for: connection,
+      rules: [
+        RuntimeRule(index: 1, type: "SRC-PORT", payload: "50000-50100", policy: "DIRECT"),
+        RuntimeRule(index: 2, type: "MATCH", payload: "", policy: "Fallback")
+      ]
+    )
+    let inboundPort = builder.explanation(
+      for: connection,
+      rules: [
+        RuntimeRule(index: 1, type: "IN-PORT", payload: "7890", policy: "Proxy"),
+        RuntimeRule(index: 2, type: "MATCH", payload: "", policy: "Fallback")
+      ]
+    )
+    let sourceIP = builder.explanation(
+      for: connection,
+      rules: [
+        RuntimeRule(index: 1, type: "SRC-IP-CIDR", payload: "192.168.1.0/24", policy: "DIRECT"),
+        RuntimeRule(index: 2, type: "MATCH", payload: "", policy: "Fallback")
+      ]
+    )
+
+    guard case let .matched(destinationPortRule) = destinationPort.localOutcome else {
+      return XCTFail("Expected destination port rule match")
+    }
+    guard case let .matched(sourcePortRule) = sourcePort.localOutcome else {
+      return XCTFail("Expected source port rule match")
+    }
+    guard case let .matched(inboundPortRule) = inboundPort.localOutcome else {
+      return XCTFail("Expected inbound port rule match")
+    }
+    guard case let .matched(sourceIPRule) = sourceIP.localOutcome else {
+      return XCTFail("Expected source IP rule match")
+    }
+
+    XCTAssertEqual(destinationPortRule.type, "DST-PORT")
+    XCTAssertEqual(sourcePortRule.type, "SRC-PORT")
+    XCTAssertEqual(inboundPortRule.type, "IN-PORT")
+    XCTAssertEqual(sourceIPRule.type, "SRC-IP-CIDR")
+    XCTAssertEqual(destinationPort.simulationInput.destinationPort, "443")
+    XCTAssertEqual(destinationPort.simulationInput.sourcePort, "50010")
+    XCTAssertEqual(destinationPort.simulationInput.inboundPort, "7890")
+    XCTAssertEqual(destinationPort.simulationInput.sourceIP, "192.168.1.44")
+    XCTAssertEqual(destinationPort.simulationInput.process, "Safari")
   }
 
   func testPreviewGroupsExtractXboardStyleInlineYaml() throws {

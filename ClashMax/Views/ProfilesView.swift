@@ -1192,7 +1192,7 @@ private struct SubscriptionProviderOptionsEditor: View {
       }
 
       if developerMode {
-        ProfileEditDisclosureRow("Advanced YAML and Filters", isExpanded: $showsAdvancedOptions) {
+        ProfileEditDisclosureRow("Legacy Advanced YAML and Filters", isExpanded: $showsAdvancedOptions) {
           ProfileEditRow("Filter") {
             TextField("Filter", text: $options.filter)
               .textFieldStyle(.roundedBorder)
@@ -1211,13 +1211,13 @@ private struct SubscriptionProviderOptionsEditor: View {
           }
 
           ProfileEditTextEditorRow("Provider Override YAML", text: $options.overrideYAML, minHeight: 72)
-          ProfileEditTextEditorRow("Runtime Merge YAML", text: $options.runtimeMergeYAML, minHeight: 88)
-            .help("Merged into runtime config before app-managed launch settings.")
+          ProfileEditTextEditorRow("Legacy Runtime Merge YAML", text: $options.runtimeMergeYAML, minHeight: 88)
+            .help("Legacy raw YAML merge. Prefer typed snippets on the Routing page for normal rule and DNS changes.")
 
           customHeadersEditor
         }
       } else {
-        ProfileEditFootnote(verbatim: String(localized: "Developer Mode is required for raw provider filters, YAML merge fields, and custom request headers."))
+        ProfileEditFootnote(verbatim: String(localized: "Developer Mode is required for legacy raw provider filters, YAML merge fields, and custom request headers. Use Routing snippets for normal rule and DNS changes."))
       }
     }
     .onAppear(perform: validateAdvancedYAML)
