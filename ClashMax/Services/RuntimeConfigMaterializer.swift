@@ -10,6 +10,7 @@ struct RuntimeConfigMaterializationRequest: Sendable {
   var options: RuntimeConfigOptions = .default
   var protectedArtifactURLs: [URL] = []
   var retainedGenerationCount: Int = 2
+  var sideLoadedProviderContentPath: String? = nil
 }
 
 struct RuntimeConfigMaterializationResult: Sendable, Equatable {
@@ -46,21 +47,40 @@ struct RuntimeConfigMaterializer: Sendable {
     do {
       try Task.checkCancellation()
       let source = try String(contentsOfFile: request.sourcePath, encoding: .utf8)
+      let sourceFormat = try ProfileConfigInspector.format(of: source)
       try Task.checkCancellation()
 
       let providerContentPath: String?
-      if try ProfileConfigInspector.format(of: source) == .proxyProviderContent {
+      let normalizerSource: String
+      if let sideLoadedProviderContentPath = request.sideLoadedProviderContentPath {
+        guard sourceFormat == .proxyProviderContent else {
+          throw ConfigNormalizer.NormalizerError.invalidProfile(
+            String(localized: "Provider side-load preflight is only available for app-managed provider subscriptions.")
+          )
+        }
+        let sideLoadedProviderContent = try String(contentsOfFile: sideLoadedProviderContentPath, encoding: .utf8)
+        guard !sideLoadedProviderContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+          throw ConfigNormalizer.NormalizerError.invalidProfile(String(localized: "Provider file is empty."))
+        }
+        try SecureFileIO.writePrivateString(sideLoadedProviderContent, to: providerContentURL)
+        writtenURLs.append(providerContentURL)
+        materializedProviderContentURL = providerContentURL
+        providerContentPath = providerContentURL.path
+        normalizerSource = sideLoadedProviderContent
+      } else if sourceFormat == .proxyProviderContent {
         try SecureFileIO.writePrivateString(source, to: providerContentURL)
         writtenURLs.append(providerContentURL)
         materializedProviderContentURL = providerContentURL
         providerContentPath = providerContentURL.path
+        normalizerSource = source
       } else {
         providerContentPath = nil
+        normalizerSource = source
       }
       try Task.checkCancellation()
 
       let output = try ConfigNormalizer().runtimeConfig(
-        from: source,
+        from: normalizerSource,
         providerContentPath: providerContentPath,
         profileName: request.profileName,
         overrides: request.overrides,

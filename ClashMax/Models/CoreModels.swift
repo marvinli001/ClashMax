@@ -679,6 +679,63 @@ struct SubscriptionProviderOptionsGuardrailReport: Codable, Equatable, Sendable 
   }
 }
 
+enum SubscriptionUpdateFailureKind: String, Codable, CaseIterable, Equatable, Sendable {
+  case network
+  case httpStatus
+  case decoding
+  case panelResponse
+  case invalidProfile
+  case preflight
+  case cancelled
+  case skipped
+  case unknown
+
+  var displayName: String {
+    switch self {
+    case .network: String(localized: "Network")
+    case .httpStatus: String(localized: "HTTP status")
+    case .decoding: String(localized: "Decoding")
+    case .panelResponse: String(localized: "Panel response")
+    case .invalidProfile: String(localized: "Invalid profile")
+    case .preflight: String(localized: "Preflight")
+    case .cancelled: String(localized: "Cancelled")
+    case .skipped: String(localized: "Skipped")
+    case .unknown: String(localized: "Unknown")
+    }
+  }
+
+  static func classify(_ error: Error) -> SubscriptionUpdateFailureKind {
+    if let fetchError = error as? SubscriptionFetchError {
+      return fetchError.kind
+    }
+    if error is SubscriptionPreflightValidationError {
+      return .preflight
+    }
+    if error is CancellationError {
+      return .cancelled
+    }
+    let nsError = error as NSError
+    if nsError.domain == NSURLErrorDomain {
+      return .network
+    }
+    if let appError = error as? AppError {
+      switch appError {
+      case .invalidSubscriptionResponse:
+        return .httpStatus
+      case let .invalidProfileConfig(message):
+        return message.localizedCaseInsensitiveContains("login or error page")
+          ? .panelResponse
+          : .invalidProfile
+      case .configValidationFailed:
+        return .preflight
+      default:
+        return .unknown
+      }
+    }
+    return .unknown
+  }
+}
+
 enum SubscriptionUpdateResult: String, Codable, Equatable, Sendable {
   case never
   case running
@@ -695,6 +752,47 @@ enum SubscriptionUpdateResult: String, Codable, Equatable, Sendable {
     case .skipped: String(localized: "Skipped")
     }
   }
+}
+
+enum SubscriptionUpdateTrigger: String, Codable, Equatable, Sendable {
+  case importProfile
+  case manual
+  case automatic
+  case sourceEdit
+  case providerOptionsEdit
+  case sourceAndProviderOptionsEdit
+
+  var displayName: String {
+    switch self {
+    case .importProfile: String(localized: "Import")
+    case .manual: String(localized: "Manual")
+    case .automatic: String(localized: "Automatic")
+    case .sourceEdit: String(localized: "Source edit")
+    case .providerOptionsEdit: String(localized: "Provider options")
+    case .sourceAndProviderOptionsEdit: String(localized: "Source and provider options")
+    }
+  }
+}
+
+enum SubscriptionUpdateIntervalSource: String, Codable, Equatable, Sendable {
+  case disabled
+  case profileOverride
+  case remoteProfileUpdateInterval
+  case globalDefault
+
+  var displayName: String {
+    switch self {
+    case .disabled: String(localized: "Disabled")
+    case .profileOverride: String(localized: "Profile override")
+    case .remoteProfileUpdateInterval: String(localized: "Remote profile-update-interval")
+    case .globalDefault: String(localized: "Global default")
+    }
+  }
+}
+
+struct SubscriptionUpdateIntervalResolution: Equatable, Sendable {
+  var source: SubscriptionUpdateIntervalSource
+  var minutes: Int?
 }
 
 struct SubscriptionUpdatePolicy: Codable, Equatable, Sendable {
@@ -742,14 +840,35 @@ struct SubscriptionUpdatePolicy: Codable, Equatable, Sendable {
   }
 
   func effectiveIntervalMinutes(remoteIntervalMinutes: Int?, globalDefaultMinutes: Int) -> Int? {
-    guard automaticUpdatesEnabled else { return nil }
+    intervalResolution(
+      remoteIntervalMinutes: remoteIntervalMinutes,
+      globalDefaultMinutes: globalDefaultMinutes
+    ).minutes
+  }
+
+  func intervalResolution(
+    remoteIntervalMinutes: Int?,
+    globalDefaultMinutes: Int
+  ) -> SubscriptionUpdateIntervalResolution {
+    guard automaticUpdatesEnabled else {
+      return SubscriptionUpdateIntervalResolution(source: .disabled, minutes: nil)
+    }
     if let intervalOverrideMinutes {
-      return Self.normalizedInterval(intervalOverrideMinutes)
+      return SubscriptionUpdateIntervalResolution(
+        source: .profileOverride,
+        minutes: Self.normalizedInterval(intervalOverrideMinutes)
+      )
     }
     if prefersRemoteInterval, let remoteIntervalMinutes, remoteIntervalMinutes > 0 {
-      return Self.normalizedInterval(remoteIntervalMinutes)
+      return SubscriptionUpdateIntervalResolution(
+        source: .remoteProfileUpdateInterval,
+        minutes: Self.normalizedInterval(remoteIntervalMinutes)
+      )
     }
-    return Self.normalizedInterval(globalDefaultMinutes)
+    return SubscriptionUpdateIntervalResolution(
+      source: .globalDefault,
+      minutes: Self.normalizedInterval(globalDefaultMinutes)
+    )
   }
 
   static func normalizedInterval(_ minutes: Int) -> Int {
@@ -867,6 +986,213 @@ struct SubscriptionUpdateStatus: Codable, Equatable, Sendable {
   }
 }
 
+struct SubscriptionHeaderDiagnostic: Codable, Equatable, Sendable, Identifiable {
+  var id: String { name.lowercased() }
+  var name: String
+  var hasValue: Bool
+
+  init(name: String, hasValue: Bool) {
+    self.name = name
+    self.hasValue = hasValue
+  }
+}
+
+struct SubscriptionFetchDiagnostics: Codable, Equatable, Sendable {
+  var fetchedAt: Date
+  var sanitizedURL: String
+  var userAgent: String
+  var attemptedStrategies: [SubscriptionFetchStrategy]
+  var successfulStrategy: SubscriptionFetchStrategy?
+  var requestHeaders: [SubscriptionHeaderDiagnostic]
+  var responseHeaderNames: [String]
+  var httpStatusCode: Int?
+  var contentType: String?
+  var subscriptionUserInfo: String?
+  var rawProfileUpdateInterval: String?
+  var parsedProfileUpdateIntervalMinutes: Int?
+  var declaredCharset: String?
+  var decodedCharset: String?
+
+  init(
+    fetchedAt: Date = Date(),
+    sanitizedURL: String,
+    userAgent: String,
+    attemptedStrategies: [SubscriptionFetchStrategy] = [],
+    successfulStrategy: SubscriptionFetchStrategy? = nil,
+    requestHeaders: [SubscriptionHeaderDiagnostic] = [],
+    responseHeaderNames: [String] = [],
+    httpStatusCode: Int? = nil,
+    contentType: String? = nil,
+    subscriptionUserInfo: String? = nil,
+    rawProfileUpdateInterval: String? = nil,
+    parsedProfileUpdateIntervalMinutes: Int? = nil,
+    declaredCharset: String? = nil,
+    decodedCharset: String? = nil
+  ) {
+    self.fetchedAt = fetchedAt
+    self.sanitizedURL = sanitizedURL
+    self.userAgent = userAgent
+    self.attemptedStrategies = attemptedStrategies
+    self.successfulStrategy = successfulStrategy
+    self.requestHeaders = requestHeaders
+    self.responseHeaderNames = responseHeaderNames
+    self.httpStatusCode = httpStatusCode
+    self.contentType = contentType?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    self.subscriptionUserInfo = subscriptionUserInfo?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    self.rawProfileUpdateInterval = rawProfileUpdateInterval?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    self.parsedProfileUpdateIntervalMinutes = parsedProfileUpdateIntervalMinutes
+    self.declaredCharset = declaredCharset?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    self.decodedCharset = decodedCharset?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+  }
+}
+
+enum SubscriptionPreflightResult: String, Codable, Equatable, Sendable {
+  case skipped
+  case succeeded
+  case failed
+
+  var displayName: String {
+    switch self {
+    case .skipped: String(localized: "Skipped")
+    case .succeeded: String(localized: "Runtime validated")
+    case .failed: String(localized: "Failed")
+    }
+  }
+}
+
+enum SubscriptionPreflightDiagnosticMessage: String, Codable, Equatable, Sendable {
+  case notRequired
+  case mihomoAccepted
+
+  var localizedMessage: String {
+    switch self {
+    case .notRequired:
+      return String(localized: "No runtime preflight required for this profile.")
+    case .mihomoAccepted:
+      return String(localized: "Runtime config accepted by Mihomo preflight.")
+    }
+  }
+}
+
+struct SubscriptionPreflightDiagnostics: Codable, Equatable, Sendable {
+  var checkedAt: Date
+  var result: SubscriptionPreflightResult
+  var message: String?
+  var messageKind: SubscriptionPreflightDiagnosticMessage?
+
+  init(
+    checkedAt: Date = Date(),
+    result: SubscriptionPreflightResult,
+    message: String? = nil,
+    messageKind: SubscriptionPreflightDiagnosticMessage? = nil
+  ) {
+    self.checkedAt = checkedAt
+    self.result = result
+    self.message = message?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    self.messageKind = messageKind
+  }
+
+  var localizedMessage: String? {
+    if let messageKind {
+      return messageKind.localizedMessage
+    }
+    guard let message else { return nil }
+    switch message {
+    case "No runtime preflight required for this profile.":
+      return SubscriptionPreflightDiagnosticMessage.notRequired.localizedMessage
+    case "Runtime config accepted by Mihomo preflight.":
+      return SubscriptionPreflightDiagnosticMessage.mihomoAccepted.localizedMessage
+    default:
+      return message
+    }
+  }
+}
+
+struct SubscriptionUpdateHistoryEntry: Identifiable, Codable, Equatable, Sendable {
+  var id: UUID
+  var date: Date
+  var trigger: SubscriptionUpdateTrigger
+  var result: SubscriptionUpdateResult
+  var failureKind: SubscriptionUpdateFailureKind?
+  var message: String?
+  var fetchStrategy: SubscriptionFetchStrategy?
+  var httpStatusCode: Int?
+
+  init(
+    id: UUID = UUID(),
+    date: Date = Date(),
+    trigger: SubscriptionUpdateTrigger,
+    result: SubscriptionUpdateResult,
+    failureKind: SubscriptionUpdateFailureKind? = nil,
+    message: String? = nil,
+    fetchStrategy: SubscriptionFetchStrategy? = nil,
+    httpStatusCode: Int? = nil
+  ) {
+    self.id = id
+    self.date = date
+    self.trigger = trigger
+    self.result = result
+    self.failureKind = failureKind
+    self.message = message?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    self.fetchStrategy = fetchStrategy
+    self.httpStatusCode = httpStatusCode
+  }
+}
+
+struct SubscriptionDiagnostics: Codable, Equatable, Sendable {
+  static let historyLimit = 10
+
+  var latestFetch: SubscriptionFetchDiagnostics?
+  var latestPreflight: SubscriptionPreflightDiagnostics?
+  var updateHistory: [SubscriptionUpdateHistoryEntry]
+
+  private enum CodingKeys: String, CodingKey {
+    case latestFetch
+    case latestPreflight
+    case updateHistory
+  }
+
+  init(
+    latestFetch: SubscriptionFetchDiagnostics? = nil,
+    latestPreflight: SubscriptionPreflightDiagnostics? = nil,
+    updateHistory: [SubscriptionUpdateHistoryEntry] = []
+  ) {
+    self.latestFetch = latestFetch
+    self.latestPreflight = latestPreflight
+    self.updateHistory = Array(updateHistory.prefix(Self.historyLimit))
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    self.init(
+      latestFetch: try container.decodeIfPresent(SubscriptionFetchDiagnostics.self, forKey: .latestFetch),
+      latestPreflight: try container.decodeIfPresent(SubscriptionPreflightDiagnostics.self, forKey: .latestPreflight),
+      updateHistory: container.decodeDefault(
+        [SubscriptionUpdateHistoryEntry].self,
+        forKey: .updateHistory,
+        default: []
+      )
+    )
+  }
+
+  static let empty = SubscriptionDiagnostics()
+
+  mutating func recordFetch(_ diagnostics: SubscriptionFetchDiagnostics) {
+    latestFetch = diagnostics
+  }
+
+  mutating func recordPreflight(_ diagnostics: SubscriptionPreflightDiagnostics) {
+    latestPreflight = diagnostics
+  }
+
+  mutating func appendHistory(_ entry: SubscriptionUpdateHistoryEntry) {
+    updateHistory.insert(entry, at: 0)
+    if updateHistory.count > Self.historyLimit {
+      updateHistory = Array(updateHistory.prefix(Self.historyLimit))
+    }
+  }
+}
+
 struct Profile: Identifiable, Codable, Equatable, Sendable {
   var id: UUID
   var name: String
@@ -877,6 +1203,7 @@ struct Profile: Identifiable, Codable, Equatable, Sendable {
   var subscriptionProviderOptions: SubscriptionProviderOptions
   var subscriptionUpdatePolicy: SubscriptionUpdatePolicy
   var subscriptionUpdateStatus: SubscriptionUpdateStatus
+  var subscriptionDiagnostics: SubscriptionDiagnostics
   var createdAt: Date
   var updatedAt: Date
 
@@ -890,6 +1217,7 @@ struct Profile: Identifiable, Codable, Equatable, Sendable {
     case subscriptionProviderOptions
     case subscriptionUpdatePolicy
     case subscriptionUpdateStatus
+    case subscriptionDiagnostics
     case createdAt
     case updatedAt
   }
@@ -904,6 +1232,7 @@ struct Profile: Identifiable, Codable, Equatable, Sendable {
     subscriptionProviderOptions: SubscriptionProviderOptions = .default,
     subscriptionUpdatePolicy: SubscriptionUpdatePolicy = .default,
     subscriptionUpdateStatus: SubscriptionUpdateStatus = .empty,
+    subscriptionDiagnostics: SubscriptionDiagnostics = .empty,
     createdAt: Date = Date(),
     updatedAt: Date = Date()
   ) {
@@ -916,6 +1245,7 @@ struct Profile: Identifiable, Codable, Equatable, Sendable {
     self.subscriptionProviderOptions = subscriptionProviderOptions
     self.subscriptionUpdatePolicy = subscriptionUpdatePolicy
     self.subscriptionUpdateStatus = subscriptionUpdateStatus
+    self.subscriptionDiagnostics = subscriptionDiagnostics
     self.createdAt = createdAt
     self.updatedAt = updatedAt
   }
@@ -940,6 +1270,11 @@ struct Profile: Identifiable, Codable, Equatable, Sendable {
     subscriptionUpdateStatus = container.decodeDefault(
       SubscriptionUpdateStatus.self,
       forKey: .subscriptionUpdateStatus,
+      default: .empty
+    )
+    subscriptionDiagnostics = container.decodeDefault(
+      SubscriptionDiagnostics.self,
+      forKey: .subscriptionDiagnostics,
       default: .empty
     )
     createdAt = try container.decode(Date.self, forKey: .createdAt)
@@ -4779,8 +5114,133 @@ struct NetworkPolicySettings: Codable, Equatable, Sendable {
   }
 }
 
-struct ClashXMigrationReport: Codable, Equatable, Sendable {
+enum MigrationClient: String, Codable, CaseIterable, Identifiable, Sendable {
+  case clashX
+  case flClash
+  case clashVerge
+
+  var id: String { rawValue }
+
+  var displayName: String {
+    switch self {
+    case .clashX:
+      return "ClashX"
+    case .flClash:
+      return "FlClash"
+    case .clashVerge:
+      return "Clash Verge"
+    }
+  }
+
+  var reportTitle: String {
+    "\(displayName) Migration Report"
+  }
+}
+
+struct MigratedSubscriptionCandidate: Codable, Equatable, Identifiable, Sendable {
+  var id: String
+  var name: String
+  var urlString: String
+  var source: String
+  var providerOptions: SubscriptionProviderOptions
+  var updatePolicy: SubscriptionUpdatePolicy
+  var note: String
+
+  init(
+    id: String,
+    name: String = "",
+    urlString: String,
+    source: String = "",
+    providerOptions: SubscriptionProviderOptions = .default,
+    updatePolicy: SubscriptionUpdatePolicy = .default,
+    note: String = ""
+  ) {
+    self.id = id
+    self.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    self.urlString = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+    self.source = source.trimmingCharacters(in: .whitespacesAndNewlines)
+    self.providerOptions = providerOptions
+    self.updatePolicy = updatePolicy
+    self.note = note.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+}
+
+struct MigratedProfileCandidate: Codable, Equatable, Identifiable, Sendable {
+  var id: String
+  var name: String
+  var filePath: String
+  var source: String
+  var note: String
+
+  init(
+    id: String,
+    name: String = "",
+    filePath: String,
+    source: String = "",
+    note: String = ""
+  ) {
+    self.id = id
+    self.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    self.filePath = filePath.trimmingCharacters(in: .whitespacesAndNewlines)
+    self.source = source.trimmingCharacters(in: .whitespacesAndNewlines)
+    self.note = note.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+}
+
+struct MigratedRuleSnippetCandidate: Codable, Equatable, Identifiable, Sendable {
+  var id: String
+  var name: String
+  var profileSourceID: String?
+  var settings: RuleOverlaySettings
+  var source: String
+  var note: String
+
+  init(
+    id: String,
+    name: String,
+    profileSourceID: String? = nil,
+    settings: RuleOverlaySettings,
+    source: String = "",
+    note: String = ""
+  ) {
+    self.id = id
+    self.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    self.profileSourceID = profileSourceID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    self.settings = settings
+    self.source = source.trimmingCharacters(in: .whitespacesAndNewlines)
+    self.note = note.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+}
+
+struct MigrationUnsupportedMapping: Codable, Equatable, Identifiable, Sendable {
+  var id: String
+  var source: String
+  var field: String
+  var handling: String
+  var action: String
+
+  init(
+    id: String,
+    source: String,
+    field: String,
+    handling: String,
+    action: String
+  ) {
+    self.id = id
+    self.source = source.trimmingCharacters(in: .whitespacesAndNewlines)
+    self.field = field.trimmingCharacters(in: .whitespacesAndNewlines)
+    self.handling = handling.trimmingCharacters(in: .whitespacesAndNewlines)
+    self.action = action.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+}
+
+struct ClientMigrationReport: Codable, Equatable, Sendable {
+  var client: MigrationClient
   var configDirectory: String
+  var localProfiles: [MigratedProfileCandidate]
+  var subscriptions: [MigratedSubscriptionCandidate]
+  var ruleSnippets: [MigratedRuleSnippetCandidate]
+  var unsupportedMappings: [MigrationUnsupportedMapping]
   var subscriptionURLs: [String]
   var duplicateSubscriptionURLs: [String]
   var bypassDomains: [String]
@@ -4798,7 +5258,12 @@ struct ClashXMigrationReport: Codable, Equatable, Sendable {
   var menuBarMigrationSuggested: Bool
 
   private enum CodingKeys: String, CodingKey {
+    case client
     case configDirectory
+    case localProfiles
+    case subscriptions
+    case ruleSnippets
+    case unsupportedMappings
     case subscriptionURLs
     case duplicateSubscriptionURLs
     case bypassDomains
@@ -4817,7 +5282,12 @@ struct ClashXMigrationReport: Codable, Equatable, Sendable {
   }
 
   init(
+    client: MigrationClient = .clashX,
     configDirectory: String,
+    localProfiles: [MigratedProfileCandidate] = [],
+    subscriptions: [MigratedSubscriptionCandidate] = [],
+    ruleSnippets: [MigratedRuleSnippetCandidate] = [],
+    unsupportedMappings: [MigrationUnsupportedMapping] = [],
     subscriptionURLs: [String] = [],
     duplicateSubscriptionURLs: [String] = [],
     bypassDomains: [String] = [],
@@ -4834,7 +5304,12 @@ struct ClashXMigrationReport: Codable, Equatable, Sendable {
     shortcutBindings: [MigratedShortcutBinding] = [],
     menuBarMigrationSuggested: Bool = false
   ) {
+    self.client = client
     self.configDirectory = configDirectory
+    self.localProfiles = localProfiles
+    self.subscriptions = subscriptions
+    self.ruleSnippets = ruleSnippets
+    self.unsupportedMappings = unsupportedMappings
     self.subscriptionURLs = subscriptionURLs
     self.duplicateSubscriptionURLs = duplicateSubscriptionURLs
     self.bypassDomains = bypassDomains
@@ -4855,7 +5330,16 @@ struct ClashXMigrationReport: Codable, Equatable, Sendable {
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     self.init(
+      client: container.decodeDefault(MigrationClient.self, forKey: .client, default: .clashX),
       configDirectory: container.decodeDefault(String.self, forKey: .configDirectory, default: ""),
+      localProfiles: container.decodeDefault([MigratedProfileCandidate].self, forKey: .localProfiles, default: []),
+      subscriptions: container.decodeDefault([MigratedSubscriptionCandidate].self, forKey: .subscriptions, default: []),
+      ruleSnippets: container.decodeDefault([MigratedRuleSnippetCandidate].self, forKey: .ruleSnippets, default: []),
+      unsupportedMappings: container.decodeDefault(
+        [MigrationUnsupportedMapping].self,
+        forKey: .unsupportedMappings,
+        default: []
+      ),
       subscriptionURLs: container.decodeDefault([String].self, forKey: .subscriptionURLs, default: []),
       duplicateSubscriptionURLs: container.decodeDefault([String].self, forKey: .duplicateSubscriptionURLs, default: []),
       bypassDomains: container.decodeDefault([String].self, forKey: .bypassDomains, default: []),
@@ -4881,7 +5365,7 @@ struct ClashXMigrationReport: Codable, Equatable, Sendable {
   var summary: String {
     let subscriptionSummary = String.localizedStringWithFormat(
       NSLocalizedString("%lld subscriptions", comment: ""),
-      Int64(subscriptionURLs.count)
+      Int64(max(subscriptionURLs.count, subscriptions.count))
     )
     let bypassSummary = String.localizedStringWithFormat(
       NSLocalizedString("%lld bypass entries", comment: ""),
@@ -4890,6 +5374,8 @@ struct ClashXMigrationReport: Codable, Equatable, Sendable {
     return "\(subscriptionSummary), \(bypassSummary)"
   }
 }
+
+typealias ClashXMigrationReport = ClientMigrationReport
 
 struct TrafficSample: Codable, Equatable, Sendable {
   var upload: Int
@@ -5017,6 +5503,14 @@ enum SubscriptionFetchStrategy: String, Codable, CaseIterable, Equatable, Sendab
   case systemProxy
 
   static let defaultRetryOrder: [SubscriptionFetchStrategy] = [.direct, .localClashProxy, .systemProxy]
+
+  var displayName: String {
+    switch self {
+    case .direct: String(localized: "Direct")
+    case .localClashProxy: String(localized: "Local Clash Proxy")
+    case .systemProxy: String(localized: "System Proxy")
+    }
+  }
 }
 
 struct SubscriptionFetchOptions: Equatable, Sendable {
@@ -5214,6 +5708,7 @@ extension SubscriptionProviderOptions {
 struct SubscriptionFetchResult: Equatable, Sendable {
   var source: String
   var metadata: SubscriptionMetadata
+  var diagnostics: SubscriptionFetchDiagnostics
 }
 
 struct ProviderSubscriptionInfo: Codable, Equatable, Sendable {

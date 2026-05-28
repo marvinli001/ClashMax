@@ -55,6 +55,13 @@ protocol SubscriptionProfilePreflightValidating {
     profileName: String,
     providerOptions: SubscriptionProviderOptions
   ) async throws
+
+  func validate(
+    subscriptionSource: String,
+    profileID: Profile.ID?,
+    profileName: String,
+    providerOptions: SubscriptionProviderOptions
+  ) async throws
 }
 
 extension SubscriptionProfilePreflightValidating {
@@ -63,6 +70,19 @@ extension SubscriptionProfilePreflightValidating {
       subscriptionSource: subscriptionSource,
       profileName: profileName,
       providerOptions: .default
+    )
+  }
+
+  func validate(
+    subscriptionSource: String,
+    profileID: Profile.ID?,
+    profileName: String,
+    providerOptions: SubscriptionProviderOptions
+  ) async throws {
+    try await validate(
+      subscriptionSource: subscriptionSource,
+      profileName: profileName,
+      providerOptions: providerOptions
     )
   }
 }
@@ -75,25 +95,41 @@ struct NoopSubscriptionProfilePreflightValidator: SubscriptionProfilePreflightVa
   ) async throws {}
 }
 
+struct SubscriptionPreflightValidationError: Error, LocalizedError, CustomStringConvertible {
+  var message: String
+  var diagnostics: SubscriptionPreflightDiagnostics
+
+  init(error: Error, diagnostics: SubscriptionPreflightDiagnostics) {
+    self.message = UserFacingError.message(for: error)
+    self.diagnostics = diagnostics
+  }
+
+  var errorDescription: String? { message }
+  var description: String { message }
+}
+
 struct MihomoSubscriptionProfilePreflightValidator: SubscriptionProfilePreflightValidating {
   var paths: RuntimePaths
   var overrides: RuntimeOverrides
   var coreURLProvider: @MainActor () throws -> URL
   var runtimeConfigValidator: any RuntimeConfigValidating
   var materializer: RuntimeConfigMaterializer
+  var runtimeSnippetsProvider: @MainActor (Profile.ID?) async -> [RuntimeSnippet]
 
   init(
     paths: RuntimePaths,
     overrides: RuntimeOverrides,
     coreURLProvider: @escaping @MainActor () throws -> URL,
     runtimeConfigValidator: any RuntimeConfigValidating = MihomoRuntimeConfigValidator(),
-    materializer: RuntimeConfigMaterializer = RuntimeConfigMaterializer()
+    materializer: RuntimeConfigMaterializer = RuntimeConfigMaterializer(),
+    runtimeSnippetsProvider: @escaping @MainActor (Profile.ID?) async -> [RuntimeSnippet] = { _ in [] }
   ) {
     self.paths = paths
     self.overrides = overrides
     self.coreURLProvider = coreURLProvider
     self.runtimeConfigValidator = runtimeConfigValidator
     self.materializer = materializer
+    self.runtimeSnippetsProvider = runtimeSnippetsProvider
   }
 
   func validate(
@@ -101,10 +137,21 @@ struct MihomoSubscriptionProfilePreflightValidator: SubscriptionProfilePreflight
     profileName: String,
     providerOptions: SubscriptionProviderOptions
   ) async throws {
-    let format = try ProfileConfigInspector.format(of: subscriptionSource)
-    guard format == .proxyProviderContent || providerOptions.requiresRuntimeConfigPreflight else {
-      return
-    }
+    try await validate(
+      subscriptionSource: subscriptionSource,
+      profileID: nil,
+      profileName: profileName,
+      providerOptions: providerOptions
+    )
+  }
+
+  func validate(
+    subscriptionSource: String,
+    profileID: Profile.ID?,
+    profileName: String,
+    providerOptions: SubscriptionProviderOptions
+  ) async throws {
+    _ = try ProfileConfigInspector.format(of: subscriptionSource)
 
     let preflightDirectory = paths.runtime.appendingPathComponent(
       "subscription-preflight-\(UUID().uuidString)",
@@ -120,10 +167,10 @@ struct MihomoSubscriptionProfilePreflightValidator: SubscriptionProfilePreflight
     let providerContentURL = preflightDirectory.appendingPathComponent("provider.txt")
     try SecureFileIO.writePrivateString(subscriptionSource, to: sourceURL)
 
-    var preflightOverrides = overrides
-    preflightOverrides.tunEnabled = false
+    let preflightOverrides = overrides
     var preflightOptions = RuntimeConfigOptions.default
     preflightOptions.subscriptionProviderOptions = providerOptions
+    preflightOptions.runtimeSnippets = await runtimeSnippetsProvider(profileID)
     let runtimeConfigURL = try await materializer.materialize(
       RuntimeConfigMaterializationRequest(
         profileName: profileName,
@@ -219,6 +266,8 @@ final class ProfileStore: ObservableObject {
     name: String = "",
     url: URL,
     displayNameHint: String? = nil,
+    providerOptions: SubscriptionProviderOptions = .default,
+    updatePolicy: SubscriptionUpdatePolicy = .default,
     session: URLSession = .shared,
     fetchOptions: SubscriptionFetchOptions = SubscriptionFetchOptions(),
     preflightValidator: any SubscriptionProfilePreflightValidating = NoopSubscriptionProfilePreflightValidator()
@@ -237,10 +286,12 @@ final class ProfileStore: ObservableObject {
         url: resolution.url
       )
       let profileName = trimmedName.isEmpty ? suggestedName : trimmedName
-      try await preflightValidator.validate(
+      let preflightDiagnostics = try await validateSubscriptionPreflight(
         subscriptionSource: result.source,
+        profileID: nil,
         profileName: profileName,
-        providerOptions: .default
+        providerOptions: providerOptions,
+        preflightValidator: preflightValidator
       )
 
       let id = UUID()
@@ -253,20 +304,44 @@ final class ProfileStore: ObservableObject {
         throw error
       }
 
+      var diagnostics = SubscriptionDiagnostics(
+        latestFetch: result.diagnostics,
+        latestPreflight: preflightDiagnostics
+      )
+      diagnostics.appendHistory(
+        SubscriptionUpdateHistoryEntry(
+          trigger: .importProfile,
+          result: .succeeded,
+          fetchStrategy: result.diagnostics.successfulStrategy,
+          httpStatusCode: result.diagnostics.httpStatusCode
+        )
+      )
       let profile = Profile(
         id: id,
         name: profileName,
         nameIsUserCustomized: !trimmedName.isEmpty,
         source: .subscription(id: id),
         originalConfigPath: destination.path,
-        subscriptionMetadata: result.metadata
+        subscriptionMetadata: result.metadata,
+        subscriptionProviderOptions: providerOptions,
+        subscriptionUpdatePolicy: updatePolicy,
+        subscriptionDiagnostics: diagnostics
       )
+      do {
+        try await saveProviderOptionSecrets(for: profile, replacing: nil)
+      } catch {
+        try? await diskIO.removeProfileConfig(atPath: destination.path)
+        try? await secretIO.delete(account: Self.subscriptionAccount(for: id))
+        await deleteProviderOptionSecrets(for: profile)
+        throw error
+      }
       let nextProfiles = profiles + [profile]
       do {
         try await saveManifest(profiles: nextProfiles, activeProfileID: profile.id)
       } catch {
         try? await diskIO.removeProfileConfig(atPath: destination.path)
         try? await secretIO.delete(account: Self.subscriptionAccount(for: id))
+        await deleteProviderOptionSecrets(for: profile)
         throw error
       }
       profiles = nextProfiles
@@ -295,30 +370,56 @@ final class ProfileStore: ObservableObject {
         displayNameHint: profile.subscriptionMetadata?.displayNameHint
       )
       let previousSource = try? await diskIO.readProfileSource(atPath: profile.originalConfigPath)
-      let result = Self.fetchResult(
-        try await fetchSubscription(url: resolution.url, session: session, options: fetchOptions),
-        displayNameHint: resolution.displayNameHint
-      )
+      let result: SubscriptionFetchResult
+      do {
+        result = Self.fetchResult(
+          try await fetchSubscription(url: resolution.url, session: session, options: fetchOptions),
+          displayNameHint: resolution.displayNameHint
+        )
+      } catch {
+        if let diagnostics = fetchDiagnostics(from: error) {
+          let nextProfiles = profilesByRecordingFetchDiagnostics(diagnostics, for: profile.id)
+          try? await saveManifest(profiles: nextProfiles, activeProfileID: activeProfileID)
+          profiles = nextProfiles
+        }
+        throw error
+      }
       let nextProfiles = await profilesByApplyingSubscriptionDetails(result, sourceURL: resolution.url, for: profile.id)
       let preflightName = nextProfiles.first { $0.id == profile.id }?.name ?? profile.name
-      try await preflightValidator.validate(
-        subscriptionSource: result.source,
-        profileName: preflightName,
-        providerOptions: nextProfiles.first { $0.id == profile.id }?.subscriptionProviderOptions ?? .default
+      let preflightDiagnostics: SubscriptionPreflightDiagnostics
+      do {
+        preflightDiagnostics = try await validateSubscriptionPreflight(
+          subscriptionSource: result.source,
+          profileID: profile.id,
+          profileName: preflightName,
+          providerOptions: nextProfiles.first { $0.id == profile.id }?.subscriptionProviderOptions ?? .default,
+          preflightValidator: preflightValidator
+        )
+      } catch let error as SubscriptionPreflightValidationError {
+        var failedProfiles = profilesByRecordingFetchDiagnostics(result.diagnostics, for: profile.id)
+        failedProfiles = profilesByRecordingPreflightDiagnostics(error.diagnostics, for: profile.id, in: failedProfiles)
+        try? await saveManifest(profiles: failedProfiles, activeProfileID: activeProfileID)
+        profiles = failedProfiles
+        throw error
+      }
+      let validatedProfiles = profilesByRecordingPreflightDiagnostics(
+        preflightDiagnostics,
+        for: profile.id,
+        in: nextProfiles
       )
       do {
         try await diskIO.writeProfileSource(result.source, to: URL(fileURLWithPath: profile.originalConfigPath))
         if rawURL != resolution.url.absoluteString {
           try await secretIO.save(resolution.url.absoluteString, account: Self.subscriptionAccount(for: id))
         }
-        try await saveManifest(profiles: nextProfiles, activeProfileID: activeProfileID)
+        try await saveManifest(profiles: validatedProfiles, activeProfileID: activeProfileID)
       } catch {
         if let previousSource {
           try? await diskIO.writeProfileSource(previousSource, to: URL(fileURLWithPath: profile.originalConfigPath))
         }
         throw error
       }
-      profiles = nextProfiles
+      profiles = validatedProfiles
       subscriptionURLCache[id] = resolution.url.absoluteString
     }
   }
@@ -340,21 +441,70 @@ final class ProfileStore: ObservableObject {
       let account = Self.subscriptionAccount(for: id)
       let previousSource = try? await diskIO.readProfileSource(atPath: profile.originalConfigPath)
       let previousURL = try await storedSubscriptionURL(for: id)
-      let result = Self.fetchResult(
-        try await fetchSubscription(url: resolution.url, session: session, options: fetchOptions),
-        displayNameHint: resolution.displayNameHint
-      )
+      let result: SubscriptionFetchResult
+      do {
+        result = Self.fetchResult(
+          try await fetchSubscription(url: resolution.url, session: session, options: fetchOptions),
+          displayNameHint: resolution.displayNameHint
+        )
+      } catch {
+        var failedProfiles = profiles
+        if let diagnostics = fetchDiagnostics(from: error) {
+          failedProfiles = profilesByRecordingFetchDiagnostics(diagnostics, for: profile.id)
+        }
+        failedProfiles = profilesByAppendingSubscriptionHistory(
+          trigger: .sourceEdit,
+          result: .failed,
+          failureKind: SubscriptionUpdateFailureKind.classify(error),
+          message: UserFacingError.message(for: error),
+          for: profile.id,
+          in: failedProfiles
+        )
+        try? await saveManifest(profiles: failedProfiles, activeProfileID: activeProfileID)
+        profiles = failedProfiles
+        throw error
+      }
       let nextProfiles = await profilesByApplyingSubscriptionDetails(result, sourceURL: resolution.url, for: profile.id)
       let preflightName = nextProfiles.first { $0.id == profile.id }?.name ?? profile.name
-      try await preflightValidator.validate(
-        subscriptionSource: result.source,
-        profileName: preflightName,
-        providerOptions: nextProfiles.first { $0.id == profile.id }?.subscriptionProviderOptions ?? .default
+      let preflightDiagnostics: SubscriptionPreflightDiagnostics
+      do {
+        preflightDiagnostics = try await validateSubscriptionPreflight(
+          subscriptionSource: result.source,
+          profileID: profile.id,
+          profileName: preflightName,
+          providerOptions: nextProfiles.first { $0.id == profile.id }?.subscriptionProviderOptions ?? .default,
+          preflightValidator: preflightValidator
+        )
+      } catch let error as SubscriptionPreflightValidationError {
+        var failedProfiles = profilesByRecordingFetchDiagnostics(result.diagnostics, for: profile.id)
+        failedProfiles = profilesByRecordingPreflightDiagnostics(error.diagnostics, for: profile.id, in: failedProfiles)
+        failedProfiles = profilesByAppendingSubscriptionHistory(
+          trigger: .sourceEdit,
+          result: .failed,
+          failureKind: .preflight,
+          message: error.message,
+          for: profile.id,
+          in: failedProfiles
+        )
+        try? await saveManifest(profiles: failedProfiles, activeProfileID: activeProfileID)
+        profiles = failedProfiles
+        throw error
+      }
+      var validatedProfiles = profilesByRecordingPreflightDiagnostics(
+        preflightDiagnostics,
+        for: profile.id,
+        in: nextProfiles
+      )
+      validatedProfiles = profilesByAppendingSubscriptionHistory(
+        trigger: .sourceEdit,
+        result: .succeeded,
+        for: profile.id,
+        in: validatedProfiles
       )
       do {
         try await diskIO.writeProfileSource(result.source, to: URL(fileURLWithPath: profile.originalConfigPath))
         try await secretIO.save(resolution.url.absoluteString, account: account)
-        try await saveManifest(profiles: nextProfiles, activeProfileID: activeProfileID)
+        try await saveManifest(profiles: validatedProfiles, activeProfileID: activeProfileID)
       } catch {
         if let previousSource {
           try? await diskIO.writeProfileSource(previousSource, to: URL(fileURLWithPath: profile.originalConfigPath))
@@ -366,7 +516,7 @@ final class ProfileStore: ObservableObject {
         }
         throw error
       }
-      profiles = nextProfiles
+      profiles = validatedProfiles
       subscriptionURLCache[id] = resolution.url.absoluteString
     }
   }
@@ -390,19 +540,68 @@ final class ProfileStore: ObservableObject {
       let account = Self.subscriptionAccount(for: id)
       let previousSource = try? await diskIO.readProfileSource(atPath: currentProfile.originalConfigPath)
       let previousURL = try await storedSubscriptionURL(for: id)
-      let result = Self.fetchResult(
-        try await fetchSubscription(url: resolution.url, session: session, options: fetchOptions),
-        displayNameHint: resolution.displayNameHint
-      )
+      let result: SubscriptionFetchResult
+      do {
+        result = Self.fetchResult(
+          try await fetchSubscription(url: resolution.url, session: session, options: fetchOptions),
+          displayNameHint: resolution.displayNameHint
+        )
+      } catch {
+        var failedProfiles = profiles
+        if let diagnostics = fetchDiagnostics(from: error) {
+          failedProfiles = profilesByRecordingFetchDiagnostics(diagnostics, for: profile.id)
+        }
+        failedProfiles = profilesByAppendingSubscriptionHistory(
+          trigger: .sourceAndProviderOptionsEdit,
+          result: .failed,
+          failureKind: SubscriptionUpdateFailureKind.classify(error),
+          message: UserFacingError.message(for: error),
+          for: profile.id,
+          in: failedProfiles
+        )
+        try? await saveManifest(profiles: failedProfiles, activeProfileID: activeProfileID)
+        profiles = failedProfiles
+        throw error
+      }
       var nextProfiles = await profilesByApplyingSubscriptionDetails(result, sourceURL: resolution.url, for: profile.id)
       guard let nextIndex = nextProfiles.firstIndex(where: { $0.id == profile.id }) else { return }
       nextProfiles[nextIndex].subscriptionProviderOptions = options
       nextProfiles[nextIndex].updatedAt = Date()
       let nextProfile = nextProfiles[nextIndex]
-      try await preflightValidator.validate(
-        subscriptionSource: result.source,
-        profileName: nextProfile.name,
-        providerOptions: options
+      let preflightDiagnostics: SubscriptionPreflightDiagnostics
+      do {
+        preflightDiagnostics = try await validateSubscriptionPreflight(
+          subscriptionSource: result.source,
+          profileID: profile.id,
+          profileName: nextProfile.name,
+          providerOptions: options,
+          preflightValidator: preflightValidator
+        )
+      } catch let error as SubscriptionPreflightValidationError {
+        var failedProfiles = profilesByRecordingFetchDiagnostics(result.diagnostics, for: profile.id)
+        failedProfiles = profilesByRecordingPreflightDiagnostics(error.diagnostics, for: profile.id, in: failedProfiles)
+        failedProfiles = profilesByAppendingSubscriptionHistory(
+          trigger: .sourceAndProviderOptionsEdit,
+          result: .failed,
+          failureKind: .preflight,
+          message: error.message,
+          for: profile.id,
+          in: failedProfiles
+        )
+        try? await saveManifest(profiles: failedProfiles, activeProfileID: activeProfileID)
+        profiles = failedProfiles
+        throw error
+      }
+      nextProfiles = profilesByRecordingPreflightDiagnostics(
+        preflightDiagnostics,
+        for: profile.id,
+        in: nextProfiles
+      )
+      nextProfiles = profilesByAppendingSubscriptionHistory(
+        trigger: .sourceAndProviderOptionsEdit,
+        result: .succeeded,
+        for: profile.id,
+        in: nextProfiles
       )
       let secretSnapshot = await providerOptionSecretSnapshot(replacing: currentProfile, with: nextProfile)
       do {
@@ -474,13 +673,40 @@ final class ProfileStore: ObservableObject {
       else { return }
       let currentProfile = profiles[index]
       let source = try await diskIO.readProfileSource(atPath: currentProfile.originalConfigPath)
-      try await preflightValidator.validate(
-        subscriptionSource: source,
-        profileName: currentProfile.name,
-        providerOptions: options
-      )
+      let preflightDiagnostics: SubscriptionPreflightDiagnostics
+      do {
+        preflightDiagnostics = try await validateSubscriptionPreflight(
+          subscriptionSource: source,
+          profileID: profile.id,
+          profileName: currentProfile.name,
+          providerOptions: options,
+          preflightValidator: preflightValidator
+        )
+      } catch let error as SubscriptionPreflightValidationError {
+        var failedProfiles = profilesByRecordingPreflightDiagnostics(error.diagnostics, for: profile.id, in: profiles)
+        failedProfiles = profilesByAppendingSubscriptionHistory(
+          trigger: .providerOptionsEdit,
+          result: .failed,
+          failureKind: .preflight,
+          message: error.message,
+          for: profile.id,
+          in: failedProfiles
+        )
+        try? await saveManifest(profiles: failedProfiles, activeProfileID: activeProfileID)
+        profiles = failedProfiles
+        throw error
+      }
       var nextProfiles = profiles
       nextProfiles[index].subscriptionProviderOptions = options
+      nextProfiles[index].subscriptionDiagnostics.recordPreflight(preflightDiagnostics)
+      nextProfiles[index].subscriptionDiagnostics.appendHistory(
+        Self.subscriptionHistoryEntry(
+          profile: nextProfiles[index],
+          trigger: .providerOptionsEdit,
+          result: .succeeded,
+          at: Date()
+        )
+      )
       nextProfiles[index].updatedAt = Date()
       let secretSnapshot = await providerOptionSecretSnapshot(replacing: currentProfile, with: nextProfiles[index])
       do {
@@ -509,26 +735,63 @@ final class ProfileStore: ObservableObject {
   }
 
   func markSubscriptionUpdateStarted(profileID: Profile.ID, at date: Date) async throws {
-    try await updateSubscriptionUpdateStatus(profileID: profileID) { status in
-      status.started(at: date)
+    try await updateSubscriptionUpdateStatus(profileID: profileID) { profile in
+      profile.subscriptionUpdateStatus = profile.subscriptionUpdateStatus.started(at: date)
     }
   }
 
-  func markSubscriptionUpdateSucceeded(profileID: Profile.ID, at date: Date, nextUpdateAt: Date?) async throws {
-    try await updateSubscriptionUpdateStatus(profileID: profileID) { status in
-      status.succeeded(at: date, nextUpdateAt: nextUpdateAt)
+  func markSubscriptionUpdateSucceeded(
+    profileID: Profile.ID,
+    trigger: SubscriptionUpdateTrigger,
+    at date: Date,
+    nextUpdateAt: Date?
+  ) async throws {
+    try await updateSubscriptionUpdateStatus(profileID: profileID) { profile in
+      profile.subscriptionUpdateStatus = profile.subscriptionUpdateStatus.succeeded(
+        at: date,
+        nextUpdateAt: nextUpdateAt
+      )
+      profile.subscriptionDiagnostics.appendHistory(
+        Self.subscriptionHistoryEntry(
+          profile: profile,
+          trigger: trigger,
+          result: .succeeded,
+          at: date
+        )
+      )
     }
   }
 
   func markSubscriptionUpdateFailed(
     profileID: Profile.ID,
+    trigger: SubscriptionUpdateTrigger,
     message: String,
+    failureKind: SubscriptionUpdateFailureKind,
     at date: Date,
     backoffUntil: Date?,
-    nextUpdateAt: Date?
+    nextUpdateAt: Date?,
+    fetchDiagnostics: SubscriptionFetchDiagnostics? = nil
   ) async throws {
-    try await updateSubscriptionUpdateStatus(profileID: profileID) { status in
-      status.failed(message: message, at: date, backoffUntil: backoffUntil, nextUpdateAt: nextUpdateAt)
+    try await updateSubscriptionUpdateStatus(profileID: profileID) { profile in
+      if let fetchDiagnostics {
+        profile.subscriptionDiagnostics.recordFetch(fetchDiagnostics)
+      }
+      profile.subscriptionUpdateStatus = profile.subscriptionUpdateStatus.failed(
+        message: message,
+        at: date,
+        backoffUntil: backoffUntil,
+        nextUpdateAt: nextUpdateAt
+      )
+      profile.subscriptionDiagnostics.appendHistory(
+        Self.subscriptionHistoryEntry(
+          profile: profile,
+          trigger: trigger,
+          result: .failed,
+          failureKind: failureKind,
+          message: message,
+          at: date
+        )
+      )
     }
   }
 
@@ -793,7 +1056,7 @@ final class ProfileStore: ObservableObject {
 
   private func updateSubscriptionUpdateStatus(
     profileID: Profile.ID,
-    transform: (SubscriptionUpdateStatus) -> SubscriptionUpdateStatus
+    transform: (inout Profile) -> Void
   ) async throws {
     await waitForManifestLoad()
     try await withMutationLock {
@@ -801,7 +1064,7 @@ final class ProfileStore: ObservableObject {
             profiles[index].isSubscription
       else { return }
       var nextProfiles = profiles
-      nextProfiles[index].subscriptionUpdateStatus = transform(nextProfiles[index].subscriptionUpdateStatus)
+      transform(&nextProfiles[index])
       try await saveManifest(profiles: nextProfiles, activeProfileID: activeProfileID)
       profiles = nextProfiles
     }
@@ -1014,6 +1277,74 @@ final class ProfileStore: ObservableObject {
     }
   }
 
+  private func validateSubscriptionPreflight(
+    subscriptionSource: String,
+    profileID: Profile.ID?,
+    profileName: String,
+    providerOptions: SubscriptionProviderOptions,
+    preflightValidator: any SubscriptionProfilePreflightValidating
+  ) async throws -> SubscriptionPreflightDiagnostics {
+    guard Self.requiresSubscriptionPreflight(subscriptionSource: subscriptionSource, providerOptions: providerOptions) else {
+      return SubscriptionPreflightDiagnostics(
+        result: .skipped,
+        messageKind: .notRequired
+      )
+    }
+
+    do {
+      try await preflightValidator.validate(
+        subscriptionSource: subscriptionSource,
+        profileID: profileID,
+        profileName: profileName,
+        providerOptions: providerOptions
+      )
+      return SubscriptionPreflightDiagnostics(
+        result: .succeeded,
+        messageKind: .mihomoAccepted
+      )
+    } catch {
+      let diagnostics = SubscriptionPreflightDiagnostics(
+        result: .failed,
+        message: UserFacingError.message(for: error)
+      )
+      throw SubscriptionPreflightValidationError(error: error, diagnostics: diagnostics)
+    }
+  }
+
+  nonisolated private static func requiresSubscriptionPreflight(
+    subscriptionSource: String,
+    providerOptions: SubscriptionProviderOptions
+  ) -> Bool {
+    if providerOptions.requiresRuntimeConfigPreflight {
+      return true
+    }
+    return (try? ProfileConfigInspector.format(of: subscriptionSource)) != nil
+  }
+
+  nonisolated private static func subscriptionHistoryEntry(
+    profile: Profile,
+    trigger: SubscriptionUpdateTrigger,
+    result: SubscriptionUpdateResult,
+    failureKind: SubscriptionUpdateFailureKind? = nil,
+    message: String? = nil,
+    at date: Date
+  ) -> SubscriptionUpdateHistoryEntry {
+    let fetch = profile.subscriptionDiagnostics.latestFetch
+    return SubscriptionUpdateHistoryEntry(
+      date: date,
+      trigger: trigger,
+      result: result,
+      failureKind: failureKind,
+      message: message,
+      fetchStrategy: fetch?.successfulStrategy ?? fetch?.attemptedStrategies.last,
+      httpStatusCode: fetch?.httpStatusCode
+    )
+  }
+
+  private func fetchDiagnostics(from error: Error) -> SubscriptionFetchDiagnostics? {
+    (error as? SubscriptionFetchError)?.diagnostics
+  }
+
   nonisolated private static func resolvedSubscriptionURL(
     from url: URL,
     displayNameHint: String? = nil
@@ -1036,7 +1367,7 @@ final class ProfileStore: ObservableObject {
     }
     var metadata = result.metadata
     metadata.displayNameHint = displayNameHint
-    return SubscriptionFetchResult(source: result.source, metadata: metadata)
+    return SubscriptionFetchResult(source: result.source, metadata: metadata, diagnostics: result.diagnostics)
   }
 
   private func loadManifestFromDisk() async {
@@ -1265,6 +1596,7 @@ final class ProfileStore: ObservableObject {
     var nextProfiles = profiles
     guard let index = nextProfiles.firstIndex(where: { $0.id == id }) else { return nextProfiles }
     nextProfiles[index].subscriptionMetadata = result.metadata
+    nextProfiles[index].subscriptionDiagnostics.recordFetch(result.diagnostics)
     if !nextProfiles[index].nameIsUserCustomized {
       nextProfiles[index].name = await Self.subscriptionDisplayNameAsync(
         metadata: result.metadata,
@@ -1273,6 +1605,51 @@ final class ProfileStore: ObservableObject {
       )
     }
     nextProfiles[index].updatedAt = Date()
+    return nextProfiles
+  }
+
+  private func profilesByRecordingFetchDiagnostics(
+    _ diagnostics: SubscriptionFetchDiagnostics,
+    for id: UUID
+  ) -> [Profile] {
+    var nextProfiles = profiles
+    guard let index = nextProfiles.firstIndex(where: { $0.id == id }) else { return nextProfiles }
+    nextProfiles[index].subscriptionDiagnostics.recordFetch(diagnostics)
+    return nextProfiles
+  }
+
+  private func profilesByRecordingPreflightDiagnostics(
+    _ diagnostics: SubscriptionPreflightDiagnostics,
+    for id: UUID,
+    in profiles: [Profile]
+  ) -> [Profile] {
+    var nextProfiles = profiles
+    guard let index = nextProfiles.firstIndex(where: { $0.id == id }) else { return nextProfiles }
+    nextProfiles[index].subscriptionDiagnostics.recordPreflight(diagnostics)
+    return nextProfiles
+  }
+
+  private func profilesByAppendingSubscriptionHistory(
+    trigger: SubscriptionUpdateTrigger,
+    result: SubscriptionUpdateResult,
+    failureKind: SubscriptionUpdateFailureKind? = nil,
+    message: String? = nil,
+    at date: Date = Date(),
+    for id: UUID,
+    in profiles: [Profile]
+  ) -> [Profile] {
+    var nextProfiles = profiles
+    guard let index = nextProfiles.firstIndex(where: { $0.id == id }) else { return nextProfiles }
+    nextProfiles[index].subscriptionDiagnostics.appendHistory(
+      Self.subscriptionHistoryEntry(
+        profile: nextProfiles[index],
+        trigger: trigger,
+        result: result,
+        failureKind: failureKind,
+        message: message,
+        at: date
+      )
+    )
     return nextProfiles
   }
 

@@ -354,6 +354,124 @@ struct RuntimeDiagnosticsReport: Equatable, Sendable {
   }
 }
 
+private enum EffectiveRuntimeConfigValidationIntent: Equatable {
+  case disabled
+  case validateOptionalCore
+  case requireCore
+}
+
+struct ProviderSideLoadPreflightResult: Equatable, Sendable {
+  var profileID: Profile.ID
+  var fileName: String
+  var checkedAt: Date
+  var message: String?
+}
+
+enum ProviderSideLoadPreflightStatus: Equatable {
+  case idle
+  case running(ProviderSideLoadPreflightResult)
+  case succeeded(ProviderSideLoadPreflightResult)
+  case failed(ProviderSideLoadPreflightResult)
+
+  func message(for profileID: Profile.ID) -> String? {
+    switch self {
+    case .idle:
+      return nil
+    case let .running(result):
+      guard result.profileID == profileID else { return nil }
+      return String(format: String(localized: "Preflighting provider file %@..."), result.fileName)
+    case let .succeeded(result):
+      guard result.profileID == profileID else { return nil }
+      return String(format: String(localized: "Provider side-load preflight passed for %@."), result.fileName)
+    case let .failed(result):
+      guard result.profileID == profileID else { return nil }
+      if let message = result.message, !message.isEmpty {
+        return String(
+          format: String(localized: "Provider side-load preflight failed for %@: %@"),
+          result.fileName,
+          message
+        )
+      }
+      return String(format: String(localized: "Provider side-load preflight failed for %@."), result.fileName)
+    }
+  }
+
+  func isRunning(for profileID: Profile.ID) -> Bool {
+    guard case let .running(result) = self else { return false }
+    return result.profileID == profileID
+  }
+}
+
+@MainActor
+protocol ProviderSideLoadPreflightRunning {
+  func preflight(
+    profile: Profile,
+    providerFileURL: URL,
+    paths: RuntimePaths,
+    overrides: RuntimeOverrides,
+    selectionOverrides: [String: String],
+    runtimeSnippets: [RuntimeSnippet],
+    coreURL: URL
+  ) async throws
+}
+
+@MainActor
+struct MihomoProviderSideLoadPreflightRunner: ProviderSideLoadPreflightRunning {
+  var materializer: RuntimeConfigMaterializer
+  var runtimeConfigValidator: any RuntimeConfigValidating
+
+  init(
+    materializer: RuntimeConfigMaterializer = RuntimeConfigMaterializer(),
+    runtimeConfigValidator: any RuntimeConfigValidating = MihomoRuntimeConfigValidator()
+  ) {
+    self.materializer = materializer
+    self.runtimeConfigValidator = runtimeConfigValidator
+  }
+
+  func preflight(
+    profile: Profile,
+    providerFileURL: URL,
+    paths: RuntimePaths,
+    overrides: RuntimeOverrides,
+    selectionOverrides: [String: String],
+    runtimeSnippets: [RuntimeSnippet],
+    coreURL: URL
+  ) async throws {
+    let preflightDirectory = paths.runtime.appendingPathComponent(
+      "provider-side-load-preflight-\(UUID().uuidString)",
+      isDirectory: true
+    )
+    try SecureFileIO.createPrivateDirectory(at: preflightDirectory)
+    defer {
+      try? FileManager.default.removeItem(at: preflightDirectory)
+    }
+
+    var preflightOverrides = overrides
+    preflightOverrides.tunEnabled = false
+    var options = RuntimeConfigOptions.default
+    options.subscriptionProviderOptions = profile.subscriptionProviderOptions
+    options.runtimeSnippets = runtimeSnippets
+    let materialization = try await materializer.materializeResult(
+      RuntimeConfigMaterializationRequest(
+        profileName: profile.name,
+        sourcePath: profile.originalConfigPath,
+        runtimeConfigURL: preflightDirectory.appendingPathComponent("runtime.yaml"),
+        providerContentURL: preflightDirectory.appendingPathComponent("provider.txt"),
+        overrides: preflightOverrides,
+        selectionOverrides: selectionOverrides,
+        options: options,
+        retainedGenerationCount: 0,
+        sideLoadedProviderContentPath: providerFileURL.path
+      )
+    )
+    try await runtimeConfigValidator.validate(
+      coreURL: coreURL,
+      configURL: materialization.runtimeConfigURL,
+      workDirectory: preflightDirectory
+    )
+  }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
   @Published var selectedSection: AppSection = .home
@@ -499,6 +617,11 @@ final class AppModel: ObservableObject {
   var publicIPInfoState: PublicIPInfoState { publicIP.state }
   @Published private(set) var appNotice: AppNotice?
   @Published private(set) var runtimeSettingsApplyState: RuntimeSettingsApplyState = .idle
+  @Published private(set) var effectiveRuntimeConfigState: EffectiveRuntimeConfigState = .idle
+  var hasLoadedEffectiveRuntimeConfigForActiveProfile: Bool {
+    effectiveRuntimeConfigSnapshotForActiveProfile != nil
+  }
+  @Published private(set) var providerSideLoadPreflightStatus: ProviderSideLoadPreflightStatus = .idle
   @Published private(set) var proxyDelayBatchProgress: ProxyDelayBatchProgress?
   @Published var routingSimulationRequest: RoutingSimulationRequest?
   private var lastErrorOrigin: LastErrorOrigin?
@@ -545,6 +668,7 @@ final class AppModel: ObservableObject {
   let profileCoordinator: ProfileCoordinator
   let systemProxy: SystemProxyCoordinator
   let profileStore: ProfileStore
+  let providerAnalytics: ProviderAnalyticsStore
   let coreController: CoreProcessController
   var systemProxyController: SystemProxyController { systemProxy.controller }
   let helperClient: TunnelHelperClient
@@ -619,6 +743,7 @@ final class AppModel: ObservableObject {
   private let networkEnvironmentMonitor: (any NetworkEnvironmentMonitoring)?
   private let globalShortcutManager: GlobalShortcutManager
   private let backupRestoreService = BackupRestoreService()
+  private var providerSideLoadPreflightRunner: any ProviderSideLoadPreflightRunning = MihomoProviderSideLoadPreflightRunner()
   private let bundledCoreURLProvider: () throws -> URL
   private let delayStateCacheTTL: TimeInterval
   static let publicIPRefreshInterval: TimeInterval = 300
@@ -669,10 +794,12 @@ final class AppModel: ObservableObject {
     delayStateCacheTTL: TimeInterval = 600,
     externalDashboardSecretStore: any SecretStoring = KeychainStore(service: "\(AppConstants.bundleIdentifier).external-dashboards"),
     runtimeSnippetLibrary: RuntimeSnippetLibraryStore? = nil,
+    providerAnalytics: ProviderAnalyticsStore? = nil,
     currentNetworkProvider: any CurrentNetworkProviding = CoreWLANCurrentNetworkProvider(),
     networkEnvironmentMonitor: (any NetworkEnvironmentMonitoring)? = nil,
     globalShortcutRegistrar: (any GlobalShortcutRegistering)? = nil,
-    bundledCoreURLProvider: (() throws -> URL)? = nil
+    bundledCoreURLProvider: (() throws -> URL)? = nil,
+    providerSideLoadPreflightRunner: any ProviderSideLoadPreflightRunning = MihomoProviderSideLoadPreflightRunner()
   ) {
     self.paths = paths
     self.delayStateCacheTTL = delayStateCacheTTL
@@ -680,9 +807,11 @@ final class AppModel: ObservableObject {
     self.currentNetworkProvider = currentNetworkProvider
     self.networkEnvironmentMonitor = networkEnvironmentMonitor ?? NetworkEnvironmentMonitor(currentNetworkProvider: currentNetworkProvider)
     self.globalShortcutManager = GlobalShortcutManager(registrar: globalShortcutRegistrar ?? CarbonGlobalShortcutRegistrar())
+    self.providerSideLoadPreflightRunner = providerSideLoadPreflightRunner
     self.bundledCoreURLProvider = bundledCoreURLProvider ?? Self.resolveBundledCoreURL
     self.profileStore = profileStore ?? ProfileStore(paths: paths)
     self.runtimeSnippetLibrary = runtimeSnippetLibrary ?? RuntimeSnippetLibraryStore(paths: paths)
+    self.providerAnalytics = providerAnalytics ?? ProviderAnalyticsStore(paths: paths)
     self.proxyPreview = ProxyPreviewStore(defaults: defaults)
     self.profileCoordinator = ProfileCoordinator(profileStore: self.profileStore, proxyPreview: self.proxyPreview)
     self.coreController = coreController
@@ -777,8 +906,15 @@ final class AppModel: ObservableObject {
       .sink { [weak self] profiles in
         Task { [weak self] in
           await self?.pruneRuntimeSnippetProfileBindings(validProfileIDs: Set(profiles.map(\.id)))
+          await MainActor.run {
+            self?.providerAnalytics.prune(validProfileIDs: Set(profiles.map(\.id)))
+          }
         }
       }
+      .store(in: &storeCancellables)
+    let providerAnalyticsStore = self.providerAnalytics
+    providerAnalyticsStore.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
       .store(in: &storeCancellables)
     self.runtimeSnippetLibrary.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
@@ -1071,6 +1207,87 @@ final class AppModel: ObservableObject {
     appNotice = AppNotice(message: String(localized: "Diagnostics copied."), tone: .success)
   }
 
+  func refreshEffectiveRuntimeConfigPreview(draftSnippet: RuntimeSnippet? = nil) async {
+    guard let profile = profileStore.activeProfile else {
+      effectiveRuntimeConfigState = .unavailable(String(localized: "No active profile selected."))
+      return
+    }
+    effectiveRuntimeConfigState = .loading
+    do {
+      let snippets = await effectiveRuntimeSnippets(for: profile.id, draftSnippet: draftSnippet)
+      let snapshot = try await makeEffectiveRuntimeConfigSnapshot(
+        profile: profile,
+        overrides: overrides,
+        runtimeSnippets: snippets,
+        preflight: .validateOptionalCore
+      )
+      guard profileStore.activeProfile?.id == profile.id else {
+        resetEffectiveRuntimeConfigPreview()
+        return
+      }
+      effectiveRuntimeConfigState = .loaded(snapshot)
+      lastError = snapshot.preflightStatus.message
+    } catch {
+      let message = UserFacingError.message(for: error)
+      effectiveRuntimeConfigState = .failed(message)
+      lastError = message
+    }
+  }
+
+  func copyEffectiveRuntimeConfigRedacted() {
+    guard let snapshot = effectiveRuntimeConfigSnapshotForActiveProfile else {
+      appNotice = AppNotice(message: String(localized: "Generate Effective Config before copying."), tone: .info)
+      return
+    }
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(snapshot.redactedReportText, forType: .string)
+    appNotice = AppNotice(message: String(localized: "Effective config copied."), tone: .success)
+  }
+
+  func exportEffectiveRuntimeConfigRedacted() {
+    guard let snapshot = effectiveRuntimeConfigSnapshotForActiveProfile else {
+      appNotice = AppNotice(message: String(localized: "Generate Effective Config before exporting."), tone: .info)
+      return
+    }
+    let panel = NSSavePanel()
+    panel.allowedContentTypes = [.plainText]
+    panel.nameFieldStringValue = "clashmax-effective-runtime-config-redacted.txt"
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    do {
+      try snapshot.redactedReportText.write(to: url, atomically: true, encoding: .utf8)
+      appNotice = AppNotice(message: String(localized: "Effective config exported."), tone: .success)
+    } catch {
+      lastError = UserFacingError.message(for: error)
+    }
+  }
+
+  private var effectiveRuntimeConfigSnapshotForActiveProfile: EffectiveRuntimeConfigSnapshot? {
+    guard case let .loaded(snapshot) = effectiveRuntimeConfigState,
+          snapshot.profileID == profileStore.activeProfile?.id
+    else { return nil }
+    return snapshot
+  }
+
+  private func resetEffectiveRuntimeConfigPreview() {
+    if profileStore.activeProfile == nil {
+      effectiveRuntimeConfigState = .unavailable(String(localized: "No active profile selected."))
+    } else {
+      effectiveRuntimeConfigState = .idle
+    }
+  }
+
+  private func resetEffectiveRuntimeConfigPreviewIfNeeded(invalidatedProfileID: Profile.ID? = nil) {
+    switch effectiveRuntimeConfigState {
+    case .loading:
+      resetEffectiveRuntimeConfigPreview()
+    case let .loaded(snapshot)
+      where snapshot.profileID == invalidatedProfileID || snapshot.profileID != profileStore.activeProfile?.id:
+      resetEffectiveRuntimeConfigPreview()
+    default:
+      break
+    }
+  }
+
   func openRuntimeLogs() {
     selectedSection = .logs
   }
@@ -1137,6 +1354,120 @@ final class AppModel: ObservableObject {
         profileCoordinator.clearMessage()
         lastError = UserFacingError.message(for: error)
       }
+    }
+  }
+
+  func providerSideLoadPreflightUnsupportedReason(for profile: Profile) -> String? {
+    guard developerMode else {
+      return String(localized: "Provider side-load preflight requires Developer Mode.")
+    }
+    guard profile.isSubscription else {
+      return String(localized: "Provider side-load preflight requires a subscription profile.")
+    }
+    guard profile.id == profileStore.activeProfileID else {
+      return String(localized: "Select this profile before running provider side-load preflight.")
+    }
+    do {
+      let source = try String(contentsOfFile: profile.originalConfigPath, encoding: .utf8)
+      guard try ProfileConfigInspector.format(of: source) == .proxyProviderContent else {
+        return String(localized: "Provider side-load preflight is only available for app-managed provider subscriptions.")
+      }
+      return nil
+    } catch {
+      return UserFacingError.message(for: error)
+    }
+  }
+
+  func chooseProviderSideLoadPreflightFile(for profile: Profile) {
+    if let reason = providerSideLoadPreflightUnsupportedReason(for: profile) {
+      lastError = reason
+      providerSideLoadPreflightStatus = .failed(
+        ProviderSideLoadPreflightResult(
+          profileID: profile.id,
+          fileName: String(localized: "Provider file"),
+          checkedAt: Date(),
+          message: reason
+        )
+      )
+      return
+    }
+    let panel = NSOpenPanel()
+    panel.allowedContentTypes = [.yaml, .yml, .text]
+    panel.allowsMultipleSelection = false
+    panel.canChooseDirectories = false
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      await preflightSideLoadedProviderContent(for: profile, providerFileURL: url)
+    }
+  }
+
+  @discardableResult
+  func preflightSideLoadedProviderContent(for profile: Profile, providerFileURL: URL) async -> Bool {
+    let fileName = providerFileURL.lastPathComponent
+    let targetProfile = profileStore.profiles.first { $0.id == profile.id } ?? profile
+    if let reason = providerSideLoadPreflightUnsupportedReason(for: targetProfile) {
+      providerSideLoadPreflightStatus = .failed(
+        ProviderSideLoadPreflightResult(
+          profileID: targetProfile.id,
+          fileName: fileName,
+          checkedAt: Date(),
+          message: reason
+        )
+      )
+      lastError = reason
+      return false
+    }
+
+    providerSideLoadPreflightStatus = .running(
+      ProviderSideLoadPreflightResult(
+        profileID: targetProfile.id,
+        fileName: fileName,
+        checkedAt: Date(),
+        message: nil
+      )
+    )
+    lastError = nil
+    await runtimeSnippetLibrary.waitForLoad()
+    do {
+      try await providerSideLoadPreflightRunner.preflight(
+        profile: targetProfile,
+        providerFileURL: providerFileURL,
+        paths: paths,
+        overrides: overrides,
+        selectionOverrides: previewSelections,
+        runtimeSnippets: runtimeSnippetLibrary.snippets(applyingTo: targetProfile.id),
+        coreURL: try bundledCoreURL()
+      )
+      providerSideLoadPreflightStatus = .succeeded(
+        ProviderSideLoadPreflightResult(
+          profileID: targetProfile.id,
+          fileName: fileName,
+          checkedAt: Date(),
+          message: nil
+        )
+      )
+      appendAppLog(
+        level: "info",
+        message: "Provider side-load preflight passed for \(targetProfile.name) using \(fileName)."
+      )
+      return true
+    } catch {
+      let message = UserFacingError.message(for: error)
+      providerSideLoadPreflightStatus = .failed(
+        ProviderSideLoadPreflightResult(
+          profileID: targetProfile.id,
+          fileName: fileName,
+          checkedAt: Date(),
+          message: message
+        )
+      )
+      lastError = message
+      appendAppLog(
+        level: "warn",
+        message: "Provider side-load preflight failed for \(targetProfile.name) using \(fileName): \(message)"
+      )
+      return false
     }
   }
 
@@ -1279,7 +1610,13 @@ final class AppModel: ObservableObject {
   }
 
   @discardableResult
-  func addSubscription(name: String = "", urlString: String, session: URLSession = .shared) async -> Bool {
+  func addSubscription(
+    name: String = "",
+    urlString: String,
+    providerOptions: SubscriptionProviderOptions = .default,
+    updatePolicy: SubscriptionUpdatePolicy = .default,
+    session: URLSession = .shared
+  ) async -> Bool {
     let trimmedURLString = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
     guard let resolution = SubscriptionURLResolver.resolve(rawInput: trimmedURLString) else {
       profileCoordinator.clearMessage()
@@ -1295,8 +1632,10 @@ final class AppModel: ObservableObject {
         name: name,
         url: resolution.url,
         displayNameHint: resolution.displayNameHint,
+        providerOptions: providerOptions,
+        updatePolicy: updatePolicy,
         session: session,
-        fetchOptions: subscriptionFetchOptions,
+        fetchOptions: providerOptions.fetchOptions(from: subscriptionFetchOptions),
         preflightValidator: subscriptionPreflightValidator()
       ) != nil else {
         return false
@@ -1555,7 +1894,12 @@ final class AppModel: ObservableObject {
     }
     if let activeProfile = profileStore.activeProfile {
       do {
-        try await preflightGlobalRuleOverlay(overlay, activeProfile: activeProfile)
+        var preflightOverrides = overrides
+        preflightOverrides.ruleOverlay = overlay
+        try await preflightEffectiveRuntimeConfig(
+          profile: activeProfile,
+          overrides: preflightOverrides
+        )
       } catch {
         lastError = UserFacingError.message(for: error)
         return false
@@ -1576,81 +1920,86 @@ final class AppModel: ObservableObject {
     }
   }
 
-  private func preflightGlobalRuleOverlay(_ overlay: RuleOverlaySettings, activeProfile: Profile) async throws {
-    guard let coreURL = try? bundledCoreURL() else { return }
-    let preflightDirectory = paths.runtime.appendingPathComponent(
-      "rule-overlay-preflight-\(UUID().uuidString)",
-      isDirectory: true
-    )
-    try SecureFileIO.createPrivateDirectory(at: preflightDirectory)
-    defer {
-      try? FileManager.default.removeItem(at: preflightDirectory)
-    }
-
-    var preflightOverrides = overrides
-    preflightOverrides.ruleOverlay = overlay
-    preflightOverrides.tunEnabled = false
-    var options = RuntimeConfigOptions.default
-    options.subscriptionProviderOptions = activeProfile.subscriptionProviderOptions
-    await runtimeSnippetLibrary.waitForLoad()
-    options.runtimeSnippets = runtimeSnippetLibrary.snippets(applyingTo: activeProfile.id)
-
-    let materialization = try await runtimeConfigMaterializer.materializeResult(
-      RuntimeConfigMaterializationRequest(
-        profileName: activeProfile.name,
-        sourcePath: activeProfile.originalConfigPath,
-        runtimeConfigURL: preflightDirectory.appendingPathComponent("runtime.yaml"),
-        providerContentURL: preflightDirectory.appendingPathComponent("provider.txt"),
-        overrides: preflightOverrides,
-        selectionOverrides: previewSelections,
-        options: options,
-        retainedGenerationCount: 0
-      )
-    )
-    try await MihomoRuntimeConfigValidator().validate(
-      coreURL: coreURL,
-      configURL: materialization.runtimeConfigURL,
-      workDirectory: preflightDirectory
-    )
-  }
-
   @discardableResult
   func saveRuntimeSnippet(_ snippet: RuntimeSnippet) async -> Bool {
-    await mutateRuntimeSnippetLibrary(logMessage: "Runtime snippet updated") {
+    await runtimeSnippetLibrary.waitForLoad()
+    if let validationError = snippet.validationError {
+      lastError = validationError
+      return false
+    }
+    var proposedSnippets = runtimeSnippetLibrary.snippets
+    if let index = proposedSnippets.firstIndex(where: { $0.id == snippet.id }) {
+      proposedSnippets[index] = snippet
+    } else {
+      proposedSnippets.append(snippet)
+    }
+    return await mutateRuntimeSnippetLibrary(logMessage: "Runtime snippet updated") {
       try await runtimeSnippetLibrary.saveSnippet(snippet)
+    } proposedSnippets: {
+      proposedSnippets
     }
   }
 
   @discardableResult
   func deleteRuntimeSnippet(_ snippet: RuntimeSnippet) async -> Bool {
-    await mutateRuntimeSnippetLibrary(logMessage: "Runtime snippet deleted") {
+    await runtimeSnippetLibrary.waitForLoad()
+    let proposedSnippets = runtimeSnippetLibrary.snippets.filter { $0.id != snippet.id }
+    return await mutateRuntimeSnippetLibrary(logMessage: "Runtime snippet deleted") {
       try await runtimeSnippetLibrary.deleteSnippet(id: snippet.id)
+    } proposedSnippets: {
+      proposedSnippets
     }
   }
 
   @discardableResult
   func setRuntimeSnippet(_ snippet: RuntimeSnippet, enabled: Bool) async -> Bool {
-    await mutateRuntimeSnippetLibrary(logMessage: "Runtime snippet toggled") {
+    await runtimeSnippetLibrary.waitForLoad()
+    var proposedSnippets = runtimeSnippetLibrary.snippets
+    if let index = proposedSnippets.firstIndex(where: { $0.id == snippet.id }) {
+      proposedSnippets[index].enabled = enabled
+      if let validationError = proposedSnippets[index].validationError {
+        lastError = validationError
+        return false
+      }
+    }
+    return await mutateRuntimeSnippetLibrary(logMessage: "Runtime snippet toggled") {
       try await runtimeSnippetLibrary.setSnippetEnabled(id: snippet.id, enabled: enabled)
+    } proposedSnippets: {
+      proposedSnippets
     }
   }
 
   @discardableResult
   func moveRuntimeSnippet(fromOffsets source: IndexSet, toOffset destination: Int) async -> Bool {
-    await mutateRuntimeSnippetLibrary(logMessage: "Runtime snippets reordered") {
+    await runtimeSnippetLibrary.waitForLoad()
+    var proposedSnippets = runtimeSnippetLibrary.snippets
+    moveSnippets(&proposedSnippets, fromOffsets: source, toOffset: destination)
+    return await mutateRuntimeSnippetLibrary(logMessage: "Runtime snippets reordered") {
       try await runtimeSnippetLibrary.moveSnippet(fromOffsets: source, toOffset: destination)
+    } proposedSnippets: {
+      proposedSnippets
     }
   }
 
   private func mutateRuntimeSnippetLibrary(
     logMessage: String,
-    mutation: () async throws -> Void
+    mutation: () async throws -> Void,
+    proposedSnippets proposedSnippetsProvider: () -> [RuntimeSnippet]
   ) async -> Bool {
     await runtimeSnippetLibrary.waitForLoad()
     let activeProfileID = profileStore.activeProfileID
     let beforeSnippets = runtimeSnippetLibrary.snippets
     let beforeActiveSnippets = activeProfileID.map { runtimeSnippetLibrary.snippets(applyingTo: $0) } ?? []
     do {
+      if let activeProfile = profileStore.activeProfile {
+        let afterActiveSnippets = proposedSnippetsProvider().filter { $0.enabled && $0.applies(to: activeProfile.id) }
+        if beforeActiveSnippets != afterActiveSnippets {
+          try await preflightEffectiveRuntimeConfig(
+            profile: activeProfile,
+            runtimeSnippets: afterActiveSnippets
+          )
+        }
+      }
       try await mutation()
       let afterActiveSnippets = activeProfileID.map { runtimeSnippetLibrary.snippets(applyingTo: $0) } ?? []
       if isRunning, let activeProfileID, beforeActiveSnippets != afterActiveSnippets {
@@ -1668,12 +2017,26 @@ final class AppModel: ObservableObject {
           throw error
         }
       }
+      if beforeActiveSnippets != afterActiveSnippets {
+        resetEffectiveRuntimeConfigPreviewIfNeeded(invalidatedProfileID: activeProfileID)
+      }
       lastError = nil
       return true
     } catch {
       lastError = UserFacingError.message(for: error)
       return false
     }
+  }
+
+  private func moveSnippets(_ snippets: inout [RuntimeSnippet], fromOffsets source: IndexSet, toOffset destination: Int) {
+    let indexed = Array(snippets.enumerated())
+    let moving = indexed.filter { source.contains($0.offset) }.map(\.element)
+    guard !moving.isEmpty else { return }
+    var remaining = indexed.filter { !source.contains($0.offset) }.map(\.element)
+    let removedBeforeDestination = source.filter { $0 < destination }.count
+    let insertionIndex = min(max(destination - removedBeforeDestination, 0), remaining.count)
+    remaining.insert(contentsOf: moving, at: insertionIndex)
+    snippets = remaining
   }
 
   private func pruneRuntimeSnippetProfileBindings(validProfileIDs: Set<Profile.ID>) async {
@@ -1698,6 +2061,7 @@ final class AppModel: ObservableObject {
         preflightValidator: subscriptionPreflightValidator()
       )
       if updated, profile.id == profileStore.activeProfileID {
+        resetEffectiveRuntimeConfigPreviewIfNeeded(invalidatedProfileID: profile.id)
         restartPreviewRuntimeIfNeeded(reason: "subscription update")
       }
       return updated
@@ -1729,6 +2093,9 @@ final class AppModel: ObservableObject {
         fetchOptions: subscriptionFetchOptions(for: profile),
         preflightValidator: subscriptionPreflightValidator()
       )
+      if updated {
+        resetEffectiveRuntimeConfigPreviewIfNeeded(invalidatedProfileID: profile.id)
+      }
       return updated
     } catch {
       profileCoordinator.clearMessage()
@@ -1751,6 +2118,7 @@ final class AppModel: ObservableObject {
         options: options,
         preflightValidator: subscriptionPreflightValidator()
       )
+      resetEffectiveRuntimeConfigPreviewIfNeeded(invalidatedProfileID: profile.id)
       return true
     } catch {
       profileCoordinator.clearMessage()
@@ -1786,6 +2154,9 @@ final class AppModel: ObservableObject {
         fetchOptions: options.fetchOptions(from: subscriptionFetchOptions),
         preflightValidator: subscriptionPreflightValidator()
       )
+      if updated {
+        resetEffectiveRuntimeConfigPreviewIfNeeded(invalidatedProfileID: profile.id)
+      }
       return updated
     } catch {
       profileCoordinator.clearMessage()
@@ -1863,6 +2234,7 @@ final class AppModel: ObservableObject {
   func deleteProfileAsync(_ profile: Profile) async -> Bool {
     do {
       try await profileCoordinator.deleteProfile(profile)
+      resetEffectiveRuntimeConfigPreviewIfNeeded(invalidatedProfileID: profile.id)
       restartPreviewRuntimeIfNeeded(reason: "profile deletion")
       lastError = nil
       return true
@@ -1883,6 +2255,7 @@ final class AppModel: ObservableObject {
   func selectProfileAsync(_ profile: Profile) async -> Bool {
     do {
       guard try await profileCoordinator.selectProfile(profile) else { return false }
+      resetEffectiveRuntimeConfigPreview()
       restartPreviewRuntimeIfNeeded(reason: "profile selection")
       lastError = nil
       return true
@@ -1950,6 +2323,11 @@ final class AppModel: ObservableObject {
       coreURLProvider: { [weak self] in
         guard let self else { throw AppError.missingBundledCore }
         return try self.bundledCoreURL()
+      },
+      runtimeSnippetsProvider: { [weak self] profileID in
+        guard let self, let profileID else { return [] }
+        await self.runtimeSnippetLibrary.waitForLoad()
+        return self.runtimeSnippetLibrary.snippets(applyingTo: profileID)
       }
     )
   }
@@ -3360,6 +3738,7 @@ final class AppModel: ObservableObject {
 
   private func startRuntimeReload(apiClient: any MihomoAPIControlling, clearAfterConfirmation: Bool) {
     let token = UUID()
+    let analyticsProfileID = profileStore.activeProfileID
     runtimeReloadToken = token
     runtimeDataLoading = true
     runtimeReloadTask = Task { @MainActor [weak self] in
@@ -3383,21 +3762,32 @@ final class AppModel: ObservableObject {
         let runtimeGroups = try await apiClient.proxyGroups()
         guard runtimeReloadToken == token, !Task.isCancelled else { return }
         let refreshedProviders: [ProxyProvider]
+        let didRefreshProviders: Bool
         do {
           refreshedProviders = try await apiClient.structuredProxyProviders()
+          didRefreshProviders = true
         } catch {
           refreshedProviders = []
+          didRefreshProviders = false
         }
         guard runtimeReloadToken == token, !Task.isCancelled else { return }
         proxyProviders = refreshedProviders
         let refreshedRuleProviders: [RuleProvider]
+        let didRefreshRuleProviders: Bool
         do {
           refreshedRuleProviders = try await apiClient.ruleProviders()
+          didRefreshRuleProviders = true
         } catch {
           refreshedRuleProviders = []
+          didRefreshRuleProviders = false
         }
         guard runtimeReloadToken == token, !Task.isCancelled else { return }
         ruleProviders = refreshedRuleProviders
+        providerAnalytics.recordSnapshots(
+          profileID: analyticsProfileID,
+          proxyProviders: didRefreshProviders ? refreshedProviders : nil,
+          ruleProviders: didRefreshRuleProviders ? refreshedRuleProviders : nil
+        )
         proxyGroups = enrichProxyGroupsWithKnownEndpoints(
           runtimeGroups,
           providers: refreshedProviders,
@@ -3933,6 +4323,7 @@ final class AppModel: ObservableObject {
           proxyProviderUpdateTasks[provider.id] == nil,
           proxyProviderUpdateTokens[provider.id] == nil
     else { return }
+    let analyticsProfileID = profileStore.activeProfileID
     setProxyProvider(provider.id, updateInFlight: true)
     let token = UUID()
     proxyProviderUpdateTokens[provider.id] = token
@@ -3948,12 +4339,26 @@ final class AppModel: ObservableObject {
       do {
         try await apiClient.updateProxyProvider(named: provider.name)
         guard self.proxyProviderUpdateTokens[provider.id] == token, !Task.isCancelled else { return }
+        self.providerAnalytics.recordUpdateAttempt(
+          profileID: analyticsProfileID,
+          kind: .proxy,
+          providerName: provider.name,
+          succeeded: true
+        )
         self.reloadRuntimeData()
       } catch is CancellationError {
         return
       } catch {
         guard self.proxyProviderUpdateTokens[provider.id] == token, !Task.isCancelled else { return }
-        self.lastError = UserFacingError.message(for: error)
+        let message = UserFacingError.message(for: error)
+        self.providerAnalytics.recordUpdateAttempt(
+          profileID: analyticsProfileID,
+          kind: .proxy,
+          providerName: provider.name,
+          succeeded: false,
+          errorMessage: message
+        )
+        self.lastError = message
       }
     }
   }
@@ -3967,6 +4372,7 @@ final class AppModel: ObservableObject {
         && proxyProviderUpdateTokens[provider.id] == nil
     }
     guard !providers.isEmpty else { return }
+    let analyticsProfileID = profileStore.activeProfileID
     let token = UUID()
     proxyProviderBatchUpdateToken = token
     providers.forEach { setProxyProvider($0.id, updateInFlight: true) }
@@ -3983,10 +4389,24 @@ final class AppModel: ObservableObject {
       for provider in providers {
         do {
           try await apiClient.updateProxyProvider(named: provider.name)
+          self.providerAnalytics.recordUpdateAttempt(
+            profileID: analyticsProfileID,
+            kind: .proxy,
+            providerName: provider.name,
+            succeeded: true
+          )
         } catch is CancellationError {
           return
         } catch {
-          failures.append((provider.name, UserFacingError.message(for: error)))
+          let message = UserFacingError.message(for: error)
+          self.providerAnalytics.recordUpdateAttempt(
+            profileID: analyticsProfileID,
+            kind: .proxy,
+            providerName: provider.name,
+            succeeded: false,
+            errorMessage: message
+          )
+          failures.append((provider.name, message))
         }
       }
       guard self.proxyProviderBatchUpdateToken == token, !Task.isCancelled else { return }
@@ -4003,6 +4423,7 @@ final class AppModel: ObservableObject {
           ruleProviderUpdateTasks[provider.id] == nil,
           ruleProviderUpdateTokens[provider.id] == nil
     else { return }
+    let analyticsProfileID = profileStore.activeProfileID
     setRuleProvider(provider.id, updateInFlight: true)
     let token = UUID()
     ruleProviderUpdateTokens[provider.id] = token
@@ -4018,12 +4439,26 @@ final class AppModel: ObservableObject {
       do {
         try await apiClient.updateRuleProvider(named: provider.name)
         guard self.ruleProviderUpdateTokens[provider.id] == token, !Task.isCancelled else { return }
+        self.providerAnalytics.recordUpdateAttempt(
+          profileID: analyticsProfileID,
+          kind: .rule,
+          providerName: provider.name,
+          succeeded: true
+        )
         self.reloadRuntimeData()
       } catch is CancellationError {
         return
       } catch {
         guard self.ruleProviderUpdateTokens[provider.id] == token, !Task.isCancelled else { return }
-        self.lastError = UserFacingError.message(for: error)
+        let message = UserFacingError.message(for: error)
+        self.providerAnalytics.recordUpdateAttempt(
+          profileID: analyticsProfileID,
+          kind: .rule,
+          providerName: provider.name,
+          succeeded: false,
+          errorMessage: message
+        )
+        self.lastError = message
       }
     }
   }
@@ -4037,6 +4472,7 @@ final class AppModel: ObservableObject {
         && ruleProviderUpdateTokens[provider.id] == nil
     }
     guard !providers.isEmpty else { return }
+    let analyticsProfileID = profileStore.activeProfileID
     let token = UUID()
     ruleProviderBatchUpdateToken = token
     providers.forEach { setRuleProvider($0.id, updateInFlight: true) }
@@ -4053,10 +4489,24 @@ final class AppModel: ObservableObject {
       for provider in providers {
         do {
           try await apiClient.updateRuleProvider(named: provider.name)
+          self.providerAnalytics.recordUpdateAttempt(
+            profileID: analyticsProfileID,
+            kind: .rule,
+            providerName: provider.name,
+            succeeded: true
+          )
         } catch is CancellationError {
           return
         } catch {
-          failures.append((provider.name, UserFacingError.message(for: error)))
+          let message = UserFacingError.message(for: error)
+          self.providerAnalytics.recordUpdateAttempt(
+            profileID: analyticsProfileID,
+            kind: .rule,
+            providerName: provider.name,
+            succeeded: false,
+            errorMessage: message
+          )
+          failures.append((provider.name, message))
         }
       }
       guard self.ruleProviderBatchUpdateToken == token, !Task.isCancelled else { return }
@@ -5745,6 +6195,91 @@ final class AppModel: ObservableObject {
 
   private func clearActiveRuntimeArtifacts() {
     activeRuntimeConfigMaterialization = nil
+  }
+
+  @discardableResult
+  func preflightEffectiveRuntimeConfig(
+    profile: Profile? = nil,
+    overrides: RuntimeOverrides? = nil,
+    runtimeSnippets: [RuntimeSnippet]? = nil,
+    selectionOverrides: [String: String]? = nil
+  ) async throws -> EffectiveRuntimeConfigSnapshot {
+    let targetProfile = try profile ?? requireActiveProfile()
+    let snippets: [RuntimeSnippet]
+    if let runtimeSnippets {
+      snippets = runtimeSnippets
+    } else {
+      await runtimeSnippetLibrary.waitForLoad()
+      snippets = runtimeSnippetLibrary.snippets(applyingTo: targetProfile.id)
+    }
+    return try await makeEffectiveRuntimeConfigSnapshot(
+      profile: targetProfile,
+      overrides: overrides ?? self.overrides,
+      selectionOverrides: selectionOverrides ?? previewSelections,
+      runtimeSnippets: snippets,
+      preflight: .requireCore
+    )
+  }
+
+  private func makeEffectiveRuntimeConfigSnapshot(
+    profile: Profile,
+    overrides: RuntimeOverrides,
+    selectionOverrides: [String: String]? = nil,
+    runtimeSnippets: [RuntimeSnippet],
+    preflight: EffectiveRuntimeConfigValidationIntent
+  ) async throws -> EffectiveRuntimeConfigSnapshot {
+    let preflightMode: EffectiveRuntimeConfigPreflightMode
+    let optionalCoreErrorMessage: String?
+    switch preflight {
+    case .disabled:
+      optionalCoreErrorMessage = nil
+      preflightMode = .disabled
+    case .validateOptionalCore:
+      do {
+        let coreURL = try bundledCoreURL()
+        optionalCoreErrorMessage = nil
+        preflightMode = .validate(coreURL: coreURL, validator: MihomoRuntimeConfigValidator())
+      } catch {
+        optionalCoreErrorMessage = UserFacingError.message(for: error)
+        preflightMode = .disabled
+      }
+    case .requireCore:
+      optionalCoreErrorMessage = nil
+      preflightMode = .validate(coreURL: try bundledCoreURL(), validator: MihomoRuntimeConfigValidator())
+    }
+    var snapshot = try await EffectiveRuntimeConfigBuilder(
+      materializer: runtimeConfigMaterializer
+    ).snapshot(
+      profile: profile,
+      paths: paths,
+      overrides: overrides,
+      selectionOverrides: selectionOverrides ?? previewSelections,
+      runtimeSnippets: runtimeSnippets,
+      preflight: preflightMode
+    )
+    if let optionalCoreErrorMessage {
+      snapshot.preflightStatus = .failed(optionalCoreErrorMessage)
+    }
+    if preflight == .requireCore, case let .failed(message) = snapshot.preflightStatus {
+      throw AppError.configValidationFailed(message)
+    }
+    return snapshot
+  }
+
+  private func effectiveRuntimeSnippets(
+    for profileID: Profile.ID,
+    draftSnippet: RuntimeSnippet?
+  ) async -> [RuntimeSnippet] {
+    await runtimeSnippetLibrary.waitForLoad()
+    var snippets = runtimeSnippetLibrary.snippets
+    if let draftSnippet {
+      if let index = snippets.firstIndex(where: { $0.id == draftSnippet.id }) {
+        snippets[index] = draftSnippet
+      } else {
+        snippets.append(draftSnippet)
+      }
+    }
+    return snippets.filter { $0.enabled && $0.applies(to: profileID) }
   }
 
   private func generateRuntimeConfig(

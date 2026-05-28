@@ -92,10 +92,11 @@ final class SubscriptionFetcherTests: XCTestCase {
     let fetcher = SubscriptionFetcher()
     let source = "\u{FEFF}proxies:\n  - name: DIRECT\n    type: direct\n"
     let response = HTTPURLResponse(
-      url: URL(string: "https://example.com/sub")!,
+      url: URL(string: "https://user:secret@example.com/sub?token=abc&flag")!,
       statusCode: 200,
       httpVersion: nil,
       headerFields: [
+        "Content-Type": "text/yaml; charset=UTF-8",
         "subscription-userinfo": "upload=1024; download=2048; total=4096; expire=1893456000",
         "content-disposition": "attachment; filename*=UTF-8''Remote%20Profile.yaml",
         "profile-update-interval": "12",
@@ -113,6 +114,51 @@ final class SubscriptionFetcherTests: XCTestCase {
     XCTAssertEqual(result.metadata.remoteFileName, "Remote Profile.yaml")
     XCTAssertEqual(result.metadata.updateIntervalMinutes, 720)
     XCTAssertEqual(result.metadata.webPageURL, URL(string: "https://example.com/dashboard"))
+    XCTAssertEqual(result.diagnostics.sanitizedURL, "https://example.com/sub?token=<redacted>&flag")
+    XCTAssertEqual(result.diagnostics.userAgent, "clash.meta")
+    XCTAssertEqual(result.diagnostics.httpStatusCode, 200)
+    XCTAssertEqual(result.diagnostics.contentType, "text/yaml; charset=UTF-8")
+    XCTAssertEqual(result.diagnostics.subscriptionUserInfo, "upload=1024; download=2048; total=4096; expire=1893456000")
+    XCTAssertEqual(result.diagnostics.rawProfileUpdateInterval, "12")
+    XCTAssertEqual(result.diagnostics.parsedProfileUpdateIntervalMinutes, 720)
+    XCTAssertEqual(result.diagnostics.declaredCharset, "UTF-8")
+    XCTAssertEqual(result.diagnostics.decodedCharset, "utf-8")
+    XCTAssertTrue(result.diagnostics.responseHeaderNames.contains("subscription-userinfo"))
+    XCTAssertTrue(result.diagnostics.responseHeaderNames.contains("profile-update-interval"))
+  }
+
+  func testFetchDiagnosticsRedactsSubscriptionTokensInURLPath() throws {
+    let fetcher = SubscriptionFetcher()
+    let response = HTTPURLResponse(
+      url: URL(string: "https://user:secret@example.com/link/path-token-123456?flag")!,
+      statusCode: 200,
+      httpVersion: nil,
+      headerFields: ["Content-Type": "text/yaml; charset=UTF-8"]
+    )!
+
+    let result = try fetcher.decode(
+      data: Data("proxies:\n  - name: DIRECT\n    type: direct\n".utf8),
+      response: response
+    )
+
+    XCTAssertEqual(result.diagnostics.sanitizedURL, "https://example.com/link/<redacted>?flag")
+  }
+
+  func testFetchDiagnosticsRedactsUUIDSubscriptionTokensInURLPath() throws {
+    let fetcher = SubscriptionFetcher()
+    let response = HTTPURLResponse(
+      url: URL(string: "https://example.com/api/client/00000000-0000-0000-0000-000000000000?token=abc")!,
+      statusCode: 200,
+      httpVersion: nil,
+      headerFields: ["Content-Type": "text/yaml; charset=UTF-8"]
+    )!
+
+    let result = try fetcher.decode(
+      data: Data("proxies:\n  - name: DIRECT\n    type: direct\n".utf8),
+      response: response
+    )
+
+    XCTAssertEqual(result.diagnostics.sanitizedURL, "https://example.com/api/client/<redacted>?token=<redacted>")
   }
 
   func testFetchParsesPrefixedSubscriptionUserInfoHeader() throws {
@@ -149,6 +195,8 @@ final class SubscriptionFetcherTests: XCTestCase {
     let result = try fetcher.decode(data: source.data(using: .isoLatin1)!, response: response)
 
     XCTAssertEqual(result.source, source)
+    XCTAssertEqual(result.diagnostics.declaredCharset, "iso-8859-1")
+    XCTAssertEqual(result.diagnostics.decodedCharset, "iso-8859-1")
   }
 
   func testDecodeAcceptsValidYamlWithTextHTMLContentType() throws {
@@ -217,6 +265,10 @@ final class SubscriptionFetcherTests: XCTestCase {
         response: response
       )
     ) { error in
+      let fetchError = error as? SubscriptionFetchError
+      XCTAssertEqual(fetchError?.kind, .panelResponse)
+      XCTAssertEqual(fetchError?.diagnostics.httpStatusCode, 200)
+      XCTAssertEqual(fetchError?.diagnostics.contentType, "text/html; charset=utf-8")
       XCTAssertTrue(String(describing: error).contains("subscription returned a login or error page"))
     }
   }
@@ -236,7 +288,32 @@ final class SubscriptionFetcherTests: XCTestCase {
         response: response
       )
     ) { error in
+      let fetchError = error as? SubscriptionFetchError
+      XCTAssertEqual(fetchError?.kind, .panelResponse)
+      XCTAssertEqual(fetchError?.diagnostics.httpStatusCode, 200)
+      XCTAssertEqual(fetchError?.diagnostics.contentType, "application/json; charset=utf-8")
       XCTAssertTrue(String(describing: error).contains("subscription returned a login or error page"))
+    }
+  }
+
+  func testDecodeClassifiesHTTPStatusAndRecordsDiagnostics() throws {
+    let fetcher = SubscriptionFetcher()
+    let response = HTTPURLResponse(
+      url: URL(string: "https://user:secret@example.com/sub?token=abc")!,
+      statusCode: 403,
+      httpVersion: nil,
+      headerFields: ["Content-Type": "text/plain"]
+    )!
+
+    XCTAssertThrowsError(
+      try fetcher.decode(data: Data("Forbidden".utf8), response: response)
+    ) { error in
+      let fetchError = error as? SubscriptionFetchError
+      XCTAssertEqual(fetchError?.kind, .httpStatus)
+      XCTAssertEqual(fetchError?.diagnostics.httpStatusCode, 403)
+      XCTAssertEqual(fetchError?.diagnostics.contentType, "text/plain")
+      XCTAssertEqual(fetchError?.diagnostics.sanitizedURL, "https://example.com/sub?token=<redacted>")
+      XCTAssertEqual(fetchError?.diagnostics.responseHeaderNames, ["Content-Type"])
     }
   }
 
@@ -252,8 +329,12 @@ final class SubscriptionFetcherTests: XCTestCase {
     )!
 
     let result = try await fetcher.fetch(
-      url: URL(string: "https://example.com/sub")!,
-      options: SubscriptionFetchOptions(retryOrder: attempts)
+      url: URL(string: "https://user:secret@example.com/sub?token=abc")!,
+      options: SubscriptionFetchOptions(
+        userAgent: "Custom UA",
+        retryOrder: attempts,
+        customHeaders: ["X-Panel-Token": "secret"]
+      )
     ) { strategy in
       let attemptCount = await recorder.record(strategy)
       if attemptCount < 3 {
@@ -265,6 +346,15 @@ final class SubscriptionFetcherTests: XCTestCase {
     let attemptedStrategies = await recorder.strategies()
     XCTAssertEqual(attemptedStrategies, [.direct, .localClashProxy, .systemProxy])
     XCTAssertEqual(result.source, "proxies:\n  - name: DIRECT\n    type: direct\n")
+    XCTAssertEqual(result.diagnostics.sanitizedURL, "https://example.com/sub?token=<redacted>")
+    XCTAssertEqual(result.diagnostics.userAgent, "Custom UA")
+    XCTAssertEqual(result.diagnostics.attemptedStrategies, [.direct, .localClashProxy, .systemProxy])
+    XCTAssertEqual(result.diagnostics.successfulStrategy, .systemProxy)
+    XCTAssertEqual(
+      result.diagnostics.requestHeaders.map(\.name),
+      ["Accept", "Authorization", "User-Agent", "X-Panel-Token"]
+    )
+    XCTAssertEqual(result.diagnostics.requestHeaders.map(\.hasValue), [true, true, true, true])
   }
 }
 

@@ -684,6 +684,95 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(try posixPermissions(at: URL(fileURLWithPath: firstProviderPath)), SecureFileIO.privateFilePermissions)
   }
 
+  func testRuntimeConfigMaterializerSideLoadsProviderContentForPreflight() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxRuntimeSideLoadTests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let sourceURL = root.appendingPathComponent("source.txt")
+    let originalProviderContent = """
+    trojan://original-password@remote.example:443?sni=remote.example#Remote%20Node
+    """
+    try originalProviderContent.write(to: sourceURL, atomically: true, encoding: .utf8)
+    let sideLoadedProviderURL = root.appendingPathComponent("local-provider.txt")
+    let sideLoadedProviderContent = """
+    vless://00000000-0000-0000-0000-000000000000@local.example:443?security=tls&sni=local.example#Local%20Node
+    """
+    try sideLoadedProviderContent.write(to: sideLoadedProviderURL, atomically: true, encoding: .utf8)
+
+    let runtimeURL = root.appendingPathComponent("profile.runtime.yaml")
+    let providerURL = root.appendingPathComponent("profile.provider.txt")
+    let result = try await RuntimeConfigMaterializer().materializeResult(
+      RuntimeConfigMaterializationRequest(
+        profileName: "Provider",
+        sourcePath: sourceURL.path,
+        runtimeConfigURL: runtimeURL,
+        providerContentURL: providerURL,
+        overrides: RuntimeOverrides.defaultForLaunch(secret: "side-load-secret"),
+        selectionOverrides: ["Proxy": "Local Node"],
+        sideLoadedProviderContentPath: sideLoadedProviderURL.path
+      )
+    )
+
+    let runtimeYAML = try XCTUnwrap(Yams.load(yaml: String(contentsOf: result.runtimeConfigURL, encoding: .utf8)) as? [String: Any])
+    let providers = try XCTUnwrap(runtimeYAML["proxy-providers"] as? [String: Any])
+    let provider = try XCTUnwrap(providers["clashmax-subscription-provider"] as? [String: Any])
+    let providerPath = try XCTUnwrap(provider["path"] as? String)
+    let groups = try XCTUnwrap(runtimeYAML["proxy-groups"] as? [[String: Any]])
+    let proxyGroup = try XCTUnwrap(groups.first(where: { ($0["name"] as? String) == "Proxy" }))
+    XCTAssertEqual(providerPath, result.providerContentURL?.path)
+    XCTAssertEqual(proxyGroup["now"] as? String, "Local Node")
+    XCTAssertEqual(try String(contentsOf: URL(fileURLWithPath: providerPath), encoding: .utf8), sideLoadedProviderContent)
+    XCTAssertEqual(try String(contentsOf: sourceURL, encoding: .utf8), originalProviderContent)
+    XCTAssertEqual(try posixPermissions(at: result.runtimeConfigURL), SecureFileIO.privateFilePermissions)
+    XCTAssertEqual(try posixPermissions(at: URL(fileURLWithPath: providerPath)), SecureFileIO.privateFilePermissions)
+  }
+
+  func testRuntimeConfigMaterializerRejectsProviderSideLoadForNormalClashConfig() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxRuntimeSideLoadRejectTests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let sourceURL = root.appendingPathComponent("profile.yaml")
+    try """
+    proxies:
+      - name: Direct
+        type: direct
+    proxy-groups:
+      - name: Proxy
+        type: select
+        proxies: [Direct]
+    rules:
+      - MATCH,Proxy
+    """.write(to: sourceURL, atomically: true, encoding: .utf8)
+    let sideLoadedProviderURL = root.appendingPathComponent("local-provider.txt")
+    try "trojan://password@example.com:443#Local\n".write(to: sideLoadedProviderURL, atomically: true, encoding: .utf8)
+
+    await XCTAssertThrowsErrorAsync {
+      _ = try await RuntimeConfigMaterializer().materializeResult(
+        RuntimeConfigMaterializationRequest(
+          profileName: "Normal",
+          sourcePath: sourceURL.path,
+          runtimeConfigURL: root.appendingPathComponent("runtime.yaml"),
+          providerContentURL: root.appendingPathComponent("provider.txt"),
+          overrides: RuntimeOverrides.defaultForLaunch(secret: "side-load-secret"),
+          selectionOverrides: [:],
+          sideLoadedProviderContentPath: sideLoadedProviderURL.path
+        )
+      )
+    } handler: { error in
+      guard case let ConfigNormalizer.NormalizerError.invalidProfile(message) = error else {
+        return XCTFail("Expected provider side-load rejection, got \(error).")
+      }
+      XCTAssertEqual(
+        message,
+        String(localized: "Provider side-load preflight is only available for app-managed provider subscriptions.")
+      )
+    }
+  }
+
   func testRuntimeConfigMaterializerRetainsProtectedActiveAndNewestGenerations() async throws {
     let root = FileManager.default.temporaryDirectory
       .appendingPathComponent("ClashMaxRuntimeRetentionTests-\(UUID().uuidString)", isDirectory: true)
@@ -748,6 +837,96 @@ final class ConfigNormalizerTests: XCTestCase {
     for url in unmanagedURLs {
       XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "\(url.lastPathComponent) should not be removed")
     }
+  }
+
+  func testEffectiveRuntimeConfigSnapshotRedactsSecretsAndExplainsLayers() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxEffectiveConfigTests-\(UUID().uuidString)", isDirectory: true)
+    let paths = RuntimePaths(
+      appSupport: root,
+      profiles: root.appendingPathComponent("Profiles", isDirectory: true),
+      runtime: root.appendingPathComponent("Runtime", isDirectory: true),
+      subscriptions: root.appendingPathComponent("Subscriptions", isDirectory: true),
+      logs: root.appendingPathComponent("Logs", isDirectory: true)
+    )
+    try paths.prepareDirectories()
+    let sourceURL = paths.profiles.appendingPathComponent("provider.txt")
+    try """
+    trojan://provider-password@example.com:443?sni=example.com#Secret%20Node
+    """.write(to: sourceURL, atomically: true, encoding: .utf8)
+    let profile = Profile(
+      id: UUID(),
+      name: "Provider Profile",
+      source: .localFile(originalPath: nil),
+      originalConfigPath: sourceURL.path,
+      subscriptionProviderOptions: SubscriptionProviderOptions(
+        runtimeMergeYAML: """
+        proxies:
+          - name: Secret Merge
+            type: vmess
+            uuid: 00000000-0000-0000-0000-000000000000
+        proxy-providers:
+          Remote:
+            type: http
+            url: https://token@example.com/profile.yaml
+        """,
+        ruleOverlay: RuleOverlaySettings(
+          enabled: true,
+          appendRules: [
+            ManagedRuleOverlayRule(kind: .domainSuffix, value: "profile.example", policy: "DIRECT")
+          ]
+        )
+      )
+    )
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "controller-secret")
+    overrides.ruleOverlay = RuleOverlaySettings(
+      enabled: true,
+      prependRules: [
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "global.example", policy: "DIRECT")
+      ]
+    )
+    let snippet = RuntimeSnippet(
+      name: "Snippet Secret",
+      enabled: true,
+      binding: .allProfiles,
+      payload: .rules(
+        RuleOverlaySettings(
+          enabled: true,
+          appendRules: [
+            ManagedRuleOverlayRule(kind: .domainSuffix, value: "snippet.example", policy: "DIRECT")
+          ]
+        )
+      )
+    )
+
+    let snapshot = try await EffectiveRuntimeConfigBuilder().snapshot(
+      profile: profile,
+      paths: paths,
+      overrides: overrides,
+      selectionOverrides: [:],
+      runtimeSnippets: [snippet],
+      preflight: .disabled
+    )
+
+    XCTAssertEqual(snapshot.layers.map(\.title), [
+      "Original profile",
+      "Provider materialization",
+      "Global overlay",
+      "Profile overlay",
+      "Snippets",
+      "Final runtime YAML"
+    ])
+    XCTAssertEqual(snapshot.preflightStatus, .notRun)
+    let exported = snapshot.redactedReportText
+    XCTAssertTrue(exported.contains("DOMAIN-SUFFIX,global.example,DIRECT"))
+    XCTAssertTrue(exported.contains("DOMAIN-SUFFIX,profile.example,DIRECT"))
+    XCTAssertTrue(exported.contains("DOMAIN-SUFFIX,snippet.example,DIRECT"))
+    XCTAssertTrue(exported.contains("<redacted>"))
+    XCTAssertFalse(exported.contains("controller-secret"))
+    XCTAssertFalse(exported.contains("provider-password"))
+    XCTAssertFalse(exported.contains("00000000-0000-0000-0000-000000000000"))
+    XCTAssertFalse(exported.contains("token@example.com"))
+    XCTAssertFalse(exported.contains(paths.runtime.path))
   }
 
   func testURIProviderContentBuildsRuntimeConfigWithFileProvider() throws {
@@ -960,6 +1139,20 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(yaml["rules"] as? [String], ["MATCH,Manual"])
   }
 
+  func testProfileConfigInspectorRequiresProxySequencesToContainMappings() throws {
+    XCTAssertThrowsError(try ProfileConfigInspector.format(of: "proxies: [DIRECT]\n")) { error in
+      guard let formatError = error as? ProfileConfigFormatError,
+            case .missingProxyDefinitions = formatError
+      else {
+        return XCTFail("Expected missing proxy definitions, got \(error).")
+      }
+    }
+    XCTAssertEqual(
+      try ProfileConfigInspector.format(of: "proxies:\n  - name: DIRECT\n    type: direct\n"),
+      .clashConfig
+    )
+  }
+
   func testProviderContentClassifierDistinguishesRuntimeKinds() throws {
     let shareLinks = "trojan://password@example.com:443#Trojan\nvless://uuid@example.net:443#VLESS\n"
     let encodedLinks = Data(shareLinks.utf8).base64EncodedString()
@@ -981,6 +1174,17 @@ final class ConfigNormalizerTests: XCTestCase {
     )
     XCTAssertEqual(
       try ProfileConfigInspector.contentKind(of: "proxies:\n  - name: DIRECT\n    type: direct\n"),
+      .proxyProviderContent
+    )
+    XCTAssertThrowsError(try ProfileConfigInspector.contentKind(of: "payload: [DIRECT]\n")) { error in
+      guard let formatError = error as? ProfileConfigFormatError,
+            case .missingProxyDefinitions = formatError
+      else {
+        return XCTFail("Expected missing proxy definitions, got \(error).")
+      }
+    }
+    XCTAssertEqual(
+      try ProfileConfigInspector.contentKind(of: "payload:\n  - name: DIRECT\n    type: direct\n"),
       .proxyProviderContent
     )
     XCTAssertEqual(try ProfileConfigInspector.contentKind(of: shareLinks), .shareLinkList)

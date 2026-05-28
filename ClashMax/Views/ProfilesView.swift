@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 import Yams
 
@@ -5,15 +6,17 @@ struct ProfilesView: View {
   @EnvironmentObject private var appModel: AppModel
   @EnvironmentObject private var profileStore: ProfileStore
   @EnvironmentObject private var profileCoordinator: ProfileCoordinator
+  @EnvironmentObject private var providerAnalytics: ProviderAnalyticsStore
   @State private var subscriptionURL = ""
   @State private var profileBeingEdited: Profile?
+  @State private var providerInsightsProfile: Profile?
   @State private var editProfileName = ""
   @State private var editSubscriptionURL = ""
   @State private var editProviderOptions = SubscriptionProviderOptions.default
   @State private var editRollbackProviderOptions = SubscriptionProviderOptions.default
   @State private var editUpdatePolicy = SubscriptionUpdatePolicy.default
   @State private var profilePendingDeletion: Profile?
-  @State private var migrationReport: ClashXMigrationReport?
+  @State private var migrationReport: ClientMigrationReport?
 
   var body: some View {
     AdaptivePage(
@@ -41,9 +44,9 @@ struct ProfilesView: View {
       }
 
       Button {
-        importClashX()
+        importClientMigration()
       } label: {
-        Label("Import ClashX", systemImage: "arrow.triangle.branch")
+        Label("Import Client", systemImage: "arrow.triangle.branch")
       }
     } content: {
       VStack(alignment: .leading, spacing: 14) {
@@ -66,6 +69,7 @@ struct ProfilesView: View {
                   sourceURLString: profileStore.subscriptionURLString(for: profile),
                   selectAction: { appModel.selectProfile(profile) },
                   editAction: { beginEditing(profile) },
+                  providerInsightsAction: { providerInsightsProfile = profile },
                   updateAction: {
                     Task { @MainActor in
                       await appModel.updateSubscription(profile)
@@ -103,6 +107,7 @@ struct ProfilesView: View {
         providerOptions: $editProviderOptions,
         rollbackProviderOptions: editRollbackProviderOptions,
         updatePolicy: $editUpdatePolicy,
+        subscriptionDefaultUpdateIntervalMinutes: appModel.settings.subscriptionFetchSettings.defaultUpdateIntervalMinutes,
         developerMode: appModel.developerMode,
         onCancel: closeEditSheet,
         onResetRemoteName: {
@@ -114,6 +119,15 @@ struct ProfilesView: View {
         onSave: {
           saveProfileEdits(profile)
         }
+      )
+    }
+    .sheet(item: $providerInsightsProfile) { profile in
+      let resolvedProfile = currentProfile(matching: profile) ?? profile
+      ProfileProviderInsightsSheet(
+        profile: resolvedProfile,
+        isActive: profileStore.activeProfileID == resolvedProfile.id,
+        summary: providerInsightsSummary(for: resolvedProfile),
+        onClose: { providerInsightsProfile = nil }
       )
     }
     .alert("Delete Profile?", isPresented: deleteConfirmationPresented) {
@@ -128,18 +142,18 @@ struct ProfilesView: View {
     }
     .sheet(isPresented: migrationReportPresented) {
       if let migrationReport {
-        ClashXMigrationReportSheet(
+        ClientMigrationReportSheet(
           report: migrationReport,
           developerMode: appModel.developerMode,
           onCancel: { self.migrationReport = nil },
           onApply: { options in applyMigrationReport(migrationReport, options: options) }
         )
-        .frame(width: 560)
+        .frame(width: 720)
         .padding(20)
       }
     }
     .onReceive(NotificationCenter.default.publisher(for: .clashMaxImportClashXRequested)) { _ in
-      importClashX()
+      importClientMigration()
     }
   }
 
@@ -277,6 +291,16 @@ struct ProfilesView: View {
     editUpdatePolicy = .default
   }
 
+  private func providerInsightsSummary(for profile: Profile) -> ProviderAnalyticsProfileSummary {
+    let isActive = profileStore.activeProfileID == profile.id
+    return providerAnalytics.summary(
+      profileID: profile.id,
+      profileTraffic: profile.subscriptionMetadata?.traffic,
+      currentProxyProviders: isActive ? appModel.proxyProviders : nil,
+      currentRuleProviders: isActive ? appModel.ruleProviders : nil
+    )
+  }
+
   private func currentProfile(matching profile: Profile) -> Profile? {
     profileStore.profiles.first { $0.id == profile.id }
   }
@@ -331,42 +355,74 @@ struct ProfilesView: View {
     }
   }
 
-  private func importClashX() {
+  private func importClientMigration() {
     let panel = NSOpenPanel()
     panel.canChooseDirectories = true
     panel.canChooseFiles = false
     panel.allowsMultipleSelection = false
     panel.prompt = "Inspect"
-    panel.directoryURL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".config/clash")
+    panel.directoryURL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".config")
     guard panel.runModal() == .OK, let url = panel.url else { return }
-    migrationReport = ClashXMigrationParser().parse(directoryURL: url)
+    migrationReport = ClientMigrationParser().parse(directoryURL: url)
   }
 
-  private func applyMigrationReport(_ report: ClashXMigrationReport, options: ClashXMigrationApplyOptions) {
+  private func applyMigrationReport(_ report: ClientMigrationReport, options: ClientMigrationApplyOptions) {
     migrationReport = nil
-    let configURL = URL(fileURLWithPath: report.configDirectory).appendingPathComponent("config.yaml")
-    applyMigrationRuntimeSettings(report, enableSystemProxy: options.enableSystemProxy)
-    if options.importShortcuts, appModel.developerMode {
-      applyMigrationShortcutSettings(report.shortcutBindings)
-    }
-    if options.enableSilentStart {
-      appModel.setSilentStart(true)
-    }
     Task { @MainActor in
-      if FileManager.default.fileExists(atPath: configURL.path) {
-        do {
-          _ = try await profileCoordinator.importLocalProfile(from: configURL)
-        } catch {
-          appModel.lastError = UserFacingError.message(for: error)
+      var migratedProfileIDs: [String: Profile.ID] = [:]
+
+      if options.importLocalProfiles {
+        for candidate in report.localProfiles {
+          do {
+            let profile = try await profileCoordinator.importLocalProfile(from: URL(fileURLWithPath: candidate.filePath))
+            migratedProfileIDs[candidate.id] = profile.id
+          } catch {
+            appModel.lastError = UserFacingError.message(for: error)
+          }
         }
       }
-      for subscriptionURL in report.subscriptionURLs {
-        _ = await appModel.addSubscription(urlString: subscriptionURL)
+
+      if options.importRemoteSubscriptions {
+        for candidate in report.subscriptions {
+          var importedProviderOptions = candidate.providerOptions
+          if options.importRuleSnippets {
+            importedProviderOptions = self.providerOptionsByApplyingRuleSnippets(
+              importedProviderOptions,
+              applyingRuleSnippets: report.ruleSnippets.filter { $0.profileSourceID == candidate.id }
+            )
+          }
+          _ = await appModel.addSubscription(
+            name: candidate.name,
+            urlString: candidate.urlString,
+            providerOptions: importedProviderOptions,
+            updatePolicy: candidate.updatePolicy
+          )
+        }
+      } else if report.subscriptions.isEmpty {
+        for subscriptionURL in report.subscriptionURLs {
+          _ = await appModel.addSubscription(urlString: subscriptionURL)
+        }
+      }
+
+      if options.importRuleSnippets {
+        await saveMigrationRuleSnippets(
+          report.ruleSnippets,
+          subscriptionSourceIDs: Set(report.subscriptions.map(\.id)),
+          migratedProfileIDs: migratedProfileIDs
+        )
+      }
+
+      applyMigrationRuntimeSettings(report, enableSystemProxy: options.enableSystemProxy)
+      if options.importShortcuts, appModel.developerMode {
+        applyMigrationShortcutSettings(report.shortcutBindings)
+      }
+      if options.enableSilentStart {
+        appModel.setSilentStart(true)
       }
     }
   }
 
-  private func applyMigrationRuntimeSettings(_ report: ClashXMigrationReport, enableSystemProxy: Bool) {
+  private func applyMigrationRuntimeSettings(_ report: ClientMigrationReport, enableSystemProxy: Bool) {
     if let mixedPort = report.ports["mixed-port"] ?? report.ports["port"] {
       let normalizedPort = min(max(mixedPort, 1), 65_535)
       appModel.setMixedPort(normalizedPort)
@@ -406,26 +462,78 @@ struct ProfilesView: View {
     }
     appModel.globalShortcutSettings = settings
   }
+
+  private func providerOptionsByApplyingRuleSnippets(
+    _ providerOptions: SubscriptionProviderOptions,
+    applyingRuleSnippets snippets: [MigratedRuleSnippetCandidate]
+  ) -> SubscriptionProviderOptions {
+    var result = providerOptions
+    for snippet in snippets {
+      result.ruleOverlay = mergedRuleOverlay(result.ruleOverlay, with: snippet.settings)
+    }
+    return result
+  }
+
+  private func mergedRuleOverlay(_ base: RuleOverlaySettings, with addition: RuleOverlaySettings) -> RuleOverlaySettings {
+    RuleOverlaySettings(
+      enabled: base.enabled || addition.enabled,
+      prependRules: base.prependRules + addition.prependRules,
+      appendRules: base.appendRules + addition.appendRules,
+      disabledRuleMatchers: base.disabledRuleMatchers + addition.disabledRuleMatchers
+    )
+  }
+
+  private func saveMigrationRuleSnippets(
+    _ snippets: [MigratedRuleSnippetCandidate],
+    subscriptionSourceIDs: Set<String>,
+    migratedProfileIDs: [String: Profile.ID]
+  ) async {
+    for candidate in snippets {
+      if let profileSourceID = candidate.profileSourceID,
+         subscriptionSourceIDs.contains(profileSourceID) {
+        continue
+      }
+      let binding: RuntimeSnippetBinding
+      if let profileSourceID = candidate.profileSourceID {
+        guard let profileID = migratedProfileIDs[profileSourceID] else { continue }
+        binding = .profiles([profileID])
+      } else {
+        binding = .allProfiles
+      }
+      let snippet = RuntimeSnippet(
+        name: candidate.name,
+        binding: binding,
+        payload: .rules(candidate.settings)
+      )
+      _ = await appModel.saveRuntimeSnippet(snippet)
+    }
+  }
 }
 
-private struct ClashXMigrationApplyOptions {
+private struct ClientMigrationApplyOptions {
+  var importLocalProfiles: Bool
+  var importRemoteSubscriptions: Bool
+  var importRuleSnippets: Bool
   var enableSystemProxy: Bool
   var importShortcuts: Bool
   var enableSilentStart: Bool
 }
 
-private struct ClashXMigrationReportSheet: View {
-  let report: ClashXMigrationReport
+private struct ClientMigrationReportSheet: View {
+  let report: ClientMigrationReport
   let developerMode: Bool
   let onCancel: () -> Void
-  let onApply: (ClashXMigrationApplyOptions) -> Void
+  let onApply: (ClientMigrationApplyOptions) -> Void
+  @State private var importLocalProfiles = true
+  @State private var importRemoteSubscriptions = true
+  @State private var importRuleSnippets = true
   @State private var enableSystemProxy = false
   @State private var importShortcuts = false
   @State private var enableSilentStart = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
-      Label("ClashX Migration Report", systemImage: "arrow.triangle.branch")
+      Label(report.client.reportTitle, systemImage: "arrow.triangle.branch")
         .font(.title3.weight(.semibold))
 
       Text(report.configDirectory)
@@ -433,17 +541,33 @@ private struct ClashXMigrationReportSheet: View {
         .foregroundStyle(.secondary)
         .lineLimit(2)
 
-      migrationSection("Subscriptions", values: report.subscriptionURLs)
-      migrationSection("Duplicates", values: report.duplicateSubscriptionURLs)
-      migrationSection("Bypass", values: report.bypassDomains)
-      migrationSection("Ports", values: report.ports.map { "\($0.key): \($0.value)" }.sorted())
-      migrationSection("Runtime", values: runtimeValues)
-      migrationSection("Shortcuts", values: shortcutValues)
-      migrationSection("Conflicts", values: report.conflicts)
-      migrationSection("Unsupported", values: report.unsupportedSettings)
-      migrationSection("Unknown Keys", values: report.unknownKeys)
-      migrationSection("Inspected Files", values: report.inspectedFiles)
-      migrationSection("Warnings", values: report.warnings)
+      ScrollView {
+        VStack(alignment: .leading, spacing: 14) {
+          migrationSection("Source", values: sourceValues)
+          migrationSection("Profiles", values: profileValues)
+          migrationSection("Subscriptions", values: subscriptionValues)
+          migrationSection("Rule Snippets", values: ruleSnippetValues)
+          migrationSection("Runtime", values: runtimeValues)
+          migrationSection("Conflicts", values: report.conflicts)
+          unsupportedMappingSection
+          migrationSection("Warnings", values: warningValues)
+          migrationSection("Inspected Files", values: report.inspectedFiles)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+      }
+      .frame(maxHeight: 520)
+
+      Toggle("Import local profiles", isOn: $importLocalProfiles)
+        .toggleStyle(.checkbox)
+        .disabled(report.localProfiles.isEmpty)
+
+      Toggle("Import remote subscriptions as ClashMax subscription/provider-backed profiles", isOn: $importRemoteSubscriptions)
+        .toggleStyle(.checkbox)
+        .disabled(report.subscriptions.isEmpty)
+
+      Toggle("Import rule snippets", isOn: $importRuleSnippets)
+        .toggleStyle(.checkbox)
+        .disabled(report.ruleSnippets.isEmpty)
 
       Toggle("Enable System Proxy after import", isOn: $enableSystemProxy)
         .toggleStyle(.checkbox)
@@ -468,7 +592,10 @@ private struct ClashXMigrationReportSheet: View {
           .keyboardShortcut(.cancelAction)
         Button("Apply") {
           onApply(
-            ClashXMigrationApplyOptions(
+            ClientMigrationApplyOptions(
+              importLocalProfiles: importLocalProfiles && !report.localProfiles.isEmpty,
+              importRemoteSubscriptions: importRemoteSubscriptions && !report.subscriptions.isEmpty,
+              importRuleSnippets: importRuleSnippets && !report.ruleSnippets.isEmpty,
               enableSystemProxy: enableSystemProxy,
               importShortcuts: developerMode && importShortcuts,
               enableSilentStart: enableSilentStart
@@ -480,12 +607,44 @@ private struct ClashXMigrationReportSheet: View {
     }
   }
 
+  private var sourceValues: [String] {
+    [
+      "Client: \(report.client.displayName)",
+      "Directory: \(report.configDirectory)"
+    ]
+  }
+
+  private var profileValues: [String] {
+    report.localProfiles.map { candidate in
+      "\(candidate.name.isEmpty ? candidate.source : candidate.name): \(candidate.source)"
+    }
+  }
+
+  private var subscriptionValues: [String] {
+    let candidates = report.subscriptions.map { candidate in
+      let name = candidate.name.isEmpty ? "Subscription" : candidate.name
+      let updateState = candidate.updatePolicy.automaticUpdatesEnabled ? "auto update" : "manual update"
+      return "\(name): \(candidate.urlString) (\(updateState), \(candidate.providerOptions.fetchProxy.displayName))"
+    }
+    return candidates.isEmpty ? report.subscriptionURLs : candidates
+  }
+
+  private var ruleSnippetValues: [String] {
+    report.ruleSnippets.map { candidate in
+      let binding = candidate.profileSourceID == nil ? "all profiles" : "bound profile"
+      return "\(candidate.name): \(candidate.settings.summary), \(binding)"
+    }
+  }
+
   private var runtimeValues: [String] {
     [
       report.allowLan.map { "allow-lan: \($0)" },
       report.mode.map { "mode: \($0)" },
       report.logLevel.map { "log-level: \($0)" },
-      report.systemProxyEnabled.map { "system proxy intent: \($0)" }
+      report.systemProxyEnabled.map { "system proxy intent: \($0)" },
+      report.ports.isEmpty ? nil : report.ports.map { "\($0.key): \($0.value)" }.sorted().joined(separator: ", "),
+      report.bypassDomains.isEmpty ? nil : "bypass: \(report.bypassDomains.joined(separator: ", "))",
+      shortcutValues.isEmpty ? nil : "shortcuts: \(shortcutValues.joined(separator: ", "))"
     ]
     .compactMap { $0 }
   }
@@ -493,6 +652,59 @@ private struct ClashXMigrationReportSheet: View {
   private var shortcutValues: [String] {
     report.shortcutBindings.map { binding in
       "\(binding.sourceKey): \(binding.action.displayName) \(binding.shortcut.displayName)"
+    }
+  }
+
+  private var warningValues: [String] {
+    report.warnings
+      + report.duplicateSubscriptionURLs.map { "Duplicate subscription: \($0)" }
+      + report.unknownKeys.map { "Unknown key: \($0)" }
+  }
+
+  private var unsupportedMappingSection: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text("Unsupported")
+        .font(.headline)
+      if report.unsupportedMappings.isEmpty, report.unsupportedSettings.isEmpty {
+        Text("Empty")
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+      } else {
+        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 5) {
+          GridRow {
+            Text("Source")
+            Text("Field")
+            Text("ClashMax handling")
+            Text("Action")
+          }
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.secondary)
+          ForEach(unsupportedRows) { row in
+            GridRow {
+              Text(row.source)
+              Text(row.field)
+              Text(row.handling)
+              Text(row.action)
+            }
+            .font(.caption)
+          }
+        }
+      }
+    }
+  }
+
+  private var unsupportedRows: [MigrationUnsupportedMapping] {
+    if !report.unsupportedMappings.isEmpty {
+      return report.unsupportedMappings
+    }
+    return report.unsupportedSettings.enumerated().map { index, value in
+      MigrationUnsupportedMapping(
+        id: "legacy-unsupported-\(index)",
+        source: value,
+        field: value,
+        handling: "Not imported",
+        action: "report only"
+      )
     }
   }
 
@@ -523,6 +735,7 @@ private struct ProfileCard: View {
   let sourceURLString: String?
   let selectAction: () -> Void
   let editAction: () -> Void
+  let providerInsightsAction: () -> Void
   let updateAction: () -> Void
   let deleteAction: () -> Void
 
@@ -582,6 +795,13 @@ private struct ProfileCard: View {
         Label("Edit", systemImage: "pencil")
       }
       .help("Edit profile")
+
+      Button {
+        providerInsightsAction()
+      } label: {
+        Label("Providers", systemImage: "shippingbox")
+      }
+      .help("Show provider analytics")
 
       Button {
         updateAction()
@@ -681,6 +901,259 @@ private struct ProfileMetricsRow: View {
   }
 }
 
+private struct ProfileProviderInsightsSheet: View {
+  let profile: Profile
+  let isActive: Bool
+  let summary: ProviderAnalyticsProfileSummary
+  let onClose: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      HStack(alignment: .top, spacing: 12) {
+        VStack(alignment: .leading, spacing: 4) {
+          Text("Provider Analytics")
+            .font(.title3.weight(.semibold))
+          Text(profile.name)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
+        Spacer()
+        Text(isActive ? "Live runtime" : "History snapshot")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(isActive ? .green : .secondary)
+      }
+
+      ProviderInsightsMetricGrid(summary: summary)
+
+      Divider()
+
+      if summary.hasData {
+        ScrollView {
+          VStack(alignment: .leading, spacing: 14) {
+            ProviderInsightsSection(
+              title: "Proxy Providers",
+              systemImage: "shippingbox",
+              rows: rows(for: .proxy)
+            )
+            ProviderInsightsSection(
+              title: "Rule Providers",
+              systemImage: "list.bullet.rectangle",
+              rows: rows(for: .rule)
+            )
+          }
+          .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .scrollIndicators(.visible)
+      } else {
+        CenteredUnavailableState(
+          title: "No provider analytics",
+          systemImage: "shippingbox",
+          message: "Start this profile and refresh runtime data to collect local provider analytics."
+        )
+        .frame(maxWidth: .infinity, minHeight: 260)
+      }
+
+      Divider()
+
+      HStack {
+        Spacer()
+        Button("Close", action: onClose)
+          .keyboardShortcut(.cancelAction)
+      }
+    }
+    .padding(20)
+    .frame(width: 760)
+    .frame(minHeight: 520)
+  }
+
+  private func rows(for kind: ProviderKind) -> [ProviderAnalyticsSummary] {
+    summary.rows.filter { $0.kind == kind }
+  }
+}
+
+private struct ProviderInsightsMetricGrid: View {
+  let summary: ProviderAnalyticsProfileSummary
+
+  var body: some View {
+    LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
+      metric("Providers", "\(summary.providerCount)", "shippingbox")
+      metric("Update Success", summary.successRateLabel, "checkmark.seal")
+      metric("Recent Failure", recentFailureLabel, "exclamationmark.triangle")
+      metric("Reminder", reminderLabel, "bell.badge")
+    }
+  }
+
+  private var columns: [GridItem] {
+    [
+      GridItem(.flexible(minimum: 130), spacing: 10, alignment: .topLeading),
+      GridItem(.flexible(minimum: 130), spacing: 10, alignment: .topLeading),
+      GridItem(.flexible(minimum: 130), spacing: 10, alignment: .topLeading),
+      GridItem(.flexible(minimum: 130), spacing: 10, alignment: .topLeading)
+    ]
+  }
+
+  private func metric(_ title: String, _ value: String, _ symbolName: String) -> some View {
+    HStack(spacing: 8) {
+      Image(systemName: symbolName)
+        .foregroundStyle(.secondary)
+        .frame(width: 16)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(LocalizedStringKey(title))
+          .font(.caption2)
+          .foregroundStyle(.tertiary)
+        Text(value)
+          .font(.callout.weight(.medium))
+          .foregroundStyle(.primary)
+          .lineLimit(1)
+          .minimumScaleFactor(0.72)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private var recentFailureLabel: String {
+    guard let failure = summary.recentFailure else { return String(localized: "None") }
+    return "\(failure.kind.displayName) \(failure.providerName)"
+  }
+
+  private var reminderLabel: String {
+    guard let reminder = summary.reminders.first else { return String(localized: "None") }
+    return "\(reminder.providerName): \(reminder.message)"
+  }
+}
+
+private struct ProviderInsightsSection: View {
+  let title: LocalizedStringKey
+  let systemImage: String
+  let rows: [ProviderAnalyticsSummary]
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Label(title, systemImage: systemImage)
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+
+      if rows.isEmpty {
+        Text("No provider data")
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.vertical, 8)
+      } else {
+        VStack(alignment: .leading, spacing: 0) {
+          ForEach(rows) { row in
+            ProviderInsightRow(row: row)
+            if row.id != rows.last?.id {
+              Divider()
+            }
+          }
+        }
+        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+          RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .strokeBorder(.quaternary, lineWidth: 1)
+        }
+      }
+    }
+  }
+}
+
+private struct ProviderInsightRow: View {
+  let row: ProviderAnalyticsSummary
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 2) {
+          Text(row.providerName)
+            .font(.callout.weight(.medium))
+            .lineLimit(1)
+          Text(row.kind.displayName)
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+        }
+        .frame(minWidth: 140, maxWidth: .infinity, alignment: .leading)
+
+        fact("Count", row.countLabel)
+        fact("Change", row.deltaLabel)
+        fact("Success", successLabel)
+        fact("Source", row.isCurrentRuntimeData ? String(localized: "Live") : String(localized: "History"))
+      }
+
+      HStack(alignment: .top, spacing: 18) {
+        detail("Recent Failure", recentFailureText)
+        detail("Subscription", subscriptionText, tint: reminderTint)
+      }
+      .font(.caption)
+    }
+    .padding(.horizontal, 10)
+    .padding(.vertical, 8)
+  }
+
+  private func fact(_ title: String, _ value: String) -> some View {
+    VStack(alignment: .leading, spacing: 2) {
+      Text(LocalizedStringKey(title))
+        .font(.caption2)
+        .foregroundStyle(.tertiary)
+      Text(value)
+        .font(.caption.weight(.medium))
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .minimumScaleFactor(0.72)
+    }
+    .frame(width: 74, alignment: .leading)
+  }
+
+  private func detail(_ title: String, _ value: String, tint: Color = .secondary) -> some View {
+    HStack(alignment: .firstTextBaseline, spacing: 5) {
+      Text(LocalizedStringKey(title))
+        .foregroundStyle(.tertiary)
+      Text(value)
+        .foregroundStyle(tint)
+        .lineLimit(2)
+        .truncationMode(.tail)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private var successLabel: String {
+    row.successRateSampleCount > 0 ? row.successRateLabel : "-"
+  }
+
+  private var recentFailureText: String {
+    guard let failure = row.lastFailure else { return String(localized: "None") }
+    return failure.errorMessage ?? String(localized: "Failed")
+  }
+
+  private var subscriptionText: String {
+    var parts: [String] = []
+    if let reminder = row.reminder {
+      parts.append(reminder.message)
+    }
+    if let remaining = row.subscriptionInfo?.remainingSummary {
+      parts.append(remaining)
+    } else if let usage = row.subscriptionInfo?.usageSummary {
+      parts.append(usage)
+    }
+    if let expireAt = row.subscriptionInfo?.expireAt {
+      parts.append(expireAt.formatted(date: .abbreviated, time: .omitted))
+    }
+    return parts.isEmpty ? String(localized: "Unknown") : parts.joined(separator: " - ")
+  }
+
+  private var reminderTint: Color {
+    switch row.reminder?.severity {
+    case .critical:
+      return .red
+    case .warning:
+      return .orange
+    case nil:
+      return .secondary
+    }
+  }
+}
+
 private func localizedProfilesText(_ value: String) -> String {
   NSLocalizedString(value, comment: "")
 }
@@ -692,6 +1165,7 @@ private struct ProfileEditSheet: View {
   @Binding var providerOptions: SubscriptionProviderOptions
   let rollbackProviderOptions: SubscriptionProviderOptions
   @Binding var updatePolicy: SubscriptionUpdatePolicy
+  let subscriptionDefaultUpdateIntervalMinutes: Int
   let developerMode: Bool
   let onCancel: () -> Void
   let onResetRemoteName: () -> Void
@@ -754,7 +1228,14 @@ private struct ProfileEditSheet: View {
 
             SubscriptionUpdatePolicyEditor(policy: $updatePolicy)
 
+            SubscriptionDiagnosticsView(
+              profile: profile,
+              subscriptionURL: subscriptionURL,
+              defaultUpdateIntervalMinutes: subscriptionDefaultUpdateIntervalMinutes
+            )
+
             SubscriptionProviderOptionsEditor(
+              profile: profile,
               options: $providerOptions,
               validationError: $providerOptionsValidationError,
               rollbackOptions: rollbackProviderOptions,
@@ -1083,7 +1564,205 @@ private struct SubscriptionUpdatePolicyEditor: View {
   }
 }
 
+private struct SubscriptionDiagnosticsView: View {
+  let profile: Profile
+  let subscriptionURL: String
+  let defaultUpdateIntervalMinutes: Int
+  @State private var isExpanded = true
+
+  private var diagnostics: SubscriptionDiagnostics {
+    profile.subscriptionDiagnostics
+  }
+
+  private var latestFetch: SubscriptionFetchDiagnostics? {
+    diagnostics.latestFetch
+  }
+
+  var body: some View {
+    ProfileEditDisclosureRow("Subscription Diagnostics", isExpanded: $isExpanded) {
+      ProfileEditInfoRow {
+        VStack(alignment: .leading, spacing: 12) {
+          diagnosticsGrid
+          historySection
+        }
+      }
+    }
+  }
+
+  private var diagnosticsGrid: some View {
+    LazyVGrid(columns: diagnosticColumns, alignment: .leading, spacing: 10) {
+      diagnosticValue("URL", displayURL)
+      diagnosticValue("User-Agent", latestFetch?.userAgent ?? "-")
+      diagnosticValue("Fetch Proxy", fetchProxySummary)
+      diagnosticValue("Request Headers", requestHeaderSummary)
+      diagnosticValue("Response Headers", responseHeaderSummary)
+      diagnosticValue("Content-Type", latestFetch?.contentType ?? "-")
+      diagnosticValue("subscription-userinfo", latestFetch?.subscriptionUserInfo ?? "-")
+      diagnosticValue("profile-update-interval", profileUpdateIntervalSummary)
+      diagnosticValue("Charset", charsetSummary)
+      diagnosticValue("Preflight", preflightSummary)
+      diagnosticValue("Update Interval Source", updateIntervalSourceSummary)
+    }
+  }
+
+  private var historySection: some View {
+    VStack(alignment: .leading, spacing: 7) {
+      Text("Recent Updates")
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+
+      if diagnostics.updateHistory.isEmpty {
+        Text("Empty")
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+      } else {
+        VStack(alignment: .leading, spacing: 6) {
+          ForEach(Array(diagnostics.updateHistory.prefix(SubscriptionDiagnostics.historyLimit))) { entry in
+            historyRow(entry)
+          }
+        }
+      }
+    }
+  }
+
+  private var diagnosticColumns: [GridItem] {
+    [
+      GridItem(.flexible(minimum: 170), spacing: 10, alignment: .topLeading),
+      GridItem(.flexible(minimum: 170), spacing: 10, alignment: .topLeading)
+    ]
+  }
+
+  private func diagnosticValue(_ title: LocalizedStringKey, _ value: String) -> some View {
+    VStack(alignment: .leading, spacing: 2) {
+      Text(title)
+        .font(.caption2)
+        .foregroundStyle(.tertiary)
+      Text(value)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .lineLimit(2)
+        .truncationMode(.middle)
+        .textSelection(.enabled)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private func historyRow(_ entry: SubscriptionUpdateHistoryEntry) -> some View {
+    VStack(alignment: .leading, spacing: 3) {
+      HStack(alignment: .firstTextBaseline, spacing: 8) {
+        Text(entry.date.formatted(date: .abbreviated, time: .shortened))
+          .font(.caption.monospacedDigit())
+          .frame(width: 118, alignment: .leading)
+        Text(entry.trigger.displayName)
+          .font(.caption)
+          .frame(width: 118, alignment: .leading)
+        Text(entry.result.displayName)
+          .font(.caption.weight(.medium))
+          .foregroundStyle(entry.result == .failed ? .red : .secondary)
+        if let failureKind = entry.failureKind {
+          Text(failureKind.displayName)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      }
+      if let message = entry.message {
+        Text(message)
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+          .lineLimit(2)
+          .textSelection(.enabled)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private var displayURL: String {
+    latestFetch?.sanitizedURL ?? Self.redactedURL(subscriptionURL) ?? "-"
+  }
+
+  private var fetchProxySummary: String {
+    guard let latestFetch else { return profile.subscriptionProviderOptions.fetchProxy.displayName }
+    let attempted = latestFetch.attemptedStrategies.map(\.displayName).joined(separator: " -> ")
+    guard let successfulStrategy = latestFetch.successfulStrategy else {
+      return attempted.isEmpty ? "-" : attempted
+    }
+    return attempted.isEmpty
+      ? successfulStrategy.displayName
+      : "\(attempted) (success: \(successfulStrategy.displayName))"
+  }
+
+  private var requestHeaderSummary: String {
+    guard let latestFetch, !latestFetch.requestHeaders.isEmpty else { return "-" }
+    return latestFetch.requestHeaders
+      .map { header in
+        header.hasValue
+          ? String(format: String(localized: "%@ (set)"), header.name)
+          : String(format: String(localized: "%@ (empty)"), header.name)
+      }
+      .joined(separator: ", ")
+  }
+
+  private var responseHeaderSummary: String {
+    guard let latestFetch, !latestFetch.responseHeaderNames.isEmpty else { return "-" }
+    return latestFetch.responseHeaderNames.joined(separator: ", ")
+  }
+
+  private var profileUpdateIntervalSummary: String {
+    guard let latestFetch else { return "-" }
+    let raw = latestFetch.rawProfileUpdateInterval ?? "-"
+    guard let minutes = latestFetch.parsedProfileUpdateIntervalMinutes else {
+      return raw
+    }
+    return "\(raw) -> \(SubscriptionFetchSettings.intervalDescription(minutes))"
+  }
+
+  private var charsetSummary: String {
+    guard let latestFetch else { return "-" }
+    let declared = latestFetch.declaredCharset ?? "-"
+    let decoded = latestFetch.decodedCharset ?? "-"
+    return "declared: \(declared), decoded: \(decoded)"
+  }
+
+  private var preflightSummary: String {
+    guard let latestPreflight = diagnostics.latestPreflight else { return "-" }
+    guard let message = latestPreflight.localizedMessage else {
+      return latestPreflight.result.displayName
+    }
+    return "\(latestPreflight.result.displayName): \(message)"
+  }
+
+  private var updateIntervalSourceSummary: String {
+    let resolution = profile.subscriptionUpdatePolicy.intervalResolution(
+      remoteIntervalMinutes: profile.subscriptionMetadata?.updateIntervalMinutes,
+      globalDefaultMinutes: defaultUpdateIntervalMinutes
+    )
+    guard let minutes = resolution.minutes else {
+      return resolution.source.displayName
+    }
+    return "\(resolution.source.displayName) - \(SubscriptionFetchSettings.intervalDescription(minutes))"
+  }
+
+  private static func redactedURL(_ value: String) -> String? {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty, var components = URLComponents(string: trimmed) else {
+      return nil
+    }
+    components.user = nil
+    components.password = nil
+    if let items = components.queryItems {
+      components.queryItems = items.map { item in
+        URLQueryItem(name: item.name, value: item.value == nil ? nil : "<redacted>")
+      }
+    }
+    return components.string?
+      .replacingOccurrences(of: "%3Credacted%3E", with: "<redacted>")
+      .replacingOccurrences(of: "%3credacted%3e", with: "<redacted>")
+  }
+}
+
 private struct SubscriptionProviderOptionsEditor: View {
+  @EnvironmentObject private var appModel: AppModel
+  let profile: Profile
   @Binding var options: SubscriptionProviderOptions
   @Binding var validationError: String?
   let rollbackOptions: SubscriptionProviderOptions
@@ -1192,6 +1871,8 @@ private struct SubscriptionProviderOptionsEditor: View {
       }
 
       if developerMode {
+        providerSideLoadPreflightRow
+
         ProfileEditDisclosureRow("Legacy Advanced YAML and Filters", isExpanded: $showsAdvancedOptions) {
           ProfileEditRow("Filter") {
             TextField("Filter", text: $options.filter)
@@ -1223,6 +1904,70 @@ private struct SubscriptionProviderOptionsEditor: View {
     .onAppear(perform: validateAdvancedYAML)
     .onChange(of: options.overrideYAML) { _, _ in validateAdvancedYAML() }
     .onChange(of: options.runtimeMergeYAML) { _, _ in validateAdvancedYAML() }
+  }
+
+  private var providerSideLoadPreflightRow: some View {
+    let unsupportedReason = appModel.providerSideLoadPreflightUnsupportedReason(for: profile)
+    let isRunning = appModel.providerSideLoadPreflightStatus.isRunning(for: profile.id)
+    return ProfileEditRow("Provider Side-load Preflight") {
+      VStack(alignment: .leading, spacing: 6) {
+        HStack(spacing: 8) {
+          Button {
+            appModel.chooseProviderSideLoadPreflightFile(for: profile)
+          } label: {
+            Label("Choose Provider File...", systemImage: "doc.badge.gearshape")
+          }
+          .disabled(unsupportedReason != nil || isRunning)
+
+          if isRunning {
+            ProgressView()
+              .controlSize(.small)
+          }
+        }
+
+        if let statusMessage = appModel.providerSideLoadPreflightStatus.message(for: profile.id) {
+          Label(statusMessage, systemImage: providerSideLoadStatusIcon)
+            .font(.caption)
+            .foregroundStyle(providerSideLoadStatusColor)
+            .lineLimit(3)
+        } else if let unsupportedReason {
+          Label(unsupportedReason, systemImage: "info.circle")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(3)
+        } else {
+          Text("Temporarily validates a local provider file against this profile's generated runtime YAML.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
+        }
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+    }
+  }
+
+  private var providerSideLoadStatusIcon: String {
+    switch appModel.providerSideLoadPreflightStatus {
+    case .idle:
+      return "info.circle"
+    case .running:
+      return "hourglass"
+    case .succeeded:
+      return "checkmark.circle.fill"
+    case .failed:
+      return "exclamationmark.triangle.fill"
+    }
+  }
+
+  private var providerSideLoadStatusColor: Color {
+    switch appModel.providerSideLoadPreflightStatus {
+    case .succeeded:
+      return .green
+    case .failed:
+      return .red
+    default:
+      return .secondary
+    }
   }
 
   private var guardrailReport: SubscriptionProviderOptionsGuardrailReport {

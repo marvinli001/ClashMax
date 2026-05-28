@@ -53,7 +53,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
   func testAddingSubscriptionShowsLoadingUntilRequestFinishes() async throws {
     let paths = try Self.makeRuntimePaths()
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
-    let model = AppModel(paths: paths, profileStore: store)
+    let preflightCore = try Self.makeRuleOverlayPreflightCore(in: paths.appSupport, rejectedToken: "never-matched")
+    let model = AppModel(paths: paths, profileStore: store, bundledCoreURLProvider: { preflightCore })
     let recorder = URLProtocolRecorder(
       responseBody: "proxies:\n  - name: DIRECT\n    type: direct\n",
       responseDelay: 0.2
@@ -133,7 +134,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
       url: URL(string: "https://example.com/sub")!,
       session: initialSession
     )
-    let model = AppModel(paths: paths, profileStore: store)
+    let preflightCore = try Self.makeRuleOverlayPreflightCore(in: paths.appSupport, rejectedToken: "never-matched")
+    let model = AppModel(paths: paths, profileStore: store, bundledCoreURLProvider: { preflightCore })
     let recorder = URLProtocolRecorder(
       responseBody: "mixed-port: 9001\nproxies:\n  - name: DIRECT\n    type: direct\n",
       responseDelay: 0.2
@@ -152,7 +154,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     let didUpdate = await updateTask.value
 
-    XCTAssertTrue(didUpdate)
+    XCTAssertTrue(didUpdate, model.lastError ?? "subscription update returned false without lastError")
     XCTAssertFalse(model.updatingProfileIDs.contains(profile.id))
     XCTAssertEqual(
       try String(contentsOfFile: profile.originalConfigPath, encoding: .utf8),
@@ -187,12 +189,14 @@ final class DashboardRuntimeStateTests: XCTestCase {
       portChecker: EmptyRuntimePortChecker()
     )
     let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
+    let preflightCore = try Self.makeRuleOverlayPreflightCore(in: paths.appSupport, rejectedToken: "never-matched")
     let model = AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       apiClient: client,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: try Self.makeIsolatedDefaults(),
+      bundledCoreURLProvider: { preflightCore }
     )
     try await controller.startUserMode(
       coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
@@ -200,6 +204,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
       workDirectory: paths.runtime,
       api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
     )
+    await model.refreshEffectiveRuntimeConfigPreview()
+    guard case .loaded = model.effectiveRuntimeConfigState else {
+      return XCTFail("Expected loaded effective runtime config snapshot.")
+    }
 
     let header = SubscriptionRequestHeader(name: "X-Panel-Token", value: "secret")
     let options = SubscriptionProviderOptions(requestHeaders: [header], fetchProxy: .direct)
@@ -223,6 +231,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(recorder.lastRequest?.value(forHTTPHeaderField: "X-Panel-Token"), "secret")
     XCTAssertEqual(try secrets.load(account: "subscription.\(profile.id.uuidString)"), "https://example.com/new")
     XCTAssertEqual(store.profiles.first?.subscriptionProviderOptions, options)
+    XCTAssertEqual(model.effectiveRuntimeConfigState, .idle)
     let reloadPaths = await client.reloadRequestPaths()
     XCTAssertEqual(reloadPaths.count, 1)
     let runtimePath = try XCTUnwrap(reloadPaths.first)
@@ -319,12 +328,14 @@ final class DashboardRuntimeStateTests: XCTestCase {
       testDelayResult: 0,
       reloadFailureMessage: "reload rejected"
     )
+    let preflightCore = try Self.makeRuleOverlayPreflightCore(in: paths.appSupport, rejectedToken: "never-matched")
     let model = AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       apiClient: client,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: try Self.makeIsolatedDefaults(),
+      bundledCoreURLProvider: { preflightCore }
     )
     await model.runtimeSnippetLibrary.waitForLoad()
     let stableSnippet = RuntimeSnippet(
@@ -4911,6 +4922,15 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     let healthCheckProviders = await client.healthCheckProviders()
     XCTAssertEqual(healthCheckProviders, ["Remote"])
+    let profileID = try XCTUnwrap(model.profileStore.activeProfileID)
+    XCTAssertFalse(
+      model.providerAnalytics.summary(
+        profileID: profileID,
+        profileTraffic: nil,
+        currentProxyProviders: nil,
+        currentRuleProviders: nil
+      ).hasData
+    )
   }
 
   func testProviderUpdatesUseRuntimeAPIAndReload() async throws {
@@ -4955,6 +4975,53 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(model.proxyProviderUpdatesInFlight.isEmpty)
     XCTAssertTrue(model.ruleProviderUpdatesInFlight.isEmpty)
     XCTAssertGreaterThanOrEqual(proxyGroupsRequestCount, 1)
+
+    let profileID = try XCTUnwrap(model.profileStore.activeProfileID)
+    let summary = model.providerAnalytics.summary(
+      profileID: profileID,
+      profileTraffic: nil,
+      currentProxyProviders: nil,
+      currentRuleProviders: nil
+    )
+    XCTAssertEqual(summary.rows.first(where: { $0.kind == .proxy })?.successRate, 1)
+    XCTAssertEqual(summary.rows.first(where: { $0.kind == .rule })?.successRate, 1)
+  }
+
+  func testDuplicateProviderUpdateWhileRunningDoesNotRecordExtraAttempt() async throws {
+    let provider = ProxyProvider(name: "Remote", type: "http", vehicleType: "HTTP", updatedAt: nil, proxies: [])
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [],
+      proxyProvidersResponse: [provider],
+      testDelayResult: 73,
+      proxyProviderUpdateDelayNanoseconds: 80_000_000
+    )
+    let model = try await makeRunningRuntimeModel(client: client)
+    model.proxyProviders = [provider]
+
+    model.updateProxyProvider(provider)
+    model.updateProxyProvider(provider)
+
+    for _ in 0..<120 {
+      let updates = await client.updatedProxyProviders()
+      if updates.count == 1 && model.proxyProviderUpdatesInFlight.isEmpty {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let updatedProxyProviders = await client.updatedProxyProviders()
+    XCTAssertEqual(updatedProxyProviders, ["Remote"])
+
+    let profileID = try XCTUnwrap(model.profileStore.activeProfileID)
+    let summary = model.providerAnalytics.summary(
+      profileID: profileID,
+      profileTraffic: nil,
+      currentProxyProviders: nil,
+      currentRuleProviders: nil
+    )
+    XCTAssertEqual(summary.updateAttemptCount, 1)
+    XCTAssertEqual(summary.rows.first?.successRateSampleCount, 1)
   }
 
   func testUpdateAllProvidersSkipsDuplicateBatchWhileRunning() async throws {
@@ -4979,6 +5046,17 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let updatedProxyProviders = await client.updatedProxyProviders()
     XCTAssertEqual(updatedProxyProviders, ["Remote A", "Remote B"])
     XCTAssertTrue(model.proxyProviderUpdatesInFlight.isEmpty)
+
+    let profileID = try XCTUnwrap(model.profileStore.activeProfileID)
+    let summary = model.providerAnalytics.summary(
+      profileID: profileID,
+      profileTraffic: nil,
+      currentProxyProviders: nil,
+      currentRuleProviders: nil
+    )
+    XCTAssertEqual(summary.updateAttemptCount, 2)
+    XCTAssertEqual(summary.rows.first { $0.providerName == "Remote A" }?.successRateSampleCount, 1)
+    XCTAssertEqual(summary.rows.first { $0.providerName == "Remote B" }?.successRateSampleCount, 1)
   }
 
   func testUpdateAllProvidersContinuesAfterPartialFailures() async throws {
@@ -5046,6 +5124,18 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(updatedRuleProviders, ["Rules A", "Rules B"])
     XCTAssertTrue(model.ruleProviderUpdatesInFlight.isEmpty)
     XCTAssertEqual(model.lastError, "Failed to update 1 rule provider: Rules A: rule update refused")
+
+    let profileID = try XCTUnwrap(model.profileStore.activeProfileID)
+    let summary = model.providerAnalytics.summary(
+      profileID: profileID,
+      profileTraffic: nil,
+      currentProxyProviders: nil,
+      currentRuleProviders: nil
+    )
+    XCTAssertEqual(summary.rows.first { $0.kind == .proxy && $0.providerName == "Remote A" }?.successRate, 0)
+    XCTAssertEqual(summary.rows.first { $0.kind == .proxy && $0.providerName == "Remote B" }?.successRate, 1)
+    XCTAssertEqual(summary.rows.first { $0.kind == .rule && $0.providerName == "Rules A" }?.successRate, 0)
+    XCTAssertEqual(summary.rows.first { $0.kind == .rule && $0.providerName == "Rules B" }?.successRate, 1)
   }
 
   func testClosingConnectionIgnoresDuplicateConnectionWhileRunning() async throws {
@@ -5120,6 +5210,57 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(model.proxyGroups.first?.selected, "Singapore")
   }
 
+  func testRuntimeReloadSnapshotsUseCapturedActiveProfileID() async throws {
+    let provider = ProxyProvider(
+      name: "Remote",
+      type: "http",
+      vehicleType: "HTTP",
+      updatedAt: nil,
+      proxies: [ProxyNode(name: "Japan", type: "Vless", delay: nil, isSelectable: true)]
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [],
+      proxyProvidersResponse: [provider],
+      testDelayResult: 73,
+      proxyGroupsDelayNanoseconds: 80_000_000
+    )
+    let model = try await makeRunningRuntimeModel(client: client)
+    guard let firstProfileID = model.profileStore.activeProfileID else {
+      return XCTFail("Expected an active profile before runtime reload.")
+    }
+
+    model.reloadRuntimeData()
+    for _ in 0..<40 where await client.proxyGroupsRequestCount() == 0 {
+      await Task.yield()
+    }
+
+    let secondConfigURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxSecondProfile-\(UUID().uuidString).yaml")
+    try Self.writeProxyConfig(named: "Singapore", to: secondConfigURL)
+    let secondProfile = try await model.profileStore.importLocalConfig(from: secondConfigURL)
+    XCTAssertEqual(model.profileStore.activeProfileID, secondProfile.id)
+
+    for _ in 0..<120 where model.runtimeDataLoading {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let firstSummary = model.providerAnalytics.summary(
+      profileID: firstProfileID,
+      profileTraffic: nil as SubscriptionTrafficUsage?,
+      currentProxyProviders: nil as [ProxyProvider]?,
+      currentRuleProviders: nil as [RuleProvider]?
+    )
+    let secondSummary = model.providerAnalytics.summary(
+      profileID: secondProfile.id,
+      profileTraffic: nil as SubscriptionTrafficUsage?,
+      currentProxyProviders: nil as [ProxyProvider]?,
+      currentRuleProviders: nil as [RuleProvider]?
+    )
+    XCTAssertEqual(firstSummary.rows.first?.providerName, "Remote")
+    XCTAssertFalse(secondSummary.hasData)
+  }
+
   func testCancelledRuntimeActionsDoNotPublishStaleErrorsAfterTermination() async throws {
     let provider = ProxyProvider(name: "Remote", type: "http", vehicleType: "HTTP", updatedAt: nil, proxies: [])
     let connection = ConnectionSnapshot(
@@ -5137,6 +5278,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       testDelayResult: 73,
       healthCheckDelayNanoseconds: 80_000_000,
       closeConnectionDelayNanoseconds: 80_000_000,
+      proxyProviderUpdateDelayNanoseconds: 80_000_000,
       healthCheckFailureMessage: "stale provider failure",
       closeConnectionFailureMessage: "stale close failure",
       ignoreHealthCheckCancellation: true,
@@ -5146,12 +5288,15 @@ final class DashboardRuntimeStateTests: XCTestCase {
     model.connections = [connection]
 
     model.healthCheckProvider(provider)
+    model.updateProxyProvider(provider)
     model.closeConnection(connection)
 
     for _ in 0..<40 {
       let healthCheckRequestCount = await client.healthCheckRequestCount()
       let closedConnectionIDs = await client.closedConnectionIDs()
-      if healthCheckRequestCount > 0 && !closedConnectionIDs.isEmpty {
+      if healthCheckRequestCount > 0
+        && model.proxyProviderUpdatesInFlight.contains(provider.id)
+        && !closedConnectionIDs.isEmpty {
         break
       }
       await Task.yield()
@@ -5164,7 +5309,57 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     XCTAssertNil(model.lastError)
     XCTAssertFalse(model.providerHealthChecksInFlight.contains(provider.id))
+    XCTAssertFalse(model.proxyProviderUpdatesInFlight.contains(provider.id))
     XCTAssertFalse(model.closingConnectionIDs.contains(connection.id))
+
+    let profileID = try XCTUnwrap(model.profileStore.activeProfileID)
+    XCTAssertFalse(
+      model.providerAnalytics.summary(
+        profileID: profileID,
+        profileTraffic: nil,
+        currentProxyProviders: nil,
+        currentRuleProviders: nil
+      ).hasData
+    )
+  }
+
+  func testSubscriptionUpdateFailureRecordsClassificationHistoryAndBackoff() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    let originalSource = "proxies:\n  - name: DIRECT\n    type: direct\n"
+    let profile = try await store.addSubscription(
+      name: "Remote",
+      url: URL(string: "https://example.com/sub")!,
+      session: URLSession(configuration: URLProtocolRecorder.configurationReturning(originalSource))
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    let failureRecorder = URLProtocolRecorder(
+      responseBody: "Forbidden",
+      responseHeaders: ["Content-Type": "text/plain"],
+      statusCode: 403
+    )
+
+    let didUpdate = await model.updateSubscription(
+      profile,
+      session: URLSession(configuration: failureRecorder.configuration)
+    )
+
+    XCTAssertFalse(didUpdate)
+    XCTAssertEqual(try String(contentsOfFile: profile.originalConfigPath, encoding: .utf8), originalSource)
+    let updatedProfile = try XCTUnwrap(store.profiles.first)
+    XCTAssertEqual(updatedProfile.subscriptionUpdateStatus.result, .failed)
+    XCTAssertEqual(updatedProfile.subscriptionUpdateStatus.consecutiveFailures, 1)
+    XCTAssertNotNil(updatedProfile.subscriptionUpdateStatus.backoffUntil)
+    XCTAssertEqual(updatedProfile.subscriptionUpdateStatus.backoffUntil, updatedProfile.subscriptionUpdateStatus.nextUpdateAt)
+    XCTAssertEqual(updatedProfile.subscriptionDiagnostics.latestFetch?.httpStatusCode, 403)
+    XCTAssertEqual(updatedProfile.subscriptionDiagnostics.updateHistory.first?.trigger, .manual)
+    XCTAssertEqual(updatedProfile.subscriptionDiagnostics.updateHistory.first?.result, .failed)
+    XCTAssertEqual(updatedProfile.subscriptionDiagnostics.updateHistory.first?.failureKind, .httpStatus)
+    XCTAssertEqual(updatedProfile.subscriptionDiagnostics.updateHistory.first?.httpStatusCode, 403)
   }
 
   func testUpdatingSubscriptionRefreshesStoppedProxyPreview() async throws {
@@ -5197,6 +5392,9 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     XCTAssertEqual(model.visibleProxyGroups.map(\.name), ["New"])
     XCTAssertEqual(model.visibleProxyGroups.first?.nodes.map(\.type), ["hysteria2", "direct"])
+    XCTAssertEqual(store.profiles.first?.subscriptionUpdateStatus.result, .succeeded)
+    XCTAssertEqual(store.profiles.first?.subscriptionDiagnostics.updateHistory.first?.trigger, .manual)
+    XCTAssertEqual(store.profiles.first?.subscriptionDiagnostics.updateHistory.first?.result, .succeeded)
   }
 
   func testStartInFlightTakesPriorityOverStoppedTunPath() {
@@ -8367,6 +8565,420 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
   }
 
+  func testSavingActiveRuntimeSnippetPreflightsEvenWhenCoreStopped() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let rejectingCore = try Self.makeRuleOverlayPreflightCore(
+      in: paths.appSupport,
+      rejectedToken: "bad-preflight.example"
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      defaults: try Self.makeIsolatedDefaults(),
+      bundledCoreURLProvider: { rejectingCore }
+    )
+    let snippet = RuntimeSnippet(
+      name: "Rejected",
+      enabled: true,
+      binding: .allProfiles,
+      payload: .rules(
+        RuleOverlaySettings(
+          enabled: true,
+          prependRules: [
+            ManagedRuleOverlayRule(kind: .domainSuffix, value: "bad-preflight.example", policy: "DIRECT")
+          ]
+        )
+      )
+    )
+
+    let didSave = await model.saveRuntimeSnippet(snippet)
+
+    XCTAssertFalse(didSave)
+    XCTAssertTrue(model.runtimeSnippetLibrary.snippets.isEmpty)
+    XCTAssertTrue(model.lastError?.contains("rejected by test core") == true)
+  }
+
+  func testEffectiveRuntimeConfigPreviewUsesDraftSnippetWithoutPersistingIt() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let passingCore = try Self.makeRuleOverlayPreflightCore(in: paths.appSupport, rejectedToken: "never-matched")
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      defaults: try Self.makeIsolatedDefaults(),
+      bundledCoreURLProvider: { passingCore }
+    )
+    let draftSnippet = RuntimeSnippet(
+      name: "Draft",
+      enabled: true,
+      binding: .allProfiles,
+      payload: .rules(
+        RuleOverlaySettings(
+          enabled: true,
+          appendRules: [
+            ManagedRuleOverlayRule(kind: .domainSuffix, value: "draft-only.example", policy: "DIRECT")
+          ]
+        )
+      )
+    )
+
+    await model.refreshEffectiveRuntimeConfigPreview(draftSnippet: draftSnippet)
+
+    guard case let .loaded(snapshot) = model.effectiveRuntimeConfigState else {
+      return XCTFail("Expected loaded effective runtime config snapshot.")
+    }
+    XCTAssertTrue(snapshot.redactedReportText.contains("DOMAIN-SUFFIX,draft-only.example,DIRECT"))
+    XCTAssertTrue(model.runtimeSnippetLibrary.snippets.isEmpty)
+  }
+
+  func testEffectiveRuntimeConfigPreviewResetsWhenSelectingAnotherProfile() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let firstConfigURL = paths.appSupport.appendingPathComponent("first.yaml")
+    let secondConfigURL = paths.appSupport.appendingPathComponent("second.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: firstConfigURL)
+    try Self.writeProxyConfig(named: "Singapore", to: secondConfigURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    let firstProfile = try await store.importLocalConfig(from: firstConfigURL)
+    let secondProfile = try await store.importLocalConfig(from: secondConfigURL)
+    try await store.select(firstProfile)
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      defaults: try Self.makeIsolatedDefaults(),
+      bundledCoreURLProvider: { throw AppError.missingBundledCore }
+    )
+
+    await model.refreshEffectiveRuntimeConfigPreview()
+
+    guard case let .loaded(snapshot) = model.effectiveRuntimeConfigState else {
+      return XCTFail("Expected loaded effective runtime config snapshot.")
+    }
+    XCTAssertEqual(snapshot.profileID, firstProfile.id)
+    XCTAssertTrue(model.hasLoadedEffectiveRuntimeConfigForActiveProfile)
+
+    let didSelect = await model.selectProfileAsync(secondProfile)
+
+    XCTAssertTrue(didSelect)
+    XCTAssertEqual(store.activeProfileID, secondProfile.id)
+    XCTAssertEqual(model.effectiveRuntimeConfigState, .idle)
+    XCTAssertFalse(model.hasLoadedEffectiveRuntimeConfigForActiveProfile)
+  }
+
+  func testEffectiveRuntimeConfigPreviewResetsWhenDeletingLoadedProfile() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    let profile = try await store.importLocalConfig(from: configURL)
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      defaults: try Self.makeIsolatedDefaults(),
+      bundledCoreURLProvider: { throw AppError.missingBundledCore }
+    )
+
+    await model.refreshEffectiveRuntimeConfigPreview()
+
+    guard case let .loaded(snapshot) = model.effectiveRuntimeConfigState else {
+      return XCTFail("Expected loaded effective runtime config snapshot.")
+    }
+    XCTAssertEqual(snapshot.profileID, profile.id)
+
+    let didDelete = await model.deleteProfileAsync(profile)
+
+    XCTAssertTrue(didDelete)
+    XCTAssertNil(store.activeProfileID)
+    XCTAssertEqual(model.effectiveRuntimeConfigState, .unavailable("No active profile selected."))
+    XCTAssertFalse(model.hasLoadedEffectiveRuntimeConfigForActiveProfile)
+  }
+
+  func testEffectiveRuntimeConfigPreviewReportsMissingCoreWithoutDroppingSnapshot() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      defaults: try Self.makeIsolatedDefaults(),
+      bundledCoreURLProvider: { throw AppError.missingBundledCore }
+    )
+
+    await model.refreshEffectiveRuntimeConfigPreview()
+
+    guard case let .loaded(snapshot) = model.effectiveRuntimeConfigState else {
+      return XCTFail("Expected loaded effective runtime config snapshot.")
+    }
+    guard case .failed = snapshot.preflightStatus else {
+      return XCTFail("Expected missing core to be reported as a preflight failure.")
+    }
+    XCTAssertEqual(model.lastError, snapshot.preflightStatus.message)
+    XCTAssertTrue(snapshot.redactedFinalYAML.contains("mixed-port"))
+  }
+
+  func testEffectiveRuntimeConfigPreviewResetsWhenActiveSubscriptionUpdates() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let oldSource = """
+    proxies:
+      - { name: Old Node, type: direct }
+    proxy-groups:
+      - { name: Proxy, type: select, proxies: [Old Node, DIRECT] }
+    rules:
+      - MATCH,Proxy
+    """
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    let profile = try await store.addSubscription(
+      name: "Remote",
+      url: URL(string: "https://example.com/sub")!,
+      session: URLSession(configuration: URLProtocolRecorder.configurationReturning(oldSource))
+    )
+    let preflightCore = try Self.makeRuleOverlayPreflightCore(in: paths.appSupport, rejectedToken: "never-matched")
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      defaults: try Self.makeIsolatedDefaults(),
+      bundledCoreURLProvider: { preflightCore }
+    )
+    await model.refreshEffectiveRuntimeConfigPreview()
+    guard case .loaded = model.effectiveRuntimeConfigState else {
+      return XCTFail("Expected loaded effective runtime config snapshot.")
+    }
+    let newSource = """
+    proxies:
+      - { name: New Node, type: direct }
+    proxy-groups:
+      - { name: Proxy, type: select, proxies: [New Node, DIRECT] }
+    rules:
+      - MATCH,Proxy
+    """
+
+    let didUpdate = await model.updateSubscription(
+      profile,
+      session: URLSession(configuration: URLProtocolRecorder.configurationReturning(newSource))
+    )
+
+    XCTAssertTrue(didUpdate)
+    XCTAssertEqual(model.effectiveRuntimeConfigState, .idle)
+  }
+
+  func testEffectiveRuntimeConfigPreviewResetsWhenActiveRuntimeSnippetChanges() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let preflightCore = try Self.makeRuleOverlayPreflightCore(in: paths.appSupport, rejectedToken: "never-matched")
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      defaults: try Self.makeIsolatedDefaults(),
+      bundledCoreURLProvider: { preflightCore }
+    )
+    await model.refreshEffectiveRuntimeConfigPreview()
+    guard case .loaded = model.effectiveRuntimeConfigState else {
+      return XCTFail("Expected loaded effective runtime config snapshot.")
+    }
+    let snippet = RuntimeSnippet(
+      name: "Active",
+      binding: .allProfiles,
+      payload: .rules(
+        RuleOverlaySettings(
+          enabled: true,
+          appendRules: [
+            ManagedRuleOverlayRule(kind: .domainSuffix, value: "snippet.example", policy: "DIRECT")
+          ]
+        )
+      )
+    )
+
+    let didSave = await model.saveRuntimeSnippet(snippet)
+
+    XCTAssertTrue(didSave)
+    XCTAssertEqual(model.effectiveRuntimeConfigState, .idle)
+  }
+
+  func testProviderOptionPreflightIncludesActiveRuntimeSnippets() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let providerContent = """
+    trojan://password@example.com:443?sni=example.com#Node
+    """
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    let profile = try await store.addSubscription(
+      url: try XCTUnwrap(URL(string: "https://example.com/sub")),
+      session: URLSession(configuration: URLProtocolRecorder.configurationReturning(providerContent)),
+      preflightValidator: NoopSubscriptionProfilePreflightValidator()
+    )
+    let rejectingCore = try Self.makeRuleOverlayPreflightCore(
+      in: paths.appSupport,
+      rejectedToken: "active-snippet.example"
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      defaults: try Self.makeIsolatedDefaults(),
+      bundledCoreURLProvider: { rejectingCore }
+    )
+    await model.runtimeSnippetLibrary.waitForLoad()
+    try await model.runtimeSnippetLibrary.saveSnippet(
+      RuntimeSnippet(
+        name: "Active",
+        enabled: true,
+        binding: .allProfiles,
+        payload: .rules(
+          RuleOverlaySettings(
+            enabled: true,
+            appendRules: [
+              ManagedRuleOverlayRule(kind: .domainSuffix, value: "active-snippet.example", policy: "DIRECT")
+            ]
+          )
+        )
+      )
+    )
+
+    let didUpdate = await model.updateSubscriptionProviderOptions(
+      profile,
+      options: SubscriptionProviderOptions(intervalSeconds: 600)
+    )
+
+    XCTAssertFalse(didUpdate)
+    XCTAssertTrue(model.lastError?.contains("rejected by test core") == true)
+  }
+
+  func testProviderSideLoadPreflightRequiresDeveloperModeAndDoesNotReloadRuntime() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let providerContent = """
+    trojan://remote-password@example.com:443?sni=example.com#Remote
+    """
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    let profile = try await store.addSubscription(
+      url: try XCTUnwrap(URL(string: "https://example.com/sub")),
+      session: URLSession(configuration: URLProtocolRecorder.configurationReturning(providerContent)),
+      preflightValidator: NoopSubscriptionProfilePreflightValidator()
+    )
+    let localProviderURL = paths.appSupport.appendingPathComponent("local-provider.txt")
+    try "vless://00000000-0000-0000-0000-000000000000@local.example:443?security=tls#Local\n"
+      .write(to: localProviderURL, atomically: true, encoding: .utf8)
+    let validator = RecordingRuntimeConfigValidator(result: .success(()))
+    let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      apiClient: client,
+      defaults: try Self.makeIsolatedDefaults(),
+      bundledCoreURLProvider: { URL(fileURLWithPath: "/tmp/mihomo") },
+      providerSideLoadPreflightRunner: MihomoProviderSideLoadPreflightRunner(runtimeConfigValidator: validator)
+    )
+
+    let blocked = await model.preflightSideLoadedProviderContent(for: profile, providerFileURL: localProviderURL)
+
+    XCTAssertFalse(blocked)
+    XCTAssertFalse(validator.didValidate)
+    XCTAssertTrue(model.lastError?.contains("Developer Mode") == true)
+
+    model.setDeveloperMode(true)
+    model.overrides.tunEnabled = true
+    let succeeded = await model.preflightSideLoadedProviderContent(for: profile, providerFileURL: localProviderURL)
+
+    XCTAssertTrue(succeeded)
+    XCTAssertTrue(validator.didValidate)
+    XCTAssertTrue(validator.validatedConfigContent?.contains("tun:\n  enable: false") == true)
+    let reloadPaths = await client.reloadRequestPaths()
+    let reloadForces = await client.reloadRequestForces()
+    XCTAssertEqual(reloadPaths, [])
+    XCTAssertEqual(reloadForces, [])
+    XCTAssertNil(model.lastError)
+    guard case let .succeeded(result) = model.providerSideLoadPreflightStatus else {
+      return XCTFail("Expected side-load preflight success.")
+    }
+    XCTAssertEqual(result.profileID, profile.id)
+    XCTAssertEqual(result.fileName, "local-provider.txt")
+  }
+
+  func testProviderSideLoadPreflightRejectsNormalSubscriptionBeforeValidator() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configContent = """
+    proxies:
+      - name: Direct
+        type: direct
+    proxy-groups:
+      - name: Proxy
+        type: select
+        proxies: [Direct]
+    rules:
+      - MATCH,Proxy
+    """
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    let profile = try await store.addSubscription(
+      url: try XCTUnwrap(URL(string: "https://example.com/sub")),
+      session: URLSession(configuration: URLProtocolRecorder.configurationReturning(configContent)),
+      preflightValidator: NoopSubscriptionProfilePreflightValidator()
+    )
+    let localProviderURL = paths.appSupport.appendingPathComponent("local-provider.txt")
+    try "trojan://password@local.example:443#Local\n".write(to: localProviderURL, atomically: true, encoding: .utf8)
+    let validator = RecordingRuntimeConfigValidator(result: .success(()))
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      defaults: try Self.makeIsolatedDefaults(),
+      bundledCoreURLProvider: { URL(fileURLWithPath: "/tmp/mihomo") },
+      providerSideLoadPreflightRunner: MihomoProviderSideLoadPreflightRunner(runtimeConfigValidator: validator)
+    )
+    model.setDeveloperMode(true)
+
+    let didPreflight = await model.preflightSideLoadedProviderContent(for: profile, providerFileURL: localProviderURL)
+
+    let expectedMessage = String(localized: "Provider side-load preflight is only available for app-managed provider subscriptions.")
+    XCTAssertFalse(didPreflight)
+    XCTAssertFalse(validator.didValidate)
+    XCTAssertEqual(model.lastError, expectedMessage)
+    guard case let .failed(result) = model.providerSideLoadPreflightStatus else {
+      return XCTFail("Expected side-load preflight failure.")
+    }
+    XCTAssertEqual(result.profileID, profile.id)
+    XCTAssertEqual(result.message, expectedMessage)
+  }
+
+  func testProviderSideLoadPreflightFailureCleansTemporaryDirectory() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let providerContent = """
+    trojan://remote-password@example.com:443?sni=example.com#Remote
+    """
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    let profile = try await store.addSubscription(
+      url: try XCTUnwrap(URL(string: "https://example.com/sub")),
+      session: URLSession(configuration: URLProtocolRecorder.configurationReturning(providerContent)),
+      preflightValidator: NoopSubscriptionProfilePreflightValidator()
+    )
+    let localProviderURL = paths.appSupport.appendingPathComponent("bad-local-provider.txt")
+    try "trojan://bad-password@local.example:443#Bad\n".write(to: localProviderURL, atomically: true, encoding: .utf8)
+    let validator = RecordingRuntimeConfigValidator(result: .failure(AppError.configValidationFailed("bad local provider")))
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      defaults: try Self.makeIsolatedDefaults(),
+      bundledCoreURLProvider: { URL(fileURLWithPath: "/tmp/mihomo") },
+      providerSideLoadPreflightRunner: MihomoProviderSideLoadPreflightRunner(runtimeConfigValidator: validator)
+    )
+    model.setDeveloperMode(true)
+
+    let didPreflight = await model.preflightSideLoadedProviderContent(for: profile, providerFileURL: localProviderURL)
+
+    XCTAssertFalse(didPreflight)
+    XCTAssertTrue(validator.didValidate)
+    XCTAssertTrue(model.lastError?.contains("bad local provider") == true)
+    let leftovers = try FileManager.default.contentsOfDirectory(at: paths.runtime, includingPropertiesForKeys: nil)
+      .filter { $0.lastPathComponent.hasPrefix("provider-side-load-preflight-") }
+    XCTAssertTrue(leftovers.isEmpty)
+  }
+
   private func waitForBatchProgress(
     _ model: AppModel,
     file: StaticString = #filePath,
@@ -8798,6 +9410,8 @@ private actor RecordingMihomoController: MihomoAPIControlling {
   private let testDelayDelaysNanoseconds: [UInt64]
   private let healthCheckDelayNanoseconds: UInt64
   private let closeConnectionDelayNanoseconds: UInt64
+  private let proxyProviderUpdateDelayNanoseconds: UInt64
+  private let ruleProviderUpdateDelayNanoseconds: UInt64
   private let healthCheckFailureMessage: String?
   private let closeConnectionFailureMessage: String?
   private let proxyProviderUpdateFailures: [String: String]
@@ -8837,6 +9451,8 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     testDelayDelaysNanoseconds: [UInt64] = [],
     healthCheckDelayNanoseconds: UInt64 = 0,
     closeConnectionDelayNanoseconds: UInt64 = 0,
+    proxyProviderUpdateDelayNanoseconds: UInt64 = 0,
+    ruleProviderUpdateDelayNanoseconds: UInt64 = 0,
     healthCheckFailureMessage: String? = nil,
     closeConnectionFailureMessage: String? = nil,
     proxyProviderUpdateFailures: [String: String] = [:],
@@ -8861,6 +9477,8 @@ private actor RecordingMihomoController: MihomoAPIControlling {
       testDelayDelaysNanoseconds: testDelayDelaysNanoseconds,
       healthCheckDelayNanoseconds: healthCheckDelayNanoseconds,
       closeConnectionDelayNanoseconds: closeConnectionDelayNanoseconds,
+      proxyProviderUpdateDelayNanoseconds: proxyProviderUpdateDelayNanoseconds,
+      ruleProviderUpdateDelayNanoseconds: ruleProviderUpdateDelayNanoseconds,
       healthCheckFailureMessage: healthCheckFailureMessage,
       closeConnectionFailureMessage: closeConnectionFailureMessage,
       proxyProviderUpdateFailures: proxyProviderUpdateFailures,
@@ -8887,6 +9505,8 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     testDelayDelaysNanoseconds: [UInt64] = [],
     healthCheckDelayNanoseconds: UInt64 = 0,
     closeConnectionDelayNanoseconds: UInt64 = 0,
+    proxyProviderUpdateDelayNanoseconds: UInt64 = 0,
+    ruleProviderUpdateDelayNanoseconds: UInt64 = 0,
     healthCheckFailureMessage: String? = nil,
     closeConnectionFailureMessage: String? = nil,
     proxyProviderUpdateFailures: [String: String] = [:],
@@ -8911,6 +9531,8 @@ private actor RecordingMihomoController: MihomoAPIControlling {
       testDelayDelaysNanoseconds: testDelayDelaysNanoseconds,
       healthCheckDelayNanoseconds: healthCheckDelayNanoseconds,
       closeConnectionDelayNanoseconds: closeConnectionDelayNanoseconds,
+      proxyProviderUpdateDelayNanoseconds: proxyProviderUpdateDelayNanoseconds,
+      ruleProviderUpdateDelayNanoseconds: ruleProviderUpdateDelayNanoseconds,
       healthCheckFailureMessage: healthCheckFailureMessage,
       closeConnectionFailureMessage: closeConnectionFailureMessage,
       proxyProviderUpdateFailures: proxyProviderUpdateFailures,
@@ -8938,6 +9560,8 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     testDelayDelaysNanoseconds: [UInt64] = [],
     healthCheckDelayNanoseconds: UInt64 = 0,
     closeConnectionDelayNanoseconds: UInt64 = 0,
+    proxyProviderUpdateDelayNanoseconds: UInt64 = 0,
+    ruleProviderUpdateDelayNanoseconds: UInt64 = 0,
     healthCheckFailureMessage: String? = nil,
     closeConnectionFailureMessage: String? = nil,
     proxyProviderUpdateFailures: [String: String] = [:],
@@ -8962,6 +9586,8 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     self.testDelayDelaysNanoseconds = testDelayDelaysNanoseconds
     self.healthCheckDelayNanoseconds = healthCheckDelayNanoseconds
     self.closeConnectionDelayNanoseconds = closeConnectionDelayNanoseconds
+    self.proxyProviderUpdateDelayNanoseconds = proxyProviderUpdateDelayNanoseconds
+    self.ruleProviderUpdateDelayNanoseconds = ruleProviderUpdateDelayNanoseconds
     self.healthCheckFailureMessage = healthCheckFailureMessage
     self.closeConnectionFailureMessage = closeConnectionFailureMessage
     self.proxyProviderUpdateFailures = proxyProviderUpdateFailures
@@ -9038,6 +9664,7 @@ private actor RecordingMihomoController: MihomoAPIControlling {
   }
 
   func updateProxyProvider(named provider: String) async throws {
+    try await sleepIfNeeded(proxyProviderUpdateDelayNanoseconds)
     proxyProviderUpdateRequests.append(provider)
     if let failure = proxyProviderUpdateFailures[provider] {
       throw AppError.helperResponse(failure)
@@ -9045,6 +9672,7 @@ private actor RecordingMihomoController: MihomoAPIControlling {
   }
 
   func updateRuleProvider(named provider: String) async throws {
+    try await sleepIfNeeded(ruleProviderUpdateDelayNanoseconds)
     ruleProviderUpdateRequests.append(provider)
     if let failure = ruleProviderUpdateFailures[provider] {
       throw AppError.helperResponse(failure)

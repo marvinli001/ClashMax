@@ -5,6 +5,15 @@ struct SubscriptionURLResolution: Equatable, Sendable {
   var displayNameHint: String?
 }
 
+struct SubscriptionFetchError: Error, LocalizedError, CustomStringConvertible, Sendable {
+  var kind: SubscriptionUpdateFailureKind
+  var message: String
+  var diagnostics: SubscriptionFetchDiagnostics
+
+  var errorDescription: String? { message }
+  var description: String { message }
+}
+
 enum SubscriptionURLResolver {
   private static let deepLinkSchemes: Set<String> = ["clash", "clash-verge", "clashmeta", "flclash"]
 
@@ -111,6 +120,14 @@ enum SubscriptionURLResolver {
 struct SubscriptionFetcher {
   typealias Attempt = @Sendable (SubscriptionFetchStrategy) async throws -> (Data, URLResponse)
 
+  private struct DecodeContext {
+    var sanitizedURL: String
+    var userAgent: String
+    var attemptedStrategies: [SubscriptionFetchStrategy]
+    var successfulStrategy: SubscriptionFetchStrategy?
+    var requestHeaders: [SubscriptionHeaderDiagnostic]
+  }
+
   func request(url: URL, options: SubscriptionFetchOptions = SubscriptionFetchOptions()) -> URLRequest {
     let target = SubscriptionURLResolver.requestTarget(for: url)
     var request = URLRequest(url: target.url)
@@ -145,13 +162,39 @@ struct SubscriptionFetcher {
     options: SubscriptionFetchOptions = SubscriptionFetchOptions(),
     attempt: Attempt
   ) async throws -> SubscriptionFetchResult {
+    let request = request(url: url, options: options)
+    let requestHeaders = requestHeaderDiagnostics(for: request)
+    let sanitizedURL = Self.sanitizedURL(request.url ?? url)
+    var attemptedStrategies: [SubscriptionFetchStrategy] = []
     var lastError: Error?
     for strategy in options.retryOrder {
+      attemptedStrategies.append(strategy)
       do {
         let (data, response) = try await attempt(strategy)
-        return try decode(data: data, response: response)
-      } catch {
+        return try decode(
+          data: data,
+          response: response,
+          context: DecodeContext(
+            sanitizedURL: sanitizedURL,
+            userAgent: options.userAgent,
+            attemptedStrategies: attemptedStrategies,
+            successfulStrategy: strategy,
+            requestHeaders: requestHeaders
+          )
+        )
+      } catch let error as SubscriptionFetchError {
         lastError = error
+      } catch {
+        lastError = SubscriptionFetchError(
+          kind: Self.failureKind(for: error),
+          message: "Subscription fetch failed: \(error.localizedDescription)",
+          diagnostics: SubscriptionFetchDiagnostics(
+            sanitizedURL: sanitizedURL,
+            userAgent: options.userAgent,
+            attemptedStrategies: attemptedStrategies,
+            requestHeaders: requestHeaders
+          )
+        )
       }
     }
 
@@ -159,37 +202,202 @@ struct SubscriptionFetcher {
   }
 
   func decode(data: Data, response: URLResponse) throws -> SubscriptionFetchResult {
+    try decode(
+      data: data,
+      response: response,
+      context: DecodeContext(
+        sanitizedURL: Self.sanitizedURL(response.url),
+        userAgent: SubscriptionFetchOptions().userAgent,
+        attemptedStrategies: [],
+        successfulStrategy: nil,
+        requestHeaders: []
+      )
+    )
+  }
+
+  private func decode(data: Data, response: URLResponse, context: DecodeContext) throws -> SubscriptionFetchResult {
     guard let http = response as? HTTPURLResponse,
           (200..<300).contains(http.statusCode)
     else {
-      throw AppError.invalidSubscriptionResponse
+      let diagnostics = diagnostics(from: response, context: context)
+      throw SubscriptionFetchError(
+        kind: .httpStatus,
+        message: httpStatusMessage(from: response),
+        diagnostics: diagnostics
+      )
     }
 
-    guard let source = decodedString(from: data, response: http) else {
-      throw AppError.invalidSubscriptionResponse
+    var diagnostics = diagnostics(from: http, context: context)
+    guard let decoded = decodedString(from: data, response: http) else {
+      throw SubscriptionFetchError(
+        kind: .decoding,
+        message: "The subscription response could not be decoded as text.",
+        diagnostics: diagnostics
+      )
     }
-    let cleanedSource = stripUTF8BOM(from: source)
-    try rejectPanelErrorPageIfNeeded(cleanedSource)
+    diagnostics.decodedCharset = decoded.decodedCharset
+    let cleanedSource = stripUTF8BOM(from: decoded.source)
+    if bodyLooksLikePanelError(cleanedSource) {
+      throw SubscriptionFetchError(
+        kind: .panelResponse,
+        message: panelErrorMessage,
+        diagnostics: diagnostics
+      )
+    }
     do {
       try ProfileConfigValidator.validateProfileSource(cleanedSource)
     } catch {
       if responseSuggestsPanelError(cleanedSource, response: http) {
-        throw panelError()
+        throw SubscriptionFetchError(
+          kind: .panelResponse,
+          message: panelErrorMessage,
+          diagnostics: diagnostics
+        )
       }
-      throw error
+      throw SubscriptionFetchError(
+        kind: .invalidProfile,
+        message: UserFacingError.message(for: error),
+        diagnostics: diagnostics
+      )
     }
 
     return SubscriptionFetchResult(
       source: cleanedSource,
-      metadata: metadata(from: http)
+      metadata: metadata(from: http),
+      diagnostics: diagnostics
     )
   }
 
-  private func metadata(from response: HTTPURLResponse) -> SubscriptionMetadata {
-    let headers = response.allHeaderFields.reduce(into: [String: String]()) { result, item in
-      guard let key = item.key as? String else { return }
-      result[key.lowercased()] = String(describing: item.value)
+  private static func sanitizedURL(_ url: URL?) -> String {
+    guard let url, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+      return "Unavailable"
     }
+    components.user = nil
+    components.password = nil
+    components.path = sanitizedPath(components.path)
+    if let queryItems = components.queryItems {
+      components.queryItems = queryItems.map { item in
+        URLQueryItem(name: item.name, value: item.value == nil ? nil : "<redacted>")
+      }
+    }
+    let value = components.url?.absoluteString ?? url.absoluteString
+    return value
+      .replacingOccurrences(of: "%3Credacted%3E", with: "<redacted>")
+      .replacingOccurrences(of: "%3credacted%3e", with: "<redacted>")
+  }
+
+  private static func sanitizedPath(_ path: String) -> String {
+    guard !path.isEmpty else { return path }
+    var shouldRedactNextSegment = false
+    let sanitizedSegments = path
+      .split(separator: "/", omittingEmptySubsequences: false)
+      .map { rawSegment -> String in
+        let segment = String(rawSegment)
+        guard !segment.isEmpty else { return segment }
+        let decodedSegment = segment.removingPercentEncoding ?? segment
+        let shouldRedact = shouldRedactNextSegment || pathSegmentLooksSecret(decodedSegment)
+        shouldRedactNextSegment = pathSegmentIntroducesSecret(decodedSegment)
+        return shouldRedact ? "<redacted>" : segment
+      }
+    return sanitizedSegments.joined(separator: "/")
+  }
+
+  private static func pathSegmentIntroducesSecret(_ segment: String) -> Bool {
+    let normalized = segment
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .lowercased()
+    return [
+      "link",
+      "links",
+      "subscribe",
+      "subscription",
+      "subscriptions",
+      "token",
+      "tokens",
+      "profile",
+      "profiles",
+      "download"
+    ].contains(normalized)
+  }
+
+  private static func pathSegmentLooksSecret(_ segment: String) -> Bool {
+    let normalized = segment.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard normalized.count >= 12 else { return false }
+    let uuidPattern = #"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"#
+    if normalized.range(of: uuidPattern, options: .regularExpression) != nil {
+      return true
+    }
+    let allowedCharacters = CharacterSet.alphanumerics
+      .union(CharacterSet(charactersIn: "-_=."))
+    guard normalized.unicodeScalars.allSatisfy({ allowedCharacters.contains($0) }) else {
+      return false
+    }
+    let hasLetter = normalized.unicodeScalars.contains { CharacterSet.letters.contains($0) }
+    let hasDigit = normalized.unicodeScalars.contains { CharacterSet.decimalDigits.contains($0) }
+    return (hasLetter && hasDigit) || normalized.count >= 24
+  }
+
+  private static func failureKind(for error: Error) -> SubscriptionUpdateFailureKind {
+    if error is CancellationError {
+      return .cancelled
+    }
+    let nsError = error as NSError
+    if nsError.domain == NSURLErrorDomain {
+      return .network
+    }
+    return .unknown
+  }
+
+  private func requestHeaderDiagnostics(for request: URLRequest) -> [SubscriptionHeaderDiagnostic] {
+    (request.allHTTPHeaderFields ?? [:])
+      .map { name, value in
+        SubscriptionHeaderDiagnostic(
+          name: name,
+          hasValue: !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        )
+      }
+      .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+  }
+
+  private func diagnostics(from response: URLResponse, context: DecodeContext) -> SubscriptionFetchDiagnostics {
+    guard let http = response as? HTTPURLResponse else {
+      return SubscriptionFetchDiagnostics(
+        sanitizedURL: context.sanitizedURL,
+        userAgent: context.userAgent,
+        attemptedStrategies: context.attemptedStrategies,
+        successfulStrategy: context.successfulStrategy,
+        requestHeaders: context.requestHeaders
+      )
+    }
+
+    let headers = normalizedHeaders(from: http)
+    let contentType = http.value(forHTTPHeaderField: "Content-Type")
+    let rawUpdateInterval = headerValue("profile-update-interval", in: headers)
+    return SubscriptionFetchDiagnostics(
+      sanitizedURL: context.sanitizedURL,
+      userAgent: context.userAgent,
+      attemptedStrategies: context.attemptedStrategies,
+      successfulStrategy: context.successfulStrategy,
+      requestHeaders: context.requestHeaders,
+      responseHeaderNames: http.allHeaderFields.keys.map { String(describing: $0) }.sorted(),
+      httpStatusCode: http.statusCode,
+      contentType: contentType,
+      subscriptionUserInfo: headerValue("subscription-userinfo", in: headers),
+      rawProfileUpdateInterval: rawUpdateInterval,
+      parsedProfileUpdateIntervalMinutes: rawUpdateInterval.flatMap(parseUpdateIntervalMinutes),
+      declaredCharset: charsetName(fromContentType: contentType)
+    )
+  }
+
+  private func httpStatusMessage(from response: URLResponse) -> String {
+    guard let http = response as? HTTPURLResponse else {
+      return "The subscription did not return an HTTP response."
+    }
+    return "The subscription returned HTTP \(http.statusCode)."
+  }
+
+  private func metadata(from response: HTTPURLResponse) -> SubscriptionMetadata {
+    let headers = normalizedHeaders(from: response)
 
     return SubscriptionMetadata(
       traffic: headerValue("subscription-userinfo", in: headers).flatMap(parseTrafficUsage),
@@ -198,6 +406,13 @@ struct SubscriptionFetcher {
       webPageURL: headerValue("profile-web-page-url", in: headers).flatMap(URL.init(string:)),
       lastFetchedAt: Date()
     )
+  }
+
+  private func normalizedHeaders(from response: HTTPURLResponse) -> [String: String] {
+    response.allHeaderFields.reduce(into: [String: String]()) { result, item in
+      guard let key = item.key as? String else { return }
+      result[key.lowercased()] = String(describing: item.value)
+    }
   }
 
   private func headerValue(_ name: String, in headers: [String: String]) -> String? {
@@ -259,24 +474,25 @@ struct SubscriptionFetcher {
     source.hasPrefix("\u{FEFF}") ? String(source.dropFirst()) : source
   }
 
-  private func decodedString(from data: Data, response: HTTPURLResponse) -> String? {
-    var encodings: [String.Encoding] = []
+  private func decodedString(from data: Data, response: HTTPURLResponse) -> (source: String, decodedCharset: String)? {
+    var encodings: [(String.Encoding, String)] = []
     if let contentType = response.value(forHTTPHeaderField: "Content-Type"),
        let declaredEncoding = encoding(fromContentType: contentType) {
       encodings.append(declaredEncoding)
     }
-    encodings.append(.utf8)
+    encodings.append((.utf8, "utf-8"))
 
     var seen: Set<String.Encoding> = []
-    for encoding in encodings where seen.insert(encoding).inserted {
+    for (encoding, label) in encodings where seen.insert(encoding).inserted {
       if let source = String(data: data, encoding: encoding) {
-        return source
+        return (source, label)
       }
     }
     return nil
   }
 
-  private func encoding(fromContentType contentType: String) -> String.Encoding? {
+  private func charsetName(fromContentType contentType: String?) -> String? {
+    guard let contentType else { return nil }
     let parameters = contentType.split(separator: ";").dropFirst()
     guard let charsetParameter = parameters.first(where: {
       $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasPrefix("charset=")
@@ -284,35 +500,43 @@ struct SubscriptionFetcher {
       return nil
     }
 
-    let rawCharset = charsetParameter
+    return charsetParameter
       .split(separator: "=", maxSplits: 1)
       .last
       .map(String.init)?
       .trimmingCharacters(in: .whitespacesAndNewlines)
       .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-      .lowercased()
+  }
+
+  private func encoding(fromContentType contentType: String) -> (String.Encoding, String)? {
+    guard let rawCharset = charsetName(fromContentType: contentType)?.lowercased() else {
+      return nil
+    }
 
     switch rawCharset {
     case "utf-8", "utf8":
-      return .utf8
+      return (.utf8, "utf-8")
     case "utf-16", "utf16":
-      return .utf16
+      return (.utf16, "utf-16")
     case "iso-8859-1", "latin1", "latin-1":
-      return .isoLatin1
+      return (.isoLatin1, "iso-8859-1")
     case "windows-1252", "cp1252":
-      return String.Encoding(
-        rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringConvertWindowsCodepageToEncoding(1252))
+      return (
+        String.Encoding(
+          rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringConvertWindowsCodepageToEncoding(1252))
+        ),
+        "windows-1252"
       )
     case "gb18030":
-      return stringEncoding(from: CFStringEncodings.GB_18030_2000)
+      return (stringEncoding(from: CFStringEncodings.GB_18030_2000), "gb18030")
     case "gbk":
-      return stringEncoding(from: CFStringEncodings.GBK_95)
+      return (stringEncoding(from: CFStringEncodings.GBK_95), "gbk")
     case "gb2312":
-      return stringEncoding(from: CFStringEncodings.GB_2312_80)
+      return (stringEncoding(from: CFStringEncodings.GB_2312_80), "gb2312")
     case "big5", "big-5":
-      return stringEncoding(from: CFStringEncodings.big5)
+      return (stringEncoding(from: CFStringEncodings.big5), "big5")
     case "shift_jis", "shift-jis", "sjis":
-      return stringEncoding(from: CFStringEncodings.shiftJIS)
+      return (stringEncoding(from: CFStringEncodings.shiftJIS), "shift_jis")
     default:
       return nil
     }
@@ -320,12 +544,6 @@ struct SubscriptionFetcher {
 
   private func stringEncoding(from encoding: CFStringEncodings) -> String.Encoding {
     String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(encoding.rawValue)))
-  }
-
-  private func rejectPanelErrorPageIfNeeded(_ source: String) throws {
-    if bodyLooksLikePanelError(source) {
-      throw panelError()
-    }
   }
 
   private func responseSuggestsPanelError(_ source: String, response: HTTPURLResponse) -> Bool {
@@ -349,10 +567,8 @@ struct SubscriptionFetcher {
     return false
   }
 
-  private func panelError() -> AppError {
-    AppError.invalidProfileConfig(
-      "subscription returned a login or error page instead of a Clash/Mihomo profile. Check the subscription URL, token, account login, or panel status."
-    )
+  private var panelErrorMessage: String {
+    "subscription returned a login or error page instead of a Clash/Mihomo profile. Check the subscription URL, token, account login, or panel status."
   }
 
   private func unquoted(_ value: String) -> String {

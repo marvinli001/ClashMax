@@ -64,6 +64,8 @@ final class ProfileCoordinator: ObservableObject {
     name: String = "",
     url: URL,
     displayNameHint: String? = nil,
+    providerOptions: SubscriptionProviderOptions = .default,
+    updatePolicy: SubscriptionUpdatePolicy = .default,
     session: URLSession = .shared,
     fetchOptions: SubscriptionFetchOptions = SubscriptionFetchOptions(),
     preflightValidator: any SubscriptionProfilePreflightValidating = NoopSubscriptionProfilePreflightValidator()
@@ -77,6 +79,8 @@ final class ProfileCoordinator: ObservableObject {
       name: name.trimmingCharacters(in: .whitespacesAndNewlines),
       url: url,
       displayNameHint: displayNameHint,
+      providerOptions: providerOptions,
+      updatePolicy: updatePolicy,
       session: session,
       fetchOptions: fetchOptions,
       preflightValidator: preflightValidator
@@ -383,7 +387,8 @@ final class ProfileCoordinator: ObservableObject {
     _ profile: Profile,
     session: URLSession,
     fetchOptions: SubscriptionFetchOptions,
-    preflightValidator: any SubscriptionProfilePreflightValidating
+    preflightValidator: any SubscriptionProfilePreflightValidating,
+    trigger: SubscriptionUpdateTrigger = .manual
   ) async throws -> Bool {
     guard profile.isSubscription else {
       throw AppError.invalidProfileConfig("Only subscription profiles can be updated.")
@@ -407,6 +412,7 @@ final class ProfileCoordinator: ObservableObject {
       let current = profileStore.profiles.first { $0.id == profile.id } ?? profile
       try? await profileStore.markSubscriptionUpdateSucceeded(
         profileID: profile.id,
+        trigger: trigger,
         at: finishedAt,
         nextUpdateAt: subscriptionScheduler.updateDate(
           for: current,
@@ -427,10 +433,13 @@ final class ProfileCoordinator: ObservableObject {
       )
       try? await profileStore.markSubscriptionUpdateFailed(
         profileID: profile.id,
+        trigger: trigger,
         message: UserFacingError.message(for: error),
+        failureKind: SubscriptionUpdateFailureKind.classify(error),
         at: failedAt,
         backoffUntil: backoffUntil,
-        nextUpdateAt: backoffUntil
+        nextUpdateAt: backoffUntil,
+        fetchDiagnostics: (error as? SubscriptionFetchError)?.diagnostics
       )
       throw error
     }
@@ -465,7 +474,8 @@ final class ProfileCoordinator: ObservableObject {
           profile,
           session: .shared,
           fetchOptions: hooks.subscriptionFetchOptions(profile),
-          preflightValidator: hooks.preflightValidator()
+          preflightValidator: hooks.preflightValidator(),
+          trigger: cancelScheduledTask ? .manual : .automatic
         )
         if updated {
           hooks.appendAppLog("info", "Auto-updated subscription \(profile.name).")
@@ -473,7 +483,9 @@ final class ProfileCoordinator: ObservableObject {
         } else {
           try? await profileStore.markSubscriptionUpdateFailed(
             profileID: profile.id,
+            trigger: cancelScheduledTask ? .manual : .automatic,
             message: "Skipped because another update is already running.",
+            failureKind: .skipped,
             at: Date(),
             backoffUntil: now.addingTimeInterval(60),
             nextUpdateAt: now.addingTimeInterval(60)

@@ -227,6 +227,10 @@ private struct EmptyRuntimePortChecker: RuntimePortChecking {
 final class RecordingRuntimeConfigValidator: RuntimeConfigValidating {
   let result: Result<Void, Error>
   private(set) var didValidate = false
+  private(set) var validatedCoreURL: URL?
+  private(set) var validatedConfigURL: URL?
+  private(set) var validatedWorkDirectory: URL?
+  private(set) var validatedConfigContent: String?
 
   init(result: Result<Void, Error>) {
     self.result = result
@@ -234,6 +238,10 @@ final class RecordingRuntimeConfigValidator: RuntimeConfigValidating {
 
   func validate(coreURL: URL, configURL: URL, workDirectory: URL) async throws {
     didValidate = true
+    validatedCoreURL = coreURL
+    validatedConfigURL = configURL
+    validatedWorkDirectory = workDirectory
+    validatedConfigContent = try? String(contentsOf: configURL, encoding: .utf8)
     try result.get()
   }
 }

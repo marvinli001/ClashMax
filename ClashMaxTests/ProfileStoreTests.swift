@@ -120,6 +120,7 @@ final class ProfileStoreTests: XCTestCase {
     XCTAssertEqual(profile.subscriptionProviderOptions, .default)
     XCTAssertEqual(profile.subscriptionUpdatePolicy, .default)
     XCTAssertEqual(profile.subscriptionUpdateStatus, .empty)
+    XCTAssertEqual(profile.subscriptionDiagnostics, .empty)
   }
 
   func testSubscriptionURLIsStoredOutsideManifestAndUpdateRefreshesConfig() async throws {
@@ -147,6 +148,15 @@ final class ProfileStoreTests: XCTestCase {
     XCTAssertEqual(profile.subscriptionMetadata?.traffic?.download, 2)
     XCTAssertEqual(profile.subscriptionMetadata?.updateIntervalMinutes, 360)
     XCTAssertEqual(profile.subscriptionMetadata?.webPageURL, URL(string: "https://example.com/dashboard"))
+    XCTAssertEqual(profile.subscriptionDiagnostics.latestFetch?.sanitizedURL, "https://example.com/sub.yaml")
+    XCTAssertEqual(profile.subscriptionDiagnostics.latestFetch?.userAgent, "clash.meta")
+    XCTAssertEqual(profile.subscriptionDiagnostics.latestFetch?.subscriptionUserInfo, "upload=1; download=2; total=3; expire=1893456000")
+    XCTAssertEqual(profile.subscriptionDiagnostics.latestFetch?.rawProfileUpdateInterval, "6")
+    XCTAssertEqual(profile.subscriptionDiagnostics.latestFetch?.parsedProfileUpdateIntervalMinutes, 360)
+    XCTAssertEqual(profile.subscriptionDiagnostics.latestPreflight?.result, .succeeded)
+    XCTAssertEqual(profile.subscriptionDiagnostics.latestPreflight?.messageKind, .mihomoAccepted)
+    XCTAssertEqual(profile.subscriptionDiagnostics.updateHistory.first?.trigger, .importProfile)
+    XCTAssertEqual(profile.subscriptionDiagnostics.updateHistory.first?.result, .succeeded)
     let manifest = try String(contentsOf: fixture.paths.manifestURL, encoding: .utf8)
     XCTAssertFalse(manifest.contains("https://example.com/sub.yaml"))
 
@@ -156,9 +166,18 @@ final class ProfileStoreTests: XCTestCase {
     )
     let updateSession = URLSession(configuration: updateRecorder.configuration)
     try await store.updateSubscription(profile, session: updateSession)
+    try await store.markSubscriptionUpdateSucceeded(
+      profileID: profile.id,
+      trigger: .manual,
+      at: Date(timeIntervalSince1970: 100),
+      nextUpdateAt: nil
+    )
     XCTAssertEqual(updateRecorder.lastRequest?.value(forHTTPHeaderField: "User-Agent"), "clash.meta")
     XCTAssertEqual(try String(contentsOfFile: profile.originalConfigPath, encoding: .utf8), "mixed-port: 9001\nproxies:\n  - name: DIRECT\n    type: direct\n")
     XCTAssertEqual(store.profiles.first?.subscriptionMetadata?.traffic?.download, 5)
+    XCTAssertEqual(store.profiles.first?.subscriptionDiagnostics.latestFetch?.subscriptionUserInfo, "upload=4; download=5; total=6")
+    XCTAssertEqual(store.profiles.first?.subscriptionDiagnostics.updateHistory.first?.trigger, .manual)
+    XCTAssertEqual(store.profiles.first?.subscriptionDiagnostics.updateHistory.first?.result, .succeeded)
   }
 
   func testSubscriptionDeepLinksNormalizeFetchURLAndUseNameFallback() async throws {
@@ -404,6 +423,56 @@ final class ProfileStoreTests: XCTestCase {
     XCTAssertEqual(reloaded.profiles.first?.subscriptionProviderOptions, options)
   }
 
+  func testAddSubscriptionPersistsProviderOptionsAndUpdatePolicy() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let secrets = InMemorySecretStore()
+    let store = ProfileStore(paths: fixture.paths, keychain: secrets)
+    let header = SubscriptionRequestHeader(name: "User-Agent", value: "Clash Verge/2.0.0")
+    let options = SubscriptionProviderOptions(
+      intervalSeconds: 7200,
+      requestHeaders: [header],
+      fetchProxy: .localClashProxy,
+      ruleOverlay: RuleOverlaySettings(
+        enabled: true,
+        prependRules: [
+          ManagedRuleOverlayRule(kind: .domainSuffix, value: "front.example", policy: "DIRECT")
+        ],
+        disabledRuleMatchers: [
+          ManagedRuleDisableMatcher(mode: .exact, pattern: "DOMAIN-SUFFIX,ads.example,REJECT")
+        ]
+      )
+    )
+    let updatePolicy = SubscriptionUpdatePolicy(
+      automaticUpdatesEnabled: false,
+      intervalOverrideMinutes: 120,
+      prefersRemoteInterval: false
+    )
+
+    let profile = try await store.addSubscription(
+      name: "Remote",
+      url: URL(string: "https://example.com/sub")!,
+      providerOptions: options,
+      updatePolicy: updatePolicy,
+      session: URLSession(configuration: URLProtocolRecorder.configurationReturning("proxies:\n  - name: DIRECT\n    type: direct\n"))
+    )
+
+    XCTAssertEqual(store.profiles.first?.subscriptionProviderOptions, options)
+    XCTAssertEqual(store.profiles.first?.subscriptionUpdatePolicy, updatePolicy)
+    XCTAssertEqual(
+      try secrets.load(account: "subscription.\(profile.id.uuidString).header.\(header.id.uuidString)"),
+      "Clash Verge/2.0.0"
+    )
+    let manifest = try String(contentsOf: fixture.paths.manifestURL, encoding: .utf8)
+    XCTAssertTrue(manifest.contains(header.id.uuidString))
+    XCTAssertTrue(manifest.contains("User-Agent"))
+    XCTAssertFalse(manifest.contains("Clash Verge/2.0.0"))
+
+    let reloaded = ProfileStore(paths: fixture.paths, keychain: secrets)
+    await reloaded.waitForManifestLoad()
+    XCTAssertEqual(reloaded.profiles.first?.subscriptionProviderOptions, options)
+    XCTAssertEqual(reloaded.profiles.first?.subscriptionUpdatePolicy, updatePolicy)
+  }
+
   func testLegacyHeaderValuesAreMigratedOutOfManifestOnLoad() async throws {
     let fixture = try TemporaryProfileFixture()
     let secrets = InMemorySecretStore()
@@ -556,6 +625,10 @@ final class ProfileStoreTests: XCTestCase {
 
     XCTAssertEqual(validator.validatedProviderOptions, [rejectedOptions])
     XCTAssertEqual(store.profiles.first?.subscriptionProviderOptions, .default)
+    XCTAssertEqual(store.profiles.first?.subscriptionDiagnostics.latestPreflight?.result, .failed)
+    XCTAssertEqual(store.profiles.first?.subscriptionDiagnostics.updateHistory.first?.trigger, .providerOptionsEdit)
+    XCTAssertEqual(store.profiles.first?.subscriptionDiagnostics.updateHistory.first?.result, .failed)
+    XCTAssertEqual(store.profiles.first?.subscriptionDiagnostics.updateHistory.first?.failureKind, .preflight)
     let reloaded = ProfileStore(paths: fixture.paths, keychain: secrets)
     await reloaded.waitForManifestLoad()
     XCTAssertEqual(reloaded.profiles.first?.subscriptionProviderOptions, .default)
@@ -614,6 +687,109 @@ final class ProfileStoreTests: XCTestCase {
     XCTAssertEqual(profile.name, "Xboard")
     XCTAssertEqual(try String(contentsOfFile: profile.originalConfigPath, encoding: .utf8), encodedSubscription)
     XCTAssertEqual(try secrets.load(account: "subscription.\(profile.id.uuidString)"), "https://example.com/api/v1/client/subscribe?token=test")
+    let manifest = try String(contentsOf: fixture.paths.manifestURL, encoding: .utf8)
+    XCTAssertFalse(manifest.contains("token=test"))
+  }
+
+  func testSubscriptionDiagnosticsManifestRedactsURLAndHeaderValues() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let secrets = InMemorySecretStore()
+    let store = ProfileStore(paths: fixture.paths, keychain: secrets)
+    let header = SubscriptionRequestHeader(name: "X-Panel-Token", value: "super-secret-token")
+    let providerOptions = SubscriptionProviderOptions(
+      requestHeaders: [header],
+      fetchProxy: .direct
+    )
+    let recorder = URLProtocolRecorder(
+      responseBody: "proxies:\n  - name: DIRECT\n    type: direct\n",
+      responseHeaders: [
+        "Content-Type": "text/yaml; charset=UTF-8",
+        "subscription-userinfo": "upload=1; download=2; total=3"
+      ]
+    )
+
+    let profile = try await store.addSubscription(
+      name: "Remote",
+      url: URL(string: "https://user:password@example.com/sub?token=abc&flag=enabled")!,
+      providerOptions: providerOptions,
+      session: URLSession(configuration: recorder.configuration),
+      fetchOptions: providerOptions.fetchOptions(from: SubscriptionFetchOptions(userAgent: "Custom UA"))
+    )
+
+    let diagnostics = try XCTUnwrap(store.profiles.first?.subscriptionDiagnostics.latestFetch)
+    XCTAssertEqual(diagnostics.sanitizedURL, "https://example.com/sub?token=<redacted>&flag=<redacted>")
+    XCTAssertEqual(diagnostics.userAgent, "Custom UA")
+    XCTAssertEqual(diagnostics.requestHeaders.first(where: { $0.name == "X-Panel-Token" })?.hasValue, true)
+    XCTAssertTrue(diagnostics.requestHeaders.contains { $0.name == "User-Agent" && $0.hasValue })
+    XCTAssertEqual(diagnostics.contentType, "text/yaml; charset=UTF-8")
+    XCTAssertEqual(diagnostics.declaredCharset, "UTF-8")
+    XCTAssertEqual(diagnostics.decodedCharset, "utf-8")
+
+    let manifest = try String(contentsOf: fixture.paths.manifestURL, encoding: .utf8)
+    XCTAssertTrue(manifest.contains("https:\\/\\/example.com\\/sub?token=<redacted>&flag=<redacted>"))
+    XCTAssertTrue(manifest.contains("X-Panel-Token"))
+    XCTAssertFalse(manifest.contains("super-secret-token"))
+    XCTAssertFalse(manifest.contains("token=abc"))
+    XCTAssertFalse(manifest.contains("user:password"))
+    XCTAssertEqual(
+      try secrets.load(account: "subscription.\(profile.id.uuidString).header.\(header.id.uuidString)"),
+      "super-secret-token"
+    )
+  }
+
+  func testSubscriptionDiagnosticsPersistRedactedPathToken() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let store = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
+    let recorder = URLProtocolRecorder(
+      responseBody: "proxies:\n  - name: DIRECT\n    type: direct\n",
+      responseHeaders: ["Content-Type": "text/yaml; charset=UTF-8"]
+    )
+
+    _ = try await store.addSubscription(
+      name: "Remote",
+      url: URL(string: "https://example.com/link/super-secret-path-token?flag=enabled")!,
+      session: URLSession(configuration: recorder.configuration)
+    )
+
+    let diagnostics = try XCTUnwrap(store.profiles.first?.subscriptionDiagnostics.latestFetch)
+    XCTAssertEqual(diagnostics.sanitizedURL, "https://example.com/link/<redacted>?flag=<redacted>")
+    let manifest = try String(contentsOf: fixture.paths.manifestURL, encoding: .utf8)
+    XCTAssertTrue(manifest.contains("https:\\/\\/example.com\\/link\\/<redacted>?flag=<redacted>"))
+    XCTAssertFalse(manifest.contains("super-secret-path-token"))
+  }
+
+  func testSubscriptionDiagnosticsHistoryTrimsToTenEntriesWhenPersisted() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let store = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
+    let profile = try await store.addSubscription(
+      name: "Remote",
+      url: URL(string: "https://example.com/sub")!,
+      session: URLSession(configuration: URLProtocolRecorder.configurationReturning("proxies:\n  - name: DIRECT\n    type: direct\n"))
+    )
+
+    for index in 0..<12 {
+      try await store.markSubscriptionUpdateFailed(
+        profileID: profile.id,
+        trigger: .automatic,
+        message: "failure \(index)",
+        failureKind: .network,
+        at: Date(timeIntervalSince1970: TimeInterval(index)),
+        backoffUntil: nil,
+        nextUpdateAt: nil
+      )
+    }
+
+    let history = try XCTUnwrap(store.profiles.first?.subscriptionDiagnostics.updateHistory)
+    XCTAssertEqual(history.count, 10)
+    XCTAssertEqual(history.first?.message, "failure 11")
+    XCTAssertEqual(history.last?.message, "failure 2")
+
+    let reloaded = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
+    await reloaded.waitForManifestLoad()
+    let reloadedHistory = try XCTUnwrap(reloaded.profiles.first?.subscriptionDiagnostics.updateHistory)
+    XCTAssertEqual(reloadedHistory.count, 10)
+    XCTAssertEqual(reloadedHistory.first?.message, "failure 11")
+    XCTAssertEqual(reloadedHistory.last?.message, "failure 2")
   }
 
   func testSubscriptionProviderContentPreflightRunsBeforeSavingProfile() async throws {
@@ -639,6 +815,43 @@ final class ProfileStoreTests: XCTestCase {
 
     XCTAssertEqual(validator.validatedNames, ["Remote"])
     XCTAssertEqual(validator.validatedSources, [providerContent])
+    XCTAssertTrue(store.profiles.isEmpty)
+    XCTAssertTrue(secrets.storedValues.isEmpty)
+  }
+
+  func testSubscriptionFullYamlPreflightRunsBeforeSavingProfile() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let secrets = InMemorySecretStore()
+    let store = ProfileStore(paths: fixture.paths, keychain: secrets)
+    let validator = RecordingSubscriptionPreflightValidator(
+      result: .failure(AppError.configValidationFailed("full config failed mihomo validation"))
+    )
+    let source = """
+    proxies:
+      - name: Node
+        type: direct
+    proxy-groups:
+      - name: Proxy
+        type: select
+        proxies: [Node, DIRECT]
+    rules:
+      - MATCH,Proxy
+    """
+    let session = URLSession(configuration: URLProtocolRecorder.configurationReturning(source))
+
+    await XCTAssertThrowsErrorAsync {
+      try await store.addSubscription(
+        name: "Remote",
+        url: URL(string: "https://example.com/sub")!,
+        session: session,
+        preflightValidator: validator
+      )
+    } handler: { error in
+      XCTAssertTrue(String(describing: error).contains("full config failed mihomo validation"))
+    }
+
+    XCTAssertEqual(validator.validatedNames, ["Remote"])
+    XCTAssertEqual(validator.validatedSources, [source])
     XCTAssertTrue(store.profiles.isEmpty)
     XCTAssertTrue(secrets.storedValues.isEmpty)
   }
@@ -764,6 +977,12 @@ final class ProfileStoreTests: XCTestCase {
     try await store.updateSubscription(profile, session: updateSession)
 
     XCTAssertEqual(try String(contentsOfFile: profile.originalConfigPath, encoding: .utf8), updatedSubscription)
+    XCTAssertEqual(store.profiles.first?.subscriptionDiagnostics.latestPreflight?.result, .succeeded)
+    XCTAssertEqual(
+      store.profiles.first?.subscriptionDiagnostics.latestPreflight?.messageKind,
+      .mihomoAccepted
+    )
+    XCTAssertNil(store.profiles.first?.subscriptionDiagnostics.latestPreflight?.message)
   }
 
   func testRuntimePathsPrepareDirectoriesUseOwnerOnlyPermissions() throws {

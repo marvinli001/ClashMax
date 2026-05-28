@@ -22,10 +22,12 @@ struct AdaptivePage<Actions: View, Content: View>: View {
 
   private var header: some View {
     ViewThatFits(in: .horizontal) {
-      HStack(alignment: .firstTextBaseline, spacing: 12) {
+      HStack(alignment: .top, spacing: 12) {
         titleBlock
-        Spacer(minLength: 12)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .layoutPriority(1)
         actions
+          .fixedSize(horizontal: true, vertical: false)
       }
 
       VStack(alignment: .leading, spacing: 10) {

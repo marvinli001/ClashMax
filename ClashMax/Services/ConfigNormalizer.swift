@@ -666,9 +666,9 @@ enum ProfileConfigInspector {
     do {
       let loaded = try Yams.load(yaml: source)
       if let root = loaded as? [String: Any] {
-        let proxies = root["proxies"] as? [[String: Any]] ?? []
-        let providers = root["proxy-providers"] as? [String: Any] ?? [:]
-        guard !proxies.isEmpty || !providers.isEmpty else {
+        let hasProxies = hasMappingSequenceEntries(root["proxies"])
+        let hasProviders = hasMappingEntries(root["proxy-providers"])
+        guard hasProxies || hasProviders else {
           throw ProfileConfigFormatError.missingProxyDefinitions
         }
         return .clashConfig
@@ -701,13 +701,13 @@ enum ProfileConfigInspector {
     do {
       let loaded = try Yams.load(yaml: source)
       if let root = loaded as? [String: Any] {
-        let proxies = root["proxies"] as? [[String: Any]] ?? []
-        let providers = root["proxy-providers"] as? [String: Any] ?? [:]
-        let payload = root["payload"] as? [[String: Any]] ?? []
-        if !payload.isEmpty || (!proxies.isEmpty && providers.isEmpty && !hasRuntimeConfigKeys(root)) {
+        let hasProxies = hasMappingSequenceEntries(root["proxies"])
+        let hasProviders = hasMappingEntries(root["proxy-providers"])
+        let hasPayload = hasMappingSequenceEntries(root["payload"])
+        if hasPayload || (hasProxies && !hasProviders && !hasRuntimeConfigKeys(root)) {
           return .proxyProviderContent
         }
-        guard !proxies.isEmpty || !providers.isEmpty else {
+        guard hasProxies || hasProviders else {
           throw ProfileConfigFormatError.missingProxyDefinitions
         }
         return .clashConfig
@@ -766,6 +766,15 @@ enum ProfileConfigInspector {
       "dns",
       "mode"
     ].contains { root[$0] != nil }
+  }
+
+  private static func hasMappingSequenceEntries(_ value: Any?) -> Bool {
+    guard let entries = value as? [Any], !entries.isEmpty else { return false }
+    return entries.allSatisfy { $0 is [String: Any] }
+  }
+
+  private static func hasMappingEntries(_ value: Any?) -> Bool {
+    (value as? [String: Any])?.isEmpty == false
   }
 
   private static func nonEmptyLines(in source: String) -> [String] {

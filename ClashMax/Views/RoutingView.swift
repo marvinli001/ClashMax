@@ -1,5 +1,24 @@
 import SwiftUI
 
+private enum EffectiveConfigInspectorTab: String, CaseIterable, Identifiable {
+  case layers
+  case diff
+  case finalYAML
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .layers:
+      return String(localized: "Layers")
+    case .diff:
+      return String(localized: "Diff")
+    case .finalYAML:
+      return String(localized: "Final YAML")
+    }
+  }
+}
+
 struct RoutingView: View {
   @EnvironmentObject private var appModel: AppModel
   @EnvironmentObject private var profileStore: ProfileStore
@@ -17,37 +36,14 @@ struct RoutingView: View {
   @State private var simulationProcess = ""
   @State private var simulationTrace: RuleMatchSimulationTrace = .noMatch
   @State private var explanationContext: RuleExplanation?
+  @State private var effectiveConfigTab: EffectiveConfigInspectorTab = .layers
 
   var body: some View {
     AdaptivePage(
       title: "Routing",
       subtitle: String(localized: "Typed snippets are merged into generated runtime YAML without editing original profiles.")
     ) {
-      Button {
-        newRuleSnippet()
-      } label: {
-        Label("New Rule Snippet", systemImage: "plus.circle")
-      }
-
-      Button {
-        newDNSPatchSnippet()
-      } label: {
-        Label("New DNS Patch", systemImage: "network")
-      }
-
-      Button {
-        saveDraft()
-      } label: {
-        Label("Save", systemImage: "checkmark.circle")
-      }
-      .disabled(!canSave)
-
-      Button(role: .destructive) {
-        deleteSelectedSnippet()
-      } label: {
-        Label("Delete", systemImage: "trash")
-      }
-      .disabled(selectedSnippet == nil)
+      routingPageActions
     } content: {
       routingWorkspace
     }
@@ -68,6 +64,65 @@ struct RoutingView: View {
     .onChange(of: simulationProcess) { _, _ in simulate() }
     .onChange(of: runtimeData.rules) { _, _ in simulate() }
     .onChange(of: appModel.routingSimulationRequest?.id) { _, _ in consumeRoutingSimulationRequest() }
+  }
+
+  private var routingPageActions: some View {
+    ViewThatFits(in: .horizontal) {
+      HStack(spacing: 6) {
+        newRuleSnippetButton
+        newDNSPatchSnippetButton
+        saveDraftButton
+        deleteSelectedSnippetButton
+      }
+      .labelStyle(.titleAndIcon)
+
+      HStack(spacing: 4) {
+        newRuleSnippetButton
+        newDNSPatchSnippetButton
+        saveDraftButton
+        deleteSelectedSnippetButton
+      }
+      .labelStyle(.iconOnly)
+    }
+    .controlSize(.small)
+  }
+
+  private var newRuleSnippetButton: some View {
+    Button {
+      newRuleSnippet()
+    } label: {
+      Label("New Rule Snippet", systemImage: "plus.circle")
+    }
+    .help(String(localized: "New Rule Snippet"))
+  }
+
+  private var newDNSPatchSnippetButton: some View {
+    Button {
+      newDNSPatchSnippet()
+    } label: {
+      Label("New DNS Patch", systemImage: "network")
+    }
+    .help(String(localized: "New DNS Patch"))
+  }
+
+  private var saveDraftButton: some View {
+    Button {
+      saveDraft()
+    } label: {
+      Label("Save", systemImage: "checkmark.circle")
+    }
+    .disabled(!canSave)
+    .help(String(localized: "Save"))
+  }
+
+  private var deleteSelectedSnippetButton: some View {
+    Button(role: .destructive) {
+      deleteSelectedSnippet()
+    } label: {
+      Label("Delete", systemImage: "trash")
+    }
+    .disabled(selectedSnippet == nil)
+    .help(String(localized: "Delete"))
   }
 
   private var routingWorkspace: some View {
@@ -274,6 +329,7 @@ struct RoutingView: View {
   private var routingInspectorContent: some View {
     VStack(alignment: .leading, spacing: 12) {
       snippetStatus
+      effectiveConfigPreview
       runtimeDiffPreview
       connectionExplanation
       matchSimulator
@@ -282,11 +338,37 @@ struct RoutingView: View {
 
   private var snippetStatus: some View {
     RoutingInspectorPanel(title: "Active Profile", systemImage: "doc.text.magnifyingglass") {
-      RoutingDetailRow(title: "Profile", value: profileStore.activeProfile?.name ?? String(localized: "No Profile"))
-      RoutingDetailRow(title: "Snippet Binding", value: draftSnippet.binding.displayName)
-      RoutingDetailRow(title: "Applies Here", value: draftAppliesToActiveProfile ? String(localized: "Yes") : String(localized: "No"))
-      RoutingDetailRow(title: "Active Snippets", value: "\(activePreviewSnippets.count)")
+      let facts = activeProfileFacts
+      ViewThatFits(in: .horizontal) {
+        HStack(alignment: .top, spacing: 10) {
+          ForEach(facts) { fact in
+            RoutingCompactDetailItem(fact: fact)
+          }
+        }
+
+        LazyVGrid(
+          columns: [
+            GridItem(.flexible(minimum: 96), spacing: 10, alignment: .leading),
+            GridItem(.flexible(minimum: 96), spacing: 10, alignment: .leading)
+          ],
+          alignment: .leading,
+          spacing: 8
+        ) {
+          ForEach(facts) { fact in
+            RoutingCompactDetailItem(fact: fact)
+          }
+        }
+      }
     }
+  }
+
+  private var activeProfileFacts: [RoutingCompactFact] {
+    [
+      RoutingCompactFact(title: "Profile", value: profileStore.activeProfile?.name ?? String(localized: "No Profile")),
+      RoutingCompactFact(title: "Snippet Binding", value: draftSnippet.binding.displayName),
+      RoutingCompactFact(title: "Applies Here", value: draftAppliesToActiveProfile ? String(localized: "Yes") : String(localized: "No")),
+      RoutingCompactFact(title: "Active Snippets", value: "\(activePreviewSnippets.count)")
+    ]
   }
 
   private var runtimeDiffPreview: some View {
@@ -298,6 +380,190 @@ struct RoutingView: View {
         dnsDiffSection(settings)
       }
     }
+  }
+
+  private var effectiveConfigPreview: some View {
+    RoutingInspectorPanel(title: "Effective Config", systemImage: "doc.text.magnifyingglass") {
+      effectiveConfigToolbar
+      effectiveConfigStateContent
+    }
+  }
+
+  private var effectiveConfigToolbar: some View {
+    ViewThatFits(in: .horizontal) {
+      HStack(spacing: 8) {
+        effectiveConfigViewPicker
+          .frame(width: 256)
+        Spacer(minLength: 12)
+        HStack(spacing: 6) {
+          effectiveConfigActions
+        }
+        .labelStyle(.titleAndIcon)
+      }
+
+      HStack(spacing: 8) {
+        effectiveConfigViewPicker
+          .frame(width: 240)
+        Spacer(minLength: 8)
+        HStack(spacing: 4) {
+          effectiveConfigActions
+        }
+        .labelStyle(.iconOnly)
+      }
+
+      VStack(alignment: .leading, spacing: 8) {
+        effectiveConfigViewPicker
+        HStack(spacing: 6) {
+          effectiveConfigActions
+        }
+        .labelStyle(.titleAndIcon)
+      }
+    }
+    .controlSize(.small)
+  }
+
+  private var effectiveConfigViewPicker: some View {
+    Picker("Effective Config View", selection: $effectiveConfigTab) {
+      ForEach(EffectiveConfigInspectorTab.allCases) { tab in
+        Text(tab.title).tag(tab)
+      }
+    }
+    .labelsHidden()
+    .pickerStyle(.segmented)
+  }
+
+  private var effectiveConfigActions: some View {
+    Group {
+      Button {
+        refreshEffectiveConfigPreview()
+      } label: {
+        Label("Refresh", systemImage: "arrow.clockwise")
+      }
+      .help(String(localized: "Refresh"))
+
+      Button {
+        appModel.copyEffectiveRuntimeConfigRedacted()
+      } label: {
+        Label("Copy Redacted", systemImage: "doc.on.doc")
+      }
+      .disabled(!effectiveConfigIsLoaded)
+      .help(String(localized: "Copy Redacted"))
+
+      Button {
+        appModel.exportEffectiveRuntimeConfigRedacted()
+      } label: {
+        Label("Export Redacted", systemImage: "square.and.arrow.down")
+      }
+      .disabled(!effectiveConfigIsLoaded)
+      .help(String(localized: "Export Redacted"))
+    }
+  }
+
+  @ViewBuilder
+  private var effectiveConfigStateContent: some View {
+    switch appModel.effectiveRuntimeConfigState {
+    case .idle:
+      RoutingWorkspaceNotice(
+        title: "Not Generated",
+        systemImage: "doc.badge.clock",
+        message: "Refresh to preview the redacted final runtime YAML and its diff."
+      )
+    case .loading:
+      HStack(spacing: 8) {
+        ProgressView()
+          .controlSize(.small)
+        Text("Generating effective config")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+    case let .unavailable(message):
+      RoutingWorkspaceNotice(title: "Unavailable", systemImage: "exclamationmark.triangle.fill", message: message)
+    case let .failed(message):
+      RoutingWorkspaceNotice(title: "Generation Failed", systemImage: "exclamationmark.triangle.fill", message: message)
+    case let .loaded(snapshot) where snapshot.profileID == profileStore.activeProfile?.id:
+      effectiveConfigSnapshotContent(snapshot)
+    case .loaded:
+      RoutingWorkspaceNotice(
+        title: "Not Generated",
+        systemImage: "doc.badge.clock",
+        message: "Refresh to preview the redacted final runtime YAML and its diff."
+      )
+    }
+  }
+
+  @ViewBuilder
+  private func effectiveConfigSnapshotContent(_ snapshot: EffectiveRuntimeConfigSnapshot) -> some View {
+    RoutingDetailRow(title: "Preflight", value: effectiveConfigPreflightSummary(snapshot), isProminent: true, lineLimit: 3)
+    switch effectiveConfigTab {
+    case .layers:
+      VStack(alignment: .leading, spacing: 10) {
+        ForEach(snapshot.layers) { layer in
+          VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+              Image(systemName: layer.isActive ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(layer.isActive ? .green : .secondary)
+              Text(layer.title)
+                .font(.caption.weight(.semibold))
+              Spacer()
+            }
+            Text(layer.summary)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .fixedSize(horizontal: false, vertical: true)
+            redactedCodeBlock(layer.redactedContent, maxHeight: 150)
+          }
+        }
+      }
+    case .diff:
+      diffRows(snapshot.diffRows)
+    case .finalYAML:
+      redactedCodeBlock(snapshot.redactedFinalYAML, maxHeight: 280)
+    }
+  }
+
+  private func diffRows(_ rows: [EffectiveRuntimeConfigDiffRow]) -> some View {
+    ScrollView {
+      LazyVStack(alignment: .leading, spacing: 2) {
+        ForEach(rows) { row in
+          Text(row.displayLine)
+            .font(.system(.caption2, design: .monospaced))
+            .foregroundStyle(diffColor(row.kind))
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    .frame(maxHeight: 280)
+  }
+
+  private func redactedCodeBlock(_ text: String, maxHeight: CGFloat) -> some View {
+    ScrollView {
+      Text(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? String(localized: "Empty") : text)
+        .font(.system(.caption2, design: .monospaced))
+        .foregroundStyle(.secondary)
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    .frame(maxHeight: maxHeight)
+  }
+
+  private func diffColor(_ kind: EffectiveRuntimeConfigDiffKind) -> Color {
+    switch kind {
+    case .unchanged:
+      return .secondary
+    case .removed:
+      return .red
+    case .added:
+      return .green
+    }
+  }
+
+  private func effectiveConfigPreflightSummary(_ snapshot: EffectiveRuntimeConfigSnapshot) -> String {
+    if let message = snapshot.preflightStatus.message {
+      return "\(snapshot.preflightStatus.displayName): \(message)"
+    }
+    return snapshot.preflightStatus.displayName
   }
 
   private func runtimeRuleDiffSections(_ settings: RuleOverlaySettings) -> some View {
@@ -404,6 +670,14 @@ struct RoutingView: View {
 
   private var canSave: Bool {
     draftSnippet.validationError == nil && draftSnippet != selectedSnippet
+  }
+
+  private var effectiveConfigIsLoaded: Bool {
+    appModel.hasLoadedEffectiveRuntimeConfigForActiveProfile
+  }
+
+  private var effectiveConfigDraftSnippet: RuntimeSnippet? {
+    draftHasUnsavedChanges || isEditingDetachedDraft ? draftSnippet : nil
   }
 
   private var selectedSnippet: RuntimeSnippet? {
@@ -554,6 +828,13 @@ struct RoutingView: View {
         loadedSnippetSnapshot = nextDraft
         isEditingDetachedDraft = false
       }
+    }
+  }
+
+  private func refreshEffectiveConfigPreview() {
+    let draft = effectiveConfigDraftSnippet
+    Task { @MainActor in
+      await appModel.refreshEffectiveRuntimeConfigPreview(draftSnippet: draft)
     }
   }
 
@@ -1138,6 +1419,41 @@ private struct RoutingInspectorPanel<Content: View>: View {
     .overlay {
       shape.strokeBorder(RoutingSurface.border(for: colorScheme).opacity(0.82), lineWidth: 1)
     }
+  }
+}
+
+private struct RoutingCompactFact: Identifiable {
+  let id: String
+  let title: String
+  let value: String
+
+  init(title: String, value: String) {
+    self.id = title
+    self.title = title
+    self.value = value
+  }
+}
+
+private struct RoutingCompactDetailItem: View {
+  let fact: RoutingCompactFact
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 3) {
+      Text(LocalizedStringKey(fact.title))
+        .font(.caption2)
+        .foregroundStyle(.tertiary)
+        .lineLimit(1)
+        .truncationMode(.tail)
+
+      Text(fact.value)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .truncationMode(.middle)
+        .textSelection(.enabled)
+    }
+    .frame(minWidth: 58, maxWidth: .infinity, alignment: .leading)
+    .accessibilityElement(children: .combine)
   }
 }
 

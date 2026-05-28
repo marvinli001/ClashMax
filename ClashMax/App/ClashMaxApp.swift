@@ -15,6 +15,7 @@ struct ClashMaxApp: App {
         .environmentObject(appModel)
         .environmentObject(appModel.settings)
         .environmentObject(appModel.profileStore)
+        .environmentObject(appModel.providerAnalytics)
         .environmentObject(appModel.runtimeSnippetLibrary)
         .environmentObject(appModel.profileCoordinator)
         .environmentObject(appModel.systemProxy)
@@ -96,7 +97,7 @@ struct ClashMaxApp: App {
           appModel.updateAllSubscriptions()
         }
 
-        Button("Import ClashX") {
+        Button("Import Client") {
           AppDelegate.showMainWindow()
           appModel.selectedSection = .profiles
           NotificationCenter.default.post(name: .clashMaxImportClashXRequested, object: nil)
@@ -109,6 +110,7 @@ struct ClashMaxApp: App {
         .environmentObject(appModel)
         .environmentObject(appModel.settings)
         .environmentObject(appModel.profileStore)
+        .environmentObject(appModel.providerAnalytics)
         .environmentObject(appModel.runtimeSnippetLibrary)
         .environmentObject(appModel.profileCoordinator)
         .environmentObject(appModel.systemProxy)
@@ -133,6 +135,7 @@ struct ClashMaxApp: App {
         .environmentObject(appModel)
         .environmentObject(appModel.settings)
         .environmentObject(appModel.profileStore)
+        .environmentObject(appModel.providerAnalytics)
         .environmentObject(appModel.runtimeSnippetLibrary)
         .environmentObject(appModel.profileCoordinator)
         .environmentObject(appModel.systemProxy)

@@ -66,6 +66,18 @@ final class LocalizationTests: XCTestCase {
     XCTAssertEqual(zhBundle.localizedString(forKey: "Detail", value: nil, table: nil), "详情")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Default Subscription Interval", value: nil, table: nil), "默认订阅间隔")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Fallback interval used when a subscription does not publish profile-update-interval.", value: nil, table: nil), "当订阅未发布 profile-update-interval 时使用的回退间隔。")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Subscription Diagnostics", value: nil, table: nil), "订阅诊断")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Request Headers", value: nil, table: nil), "请求头")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Response Headers", value: nil, table: nil), "响应头")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Update Interval Source", value: nil, table: nil), "更新间隔来源")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Recent Updates", value: nil, table: nil), "最近更新")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "HTTP status", value: nil, table: nil), "HTTP 状态")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Panel response", value: nil, table: nil), "面板响应")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Remote profile-update-interval", value: nil, table: nil), "远端 profile-update-interval")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Skipped", value: nil, table: nil), "已跳过")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Runtime validated", value: nil, table: nil), "运行时验证通过")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "No runtime preflight required for this profile.", value: nil, table: nil), "此配置无需运行时预检。")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Runtime config accepted by Mihomo preflight.", value: nil, table: nil), "运行时配置已通过 Mihomo 预检。")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Background Check Interval", value: nil, table: nil), "后台检查间隔")
     XCTAssertEqual(zhBundle.localizedString(forKey: "How often ClashMax wakes to check whether any subscription is due.", value: nil, table: nil), "ClashMax 唤醒检查订阅是否到期的频率。")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Retry Backoff Cap", value: nil, table: nil), "重试退避上限")
@@ -182,12 +194,45 @@ final class LocalizationTests: XCTestCase {
     XCTAssertEqual(zhBundle.localizedString(forKey: "Controller unavailable", value: nil, table: nil), "控制器不可用")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Update Due", value: nil, table: nil), "更新到期项")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Import ClashX", value: nil, table: nil), "导入 ClashX")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Import Client", value: nil, table: nil), "导入客户端")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Effective Config", value: nil, table: nil), "生效配置")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Effective Config View", value: nil, table: nil), "生效配置视图")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Copy Redacted", value: nil, table: nil), "复制打码内容")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Export Redacted", value: nil, table: nil), "导出打码内容")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Original profile", value: nil, table: nil), "原始配置")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Provider materialization", value: nil, table: nil), "Provider 物化")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Final runtime YAML", value: nil, table: nil), "最终运行时 YAML")
+    XCTAssertEqual(
+      zhBundle.localizedString(forKey: "Generate Effective Config before copying.", value: nil, table: nil),
+      "复制前请先生成生效配置。"
+    )
+    XCTAssertEqual(
+      zhBundle.localizedString(forKey: "Original provider content is kept unchanged and wrapped at runtime.", value: nil, table: nil),
+      "原始 provider 内容保持不变，并在运行时封装。"
+    )
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Provider Side-load Preflight", value: nil, table: nil), "Provider 旁加载预检")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Choose Provider File...", value: nil, table: nil), "选择 Provider 文件...")
+    XCTAssertEqual(
+      zhBundle.localizedString(forKey: "Provider side-load preflight requires Developer Mode.", value: nil, table: nil),
+      "Provider 旁加载预检需要 Developer Mode。"
+    )
+    XCTAssertEqual(
+      zhBundle.localizedString(
+        forKey: "Provider side-load preflight is only available for app-managed provider subscriptions.",
+        value: nil,
+        table: nil
+      ),
+      "Provider 旁加载预检仅适用于应用托管的 provider 订阅。"
+    )
 
     let connectionsFormat = zhBundle.localizedString(forKey: "%lld active, %lld retained", value: nil, table: nil)
     XCTAssertEqual(String(format: connectionsFormat, Int64(0), Int64(0)), "0 个活动连接，0 个保留连接")
 
     let rulesFormat = zhBundle.localizedString(forKey: "%lld rules", value: nil, table: nil)
     XCTAssertEqual(String(format: rulesFormat, Int64(0)), "0 条规则")
+
+    let activeSnippetsFormat = zhBundle.localizedString(forKey: "%lld active snippets", value: nil, table: nil)
+    XCTAssertEqual(String(format: activeSnippetsFormat, Int64(3)), "3 个活动片段")
 
     let filteredRulesFormat = zhBundle.localizedString(forKey: "%lld of %lld", value: nil, table: nil)
     XCTAssertEqual(String(format: filteredRulesFormat, Int64(0), Int64(0)), "0 / 0")
