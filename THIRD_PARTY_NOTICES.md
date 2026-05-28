@@ -21,6 +21,12 @@ as a separate process and preserves user-provided Clash/Mihomo YAML configs.
 - License: MIT
 - Use: SwiftUI change effects and transitions on the Home dashboard.
 
+## SwiftUI-Shimmer
+
+- Upstream: https://github.com/markiv/SwiftUI-Shimmer
+- License: MIT
+- Use: Shared SwiftUI loading skeleton shimmer effects.
+
 ## Sparkle
 
 - Upstream: https://github.com/sparkle-project/Sparkle

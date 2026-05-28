@@ -100,4 +100,5 @@ ClashMax is released under the GPL-3.0 license. The project distributes and cont
 - [Mihomo](https://github.com/MetaCubeX/mihomo) provides the proxy core.
 - [Yams](https://github.com/jpsim/Yams) provides YAML parsing and generation.
 - [Pow](https://github.com/EmergeTools/Pow) provides SwiftUI effects.
+- [SwiftUI-Shimmer](https://github.com/markiv/SwiftUI-Shimmer) provides loading skeleton shimmer effects.
 - [Sparkle](https://github.com/sparkle-project/Sparkle) provides the macOS app update framework.
