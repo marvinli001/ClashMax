@@ -1,0 +1,50 @@
+title: "[Idea] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this category for early feature ideas, product direction, and workflow proposals.
+
+        If the idea is already scoped into a concrete implementation task with acceptance criteria, open an Issue instead.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or workflow
+      description: What daily ClashMax workflow is difficult, missing, or confusing?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed direction
+      description: Describe the behavior or product direction you would like to discuss.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Dashboard
+        - Profiles
+        - Proxies
+        - Connections
+        - Rules
+        - Logs
+        - Settings
+        - Menu bar
+        - System Proxy
+        - TUN helper
+        - NE Proxy
+        - Downloads / updates
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: tradeoffs
+    attributes:
+      label: Tradeoffs or constraints
+      description: Note security, macOS integration, runtime compatibility, UI complexity, or maintenance concerns you already see.
+    validations:
+      required: false

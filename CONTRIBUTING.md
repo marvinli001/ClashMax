@@ -6,9 +6,13 @@ For Chinese users: issues and pull requests in Chinese are welcome. Please inclu
 
 ## Where to Start
 
-- Use [Issues](https://github.com/marvinli001/ClashMax/issues) for actionable feedback, reproducible bugs, and trackable implementation tasks.
-- Use [Discussions](https://github.com/marvinli001/ClashMax/discussions) for questions, announcements, setup help, and broader project conversations.
+- Use [Issues](https://github.com/marvinli001/ClashMax/issues) for reproducible bugs, actionable feedback, and implementation tasks that are specific enough to track.
+- Use [Questions](https://github.com/marvinli001/ClashMax/discussions/new?category=questions) for installation, usage, setup help, and runtime troubleshooting.
+- Use [Ideas](https://github.com/marvinli001/ClashMax/discussions/new?category=ideas) for early feature ideas, product direction, and workflow proposals.
+- Use [Development](https://github.com/marvinli001/ClashMax/discussions/new?category=development) before starting larger contributions that need design alignment, ownership boundaries, or release-sensitive verification.
 - Use a pull request when you already have a narrow code or documentation change ready for review.
+
+If an idea is still open-ended, start in Discussions. If it has a concrete goal, scope, and acceptance criteria, open an Issue or pull request instead.
 
 ## Local Setup
 

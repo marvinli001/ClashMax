@@ -1,0 +1,56 @@
+title: "[Question] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this category for ClashMax setup, usage, and troubleshooting questions.
+
+        Before posting logs or screenshots, remove subscription URLs, node credentials, private domains, controller secrets, and other personal network details.
+  - type: input
+    id: version
+    attributes:
+      label: ClashMax version
+      description: Use Settings -> About, the release tag, or the app bundle version if available.
+      placeholder: "1.0.7 (13)"
+    validations:
+      required: false
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and Mac architecture
+      placeholder: "macOS 26.x, Apple Silicon / Intel"
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Installation / permissions
+        - Dashboard / runtime start-stop
+        - Profiles / subscriptions
+        - Proxies / delay testing
+        - Connections / rules / logs
+        - System Proxy
+        - TUN helper
+        - NE Proxy
+        - Updates
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What are you trying to do, and where are you stuck?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Include redacted logs, screenshots, profile shape, or steps already tried when useful.
+      render: text
+    validations:
+      required: false

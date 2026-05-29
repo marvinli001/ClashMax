@@ -5,12 +5,12 @@ body:
   - type: markdown
     attributes:
       value: |
-        Use Issues for actionable feedback that can become a task. Use Discussions for open-ended conversation, questions, and announcements.
+        Use Issues for actionable feedback that is already clear enough to become a tracked task. Use Discussions -> Ideas for early feature ideas, product direction, and open-ended workflow conversation.
   - type: textarea
     id: feedback
     attributes:
       label: Feedback
-      description: What should be improved, and why does it matter in daily proxy use?
+      description: What concrete behavior should be improved, and why does it matter in daily proxy use?
     validations:
       required: true
   - type: dropdown
@@ -39,4 +39,3 @@ body:
     attributes:
       label: Current workflow
       description: Describe how you use ClashMax today and where the experience breaks down.
-

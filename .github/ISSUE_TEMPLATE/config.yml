@@ -1,6 +1,14 @@
-blank_issues_enabled: true
+blank_issues_enabled: false
 contact_links:
-  - name: Q&A, announcements, and project conversation
-    url: https://github.com/marvinli001/ClashMax/discussions
-    about: Use Discussions for questions, setup conversations, announcements, and broader project dialogue.
-
+  - name: Questions and setup help
+    url: https://github.com/marvinli001/ClashMax/discussions/new?category=questions
+    about: Use Discussions for installation, usage, runtime troubleshooting, and setup conversations.
+  - name: Feature ideas and product direction
+    url: https://github.com/marvinli001/ClashMax/discussions/new?category=ideas
+    about: Discuss early feature ideas before they become trackable implementation tasks.
+  - name: Contribution design discussion
+    url: https://github.com/marvinli001/ClashMax/discussions/new?category=development
+    about: Align on design, ownership boundaries, and verification before starting larger contributions.
+  - name: Security policy
+    url: https://github.com/marvinli001/ClashMax/security/policy
+    about: Do not post vulnerabilities, secrets, subscription URLs, or exploit details in public issues.
