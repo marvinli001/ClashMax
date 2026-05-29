@@ -71,8 +71,10 @@ ClashMax 是一个使用 SwiftUI 构建的原生 macOS Mihomo 图形客户端。
 
 ## 社区与反馈
 
-- [Issues](https://github.com/marvinli001/ClashMax/issues) 用于收集可执行反馈、可复现 bug 和可跟踪开发任务。
-- [Discussions](https://github.com/marvinli001/ClashMax/discussions) 用于问答、公告、安装使用交流和更宽泛的项目对话。
+- [Issues](https://github.com/marvinli001/ClashMax/issues) 用于可复现 bug、足够明确的可执行反馈，以及可以跟踪的开发任务。
+- [Questions](https://github.com/marvinli001/ClashMax/discussions/new?category=questions) 用于安装、使用、配置、运行时排障等问答。
+- [Ideas](https://github.com/marvinli001/ClashMax/discussions/new?category=ideas) 用于早期功能想法、产品方向和工作流提案，等想法收敛后再转成可跟踪 Issue。
+- [Development](https://github.com/marvinli001/ClashMax/discussions/new?category=development) 用于较大贡献开始前的设计讨论、边界确认和验证方案对齐。
 - 提交日志或截图前，请移除订阅 URL、节点凭据、私有域名和其他敏感 profile 信息。
 
 ## 本地开发
@@ -94,6 +96,10 @@ xcodebuild test -project ClashMax.xcodeproj -scheme ClashMax -destination 'platf
 ## 许可证
 
 ClashMax 使用 GPL-3.0 许可证发布。项目分发并控制 Mihomo，因此保留与 Mihomo 生态兼容的开源授权边界。
+
+## 赞助
+
+如果 ClashMax 对你有帮助，可以通过 GitHub Sponsor 按钮支持项目。赞助会帮助项目持续维护、发布版本并验证 macOS 兼容性。
 
 ## 致谢
 

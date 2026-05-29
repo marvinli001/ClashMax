@@ -71,8 +71,10 @@ Release builds are distributed through GitHub Releases. After installation, Clas
 
 ## Community
 
-- Use [Issues](https://github.com/marvinli001/ClashMax/issues) for actionable feedback, reproducible bugs, and trackable implementation tasks.
-- Use [Discussions](https://github.com/marvinli001/ClashMax/discussions) for questions, announcements, setup conversations, and broader project discussion.
+- Use [Issues](https://github.com/marvinli001/ClashMax/issues) for reproducible bugs, actionable feedback, and implementation tasks that are specific enough to track.
+- Use [Questions](https://github.com/marvinli001/ClashMax/discussions/new?category=questions) for installation, usage, setup, and runtime troubleshooting conversations.
+- Use [Ideas](https://github.com/marvinli001/ClashMax/discussions/new?category=ideas) for early feature ideas, product direction, and workflow proposals before they become implementation tasks.
+- Use [Development](https://github.com/marvinli001/ClashMax/discussions/new?category=development) before starting larger contributions that need design alignment, ownership boundaries, or release-sensitive verification.
 - Before opening a report, remove subscription URLs, node credentials, private domains, and other sensitive profile data from screenshots or logs.
 
 ## Local Development
@@ -94,6 +96,10 @@ xcodebuild test -project ClashMax.xcodeproj -scheme ClashMax -destination 'platf
 ## License
 
 ClashMax is released under the GPL-3.0 license. The project distributes and controls Mihomo, so it keeps an open-source licensing boundary compatible with the Mihomo ecosystem.
+
+## Sponsorship
+
+If ClashMax is useful to you, you can support the project through the GitHub Sponsor button. Sponsorship helps keep maintenance, release work, and macOS compatibility testing sustainable.
 
 ## Acknowledgements
 

@@ -1,0 +1,47 @@
+title: "[Development] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this category before starting a contribution that needs design alignment, ownership boundaries, or release-sensitive verification.
+
+        Open a pull request when you already have a narrow code or documentation change ready for review.
+  - type: textarea
+    id: goal
+    attributes:
+      label: Contribution goal
+      description: What user-visible or maintainer-visible outcome do you want to deliver?
+    validations:
+      required: true
+  - type: textarea
+    id: approach
+    attributes:
+      label: Proposed approach
+      description: Describe the files, workflows, or runtime surfaces you expect to touch.
+    validations:
+      required: true
+  - type: dropdown
+    id: risk
+    attributes:
+      label: Risk area
+      options:
+        - Low-risk documentation or UI copy
+        - UI behavior
+        - Runtime config / Mihomo control
+        - System Proxy
+        - TUN helper
+        - NE Proxy
+        - Signing / release / updates
+        - Security-sensitive
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification plan
+      description: Which commands, installed-app checks, screenshots, or manual scenarios should prove the contribution?
+      placeholder: |
+        - Command:
+        - Manual check:
+    validations:
+      required: true
