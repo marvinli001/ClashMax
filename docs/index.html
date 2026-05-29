@@ -1,11 +1,11 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en" data-lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="ClashMax is a native macOS Mihomo proxy client built with SwiftUI.">
   <meta property="og:title" content="ClashMax">
-  <meta property="og:description" content="原生 macOS Mihomo 代理控制台。">
+  <meta property="og:description" content="A native macOS Mihomo proxy console.">
   <meta property="og:image" content="https://marvinli001.github.io/ClashMax/assets/clashmax-icon.png">
   <meta property="og:type" content="website">
   <link rel="icon" type="image/png" href="assets/clashmax-icon.png">
@@ -111,6 +111,65 @@
       border-radius: 999px;
       color: var(--ink);
       background: rgba(255, 255, 255, 0.04);
+    }
+
+    .language-toggle {
+      position: relative;
+      isolation: isolate;
+      display: inline-grid;
+      grid-template-columns: 1fr 1fr;
+      align-items: center;
+      width: 82px;
+      height: 32px;
+      padding: 3px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.035);
+      color: var(--soft);
+      font: inherit;
+      font-size: 12px;
+      font-weight: 720;
+      cursor: pointer;
+    }
+
+    .language-toggle::before {
+      position: absolute;
+      z-index: 0;
+      top: 3px;
+      left: 3px;
+      width: calc(50% - 3px);
+      height: calc(100% - 6px);
+      border: 1px solid rgba(25, 230, 194, 0.38);
+      border-radius: 999px;
+      background: rgba(25, 230, 194, 0.16);
+      content: "";
+      transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
+    }
+
+    .language-toggle[data-lang="zh"]::before {
+      transform: translateX(100%);
+    }
+
+    .language-option {
+      position: relative;
+      z-index: 1;
+      text-align: center;
+      line-height: 1;
+      transition: color 160ms ease;
+    }
+
+    .language-toggle[data-lang="en"] .language-option-en,
+    .language-toggle[data-lang="zh"] .language-option-zh {
+      color: var(--ink);
+    }
+
+    .language-toggle:hover {
+      border-color: rgba(255, 255, 255, 0.24);
+    }
+
+    .language-toggle:focus-visible {
+      outline: 2px solid rgba(25, 230, 194, 0.52);
+      outline-offset: 3px;
     }
 
     .hero {
@@ -666,8 +725,22 @@
         width: min(100% - 28px, var(--max));
       }
 
+      .nav-links {
+        gap: 10px;
+      }
+
       .nav-links a:not(.nav-download) {
         display: none;
+      }
+
+      .nav-download {
+        padding: 8px 11px;
+      }
+
+      .language-toggle {
+        width: 78px;
+        height: 31px;
+        font-size: 11px;
       }
 
       .hero-inner,
@@ -748,20 +821,30 @@
         padding: 24px 0;
       }
     }
+
+    @media (max-width: 380px) {
+      .brand span {
+        display: none;
+      }
+    }
   </style>
 </head>
 <body>
   <header class="site-header">
-    <nav class="nav" aria-label="Primary navigation">
-      <a class="brand" href="#top" aria-label="ClashMax home">
+    <nav class="nav" aria-label="Primary navigation" data-i18n-aria-label="nav.primary">
+      <a class="brand" href="#top" aria-label="ClashMax home" data-i18n-aria-label="nav.homeAria">
         <img src="assets/clashmax-icon.png" width="34" height="34" alt="">
         <span>ClashMax</span>
       </a>
       <div class="nav-links">
-        <a href="#runtime">Runtime</a>
-        <a href="#controls">Controls</a>
-        <a href="#security">Security</a>
-        <a class="nav-download" href="https://github.com/marvinli001/ClashMax/releases/latest" data-latest-download>Download</a>
+        <a href="#runtime" data-i18n="nav.runtime">Runtime</a>
+        <a href="#controls" data-i18n="nav.controls">Controls</a>
+        <a href="#security" data-i18n="nav.security">Security</a>
+        <button class="language-toggle" type="button" data-lang="en" data-language-toggle aria-label="Switch language, English selected" aria-pressed="false">
+          <span class="language-option language-option-en">EN</span>
+          <span class="language-option language-option-zh">中</span>
+        </button>
+        <a class="nav-download" href="https://github.com/marvinli001/ClashMax/releases/latest" data-latest-download data-i18n="nav.download" data-i18n-aria-label="download.aria">Download</a>
       </div>
     </nav>
   </header>
@@ -770,67 +853,67 @@
     <section class="hero" aria-labelledby="hero-title">
       <div class="hero-inner">
         <div class="hero-copy">
-          <img class="logo-mark" src="assets/clashmax-icon.png" width="72" height="72" alt="ClashMax icon">
+          <img class="logo-mark" src="assets/clashmax-icon.png" width="72" height="72" alt="ClashMax icon" data-i18n-alt="hero.iconAlt">
           <h1 id="hero-title">ClashMax</h1>
-          <p>原生 macOS Mihomo 代理控制台。把配置、代理组、连接、规则、日志和系统代理/TUN 收进一个安静、可扫描的 SwiftUI 工作面。</p>
-          <div class="hero-actions" aria-label="Project links">
-            <a class="button primary" href="https://github.com/marvinli001/ClashMax/releases/latest" data-latest-download>Download</a>
+          <p data-i18n="hero.copy">A native macOS Mihomo proxy console that brings profiles, proxy groups, connections, rules, logs, and system proxy/TUN controls into a quiet, scannable SwiftUI workspace.</p>
+          <div class="hero-actions" aria-label="Project links" data-i18n-aria-label="hero.actionsAria">
+            <a class="button primary" href="https://github.com/marvinli001/ClashMax/releases/latest" data-latest-download data-i18n="nav.download" data-i18n-aria-label="download.aria">Download</a>
             <a class="button" href="https://github.com/marvinli001/ClashMax">GitHub</a>
-            <a class="button" href="https://github.com/marvinli001/ClashMax/issues">Issue</a>
+            <a class="button" href="https://github.com/marvinli001/ClashMax/issues" data-i18n="hero.issue">Issue</a>
           </div>
-          <div class="facts" aria-label="Project facts">
+          <div class="facts" aria-label="Project facts" data-i18n-aria-label="hero.factsAria">
             <div class="fact">
               <strong>SwiftUI</strong>
-              <span>native macOS 26+</span>
+              <span data-i18n="facts.swiftui">native macOS 26+</span>
             </div>
             <div class="fact">
               <strong>Mihomo v1.19.25</strong>
-              <span>bundled sidecar core</span>
+              <span data-i18n="facts.mihomo">bundled sidecar core</span>
             </div>
             <div class="fact">
               <strong>GPL-3.0</strong>
-              <span>open source boundary</span>
+              <span data-i18n="facts.license">open source boundary</span>
             </div>
           </div>
         </div>
 
-        <div class="runtime-plane" aria-label="ClashMax runtime preview">
+        <div class="runtime-plane" aria-label="ClashMax runtime preview" data-i18n-aria-label="runtime.previewAria">
           <div class="plane-top">
-            <span class="status"><span class="dot"></span> running</span>
-            <span>127.0.0.1 controller / bearer auth</span>
+            <span class="status"><span class="dot"></span> <span data-i18n="runtime.status">running</span></span>
+            <span data-i18n="runtime.controller">127.0.0.1 controller / bearer auth</span>
           </div>
           <div class="plane-body">
             <div class="ops-column">
-              <p class="section-label">Runtime snapshot</p>
+              <p class="section-label" data-i18n="runtime.snapshot">Runtime snapshot</p>
               <div class="metric-row">
-                <span>Profile</span>
+                <span data-i18n="runtime.profile">Profile</span>
                 <strong>default.yaml</strong>
               </div>
               <div class="metric-row">
-                <span>Mode</span>
-                <strong>Rule</strong>
+                <span data-i18n="runtime.mode">Mode</span>
+                <strong data-i18n="runtime.modeValue">Rule</strong>
               </div>
               <div class="metric-row">
-                <span>System proxy</span>
-                <strong>managed</strong>
+                <span data-i18n="runtime.systemProxy">System proxy</span>
+                <strong data-i18n="runtime.managed">managed</strong>
               </div>
               <div class="metric-row">
                 <span>TUN</span>
-                <strong>helper path</strong>
+                <strong data-i18n="runtime.helperPath">helper path</strong>
               </div>
               <div class="metric-row">
-                <span>Controller secret</span>
-                <strong>per run</strong>
+                <span data-i18n="runtime.secret">Controller secret</span>
+                <strong data-i18n="runtime.perRun">per run</strong>
               </div>
-              <div class="log-stream" aria-label="Runtime log preview">
-                <div><b>proxy</b> provider health check completed</div>
-                <div><b>rule</b> GEOIP matched direct</div>
-                <div><b>conn</b> closed stale tcp session</div>
-                <div><b>tun</b> macOS runtime without auto-redirect</div>
+              <div class="log-stream" aria-label="Runtime log preview" data-i18n-aria-label="runtime.logAria">
+                <div><b>proxy</b> <span data-i18n="runtime.logProxy">provider health check completed</span></div>
+                <div><b>rule</b> <span data-i18n="runtime.logRule">GEOIP matched direct</span></div>
+                <div><b>conn</b> <span data-i18n="runtime.logConn">closed stale tcp session</span></div>
+                <div><b>tun</b> <span data-i18n="runtime.logTun">macOS runtime without auto-redirect</span></div>
               </div>
             </div>
             <div class="route-column">
-              <p class="section-label">Route surface</p>
+              <p class="section-label" data-i18n="runtime.routeSurface">Route surface</p>
               <div class="route-map" aria-hidden="true">
                 <div class="route-line"></div>
                 <span class="node-a">DIRECT</span>
@@ -838,16 +921,16 @@
                 <span class="node-c">REJECT</span>
               </div>
               <div class="metric-row">
-                <span>Proxy groups</span>
-                <strong>switchable</strong>
+                <span data-i18n="runtime.proxyGroups">Proxy groups</span>
+                <strong data-i18n="runtime.switchable">switchable</strong>
               </div>
               <div class="metric-row">
-                <span>Connections</span>
-                <strong>inspectable</strong>
+                <span data-i18n="runtime.connections">Connections</span>
+                <strong data-i18n="runtime.inspectable">inspectable</strong>
               </div>
               <div class="metric-row">
-                <span>Logs</span>
-                <strong>streaming</strong>
+                <span data-i18n="runtime.logs">Logs</span>
+                <strong data-i18n="runtime.streaming">streaming</strong>
               </div>
             </div>
           </div>
@@ -857,13 +940,13 @@
 
     <section class="section" id="runtime" aria-labelledby="runtime-title">
       <div class="section-heading">
-        <h2 id="runtime-title">原始 profile 保持不动，运行态配置由 ClashMax 托管。</h2>
-        <p>日常使用不应该把订阅文件改得面目全非。ClashMax 在启动前生成 runtime YAML，用来注入端口、controller、secret、DNS、TUN 和运行模式。</p>
+        <h2 id="runtime-title" data-i18n="sections.runtimeTitle">Source profiles stay untouched. ClashMax owns the runtime config.</h2>
+        <p data-i18n="sections.runtimeCopy">Daily use should not rewrite your subscription files. Before launch, ClashMax generates runtime YAML for ports, controller, secret, DNS, TUN, and operating mode.</p>
       </div>
       <div class="flow">
         <div class="flow-pane">
-          <p class="section-label">Input profile</p>
-          <div class="code-block">profiles/
+          <p class="section-label" data-i18n="sections.inputProfile">Input profile</p>
+          <div class="code-block" data-i18n-html="sections.inputCode">profiles/
   default.yaml
   work.yaml
   lab.yaml
@@ -872,8 +955,8 @@ subscription url -> Keychain
 source yaml -> local storage</div>
         </div>
         <div class="flow-pane">
-          <p class="section-label">Managed runtime</p>
-          <div class="code-block"><span class="accent">external-controller</span>: 127.0.0.1:&lt;port&gt;
+          <p class="section-label" data-i18n="sections.managedRuntime">Managed runtime</p>
+          <div class="code-block" data-i18n-html="sections.runtimeCode"><span class="accent">external-controller</span>: 127.0.0.1:&lt;port&gt;
 <span class="accent">secret</span>: generated per run
 <span class="warn">tun</span>: helper-owned path on macOS
 system proxy: snapshot -> set -> restore
@@ -884,96 +967,322 @@ controller access: Bearer auth</div>
 
     <section class="section" id="controls" aria-labelledby="controls-title">
       <div class="section-heading">
-        <h2 id="controls-title">第一屏就是代理客户端，不绕到营销页。</h2>
-        <p>ClashMax 的界面方向是密度适中、状态明确、可快速操作。常用页面围绕 Mihomo 控制面展开。</p>
+        <h2 id="controls-title" data-i18n="sections.controlsTitle">The first screen is the proxy client, not a marketing page.</h2>
+        <p data-i18n="sections.controlsCopy">ClashMax aims for moderate density, explicit state, and quick operation. Common pages are built around Mihomo's control plane.</p>
       </div>
       <div class="control-grid">
         <div class="control">
           <small>01</small>
           <strong>Dashboard</strong>
-          <span>启动、停止、运行模式、系统代理和 TUN 状态。</span>
+          <span data-i18n="controls.dashboard">Start, stop, run mode, system proxy, and TUN state.</span>
         </div>
         <div class="control">
           <small>02</small>
           <strong>Profiles</strong>
-          <span>导入本地 YAML，管理订阅，更新、重命名和删除。</span>
+          <span data-i18n="controls.profiles">Import local YAML, manage subscriptions, update, rename, and delete.</span>
         </div>
         <div class="control">
           <small>03</small>
           <strong>Proxies</strong>
-          <span>代理组切换、延迟测试、provider health check。</span>
+          <span data-i18n="controls.proxies">Switch proxy groups, test latency, and run provider health checks.</span>
         </div>
         <div class="control">
           <small>04</small>
           <strong>Connections</strong>
-          <span>查看连接、目标地址、规则命中和实时流量。</span>
+          <span data-i18n="controls.connections">Inspect sessions, destinations, matched rules, and live traffic.</span>
         </div>
         <div class="control">
           <small>05</small>
           <strong>Rules</strong>
-          <span>检查运行时规则列表，定位配置命中路径。</span>
+          <span data-i18n="controls.rules">Review runtime rule lists and trace configuration hit paths.</span>
         </div>
         <div class="control">
           <small>06</small>
           <strong>Logs</strong>
-          <span>观察 Mihomo 日志，排查配置和网络异常。</span>
+          <span data-i18n="controls.logs">Watch Mihomo logs while debugging config and network issues.</span>
         </div>
         <div class="control">
           <small>07</small>
           <strong>Settings</strong>
-          <span>管理 core、helper、更新源和运行参数。</span>
+          <span data-i18n="controls.settings">Manage the core, helper, update source, and runtime parameters.</span>
         </div>
         <div class="control">
           <small>08</small>
           <strong>Menu Bar</strong>
-          <span>从菜单栏快速查看状态和执行轻量操作。</span>
+          <span data-i18n="controls.menuBar">Check status and run lightweight actions from the menu bar.</span>
         </div>
       </div>
     </section>
 
     <section class="section" id="security" aria-labelledby="security-title">
       <div class="section-heading">
-        <h2 id="security-title">安全边界写清楚，权限路径尽量窄。</h2>
-        <p>代理客户端会触碰系统网络设置，所以默认行为必须具体、可检查、可恢复。</p>
+        <h2 id="security-title" data-i18n="sections.securityTitle">Security boundaries are explicit, and privileged paths stay narrow.</h2>
+        <p data-i18n="sections.securityCopy">A proxy client touches system network settings, so default behavior must be concrete, inspectable, and recoverable.</p>
       </div>
       <div class="boundary">
         <div class="boundary-item">
-          <strong>Local controller</strong>
-          <p>Mihomo controller 默认监听 <code>127.0.0.1</code>，不会把控制面暴露给局域网。</p>
+          <strong data-i18n="security.localController">Local controller</strong>
+          <p data-i18n-html="security.localControllerCopy">The Mihomo controller listens on <code>127.0.0.1</code> by default, so the control plane is not exposed to the LAN.</p>
         </div>
         <div class="boundary-item">
-          <strong>Per-run secret</strong>
-          <p>每次启动生成新的 controller secret，访问 Mihomo REST/WebSocket 控制面时使用 Bearer auth。</p>
+          <strong data-i18n="security.perRunSecret">Per-run secret</strong>
+          <p data-i18n="security.perRunSecretCopy">Each launch generates a new controller secret and uses Bearer auth for Mihomo REST/WebSocket access.</p>
         </div>
         <div class="boundary-item">
-          <strong>Helper boundary</strong>
-          <p>普通系统代理走用户态 core；TUN 相关能力交给 privileged helper，并校验 app-owned core/config paths。</p>
+          <strong data-i18n="security.helperBoundary">Helper boundary</strong>
+          <p data-i18n="security.helperBoundaryCopy">Normal system proxy runs through the user-mode core. TUN capabilities go through the privileged helper, with app-owned core/config paths validated.</p>
         </div>
       </div>
     </section>
 
     <section class="closing" aria-labelledby="closing-title">
       <div>
-        <h2 id="closing-title">开源、早期、欢迎直接挑问题。</h2>
-        <p>ClashMax 使用 GPL-3.0 发布。遇到复现稳定的问题，直接发 Issue；如果这个方向对你有用，也欢迎给项目一个 Star。</p>
+        <h2 id="closing-title" data-i18n="closing.title">Open source, early, and direct about issues.</h2>
+        <p data-i18n="closing.copy">ClashMax is released under GPL-3.0. If you hit a stable repro, open an Issue directly. If this direction is useful, a GitHub Star helps.</p>
       </div>
       <div class="closing-actions">
-        <a class="button primary" href="https://github.com/marvinli001/ClashMax">Star on GitHub</a>
-        <a class="button" href="https://github.com/marvinli001/ClashMax/issues">Report issue</a>
+        <a class="button primary" href="https://github.com/marvinli001/ClashMax" data-i18n="closing.star">Star on GitHub</a>
+        <a class="button" href="https://github.com/marvinli001/ClashMax/issues" data-i18n="closing.report">Report issue</a>
       </div>
     </section>
   </main>
 
   <footer>
     <div class="footer-inner">
-      <span>ClashMax. Native macOS Mihomo client.</span>
+      <span data-i18n="footer.tagline">ClashMax. Native macOS Mihomo client.</span>
       <div class="footer-links">
         <a href="https://github.com/marvinli001/ClashMax">GitHub</a>
         <a href="appcast.xml">Appcast</a>
-        <a href="https://github.com/marvinli001/ClashMax/releases/latest">Release</a>
+        <a href="https://github.com/marvinli001/ClashMax/releases/latest" data-i18n="footer.release">Release</a>
       </div>
     </div>
   </footer>
+  <script>
+    (() => {
+      const storageKey = "clashmax-language";
+      const translations = {
+        zh: {
+          "page.title": "ClashMax - 原生 macOS Mihomo 客户端",
+          "meta.description": "ClashMax 是使用 SwiftUI 构建的原生 macOS Mihomo 代理客户端。",
+          "meta.ogDescription": "原生 macOS Mihomo 代理控制台。",
+          "language.toggleAria": "切换语言，当前为中文",
+          "language.toggleTitle": "切换语言",
+          "nav.primary": "主导航",
+          "nav.homeAria": "ClashMax 首页",
+          "nav.runtime": "运行态",
+          "nav.controls": "控制台",
+          "nav.security": "安全",
+          "nav.download": "下载",
+          "download.aria": "下载最新 ClashMax zip",
+          "hero.iconAlt": "ClashMax 图标",
+          "hero.copy": "原生 macOS Mihomo 代理控制台。把配置、代理组、连接、规则、日志和系统代理/TUN 收进一个安静、可扫描的 SwiftUI 工作面。",
+          "hero.actionsAria": "项目链接",
+          "hero.issue": "Issue",
+          "hero.factsAria": "项目信息",
+          "facts.swiftui": "原生 macOS 26+",
+          "facts.mihomo": "随附 sidecar core",
+          "facts.license": "开源边界",
+          "runtime.previewAria": "ClashMax 运行态预览",
+          "runtime.status": "运行中",
+          "runtime.controller": "127.0.0.1 控制面 / Bearer 认证",
+          "runtime.snapshot": "运行态快照",
+          "runtime.profile": "配置",
+          "runtime.mode": "模式",
+          "runtime.modeValue": "规则",
+          "runtime.systemProxy": "系统代理",
+          "runtime.managed": "托管",
+          "runtime.helperPath": "helper 路径",
+          "runtime.secret": "控制密钥",
+          "runtime.perRun": "每次启动",
+          "runtime.logAria": "运行日志预览",
+          "runtime.logProxy": "provider health check 完成",
+          "runtime.logRule": "GEOIP 命中直连",
+          "runtime.logConn": "关闭过期 TCP 连接",
+          "runtime.logTun": "macOS 运行态不写入 auto-redirect",
+          "runtime.routeSurface": "路由视图",
+          "runtime.proxyGroups": "代理组",
+          "runtime.switchable": "可切换",
+          "runtime.connections": "连接",
+          "runtime.inspectable": "可检查",
+          "runtime.logs": "日志",
+          "runtime.streaming": "实时流",
+          "sections.runtimeTitle": "原始 profile 保持不动，运行态配置由 ClashMax 托管。",
+          "sections.runtimeCopy": "日常使用不应该把订阅文件改得面目全非。ClashMax 在启动前生成 runtime YAML，用来注入端口、controller、secret、DNS、TUN 和运行模式。",
+          "sections.inputProfile": "输入配置",
+          "sections.inputCode": `profiles/
+  default.yaml
+  work.yaml
+  lab.yaml
+
+订阅 URL -> Keychain
+源 YAML -> 本地存储`,
+          "sections.managedRuntime": "托管运行态",
+          "sections.runtimeCode": `<span class="accent">external-controller</span>: 127.0.0.1:&lt;port&gt;
+<span class="accent">secret</span>: 每次启动生成
+<span class="warn">tun</span>: macOS 上由 helper 持有路径
+系统代理: 快照 -> 设置 -> 恢复
+控制面访问: Bearer auth`,
+          "sections.controlsTitle": "第一屏就是代理客户端，不绕到营销页。",
+          "sections.controlsCopy": "ClashMax 的界面方向是密度适中、状态明确、可快速操作。常用页面围绕 Mihomo 控制面展开。",
+          "controls.dashboard": "启动、停止、运行模式、系统代理和 TUN 状态。",
+          "controls.profiles": "导入本地 YAML，管理订阅，更新、重命名和删除。",
+          "controls.proxies": "代理组切换、延迟测试、provider health check。",
+          "controls.connections": "查看连接、目标地址、规则命中和实时流量。",
+          "controls.rules": "检查运行时规则列表，定位配置命中路径。",
+          "controls.logs": "观察 Mihomo 日志，排查配置和网络异常。",
+          "controls.settings": "管理 core、helper、更新源和运行参数。",
+          "controls.menuBar": "从菜单栏快速查看状态和执行轻量操作。",
+          "sections.securityTitle": "安全边界写清楚，权限路径尽量窄。",
+          "sections.securityCopy": "代理客户端会触碰系统网络设置，所以默认行为必须具体、可检查、可恢复。",
+          "security.localController": "本地控制面",
+          "security.localControllerCopy": `Mihomo controller 默认监听 <code>127.0.0.1</code>，不会把控制面暴露给局域网。`,
+          "security.perRunSecret": "每次启动密钥",
+          "security.perRunSecretCopy": "每次启动生成新的 controller secret，访问 Mihomo REST/WebSocket 控制面时使用 Bearer auth。",
+          "security.helperBoundary": "Helper 边界",
+          "security.helperBoundaryCopy": "普通系统代理走用户态 core；TUN 相关能力交给 privileged helper，并校验 app-owned core/config paths。",
+          "closing.title": "开源、早期、欢迎直接挑问题。",
+          "closing.copy": "ClashMax 使用 GPL-3.0 发布。遇到复现稳定的问题，直接发 Issue；如果这个方向对你有用，也欢迎给项目一个 Star。",
+          "closing.star": "在 GitHub Star",
+          "closing.report": "反馈问题",
+          "footer.tagline": "ClashMax。原生 macOS Mihomo 客户端。",
+          "footer.release": "发布"
+        }
+      };
+
+      const metaDescription = document.querySelector('meta[name="description"]');
+      const ogDescription = document.querySelector('meta[property="og:description"]');
+      const defaults = {
+        title: document.title,
+        description: metaDescription?.content || "",
+        ogDescription: ogDescription?.content || ""
+      };
+      const textDefaults = new Map(
+        Array.from(document.querySelectorAll("[data-i18n]")).map((element) => [element, element.textContent])
+      );
+      const htmlDefaults = new Map(
+        Array.from(document.querySelectorAll("[data-i18n-html]")).map((element) => [element, element.innerHTML])
+      );
+      const ariaDefaults = new Map(
+        Array.from(document.querySelectorAll("[data-i18n-aria-label]")).map((element) => [element, element.getAttribute("aria-label") || ""])
+      );
+      const altDefaults = new Map(
+        Array.from(document.querySelectorAll("[data-i18n-alt]")).map((element) => [element, element.getAttribute("alt") || ""])
+      );
+      const languageToggle = document.querySelector("[data-language-toggle]");
+      let currentLanguage = "en";
+
+      const normalizeLanguage = (language) => {
+        if (typeof language !== "string") {
+          return null;
+        }
+        const normalized = language.toLowerCase();
+        if (normalized === "en" || normalized.startsWith("en-")) {
+          return "en";
+        }
+        if (normalized === "zh" || normalized.startsWith("zh-")) {
+          return "zh";
+        }
+        return null;
+      };
+
+      const readStoredLanguage = () => {
+        try {
+          return normalizeLanguage(window.localStorage.getItem(storageKey));
+        } catch {
+          return null;
+        }
+      };
+
+      const writeStoredLanguage = (language) => {
+        try {
+          window.localStorage.setItem(storageKey, language);
+        } catch {
+          // localStorage can be unavailable in strict privacy modes; the page still switches for this visit.
+        }
+      };
+
+      const detectBrowserLanguage = () => {
+        const browserLanguages = Array.isArray(navigator.languages) && navigator.languages.length
+          ? navigator.languages
+          : [navigator.language].filter(Boolean);
+        return browserLanguages.some((language) => normalizeLanguage(language) === "zh") ? "zh" : "en";
+      };
+
+      const localizedValue = (language, key, fallback) => {
+        if (language !== "zh") {
+          return fallback;
+        }
+        return translations.zh[key] ?? fallback;
+      };
+
+      const applyLanguage = (language, options = {}) => {
+        const nextLanguage = language === "zh" ? "zh" : "en";
+        currentLanguage = nextLanguage;
+        document.documentElement.lang = nextLanguage === "zh" ? "zh-CN" : "en";
+        document.documentElement.dataset.lang = nextLanguage;
+        document.title = localizedValue(nextLanguage, "page.title", defaults.title);
+
+        if (metaDescription) {
+          metaDescription.content = localizedValue(nextLanguage, "meta.description", defaults.description);
+        }
+
+        if (ogDescription) {
+          ogDescription.content = localizedValue(nextLanguage, "meta.ogDescription", defaults.ogDescription);
+        }
+
+        textDefaults.forEach((fallback, element) => {
+          element.textContent = localizedValue(nextLanguage, element.dataset.i18n, fallback);
+        });
+
+        htmlDefaults.forEach((fallback, element) => {
+          element.innerHTML = localizedValue(nextLanguage, element.dataset.i18nHtml, fallback);
+        });
+
+        ariaDefaults.forEach((fallback, element) => {
+          element.setAttribute("aria-label", localizedValue(nextLanguage, element.dataset.i18nAriaLabel, fallback));
+        });
+
+        altDefaults.forEach((fallback, element) => {
+          element.setAttribute("alt", localizedValue(nextLanguage, element.dataset.i18nAlt, fallback));
+        });
+
+        if (languageToggle) {
+          languageToggle.dataset.lang = nextLanguage;
+          languageToggle.setAttribute("aria-pressed", String(nextLanguage === "zh"));
+          languageToggle.setAttribute("aria-label", localizedValue(nextLanguage, "language.toggleAria", "Switch language, English selected"));
+          languageToggle.setAttribute("title", localizedValue(nextLanguage, "language.toggleTitle", "Switch language"));
+        }
+
+        if (options.persist) {
+          writeStoredLanguage(nextLanguage);
+        }
+
+        window.dispatchEvent(new CustomEvent("clashmax:languagechange", {
+          detail: { language: nextLanguage }
+        }));
+      };
+
+      if (languageToggle) {
+        languageToggle.addEventListener("click", () => {
+          applyLanguage(currentLanguage === "zh" ? "en" : "zh", { persist: true });
+        });
+      }
+
+      window.clashMaxLanguage = {
+        get current() {
+          return currentLanguage;
+        },
+        apply(language) {
+          applyLanguage(normalizeLanguage(language) || "en", { persist: true });
+        },
+        translate(key, fallback = "") {
+          return localizedValue(currentLanguage, key, fallback);
+        }
+      };
+
+      applyLanguage(readStoredLanguage() || detectBrowserLanguage());
+    })();
+  </script>
   <script>
     (() => {
       const releasePageURL = "https://github.com/marvinli001/ClashMax/releases/latest";
@@ -983,6 +1292,11 @@ controller access: Bearer auth</div>
       if (!downloadLinks.length) {
         return;
       }
+
+      const downloadAriaLabel = () => (
+        window.clashMaxLanguage?.translate("download.aria", "Download latest ClashMax zip") ||
+        "Download latest ClashMax zip"
+      );
 
       const chooseZipAsset = (assets = []) => {
         const zipAssets = assets.filter((asset) =>
@@ -1005,7 +1319,7 @@ controller access: Bearer auth</div>
         latestDownloadURL = url;
         downloadLinks.forEach((link) => {
           link.href = url;
-          link.setAttribute("aria-label", "Download latest ClashMax zip");
+          link.setAttribute("aria-label", downloadAriaLabel());
         });
       };
 
@@ -1041,6 +1355,12 @@ controller access: Bearer auth</div>
           latestDownloadRequest.then((url) => {
             window.location.href = url;
           });
+        });
+      });
+
+      window.addEventListener("clashmax:languagechange", () => {
+        downloadLinks.forEach((link) => {
+          link.setAttribute("aria-label", downloadAriaLabel());
         });
       });
     })();
