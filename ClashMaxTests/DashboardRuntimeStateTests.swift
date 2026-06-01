@@ -1071,7 +1071,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       cors: ExternalControllerCORSSettings(
         enabled: true,
         allowPrivateNetwork: false,
-        allowedOrigins: ["https://yacd.metacubex.one"]
+        allowedOrigins: ["https://custom.example"]
       )
     )
 
@@ -1541,7 +1541,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertFalse(model.overrides.externalControllerCORS.enabled)
   }
 
-  func testExternalDashboardProfileStoresSecretOutsidePersistedProfile() throws {
+  func testExternalDashboardProfileStoresSecretOutsidePersistedProfileAndDowngradesRemoteWriteToCopy() throws {
     let paths = try Self.makeRuntimePaths()
     let defaults = try Self.makeIsolatedDefaults()
     let dashboardSecrets = InMemorySecretStore()
@@ -1565,7 +1565,14 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     XCTAssertEqual(dashboardSecrets.storedValues[account], "dashboard-secret")
     XCTAssertFalse(encodedProfiles?.contains("dashboard-secret") == true)
-    XCTAssertTrue(model.externalDashboardURL(for: saved).absoluteString.contains("secret=dashboard-secret"))
+    let plan = model.externalDashboardOpenPlan(for: saved)
+    let queryItems = URLComponents(url: plan.url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+
+    XCTAssertEqual(plan.secretDelivery, .manualCopy)
+    XCTAssertEqual(plan.secretForManualCopy, "dashboard-secret")
+    XCTAssertNil(queryItems.first { $0.name.caseInsensitiveCompare("secret") == .orderedSame })
+    XCTAssertNil(URLComponents(url: plan.url, resolvingAgainstBaseURL: false)?.fragment)
+    XCTAssertFalse(model.externalControllerSettings.cors.allowedOrigins.contains("https://yacd.example"))
   }
 
   func testReadOnlyExternalDashboardDoesNotExposeControllerSecret() throws {
@@ -1593,6 +1600,81 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(queryItems.first { $0.name == "hostname" }?.value, model.externalControllerSettings.normalizedHost)
     XCTAssertEqual(queryItems.first { $0.name == "port" }?.value, "\(model.externalControllerSettings.normalizedPort)")
     XCTAssertNil(queryItems.first { $0.name.caseInsensitiveCompare("secret") == .orderedSame })
+    XCTAssertNil(saved.secretAccount)
+    XCTAssertEqual(model.externalDashboardOpenPlan(for: saved).secretDelivery, .none)
+  }
+
+  func testTrustedExternalDashboardUsesFragmentSecretAndRemovesQuerySecret() throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    let dashboardSecrets = InMemorySecretStore()
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: defaults,
+      externalDashboardSecretStore: dashboardSecrets
+    )
+    let profile = ExternalDashboardProfile(
+      name: "Trusted Remote",
+      url: URL(string: "https://yacd.example/app?theme=dark&secret=embedded#/proxies?secret=old&tab=rules")!,
+      readOnly: false,
+      trustedForSecretAutofill: true
+    )
+
+    XCTAssertTrue(model.saveExternalDashboardProfile(profile, secret: "dashboard secret"))
+    let saved = try XCTUnwrap(model.externalDashboardProfiles.first { $0.name == "Trusted Remote" })
+    let plan = model.externalDashboardOpenPlan(for: saved)
+    let components = try XCTUnwrap(URLComponents(url: plan.url, resolvingAgainstBaseURL: false))
+    let queryItems = components.queryItems ?? []
+    let fragment = try XCTUnwrap(components.fragment)
+    let fragmentQuery = String(fragment.split(separator: "?", maxSplits: 1).last ?? "")
+    var fragmentComponents = URLComponents()
+    fragmentComponents.query = fragmentQuery
+    let fragmentItems = fragmentComponents.queryItems ?? []
+
+    XCTAssertEqual(plan.secretDelivery, .fragment)
+    XCTAssertNil(plan.secretForManualCopy)
+    XCTAssertEqual(queryItems.first { $0.name == "theme" }?.value, "dark")
+    XCTAssertEqual(queryItems.first { $0.name == "hostname" }?.value, model.externalControllerSettings.normalizedHost)
+    XCTAssertEqual(queryItems.first { $0.name == "port" }?.value, "\(model.externalControllerSettings.normalizedPort)")
+    XCTAssertNil(queryItems.first { $0.name.caseInsensitiveCompare("secret") == .orderedSame })
+    XCTAssertTrue(fragment.hasPrefix("/proxies?"))
+    XCTAssertEqual(fragmentItems.first { $0.name == "tab" }?.value, "rules")
+    XCTAssertEqual(fragmentItems.first { $0.name.caseInsensitiveCompare("secret") == .orderedSame }?.value, "dashboard secret")
+    XCTAssertEqual(model.externalControllerSettings.cors.allowedOrigins, ["https://yacd.example"])
+    XCTAssertEqual(model.overrides.externalControllerCORS.allowedOrigins, ["https://yacd.example"])
+  }
+
+  func testLocalExternalDashboardAutofillsSecretWithoutTrustedFlag() throws {
+    let plan = AppModel.dashboardOpenPlan(
+      baseURL: URL(string: "http://localhost:9090/ui?secret=old")!,
+      controllerHost: "127.0.0.1",
+      controllerPort: 9097,
+      readOnly: false,
+      trustedForSecretAutofill: false,
+      secret: "local-secret"
+    )
+    let components = try XCTUnwrap(URLComponents(url: plan.url, resolvingAgainstBaseURL: false))
+
+    XCTAssertEqual(plan.secretDelivery, .fragment)
+    XCTAssertNil((components.queryItems ?? []).first { $0.name.caseInsensitiveCompare("secret") == .orderedSame })
+    XCTAssertEqual(components.fragment, "secret=local-secret")
+  }
+
+  func testExternalDashboardProfileDecodesTrustedAutofillAsFalseByDefault() throws {
+    let data = """
+    {
+      "id": "\(UUID().uuidString)",
+      "name": "Legacy",
+      "url": "https://yacd.example",
+      "readOnly": false,
+      "secretAccount": "external-dashboard-legacy"
+    }
+    """.data(using: .utf8)!
+
+    let decoded = try JSONDecoder().decode(ExternalDashboardProfile.self, from: data)
+
+    XCTAssertFalse(decoded.trustedForSecretAutofill)
   }
 
   func testExternalControllerSettingsMigratesPartialNestedCORSFromUserDefaults() throws {
@@ -1628,6 +1710,40 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(model.overrides.externalControllerHost, "127.0.0.1")
     XCTAssertTrue(model.overrides.externalControllerCORS.enabled)
     XCTAssertEqual(model.overrides.externalControllerCORS.allowedOrigins, ExternalControllerCORSSettings.default.allowedOrigins)
+  }
+
+  func testExternalControllerSettingsRemovesLegacyDefaultPanelCORSOriginsOnLoad() throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    try Self.storeJSON(
+      [
+        "enabled": true,
+        "host": "127.0.0.1",
+        "port": 19198,
+        "secret": "saved-secret",
+        "cors": [
+          "enabled": true,
+          "allowPrivateNetwork": true,
+          "allowedOrigins": [
+            "https://custom.example",
+            "https://yacd.metacubex.one",
+            "https://metacubex.github.io",
+            "https://board.zash.run.place"
+          ]
+        ]
+      ],
+      forKey: Self.externalControllerSettingsDefaultsKey,
+      defaults: defaults
+    )
+
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: defaults
+    )
+
+    XCTAssertEqual(model.externalControllerSettings.cors.allowedOrigins, ["https://custom.example"])
+    XCTAssertEqual(model.overrides.externalControllerCORS.allowedOrigins, ["https://custom.example"])
   }
 
   func testRuntimeOverridesMigratesMissingNestedSettings() throws {

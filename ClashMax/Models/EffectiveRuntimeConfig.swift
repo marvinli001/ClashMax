@@ -98,6 +98,7 @@ enum EffectiveRuntimeConfigDiffKind: String, Equatable, Sendable {
   case unchanged
   case removed
   case added
+  case omitted
 }
 
 struct EffectiveRuntimeConfigDiffRow: Identifiable, Equatable, Sendable {
@@ -113,6 +114,8 @@ struct EffectiveRuntimeConfigDiffRow: Identifiable, Equatable, Sendable {
       return "- \(text)"
     case .added:
       return "+ \(text)"
+    case .omitted:
+      return "... \(text)"
     }
   }
 }

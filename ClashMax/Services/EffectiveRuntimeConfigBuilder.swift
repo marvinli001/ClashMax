@@ -440,19 +440,196 @@ enum RuntimeConfigDisplayRedactor {
 }
 
 enum EffectiveRuntimeConfigLineDiff {
+  private static let maximumExactCellCount = 400_000
+  private static let maximumRenderedRowCount = 1_200
+  private static let contextLineCount = 80
+
   static func diff(oldText: String, newText: String) -> [EffectiveRuntimeConfigDiffRow] {
     let oldLines = oldText.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
     let newLines = newText.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-    let cellCount = oldLines.count * newLines.count
-    let rows: [(EffectiveRuntimeConfigDiffKind, String)]
-    if cellCount > 400_000 {
-      rows = oldLines.map { (.removed, $0) } + newLines.map { (.added, $0) }
-    } else {
-      rows = lcsDiff(oldLines: oldLines, newLines: newLines)
-    }
+    let rows = boundedDiff(oldLines: oldLines, newLines: newLines)
     return rows.enumerated().map { offset, row in
       EffectiveRuntimeConfigDiffRow(id: offset, kind: row.0, text: row.1)
     }
+  }
+
+  private static func boundedDiff(
+    oldLines: [String],
+    newLines: [String]
+  ) -> [(EffectiveRuntimeConfigDiffKind, String)] {
+    guard exceedsExactLimit(oldLines.count, newLines.count) else {
+      return lcsDiff(oldLines: oldLines, newLines: newLines)
+    }
+
+    let prefixCount = commonPrefixCount(oldLines: oldLines, newLines: newLines)
+    let suffixCount = commonSuffixCount(oldLines: oldLines, newLines: newLines, prefixCount: prefixCount)
+    let oldMiddleStart = prefixCount
+    let oldMiddleEnd = oldLines.count - suffixCount
+    let newMiddleStart = prefixCount
+    let newMiddleEnd = newLines.count - suffixCount
+    let oldMiddle = Array(oldLines[oldMiddleStart..<oldMiddleEnd])
+    let newMiddle = Array(newLines[newMiddleStart..<newMiddleEnd])
+
+    if !exceedsExactLimit(oldMiddle.count, newMiddle.count) {
+      let middleRows = lcsDiff(oldLines: oldMiddle, newLines: newMiddle)
+      let fullRows = unchangedRows(oldLines.prefix(prefixCount))
+        + middleRows
+        + unchangedRows(oldLines.suffix(suffixCount))
+      guard fullRows.count > maximumRenderedRowCount else {
+        return fullRows
+      }
+      return compactDiff(
+        oldLines: oldLines,
+        newLines: newLines,
+        prefixCount: prefixCount,
+        middleRows: middleRows,
+        suffixCount: suffixCount
+      )
+    }
+
+    return compactDiff(
+      oldLines: oldLines,
+      newLines: newLines,
+      prefixCount: prefixCount,
+      middleRows: replacementRows(oldLines: oldMiddle, newLines: newMiddle, maximumCount: maximumRenderedRowCount),
+      suffixCount: suffixCount
+    )
+  }
+
+  private static func compactDiff(
+    oldLines: [String],
+    newLines: [String],
+    prefixCount: Int,
+    middleRows: [(EffectiveRuntimeConfigDiffKind, String)],
+    suffixCount: Int
+  ) -> [(EffectiveRuntimeConfigDiffKind, String)] {
+    var rows: [(EffectiveRuntimeConfigDiffKind, String)] = []
+
+    appendContext(
+      Array(oldLines.prefix(prefixCount)),
+      omittedPrefix: "%lld unchanged line(s) omitted before the change",
+      to: &rows
+    )
+
+    let suffixContextCount = min(suffixCount, contextLineCount)
+    let suffixOmittedCount = max(0, suffixCount - suffixContextCount)
+    let reservedSuffixCount = suffixContextCount + (suffixOmittedCount > 0 ? 1 : 0)
+    let middleBudget = max(0, maximumRenderedRowCount - rows.count - reservedSuffixCount)
+    rows.append(contentsOf: sampleRows(middleRows, maximumCount: middleBudget))
+
+    if suffixContextCount > 0 {
+      let suffixStart = newLines.count - suffixCount
+      rows.append(contentsOf: unchangedRows(newLines[suffixStart..<(suffixStart + suffixContextCount)]))
+    }
+    if suffixOmittedCount > 0 {
+      rows.append((.omitted, omittedMessage("%lld unchanged line(s) omitted after the change", suffixOmittedCount)))
+    }
+
+    if rows.count > maximumRenderedRowCount {
+      return Array(rows.prefix(maximumRenderedRowCount))
+    }
+    return rows
+  }
+
+  private static func appendContext(
+    _ lines: [String],
+    omittedPrefix: String.LocalizationValue,
+    to rows: inout [(EffectiveRuntimeConfigDiffKind, String)]
+  ) {
+    guard !lines.isEmpty else { return }
+    if lines.count <= contextLineCount {
+      rows.append(contentsOf: unchangedRows(lines))
+    } else {
+      let omittedCount = lines.count - contextLineCount
+      rows.append((.omitted, omittedMessage(omittedPrefix, omittedCount)))
+      rows.append(contentsOf: unchangedRows(lines.suffix(contextLineCount)))
+    }
+  }
+
+  private static func sampleRows(
+    _ rows: [(EffectiveRuntimeConfigDiffKind, String)],
+    maximumCount: Int
+  ) -> [(EffectiveRuntimeConfigDiffKind, String)] {
+    guard maximumCount > 0, rows.count > maximumCount else { return rows }
+    guard maximumCount > 1 else {
+      return [(.omitted, omittedMessage("%lld diff line(s) omitted", rows.count))]
+    }
+    let visibleCount = maximumCount - 1
+    return Array(rows.prefix(visibleCount))
+      + [(.omitted, omittedMessage("%lld diff line(s) omitted", rows.count - visibleCount))]
+  }
+
+  private static func replacementRows(
+    oldLines: [String],
+    newLines: [String],
+    maximumCount: Int
+  ) -> [(EffectiveRuntimeConfigDiffKind, String)] {
+    guard maximumCount > 1 else {
+      return [(.omitted, omittedMessage("%lld changed line(s) omitted", oldLines.count + newLines.count))]
+    }
+
+    let removedCount = min(oldLines.count, max(0, (maximumCount - 1) / 2))
+    let addedBudget = max(0, maximumCount - removedCount - 1)
+    let addedCount = min(newLines.count, addedBudget)
+    let omittedRemovedCount = max(0, oldLines.count - removedCount)
+    let omittedAddedCount = max(0, newLines.count - addedCount)
+    var rows: [(EffectiveRuntimeConfigDiffKind, String)] = oldLines
+      .prefix(removedCount)
+      .map { (.removed, $0) }
+
+    if omittedRemovedCount > 0 || omittedAddedCount > 0 {
+      rows.append((
+        .omitted,
+        omittedMessage(
+          "%lld removed and %lld added line(s) omitted",
+          omittedRemovedCount,
+          omittedAddedCount
+        )
+      ))
+    }
+
+    rows.append(contentsOf: newLines.prefix(addedCount).map { (.added, $0) })
+    return rows
+  }
+
+  private static func commonPrefixCount(oldLines: [String], newLines: [String]) -> Int {
+    let limit = min(oldLines.count, newLines.count)
+    var count = 0
+    while count < limit, oldLines[count] == newLines[count] {
+      count += 1
+    }
+    return count
+  }
+
+  private static func commonSuffixCount(oldLines: [String], newLines: [String], prefixCount: Int) -> Int {
+    let oldLimit = oldLines.count - prefixCount
+    let newLimit = newLines.count - prefixCount
+    let limit = min(oldLimit, newLimit)
+    var count = 0
+    while count < limit,
+          oldLines[oldLines.count - count - 1] == newLines[newLines.count - count - 1] {
+      count += 1
+    }
+    return count
+  }
+
+  private static func unchangedRows<S: Sequence>(
+    _ lines: S
+  ) -> [(EffectiveRuntimeConfigDiffKind, String)] where S.Element == String {
+    lines.map { (.unchanged, $0) }
+  }
+
+  private static func exceedsExactLimit(_ oldCount: Int, _ newCount: Int) -> Bool {
+    guard oldCount > 0, newCount > 0 else { return false }
+    return oldCount > maximumExactCellCount / newCount
+  }
+
+  private static func omittedMessage(_ format: String.LocalizationValue, _ count: Int) -> String {
+    String(format: String(localized: format), Int64(count))
+  }
+
+  private static func omittedMessage(_ format: String.LocalizationValue, _ firstCount: Int, _ secondCount: Int) -> String {
+    String(format: String(localized: format), Int64(firstCount), Int64(secondCount))
   }
 
   private static func lcsDiff(oldLines: [String], newLines: [String]) -> [(EffectiveRuntimeConfigDiffKind, String)] {

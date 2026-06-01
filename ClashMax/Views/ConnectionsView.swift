@@ -1,6 +1,21 @@
 import AppKit
 import SwiftUI
 
+enum ConnectionsLayoutMode {
+  case stackedDetail
+  case splitDetail
+}
+
+enum ConnectionsLayout {
+  static let splitDetailBreakpoint: CGFloat = 1_080
+  static let detailWidth: CGFloat = 320
+  static let stackedListMinHeight: CGFloat = 280
+
+  static func mode(forWidth width: CGFloat) -> ConnectionsLayoutMode {
+    width >= splitDetailBreakpoint ? .splitDetail : .stackedDetail
+  }
+}
+
 struct ConnectionsView: View {
   @EnvironmentObject private var appModel: AppModel
   @EnvironmentObject private var runtimeData: RuntimeDataStore
@@ -8,6 +23,7 @@ struct ConnectionsView: View {
   @State private var mode = ConnectionViewMode.active
   @State private var groupsByApp = false
   @State private var selectedConnectionIDs = Set<ConnectionSnapshot.ID>()
+  @StateObject private var appIconCache = ConnectionAppIconCache()
 
   var body: some View {
     AdaptivePage(
@@ -41,13 +57,8 @@ struct ConnectionsView: View {
           message: emptyMessage
         )
       } else {
-        VStack(alignment: .leading, spacing: 10) {
-          controls
-          HStack(alignment: .top, spacing: 12) {
-            connectionList
-            connectionDetail
-              .frame(width: 320)
-          }
+        GeometryReader { proxy in
+          connectionsWorkspace(mode: ConnectionsLayout.mode(forWidth: proxy.size.width))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       }
@@ -66,24 +77,74 @@ struct ConnectionsView: View {
   }
 
   private var controls: some View {
-    HStack(spacing: 10) {
-      TextField("Search app, host, IP, rule, chain", text: $searchText)
-        .textFieldStyle(.roundedBorder)
-        .frame(minWidth: 240, idealWidth: 360, maxWidth: 460)
+    ViewThatFits(in: .horizontal) {
+      HStack(spacing: 10) {
+        searchField
 
-      Picker("Mode", selection: $mode) {
-        ForEach(ConnectionViewMode.allCases) { mode in
-          Text(mode.displayName).tag(mode)
+        modePicker
+
+        groupByAppToggle
+
+        Spacer()
+      }
+
+      VStack(alignment: .leading, spacing: 8) {
+        searchField
+        HStack(spacing: 10) {
+          modePicker
+          groupByAppToggle
+          Spacer()
         }
       }
-      .pickerStyle(.segmented)
-      .frame(width: 170)
-
-      Toggle("Group by App", isOn: $groupsByApp)
-        .toggleStyle(.checkbox)
-
-      Spacer()
     }
+  }
+
+  @ViewBuilder
+  private func connectionsWorkspace(mode layoutMode: ConnectionsLayoutMode) -> some View {
+    VStack(alignment: .leading, spacing: 10) {
+      controls
+
+      switch layoutMode {
+      case .splitDetail:
+        HStack(alignment: .top, spacing: 12) {
+          connectionList
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+          connectionDetail
+            .frame(width: ConnectionsLayout.detailWidth, alignment: .topLeading)
+        }
+      case .stackedDetail:
+        VStack(alignment: .leading, spacing: 12) {
+          connectionList
+            .frame(minHeight: ConnectionsLayout.stackedListMinHeight)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+          connectionDetail
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+      }
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+  }
+
+  private var searchField: some View {
+    TextField("Search app, host, IP, rule, chain", text: $searchText)
+      .textFieldStyle(.roundedBorder)
+      .frame(minWidth: 240, idealWidth: 360, maxWidth: 460)
+  }
+
+  private var modePicker: some View {
+    Picker("Mode", selection: $mode) {
+      ForEach(ConnectionViewMode.allCases) { mode in
+        Text(mode.displayName).tag(mode)
+      }
+    }
+    .pickerStyle(.segmented)
+    .frame(width: 170)
+  }
+
+  private var groupByAppToggle: some View {
+    Toggle("Group by App", isOn: $groupsByApp)
+      .toggleStyle(.checkbox)
+      .fixedSize(horizontal: true, vertical: false)
   }
 
   @ViewBuilder
@@ -100,6 +161,7 @@ struct ConnectionsView: View {
                 let canClose = canCloseConnection(connection)
                 ConnectionRow(
                   connection: connection,
+                  iconCache: appIconCache,
                   isSelected: selectedConnectionIDs.contains(connection.id),
                   isClosing: runtimeData.closingConnectionIDs.contains(connection.id),
                   canClose: canClose
@@ -118,7 +180,7 @@ struct ConnectionsView: View {
     } else {
       Table(visibleConnections, selection: $selectedConnectionIDs) {
         TableColumn("App") { connection in
-          ConnectionAppLabel(connection: connection)
+          ConnectionAppLabel(connection: connection, iconCache: appIconCache)
         }
         .width(min: 130, ideal: 180)
 
@@ -357,12 +419,73 @@ private struct ConnectionSearchQuery {
   }
 }
 
+@MainActor
+final class ConnectionAppIconCache: ObservableObject {
+  private let maximumCount: Int
+  private let loader: (String) -> NSImage?
+  private var images: [String: NSImage] = [:]
+  private var missingPaths = Set<String>()
+  private var insertionOrder: [String] = []
+
+  init(maximumCount: Int = 256, loader: @escaping (String) -> NSImage? = { NSWorkspace.shared.icon(forFile: $0) }) {
+    self.maximumCount = maximumCount
+    self.loader = loader
+  }
+
+  func icon(for rawPath: String?) -> NSImage? {
+    guard let path = normalizedPath(rawPath) else {
+      return nil
+    }
+    if let image = images[path] {
+      return image
+    }
+    if missingPaths.contains(path) {
+      return nil
+    }
+    let image = loader(path)
+    store(image, for: path)
+    return image
+  }
+
+  private func store(_ image: NSImage?, for path: String) {
+    if images[path] == nil, !missingPaths.contains(path) {
+      insertionOrder.append(path)
+    }
+    if let image {
+      images[path] = image
+      missingPaths.remove(path)
+    } else {
+      images.removeValue(forKey: path)
+      missingPaths.insert(path)
+    }
+    trimIfNeeded()
+  }
+
+  private func normalizedPath(_ rawPath: String?) -> String? {
+    guard let path = rawPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !path.isEmpty
+    else {
+      return nil
+    }
+    return path
+  }
+
+  private func trimIfNeeded() {
+    while insertionOrder.count > maximumCount, let removed = insertionOrder.first {
+      insertionOrder.removeFirst()
+      images.removeValue(forKey: removed)
+      missingPaths.remove(removed)
+    }
+  }
+}
+
 private struct ConnectionAppLabel: View {
   let connection: ConnectionSnapshot
+  @ObservedObject var iconCache: ConnectionAppIconCache
 
   var body: some View {
     HStack(spacing: 6) {
-      if let image = appIcon {
+      if let image = iconCache.icon(for: connection.processPath) {
         Image(nsImage: image)
           .resizable()
           .frame(width: 16, height: 16)
@@ -376,15 +499,11 @@ private struct ConnectionAppLabel: View {
         .lineLimit(1)
     }
   }
-
-  private var appIcon: NSImage? {
-    guard let path = connection.processPath else { return nil }
-    return NSWorkspace.shared.icon(forFile: path)
-  }
 }
 
 private struct ConnectionRow: View {
   let connection: ConnectionSnapshot
+  @ObservedObject var iconCache: ConnectionAppIconCache
   let isSelected: Bool
   let isClosing: Bool
   let canClose: Bool
@@ -399,7 +518,7 @@ private struct ConnectionRow: View {
       }
       .buttonStyle(.borderless)
 
-      ConnectionAppLabel(connection: connection)
+      ConnectionAppLabel(connection: connection, iconCache: iconCache)
         .frame(width: 160, alignment: .leading)
       Text(connection.host)
         .lineLimit(1)

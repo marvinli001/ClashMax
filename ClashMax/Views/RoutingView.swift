@@ -19,6 +19,66 @@ private enum EffectiveConfigInspectorTab: String, CaseIterable, Identifiable {
   }
 }
 
+enum RoutingWorkspaceLayoutMode {
+  case singleColumn
+  case twoColumn
+  case threeColumn
+}
+
+enum RoutingWorkspaceLayout {
+  static let twoColumnBreakpoint: CGFloat = 820
+  static let threeColumnBreakpoint: CGFloat = 1_220
+  static let snippetListWidth: CGFloat = 292
+  static let inspectorMinWidth: CGFloat = 320
+  static let inspectorMaxWidth: CGFloat = 380
+
+  static func mode(forWidth width: CGFloat) -> RoutingWorkspaceLayoutMode {
+    if width >= threeColumnBreakpoint {
+      return .threeColumn
+    }
+    if width >= twoColumnBreakpoint {
+      return .twoColumn
+    }
+    return .singleColumn
+  }
+}
+
+@MainActor
+final class RuleMatchSimulationDebouncer: ObservableObject {
+  private let delayNanoseconds: UInt64
+  private var task: Task<Void, Never>?
+
+  init(delayNanoseconds: UInt64 = 250_000_000) {
+    self.delayNanoseconds = delayNanoseconds
+  }
+
+  func schedule(_ action: @escaping @MainActor () -> Void) {
+    task?.cancel()
+    let delayNanoseconds = delayNanoseconds
+    task = Task { @MainActor [weak self] in
+      do {
+        try await Task.sleep(nanoseconds: delayNanoseconds)
+      } catch {
+        return
+      }
+      guard let self, !Task.isCancelled else { return }
+      self.task = nil
+      action()
+    }
+  }
+
+  func runImmediately(_ action: @escaping @MainActor () -> Void) {
+    task?.cancel()
+    task = nil
+    action()
+  }
+
+  func cancel() {
+    task?.cancel()
+    task = nil
+  }
+}
+
 struct RoutingView: View {
   @EnvironmentObject private var appModel: AppModel
   @EnvironmentObject private var profileStore: ProfileStore
@@ -37,6 +97,7 @@ struct RoutingView: View {
   @State private var simulationTrace: RuleMatchSimulationTrace = .noMatch
   @State private var explanationContext: RuleExplanation?
   @State private var effectiveConfigTab: EffectiveConfigInspectorTab = .layers
+  @StateObject private var simulationDebouncer = RuleMatchSimulationDebouncer()
 
   var body: some View {
     AdaptivePage(
@@ -54,16 +115,19 @@ struct RoutingView: View {
     }
     .onChange(of: selectedSnippetID) { _, _ in loadSelectedSnippet() }
     .onChange(of: snippetLibrary.snippets) { _, _ in reconcileDraftWithLibrary() }
-    .onChange(of: profileStore.activeProfileID) { _, _ in simulate() }
-    .onChange(of: draftSnippet) { _, _ in simulate() }
-    .onChange(of: simulationDestination) { _, _ in simulate() }
-    .onChange(of: simulationSourceIP) { _, _ in simulate() }
-    .onChange(of: simulationDestinationPort) { _, _ in simulate() }
-    .onChange(of: simulationSourcePort) { _, _ in simulate() }
-    .onChange(of: simulationInboundPort) { _, _ in simulate() }
-    .onChange(of: simulationProcess) { _, _ in simulate() }
-    .onChange(of: runtimeData.rules) { _, _ in simulate() }
+    .onChange(of: profileStore.activeProfileID) { _, _ in scheduleSimulation() }
+    .onChange(of: draftSnippet) { _, _ in scheduleSimulation() }
+    .onChange(of: simulationDestination) { _, _ in scheduleSimulation() }
+    .onChange(of: simulationSourceIP) { _, _ in scheduleSimulation() }
+    .onChange(of: simulationDestinationPort) { _, _ in scheduleSimulation() }
+    .onChange(of: simulationSourcePort) { _, _ in scheduleSimulation() }
+    .onChange(of: simulationInboundPort) { _, _ in scheduleSimulation() }
+    .onChange(of: simulationProcess) { _, _ in scheduleSimulation() }
+    .onChange(of: runtimeData.rules) { _, _ in scheduleSimulation() }
     .onChange(of: appModel.routingSimulationRequest?.id) { _, _ in consumeRoutingSimulationRequest() }
+    .onDisappear {
+      simulationDebouncer.cancel()
+    }
   }
 
   private var routingPageActions: some View {
@@ -175,37 +239,76 @@ struct RoutingView: View {
 
   private var routingWorkspaceBody: some View {
     GeometryReader { proxy in
-      if proxy.size.width >= 1120 {
-        HStack(alignment: .top, spacing: 0) {
-          snippetListPane
-            .frame(width: 292, alignment: .topLeading)
-            .frame(maxHeight: .infinity, alignment: .topLeading)
-
-          Divider()
-
-          routingEditorPane
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-
-          Divider()
-
-          routingInspectorPane
-            .frame(width: min(max(proxy.size.width * 0.34, 320), 380), alignment: .topLeading)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-      } else {
-        ScrollView {
-          VStack(alignment: .leading, spacing: 12) {
-            snippetListContent
-            routingEditorContent
-            routingInspectorContent
-          }
-          .padding(12)
-          .frame(maxWidth: .infinity, alignment: .topLeading)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      switch RoutingWorkspaceLayout.mode(forWidth: proxy.size.width) {
+      case .threeColumn:
+        routingThreeColumnWorkspace(width: proxy.size.width)
+      case .twoColumn:
+        routingTwoColumnWorkspace
+      case .singleColumn:
+        routingSingleColumnWorkspace
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+  }
+
+  private func routingThreeColumnWorkspace(width: CGFloat) -> some View {
+    HStack(alignment: .top, spacing: 0) {
+      snippetListPane
+        .frame(width: RoutingWorkspaceLayout.snippetListWidth, alignment: .topLeading)
+        .frame(maxHeight: .infinity, alignment: .topLeading)
+
+      Divider()
+
+      routingEditorPane
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+      Divider()
+
+      routingInspectorPane
+        .frame(width: inspectorWidth(for: width), alignment: .topLeading)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+  }
+
+  private var routingTwoColumnWorkspace: some View {
+    HStack(alignment: .top, spacing: 0) {
+      snippetListPane
+        .frame(width: RoutingWorkspaceLayout.snippetListWidth, alignment: .topLeading)
+        .frame(maxHeight: .infinity, alignment: .topLeading)
+
+      Divider()
+
+      ScrollView {
+        VStack(alignment: .leading, spacing: 12) {
+          routingEditorContent
+          routingInspectorContent
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+  }
+
+  private var routingSingleColumnWorkspace: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 12) {
+        snippetListContent
+        routingEditorContent
+        routingInspectorContent
+      }
+      .padding(12)
+      .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+  }
+
+  private func inspectorWidth(for width: CGFloat) -> CGFloat {
+    min(
+      max(width * 0.34, RoutingWorkspaceLayout.inspectorMinWidth),
+      RoutingWorkspaceLayout.inspectorMaxWidth
+    )
   }
 
   private var snippetListPane: some View {
@@ -556,6 +659,8 @@ struct RoutingView: View {
       return .red
     case .added:
       return .green
+    case .omitted:
+      return .secondary
     }
   }
 
@@ -808,7 +913,7 @@ struct RoutingView: View {
     draftSnippet = RuntimeSnippet.defaultRuleSnippet
     loadedSnippetSnapshot = nil
     isEditingDetachedDraft = true
-    simulate()
+    runSimulationImmediately()
   }
 
   private func newDNSPatchSnippet() {
@@ -816,7 +921,7 @@ struct RoutingView: View {
     draftSnippet = RuntimeSnippet.defaultDNSPatchSnippet
     loadedSnippetSnapshot = nil
     isEditingDetachedDraft = true
-    simulate()
+    runSimulationImmediately()
   }
 
   private func saveDraft() {
@@ -864,7 +969,7 @@ struct RoutingView: View {
     draftSnippet = selectedSnippet
     loadedSnippetSnapshot = selectedSnippet
     isEditingDetachedDraft = false
-    simulate()
+    runSimulationImmediately()
   }
 
   private func reconcileDraftWithLibrary() {
@@ -895,7 +1000,19 @@ struct RoutingView: View {
     } else {
       selectInitialSnippetIfNeeded()
     }
-    simulate()
+    runSimulationImmediately()
+  }
+
+  private func scheduleSimulation() {
+    simulationDebouncer.schedule {
+      simulate()
+    }
+  }
+
+  private func runSimulationImmediately() {
+    simulationDebouncer.runImmediately {
+      simulate()
+    }
   }
 
   private func simulate() {
@@ -912,7 +1029,7 @@ struct RoutingView: View {
     simulationSourcePort = request.input.sourcePort
     simulationInboundPort = request.input.inboundPort
     simulationProcess = request.input.process
-    simulate()
+    runSimulationImmediately()
   }
 
   private var simulationInput: RuleMatchSimulationInput {

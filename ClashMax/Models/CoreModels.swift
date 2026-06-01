@@ -1773,11 +1773,12 @@ struct ExternalControllerCORSSettings: Codable, Equatable, Sendable {
     "http://tauri.localhost",
     "http://localhost:3000"
   ]
-  static let defaultPanelOrigins = [
+  static let legacyDefaultPanelOrigins = [
     "https://yacd.metacubex.one",
     "https://metacubex.github.io",
     "https://board.zash.run.place"
   ]
+  static let defaultPanelOrigins: [String] = []
 
   var enabled: Bool
   var allowPrivateNetwork: Bool
@@ -1858,6 +1859,34 @@ struct ExternalControllerCORSSettings: Codable, Equatable, Sendable {
     else { return false }
 
     return true
+  }
+
+  static func origin(forDashboardURL url: URL) -> String? {
+    guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+          let scheme = components.scheme?.lowercased(),
+          ["http", "https", "tauri"].contains(scheme),
+          let rawHost = components.host?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !rawHost.isEmpty
+    else { return nil }
+
+    let host = rawHost
+      .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+      .lowercased()
+    let originHost = host.contains(":") ? "[\(host)]" : host
+    var origin = "\(scheme)://\(originHost)"
+    if let port = components.port {
+      origin += ":\(port)"
+    }
+    return isValidOrigin(origin) ? origin : nil
+  }
+
+  static func removingLegacyDefaultPanelOrigins(_ settings: ExternalControllerCORSSettings) -> ExternalControllerCORSSettings {
+    let legacyOrigins = Set(legacyDefaultPanelOrigins.map { $0.lowercased() })
+    var migrated = settings
+    migrated.allowedOrigins = normalizedOrigins(settings.allowedOrigins).filter { origin in
+      !legacyOrigins.contains(origin.lowercased())
+    }
+    return migrated
   }
 }
 
@@ -4879,20 +4908,66 @@ struct ExternalDashboardProfile: Identifiable, Codable, Equatable, Sendable {
   var url: URL
   var readOnly: Bool
   var secretAccount: String?
+  var trustedForSecretAutofill: Bool
 
   init(
     id: UUID = UUID(),
     name: String,
     url: URL = URL(string: "https://yacd.metacubex.one")!,
     readOnly: Bool = true,
-    secretAccount: String? = nil
+    secretAccount: String? = nil,
+    trustedForSecretAutofill: Bool = false
   ) {
     self.id = id
     self.name = name.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? String(localized: "Dashboard")
     self.url = url
     self.readOnly = readOnly
     self.secretAccount = secretAccount?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    self.trustedForSecretAutofill = trustedForSecretAutofill
   }
+
+  private enum CodingKeys: String, CodingKey {
+    case id
+    case name
+    case url
+    case readOnly
+    case secretAccount
+    case trustedForSecretAutofill
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    self.init(
+      id: container.decodeDefault(UUID.self, forKey: .id, default: UUID()),
+      name: container.decodeDefault(String.self, forKey: .name, default: String(localized: "Dashboard")),
+      url: container.decodeDefault(URL.self, forKey: .url, default: URL(string: "https://yacd.metacubex.one")!),
+      readOnly: container.decodeDefault(Bool.self, forKey: .readOnly, default: true),
+      secretAccount: try container.decodeIfPresent(String.self, forKey: .secretAccount),
+      trustedForSecretAutofill: container.decodeDefault(Bool.self, forKey: .trustedForSecretAutofill, default: false)
+    )
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(id, forKey: .id)
+    try container.encode(name, forKey: .name)
+    try container.encode(url, forKey: .url)
+    try container.encode(readOnly, forKey: .readOnly)
+    try container.encodeIfPresent(secretAccount, forKey: .secretAccount)
+    try container.encode(trustedForSecretAutofill, forKey: .trustedForSecretAutofill)
+  }
+}
+
+struct ExternalDashboardOpenPlan: Equatable, Sendable {
+  enum SecretDelivery: Equatable, Sendable {
+    case none
+    case fragment
+    case manualCopy
+  }
+
+  var url: URL
+  var secretDelivery: SecretDelivery
+  var secretForManualCopy: String?
 }
 
 enum ExternalControlHealthStatus: String, Codable, Equatable, Sendable {

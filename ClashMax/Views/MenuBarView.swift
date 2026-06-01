@@ -6,6 +6,7 @@ enum MenuBarPanelLayout {
   static let controlWidth: CGFloat = 108
   static let statusCornerRadius: CGFloat = 8
   static let trafficChartHeight: CGFloat = 52
+  static let footerButtonMinWidth: CGFloat = 0
   static let plannedWidthRange: ClosedRange<CGFloat> = 300 ... 330
 }
 
@@ -131,16 +132,14 @@ struct MenuBarView: View {
           Button {
             appModel.updateActiveSubscription()
           } label: {
-            Label("Update Subscription", systemImage: "arrow.triangle.2.circlepath")
-              .frame(maxWidth: .infinity)
+            MenuBarFooterButtonLabel(title: "Update Subscription", systemImage: "arrow.triangle.2.circlepath")
           }
           .disabled(!(appModel.profileStore.activeProfile?.isSubscription ?? false))
 
           Button {
             appModel.updateAllSubscriptions()
           } label: {
-            Label("Update All", systemImage: "arrow.triangle.2.circlepath.circle")
-              .frame(maxWidth: .infinity)
+            MenuBarFooterButtonLabel(title: "Update All", systemImage: "arrow.triangle.2.circlepath.circle")
           }
           .disabled(!appModel.profileStore.profiles.contains(where: \.isSubscription))
         }
@@ -149,8 +148,7 @@ struct MenuBarView: View {
           Button {
             appModel.testDelayForAllProxyGroups()
           } label: {
-            Label("Test All", systemImage: "waveform.path.ecg")
-              .frame(maxWidth: .infinity)
+            MenuBarFooterButtonLabel(title: "Test All", systemImage: "waveform.path.ecg")
           }
           .disabled(!appModel.canControlRuntimeProxies || appModel.visibleProxyGroups.isEmpty)
 
@@ -158,8 +156,7 @@ struct MenuBarView: View {
             appModel.updateAllProxyProviders()
             appModel.updateAllRuleProviders()
           } label: {
-            Label("Providers", systemImage: "shippingbox")
-              .frame(maxWidth: .infinity)
+            MenuBarFooterButtonLabel(title: "Providers", systemImage: "shippingbox")
           }
           .disabled(!appModel.canControlRuntimeProxies)
         }
@@ -170,8 +167,7 @@ struct MenuBarView: View {
           Button {
             AppDelegate.showMainWindow()
           } label: {
-            Label("Open Main Window", systemImage: "macwindow")
-              .frame(maxWidth: .infinity)
+            MenuBarFooterButtonLabel(title: "Open Main Window", systemImage: "macwindow")
           }
         }
 
@@ -180,8 +176,7 @@ struct MenuBarView: View {
           Button {
             NSApp.terminate(nil)
           } label: {
-            Label("Quit", systemImage: "power")
-              .frame(maxWidth: .infinity)
+            MenuBarFooterButtonLabel(title: "Quit", systemImage: "power")
           }
         }
       }
@@ -376,9 +371,7 @@ private struct MenuBarPinnedGroupsSection: View {
               }
             }
           } label: {
-            Label(group.selected ?? String(localized: "Select"), systemImage: "point.3.connected.trianglepath.dotted")
-              .lineLimit(1)
-              .frame(width: MenuBarPanelLayout.controlWidth, alignment: .trailing)
+            MenuBarPinnedGroupSelectionLabel(title: group.selected ?? String(localized: "Select"))
           }
           .controlSize(.small)
           .disabled(!appModel.canControlRuntimeProxies || group.nodes.filter(\.isSelectable).isEmpty)
@@ -422,6 +415,8 @@ struct MenuBarHeader: View {
           .foregroundStyle(.tertiary)
           .lineLimit(1)
       }
+      .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+      .layoutPriority(1)
 
       Spacer(minLength: 6)
 
@@ -429,6 +424,7 @@ struct MenuBarHeader: View {
         .font(.caption.weight(.semibold))
         .foregroundStyle(runtime.tint)
         .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
         .padding(.horizontal, 7)
         .padding(.vertical, 3)
         .background(runtime.tint.opacity(0.12), in: Capsule())
@@ -530,12 +526,37 @@ struct MenuBarControlRow<Control: View>: View {
       Label(title, systemImage: systemImage)
         .font(.callout)
         .lineLimit(1)
-
-      Spacer(minLength: 6)
+        .truncationMode(.tail)
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
 
       control
         .controlSize(.small)
+        .layoutPriority(1)
     }
+  }
+}
+
+struct MenuBarPinnedGroupSelectionLabel: View {
+  let title: String
+
+  var body: some View {
+    Label(title, systemImage: "point.3.connected.trianglepath.dotted")
+      .lineLimit(1)
+      .truncationMode(.middle)
+      .frame(width: MenuBarPanelLayout.controlWidth, alignment: .trailing)
+  }
+}
+
+struct MenuBarFooterButtonLabel: View {
+  let title: String
+  let systemImage: String
+
+  var body: some View {
+    Label(title, systemImage: systemImage)
+      .lineLimit(1)
+      .truncationMode(.tail)
+      .minimumScaleFactor(0.78)
+      .frame(minWidth: MenuBarPanelLayout.footerButtonMinWidth, maxWidth: .infinity)
   }
 }
 

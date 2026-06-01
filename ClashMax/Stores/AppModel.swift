@@ -1816,13 +1816,23 @@ final class AppModel: ObservableObject {
     var nextProfile = profile
     let trimmedSecret = secret?.trimmingCharacters(in: .whitespacesAndNewlines)
     do {
-      if let trimmedSecret, !trimmedSecret.isEmpty {
+      if nextProfile.readOnly {
+        if let account = nextProfile.secretAccount {
+          try externalDashboardSecretStore.delete(account: account)
+        }
+        nextProfile.secretAccount = nil
+        nextProfile.trustedForSecretAutofill = false
+      } else if let trimmedSecret, !trimmedSecret.isEmpty {
         let account = nextProfile.secretAccount ?? "external-dashboard-\(nextProfile.id.uuidString)"
         try externalDashboardSecretStore.save(trimmedSecret, account: account)
         nextProfile.secretAccount = account
       } else if secret != nil, let account = nextProfile.secretAccount {
         try externalDashboardSecretStore.delete(account: account)
         nextProfile.secretAccount = nil
+      }
+
+      guard syncControllerCORSForAutomaticSecretIfNeeded(nextProfile) else {
+        return false
       }
 
       var profiles = externalDashboardProfiles
@@ -1840,6 +1850,24 @@ final class AppModel: ObservableObject {
     }
   }
 
+  private func syncControllerCORSForAutomaticSecretIfNeeded(_ profile: ExternalDashboardProfile) -> Bool {
+    guard let origin = Self.corsOriginForAutomaticSecretDashboard(profile) else { return true }
+    var controllerSettings = externalControllerSettings
+    let origins = ExternalControllerCORSSettings.normalizedOrigins(
+      controllerSettings.cors.allowedOrigins + [origin]
+    )
+    guard origins != controllerSettings.cors.allowedOrigins else { return true }
+    controllerSettings.cors.allowedOrigins = origins
+    return updateExternalControllerSettings(controllerSettings)
+  }
+
+  private static func corsOriginForAutomaticSecretDashboard(_ profile: ExternalDashboardProfile) -> String? {
+    guard !profile.readOnly,
+          profile.trustedForSecretAutofill || isLocalDashboardURL(profile.url)
+    else { return nil }
+    return ExternalControllerCORSSettings.origin(forDashboardURL: profile.url)
+  }
+
   func deleteExternalDashboardProfile(_ profile: ExternalDashboardProfile) {
     if let account = profile.secretAccount {
       try? externalDashboardSecretStore.delete(account: account)
@@ -1847,16 +1875,87 @@ final class AppModel: ObservableObject {
     externalDashboardProfiles.removeAll { $0.id == profile.id }
   }
 
-  func externalDashboardURL(for profile: ExternalDashboardProfile) -> URL {
+  func externalDashboardOpenPlan(for profile: ExternalDashboardProfile) -> ExternalDashboardOpenPlan {
     let secret = profile.readOnly
       ? nil
       : profile.secretAccount.flatMap { try? externalDashboardSecretStore.load(account: $0) }
         ?? externalControllerSettings.normalizedSecret
-    return Self.dashboardURL(
+    return Self.dashboardOpenPlan(
       baseURL: profile.url,
       controllerHost: externalControllerSettings.normalizedHost,
       controllerPort: externalControllerSettings.normalizedPort,
+      readOnly: profile.readOnly,
+      trustedForSecretAutofill: profile.trustedForSecretAutofill,
       secret: secret
+    )
+  }
+
+  func externalDashboardURL(for profile: ExternalDashboardProfile) -> URL {
+    externalDashboardOpenPlan(for: profile).url
+  }
+
+  static func dashboardOpenPlan(
+    baseURL: URL,
+    controllerHost: String,
+    controllerPort: Int,
+    readOnly: Bool,
+    trustedForSecretAutofill: Bool,
+    secret: String?
+  ) -> ExternalDashboardOpenPlan {
+    let trimmedSecret = secret?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let effectiveSecret = trimmedSecret?.isEmpty == false ? trimmedSecret : nil
+    let shouldAutofillSecret = !readOnly
+      && effectiveSecret != nil
+      && (trustedForSecretAutofill || isLocalDashboardURL(baseURL))
+
+    if shouldAutofillSecret, let effectiveSecret {
+      return ExternalDashboardOpenPlan(
+        url: dashboardURL(
+          baseURL: baseURL,
+          controllerHost: controllerHost,
+          controllerPort: controllerPort,
+          secret: effectiveSecret
+        ),
+        secretDelivery: .fragment,
+        secretForManualCopy: nil
+      )
+    }
+
+    return sanitizedDashboardOpenPlan(
+      baseURL: baseURL,
+      controllerHost: controllerHost,
+      controllerPort: controllerPort,
+      secretForManualCopy: !readOnly ? effectiveSecret : nil
+    )
+  }
+
+  private static func isLocalDashboardURL(_ url: URL) -> Bool {
+    if url.isFileURL {
+      return true
+    }
+    guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+          let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    else {
+      return false
+    }
+    return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
+  }
+
+  private static func sanitizedDashboardOpenPlan(
+    baseURL: URL,
+    controllerHost: String,
+    controllerPort: Int,
+    secretForManualCopy: String?
+  ) -> ExternalDashboardOpenPlan {
+    ExternalDashboardOpenPlan(
+      url: dashboardURL(
+        baseURL: baseURL,
+        controllerHost: controllerHost,
+        controllerPort: controllerPort,
+        secret: nil
+      ),
+      secretDelivery: secretForManualCopy == nil ? .none : .manualCopy,
+      secretForManualCopy: secretForManualCopy
     )
   }
 
@@ -1879,11 +1978,56 @@ final class AppModel: ObservableObject {
       items.append(value)
     }
     items.removeAll { $0.name.caseInsensitiveCompare("secret") == .orderedSame }
-    if let secret = secret?.trimmingCharacters(in: .whitespacesAndNewlines), !secret.isEmpty {
+    components.queryItems = items.isEmpty ? nil : items
+    components.percentEncodedFragment = fragmentByUpdatingSecret(secret, in: components.fragment)
+    return components.url ?? baseURL
+  }
+
+  private static func fragmentByUpdatingSecret(_ secret: String?, in fragment: String?) -> String? {
+    let trimmedSecret = secret?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let effectiveSecret = trimmedSecret?.isEmpty == false ? trimmedSecret : nil
+    guard let fragment, !fragment.isEmpty else {
+      return effectiveSecret.map { queryByUpdatingSecret($0, in: "") ?? "secret=\($0)" }
+    }
+
+    if let separator = fragment.firstIndex(of: "?") {
+      let prefix = String(fragment[..<separator])
+      let query = String(fragment[fragment.index(after: separator)...])
+      guard let updatedQuery = queryByUpdatingSecret(effectiveSecret, in: query), !updatedQuery.isEmpty else {
+        let encodedPrefix = percentEncodedFragmentPrefix(prefix)
+        return encodedPrefix.isEmpty ? nil : encodedPrefix
+      }
+      let encodedPrefix = percentEncodedFragmentPrefix(prefix)
+      return encodedPrefix.isEmpty ? updatedQuery : "\(encodedPrefix)?\(updatedQuery)"
+    }
+
+    if fragment.contains("=") || fragment.contains("&") {
+      return queryByUpdatingSecret(effectiveSecret, in: fragment)
+    }
+
+    guard let effectiveSecret else {
+      return percentEncodedFragmentPrefix(fragment)
+    }
+    let query = queryByUpdatingSecret(effectiveSecret, in: "") ?? "secret=\(effectiveSecret)"
+    return "\(percentEncodedFragmentPrefix(fragment))?\(query)"
+  }
+
+  private static func queryByUpdatingSecret(_ secret: String?, in query: String) -> String? {
+    var components = URLComponents()
+    components.query = query.isEmpty ? nil : query
+    var items = components.queryItems ?? []
+    items.removeAll { $0.name.caseInsensitiveCompare("secret") == .orderedSame }
+    if let secret {
       items.append(URLQueryItem(name: "secret", value: secret))
     }
-    components.queryItems = items
-    return components.url ?? baseURL
+    components.queryItems = items.isEmpty ? nil : items
+    return components.percentEncodedQuery
+  }
+
+  private static func percentEncodedFragmentPrefix(_ value: String) -> String {
+    var allowed = CharacterSet.urlFragmentAllowed
+    allowed.remove(charactersIn: "%?")
+    return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
   }
 
   @discardableResult

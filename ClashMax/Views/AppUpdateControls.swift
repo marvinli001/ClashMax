@@ -9,6 +9,9 @@ struct CheckForUpdatesButton: View {
       updateController.checkForUpdates()
     } label: {
       Label("Check Updates", systemImage: "sparkles")
+        .lineLimit(1)
+        .truncationMode(.tail)
+        .minimumScaleFactor(0.78)
         .frame(maxWidth: fillsWidth ? .infinity : nil)
     }
     .disabled(!updateController.canCheckForUpdates)

@@ -217,7 +217,7 @@ final class PersistedSettingsStore: ObservableObject {
       ExternalControllerCORSSettings.self,
       forKey: Self.externalControllerCORSSettingsDefaultsKey,
       defaults: defaults
-    )
+    ).map(ExternalControllerCORSSettings.removingLegacyDefaultPanelOrigins)
     externalControllerSettings = Self.loadExternalControllerSettings(
       defaults: defaults,
       migratedCORSSettings: migratedCORSSettings
@@ -377,6 +377,7 @@ final class PersistedSettingsStore: ObservableObject {
       defaults: defaults
     ) ?? ExternalControllerSettings(cors: migratedCORSSettings ?? .default)
     settings.secret = ExternalControllerSettings.generateSecret()
+    settings.cors = ExternalControllerCORSSettings.removingLegacyDefaultPanelOrigins(settings.cors)
     return settings
   }
 

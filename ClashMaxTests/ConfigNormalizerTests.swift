@@ -583,6 +583,22 @@ final class ConfigNormalizerTests: XCTestCase {
     )
   }
 
+  func testRuntimeConfigDefaultCORSOnlyIncludesFixedLocalOrigins() throws {
+    let source = """
+    proxies:
+      - name: DIRECT
+        type: direct
+    """
+    let overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+
+    let output = try ConfigNormalizer().runtimeConfig(from: source, overrides: overrides)
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let cors = try XCTUnwrap(yaml["external-controller-cors"] as? [String: Any])
+
+    XCTAssertEqual(cors["allow-origins"] as? [String], ExternalControllerCORSSettings.fixedLocalOrigins)
+    XCTAssertEqual(cors["allow-private-network"] as? Bool, true)
+  }
+
   func testRuntimeConfigRemovesExternalControllerCORSWhenDisabled() throws {
     let source = """
     proxies:
@@ -927,6 +943,37 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertFalse(exported.contains("00000000-0000-0000-0000-000000000000"))
     XCTAssertFalse(exported.contains("token@example.com"))
     XCTAssertFalse(exported.contains(paths.runtime.path))
+  }
+
+  func testEffectiveRuntimeConfigDiffCapsLargeSingleLineChangeWithoutFullReplacement() throws {
+    let oldLines = (0..<701).map { "rule-\($0)" }
+    var newLines = oldLines
+    newLines[350] = "rule-350-updated"
+
+    let rows = EffectiveRuntimeConfigLineDiff.diff(
+      oldText: oldLines.joined(separator: "\n"),
+      newText: newLines.joined(separator: "\n")
+    )
+
+    XCTAssertTrue(rows.contains { $0.kind == .removed && $0.text == "rule-350" })
+    XCTAssertTrue(rows.contains { $0.kind == .added && $0.text == "rule-350-updated" })
+    XCTAssertLessThan(rows.filter { $0.kind == .removed }.count, oldLines.count)
+    XCTAssertLessThan(rows.filter { $0.kind == .added }.count, newLines.count)
+  }
+
+  func testEffectiveRuntimeConfigDiffCapsCompletelyDifferentLargeFiles() throws {
+    let oldLines = (0..<701).map { "old-rule-\($0)" }
+    let newLines = (0..<701).map { "new-rule-\($0)" }
+
+    let rows = EffectiveRuntimeConfigLineDiff.diff(
+      oldText: oldLines.joined(separator: "\n"),
+      newText: newLines.joined(separator: "\n")
+    )
+
+    XCTAssertLessThanOrEqual(rows.count, 1_200)
+    XCTAssertTrue(rows.contains { $0.kind == .omitted })
+    XCTAssertEqual(rows.first?.kind, .removed)
+    XCTAssertEqual(rows.last?.kind, .added)
   }
 
   func testURIProviderContentBuildsRuntimeConfigWithFileProvider() throws {

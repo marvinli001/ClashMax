@@ -1206,6 +1206,7 @@ private struct ExternalDashboardProfilesPopover: View {
   @Binding var urlString: String
   @Binding var readOnly: Bool
   @Binding var secret: String
+  @Binding var trustedForSecretAutofill: Bool
   @Binding var error: String?
   let onAdd: () -> Void
   let onDelete: (ExternalDashboardProfile) -> Void
@@ -1226,9 +1227,22 @@ private struct ExternalDashboardProfilesPopover: View {
           .textFieldStyle(.roundedBorder)
         Toggle("Read-only dashboard", isOn: $readOnly)
           .toggleStyle(.checkbox)
+          .onChange(of: readOnly) { _, newValue in
+            if newValue {
+              trustedForSecretAutofill = false
+            }
+          }
         SecureField("Dashboard Secret", text: $secret)
           .textFieldStyle(.roundedBorder)
           .disabled(readOnly)
+        if !readOnly {
+          Toggle("Trust this dashboard to receive the API secret automatically", isOn: $trustedForSecretAutofill)
+            .toggleStyle(.checkbox)
+          Text("Trusted read-write dashboards receive the secret in the URL fragment. Remote dashboards that are not trusted open without the secret, and the menu offers one-time copy instead.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
         HStack {
           if let error {
             Label(error, systemImage: "exclamationmark.triangle.fill")
@@ -1272,6 +1286,11 @@ private struct ExternalDashboardProfilesPopover: View {
                 Image(systemName: "key")
                   .foregroundStyle(.secondary)
                   .help("Secret stored in Keychain")
+              }
+              if !profile.readOnly && profile.trustedForSecretAutofill {
+                Image(systemName: "shield.checkered")
+                  .foregroundStyle(.secondary)
+                  .help("Trusted for automatic secret autofill")
               }
               Button {
                 onDelete(profile)
@@ -2296,6 +2315,7 @@ private struct ExternalControlSettingsRow: View {
   @State private var dashboardURLDraft = "https://yacd.metacubex.one"
   @State private var dashboardReadOnlyDraft = true
   @State private var dashboardSecretDraft = ""
+  @State private var dashboardTrustedForSecretAutofillDraft = false
   @State private var dashboardError: String?
   private let healthChecker = ExternalControlHealthChecker()
 
@@ -2355,24 +2375,7 @@ private struct ExternalControlSettingsRow: View {
   private var dashboardMenu: some View {
     Menu {
       ForEach(settings.externalDashboardProfiles) { profile in
-        Menu {
-          Button {
-            NSWorkspace.shared.open(appModel.externalDashboardURL(for: profile))
-          } label: {
-            Label("Open Dashboard", systemImage: "safari")
-          }
-          Button {
-            runDashboardHealthCheck(profile)
-          } label: {
-            Label("Health Check", systemImage: "heart.text.square")
-          }
-          if let result = dashboardHealth[profile.id] {
-            Divider()
-            Label(result.displayMessage, systemImage: healthSymbol(for: result))
-          }
-        } label: {
-          Label(profile.name, systemImage: profile.readOnly ? "eye" : "pencil")
-        }
+        dashboardProfileMenu(for: profile)
       }
       Divider()
       Button {
@@ -2386,6 +2389,36 @@ private struct ExternalControlSettingsRow: View {
         .frame(width: 22, height: 22)
     }
     .help(controllerHealth.displayMessage)
+  }
+
+  @ViewBuilder
+  private func dashboardProfileMenu(for profile: ExternalDashboardProfile) -> some View {
+    let plan = appModel.externalDashboardOpenPlan(for: profile)
+    Menu {
+      Button {
+        NSWorkspace.shared.open(plan.url)
+      } label: {
+        Label("Open Dashboard", systemImage: "safari")
+      }
+      if let secret = plan.secretForManualCopy {
+        Button {
+          copyToPasteboard(secret)
+        } label: {
+          Label("Copy API Secret", systemImage: "key")
+        }
+      }
+      Button {
+        runDashboardHealthCheck(profile)
+      } label: {
+        Label("Health Check", systemImage: "heart.text.square")
+      }
+      if let result = dashboardHealth[profile.id] {
+        Divider()
+        Label(result.displayMessage, systemImage: healthSymbol(for: result))
+      }
+    } label: {
+      Label(profile.name, systemImage: dashboardProfileSymbol(for: profile, plan: plan))
+    }
   }
 
   private var dashboardProfilesButton: some View {
@@ -2409,6 +2442,7 @@ private struct ExternalControlSettingsRow: View {
         urlString: $dashboardURLDraft,
         readOnly: $dashboardReadOnlyDraft,
         secret: $dashboardSecretDraft,
+        trustedForSecretAutofill: $dashboardTrustedForSecretAutofillDraft,
         error: $dashboardError,
         onAdd: saveDashboardProfile,
         onDelete: deleteDashboardProfile
@@ -2521,6 +2555,7 @@ private struct ExternalControlSettingsRow: View {
     dashboardURLDraft = "https://yacd.metacubex.one"
     dashboardReadOnlyDraft = true
     dashboardSecretDraft = ""
+    dashboardTrustedForSecretAutofillDraft = false
     dashboardError = nil
   }
 
@@ -2536,7 +2571,12 @@ private struct ExternalControlSettingsRow: View {
       dashboardError = "Dashboard URL must start with http or https."
       return
     }
-    let profile = ExternalDashboardProfile(name: trimmedName, url: url, readOnly: dashboardReadOnlyDraft)
+    let profile = ExternalDashboardProfile(
+      name: trimmedName,
+      url: url,
+      readOnly: dashboardReadOnlyDraft,
+      trustedForSecretAutofill: !dashboardReadOnlyDraft && dashboardTrustedForSecretAutofillDraft
+    )
     let secret = dashboardReadOnlyDraft ? nil : dashboardSecretDraft
     guard appModel.saveExternalDashboardProfile(profile, secret: secret) else {
       dashboardError = appModel.lastError
@@ -2576,6 +2616,22 @@ private struct ExternalControlSettingsRow: View {
     case .failed:
       "exclamationmark.triangle.fill"
     }
+  }
+
+  private func dashboardProfileSymbol(for profile: ExternalDashboardProfile, plan: ExternalDashboardOpenPlan) -> String {
+    switch plan.secretDelivery {
+    case .fragment:
+      "shield.checkered"
+    case .manualCopy:
+      "key"
+    case .none:
+      profile.readOnly ? "eye" : "pencil"
+    }
+  }
+
+  private func copyToPasteboard(_ value: String) {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(value, forType: .string)
   }
 
   private static func parseAddress(_ value: String) -> (host: String, port: Int)? {

@@ -138,6 +138,97 @@ final class MenuBarPanelLayoutTests: XCTestCase {
     XCTAssertLessThanOrEqual(size.height, 52)
   }
 
+  func testPinnedGroupStyleRowKeepsLongGroupAndNodeNamesInsidePanelWidth() {
+    let view = MenuBarControlRow(
+      title: "Proxy Group - 香港 日本 美国 自动选择 - Very Long Provider Alias",
+      systemImage: "pin.fill"
+    ) {
+      MenuBarPinnedGroupSelectionLabel(
+        title: "Auto Select - Hong Kong Premium Relay With A Very Long Name"
+      )
+    }
+    .padding(MenuBarPanelLayout.padding)
+    .frame(width: MenuBarPanelLayout.width)
+    .environment(\.locale, Locale(identifier: "zh-Hans"))
+
+    let size = fittingSize(for: view)
+
+    XCTAssertLessThanOrEqual(size.width, MenuBarPanelLayout.width + 1)
+    XCTAssertLessThanOrEqual(size.height, 52)
+  }
+
+  func testFooterButtonLabelsKeepLongEnglishAndChineseTitlesInsidePanelWidth() {
+    let view = HStack(spacing: 5) {
+      MenuBarFooterButtonLabel(
+        title: "Update Subscription Providers",
+        systemImage: "arrow.triangle.2.circlepath"
+      )
+      MenuBarFooterButtonLabel(
+        title: "更新全部订阅和远程提供者",
+        systemImage: "shippingbox"
+      )
+    }
+    .buttonStyle(.bordered)
+    .controlSize(.small)
+    .font(.caption)
+    .padding(MenuBarPanelLayout.padding)
+    .frame(width: MenuBarPanelLayout.width)
+
+    let size = fittingSize(for: view, height: 80)
+
+    XCTAssertLessThanOrEqual(size.width, MenuBarPanelLayout.width + 1)
+    XCTAssertLessThanOrEqual(size.height, 52)
+  }
+
+  func testRuleMatchSimulationDebouncerRunsOnlyLatestScheduledWork() async throws {
+    let debouncer = RuleMatchSimulationDebouncer(delayNanoseconds: 20_000_000)
+    var events: [String] = []
+
+    debouncer.schedule { events.append("first") }
+    debouncer.schedule { events.append("second") }
+    try await Task.sleep(nanoseconds: 80_000_000)
+
+    XCTAssertEqual(events, ["second"])
+  }
+
+  func testRuleMatchSimulationDebouncerImmediateRunCancelsPendingWork() async throws {
+    let debouncer = RuleMatchSimulationDebouncer(delayNanoseconds: 20_000_000)
+    var events: [String] = []
+
+    debouncer.schedule { events.append("scheduled") }
+    debouncer.runImmediately { events.append("immediate") }
+    try await Task.sleep(nanoseconds: 80_000_000)
+
+    XCTAssertEqual(events, ["immediate"])
+  }
+
+  func testConnectionAppIconCacheReusesLoadedIconsAndEvictsOldestPath() throws {
+    let loadedImage = NSImage(size: NSSize(width: 16, height: 16))
+    var loadedPaths: [String] = []
+    let cache = ConnectionAppIconCache(maximumCount: 2) { path in
+      loadedPaths.append(path)
+      return loadedImage
+    }
+
+    let first = try XCTUnwrap(cache.icon(for: "  /Applications/One.app  "))
+    let second = try XCTUnwrap(cache.icon(for: "/Applications/One.app"))
+    _ = cache.icon(for: "/Applications/Two.app")
+    _ = cache.icon(for: "/Applications/Three.app")
+    _ = cache.icon(for: "/Applications/One.app")
+
+    XCTAssertTrue(first === loadedImage)
+    XCTAssertTrue(second === loadedImage)
+    XCTAssertEqual(
+      loadedPaths,
+      [
+        "/Applications/One.app",
+        "/Applications/Two.app",
+        "/Applications/Three.app",
+        "/Applications/One.app"
+      ]
+    )
+  }
+
   private func fullPanelView(model: AppModel, localeIdentifier: String) -> some View {
     MenuBarView()
       .environmentObject(model)
@@ -222,6 +313,48 @@ final class MenuBarPanelLayoutTests: XCTestCase {
     TrafficSample(upload: 8192, download: 65536),
     TrafficSample(upload: 4096, download: 32768)
   ]
+}
+
+@MainActor
+final class MainWindowLayoutTests: XCTestCase {
+  func testRoutingWorkspaceLayoutUsesThreeDeterministicBreakpoints() {
+    XCTAssertEqual(RoutingWorkspaceLayout.mode(forWidth: 819), .singleColumn)
+    XCTAssertEqual(RoutingWorkspaceLayout.mode(forWidth: 820), .twoColumn)
+    XCTAssertEqual(RoutingWorkspaceLayout.mode(forWidth: 1_219), .twoColumn)
+    XCTAssertEqual(RoutingWorkspaceLayout.mode(forWidth: 1_220), .threeColumn)
+  }
+
+  func testConnectionsLayoutMovesDetailBelowAtNarrowWidths() {
+    XCTAssertEqual(ConnectionsLayout.mode(forWidth: 1_079), .stackedDetail)
+    XCTAssertEqual(ConnectionsLayout.mode(forWidth: 1_080), .splitDetail)
+  }
+
+  func testStatusStripCompactMessageFitsNarrowWidthWithoutSingleLineLoss() {
+    let view = StatusStripContent(
+      statusSummary: "Crashed: mihomo exited with code 2",
+      statusSymbol: "exclamationmark.triangle.fill",
+      statusStyle: .red,
+      profileName: "Long Subscription Profile Name - 香港 日本 美国 自动选择",
+      proxyRoutingStatus: "Network Extension Ready",
+      supplemental: .error(
+        "Could not repair TUN routing because the helper still reports a stale default route after reload and restart."
+      )
+    )
+    .frame(width: 520)
+
+    let size = fittingSize(for: view, width: 520, height: 160)
+
+    XCTAssertLessThanOrEqual(size.width, 521)
+    XCTAssertGreaterThan(size.height, 36)
+    XCTAssertLessThanOrEqual(size.height, 96)
+  }
+
+  private func fittingSize<Content: View>(for view: Content, width: CGFloat, height: CGFloat) -> CGSize {
+    let hostingView = NSHostingView(rootView: view)
+    hostingView.setFrameSize(NSSize(width: width, height: height))
+    hostingView.layoutSubtreeIfNeeded()
+    return hostingView.fittingSize
+  }
 }
 
 private struct MenuBarPanelLayoutFixture {
