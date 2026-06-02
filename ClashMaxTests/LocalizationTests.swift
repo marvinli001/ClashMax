@@ -3,6 +3,36 @@ import XCTest
 @testable import ClashMax
 
 final class LocalizationTests: XCTestCase {
+  private let activeCatalogKeysThatMustRemainExtracted = [
+    "%lld changed line(s) omitted",
+    "%lld diff line(s) omitted",
+    "%lld removed and %lld added line(s) omitted",
+    "%lld snippets, %lld enabled",
+    "%lld unchanged line(s) omitted after the change",
+    "%lld unchanged line(s) omitted before the change",
+    "Active Profile",
+    "Active Snippets",
+    "Applies Here",
+    "Copy API Secret",
+    "Create a typed rule or DNS patch snippet to apply runtime changes safely.",
+    "Destination host or IP",
+    "Dst Port",
+    "In Port",
+    "No runtime preflight required for this profile.",
+    "No Snippets",
+    "Process name or path",
+    "Rule value",
+    "Runtime config accepted by Mihomo preflight.",
+    "Skipped",
+    "Snippet Binding",
+    "Snippet Library",
+    "Source IP",
+    "Src Port",
+    "Trust this dashboard to receive the API secret automatically",
+    "Trusted for automatic secret autofill",
+    "Typed snippets are merged into generated runtime YAML without editing original profiles."
+  ]
+
   func testStatusSectionAppearsAfterHome() {
     XCTAssertEqual(Array(AppSection.allCases.prefix(2)), [.home, .status])
   }
@@ -25,6 +55,22 @@ final class LocalizationTests: XCTestCase {
     XCTAssertEqual(bundle.developmentLocalization, "en")
     XCTAssertTrue(bundle.localizations.contains("en"))
     XCTAssertTrue(bundle.localizations.contains("zh-Hans"))
+  }
+
+  func testActiveStringCatalogKeysAreNotMarkedStale() throws {
+    let testFileURL = URL(fileURLWithPath: #filePath)
+    let catalogURL = testFileURL
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .appendingPathComponent("Resources/Localizable.xcstrings")
+    let catalogData = try Data(contentsOf: catalogURL)
+    let catalog = try XCTUnwrap(JSONSerialization.jsonObject(with: catalogData) as? [String: Any])
+    let strings = try XCTUnwrap(catalog["strings"] as? [String: [String: Any]])
+    let staleKeys = activeCatalogKeysThatMustRemainExtracted.filter { key in
+      strings[key]?["extractionState"] as? String == "stale"
+    }
+
+    XCTAssertEqual(staleKeys, [])
   }
 
   func testSimplifiedChineseStringCatalogProvidesRepresentativeSettingsKeys() throws {

@@ -320,7 +320,7 @@ struct RoutingView: View {
   }
 
   private var snippetListContent: some View {
-    VStack(alignment: .leading, spacing: 10) {
+    LazyVStack(alignment: .leading, spacing: 10) {
       if snippetLibrary.snippets.isEmpty {
         RoutingWorkspaceNotice(
           title: "No Snippets",
@@ -1017,7 +1017,7 @@ struct RoutingView: View {
 
   private func simulate() {
     let simulator = RuleMatchSimulator()
-    simulationTrace = simulator.simulate(input: simulationInput, candidates: effectiveRuleCandidates())
+    simulationTrace = simulator.simulate(input: simulationInput, candidateProvider: effectiveRuleCandidates)
   }
 
   private func consumeRoutingSimulationRequest() {

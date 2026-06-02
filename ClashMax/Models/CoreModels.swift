@@ -4506,14 +4506,25 @@ struct RuleMatchSimulator: Sendable {
   func simulate(target: String, rules: [RuntimeRule]) -> RuleMatchSimulationOutcome {
     simulate(
       input: .legacyTarget(target),
-      candidates: rules.map { RuntimeRuleCandidate(rule: $0, source: .runtimeProfile) }
+      candidateProvider: {
+        rules.map { RuntimeRuleCandidate(rule: $0, source: .runtimeProfile) }
+      }
     ).outcome
   }
 
   func simulate(input: RuleMatchSimulationInput, candidates: [RuntimeRuleCandidate]) -> RuleMatchSimulationTrace {
+    simulate(input: input) {
+      candidates
+    }
+  }
+
+  func simulate(
+    input: RuleMatchSimulationInput,
+    candidateProvider: () -> [RuntimeRuleCandidate]
+  ) -> RuleMatchSimulationTrace {
     guard !input.isEmpty else { return .noMatch }
 
-    for candidate in candidates.sorted(by: { $0.rule.index < $1.rule.index }) {
+    for candidate in candidatesInRuleOrder(candidateProvider()) {
       switch match(rule: candidate.rule, input: input) {
       case true:
         return RuleMatchSimulationTrace(
@@ -4539,6 +4550,15 @@ struct RuleMatchSimulator: Sendable {
       }
     }
     return .noMatch
+  }
+
+  private func candidatesInRuleOrder(_ candidates: [RuntimeRuleCandidate]) -> [RuntimeRuleCandidate] {
+    for index in candidates.indices.dropFirst() {
+      if candidates[candidates.index(before: index)].rule.index > candidates[index].rule.index {
+        return candidates.sorted { $0.rule.index < $1.rule.index }
+      }
+    }
+    return candidates
   }
 
   private func match(rule: RuntimeRule, input: RuleMatchSimulationInput) -> Bool? {

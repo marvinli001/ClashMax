@@ -1953,6 +1953,65 @@ final class ConfigNormalizerTests: XCTestCase {
     }
   }
 
+  func testRuleMatchSimulatorSkipsCandidateProviderForEmptyInput() throws {
+    var providerCallCount = 0
+
+    let trace = RuleMatchSimulator().simulate(input: RuleMatchSimulationInput()) {
+      providerCallCount += 1
+      return [
+        RuntimeRuleCandidate(
+          rule: RuntimeRule(index: 1, type: "MATCH", payload: "", policy: "Proxy"),
+          source: .runtimeProfile
+        )
+      ]
+    }
+
+    XCTAssertEqual(trace.outcome, .noMatch)
+    XCTAssertEqual(providerCallCount, 0)
+  }
+
+  func testRuleMatchSimulatorInvokesCandidateProviderForNonEmptyInput() throws {
+    var providerCallCount = 0
+
+    let trace = RuleMatchSimulator().simulate(input: RuleMatchSimulationInput(destination: "api.example.com")) {
+      providerCallCount += 1
+      return [
+        RuntimeRuleCandidate(
+          rule: RuntimeRule(index: 1, type: "DOMAIN-SUFFIX", payload: "example.com", policy: "DIRECT"),
+          source: .runtimeProfile
+        )
+      ]
+    }
+
+    guard case let .matched(rule) = trace.outcome else {
+      return XCTFail("Expected local rule match, got \(trace.outcome)")
+    }
+    XCTAssertEqual(providerCallCount, 1)
+    XCTAssertEqual(rule.policy, "DIRECT")
+  }
+
+  func testRuleMatchSimulatorOrdersLazyCandidatesByRuleIndex() throws {
+    let trace = RuleMatchSimulator().simulate(input: RuleMatchSimulationInput(destination: "api.example.com")) {
+      [
+        RuntimeRuleCandidate(
+          rule: RuntimeRule(index: 3, type: "MATCH", payload: "", policy: "Proxy"),
+          source: .runtimeProfile
+        ),
+        RuntimeRuleCandidate(
+          rule: RuntimeRule(index: 1, type: "DOMAIN-SUFFIX", payload: "example.com", policy: "DIRECT"),
+          source: .globalPrepend
+        )
+      ]
+    }
+
+    guard case let .matched(rule) = trace.outcome else {
+      return XCTFail("Expected local rule match, got \(trace.outcome)")
+    }
+    XCTAssertEqual(rule.index, 1)
+    XCTAssertEqual(rule.policy, "DIRECT")
+    XCTAssertEqual(trace.source, .globalPrepend)
+  }
+
   func testRuleMatchSimulatorUsesRuleOrderBeforeMatchFallback() throws {
     let rules = [
       RuntimeRule(index: 1, type: "DOMAIN-SUFFIX", payload: "example.com", policy: "DIRECT"),
