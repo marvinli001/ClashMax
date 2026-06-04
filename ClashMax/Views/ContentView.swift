@@ -65,7 +65,7 @@ struct ContentView: View {
   }
 
   private var toolbarRunTitle: String {
-    appModel.canStopRuntime ? "Stop" : "Start"
+    appModel.canStopRuntime ? String(localized: "Stop") : String(localized: "Start")
   }
 
   private var toolbarRunSymbol: String {

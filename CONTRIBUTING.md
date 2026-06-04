@@ -28,6 +28,13 @@ Open the generated `ClashMax.xcodeproj`, or run the main verification command:
 xcodebuild test -project ClashMax.xcodeproj -scheme ClashMax -destination 'platform=macOS' -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO
 ```
 
+Run the localization gate before release, and whenever a change touches
+user-visible strings:
+
+```bash
+script/localization_gate.sh
+```
+
 For local app runs:
 
 ```bash
@@ -53,5 +60,6 @@ Before opening a PR, please confirm:
 - The PR explains the problem, the user-visible behavior, and the chosen fix.
 - Relevant screenshots or screen recordings are included for visible UI changes.
 - The narrowest useful verification command was run, and the result is included in the PR.
+- `script/localization_gate.sh` was run when the PR touches user-visible strings or release preparation.
 - Documentation was updated when behavior, installation, release, or security expectations changed.
 - Logs, screenshots, sample profiles, and test data do not include subscription URLs, credentials, private domains, or personal network details.

@@ -18,6 +18,7 @@ final class LocalizationTests: XCTestCase {
     "Destination host or IP",
     "Dst Port",
     "In Port",
+    "Later",
     "No runtime preflight required for this profile.",
     "No Snippets",
     "Process name or path",
@@ -27,7 +28,11 @@ final class LocalizationTests: XCTestCase {
     "Snippet Binding",
     "Snippet Library",
     "Source IP",
+    "Start",
+    "Start / Stop Core",
+    "Start Core",
     "Src Port",
+    "Stop Core",
     "Trust this dashboard to receive the API secret automatically",
     "Trusted for automatic secret autofill",
     "Typed snippets are merged into generated runtime YAML without editing original profiles."
@@ -172,6 +177,53 @@ final class LocalizationTests: XCTestCase {
       table: nil
     )
     XCTAssertEqual(String(format: followUpFailureFormat, "proxy refused"), "运行时设置已应用，但代理就绪检查或系统代理设置失败：proxy refused")
+  }
+
+  func testSimplifiedChineseStringCatalogProvidesActiveOperationalKeys() throws {
+    let bundle = try XCTUnwrap(Bundle(identifier: AppConstants.bundleIdentifier))
+    let zhPath = try XCTUnwrap(bundle.path(forResource: "zh-Hans", ofType: "lproj"))
+    let zhBundle = try XCTUnwrap(Bundle(path: zhPath))
+
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Action", value: nil, table: nil), "操作")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Allowed Origins", value: nil, table: nil), "允许的来源")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Current System Proxy", value: nil, table: nil), "当前系统代理")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Custom", value: nil, table: nil), "自定义")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Enable External Controller", value: nil, table: nil), "启用外部控制器")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Field", value: nil, table: nil), "字段")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Inherit", value: nil, table: nil), "继承")
+    XCTAssertEqual(
+      zhBundle.localizedString(
+        forKey: "LaunchDaemon approval is managed by macOS. Registering may open System Settings instead of showing an app permission sheet.",
+        value: nil,
+        table: nil
+      ),
+      "LaunchDaemon 批准由 macOS 管理。注册时可能会打开系统设置，而不是显示应用内权限表。"
+    )
+    XCTAssertEqual(
+      zhBundle.localizedString(forKey: "Leave blank to restore without encrypted secrets.", value: nil, table: nil),
+      "留空即可在不恢复加密密钥的情况下还原。"
+    )
+    XCTAssertEqual(zhBundle.localizedString(forKey: "No Profiles", value: nil, table: nil), "无配置")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "No profiles available", value: nil, table: nil), "无可用配置")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "On", value: nil, table: nil), "开启")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Start", value: nil, table: nil), "启动")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Stop", value: nil, table: nil), "停止")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Unsupported", value: nil, table: nil), "不支持")
+
+    let alwaysIncludesFormat = zhBundle.localizedString(forKey: "Always includes: %@", value: nil, table: nil)
+    XCTAssertEqual(String(format: alwaysIncludesFormat, "http://127.0.0.1"), "始终包含：http://127.0.0.1")
+    let nodeFormat = zhBundle.localizedString(forKey: "%@ nodes", value: nil, table: nil)
+    XCTAssertEqual(String(format: nodeFormat, "12"), "12 个节点")
+    let bypassFormat = zhBundle.localizedString(forKey: "%lld bypass entries", value: nil, table: nil)
+    XCTAssertEqual(String(format: bypassFormat, Int64(3)), "3 条绕过条目")
+    let subscriptionsFormat = zhBundle.localizedString(forKey: "%lld subscriptions", value: nil, table: nil)
+    XCTAssertEqual(String(format: subscriptionsFormat, Int64(2)), "2 个订阅")
+    let removeFormat = zhBundle.localizedString(
+      forKey: "Remove %@ from ClashMax. Stored subscription metadata and the app-managed profile copy will be deleted.",
+      value: nil,
+      table: nil
+    )
+    XCTAssertEqual(String(format: removeFormat, "Demo"), "从 ClashMax 移除 Demo。已存储的订阅元数据和应用管理的配置副本将被删除。")
   }
 
   func testSimplifiedChineseStringCatalogProvidesMenuBarKeys() throws {

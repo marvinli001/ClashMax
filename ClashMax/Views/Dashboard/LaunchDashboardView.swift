@@ -303,7 +303,7 @@ private struct LaunchControlDeck: View {
   }
 
   private var primaryActionTitle: String {
-    appModel.canStopRuntime ? "Stop" : "Start"
+    appModel.canStopRuntime ? String(localized: "Stop") : String(localized: "Start")
   }
 
   private var primaryActionSymbol: String {

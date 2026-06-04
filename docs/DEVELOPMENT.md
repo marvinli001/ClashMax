@@ -67,6 +67,16 @@ Main verification command:
 xcodebuild test -project ClashMax.xcodeproj -scheme ClashMax -destination 'platform=macOS' -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO
 ```
 
+Localization release gate:
+
+```bash
+script/localization_gate.sh
+```
+
+Run this before shipping and after touching user-visible strings. The gate
+validates `Resources/Localizable.xcstrings`, dry-runs catalog compilation, and
+runs `LocalizationTests`, including the active-key stale check.
+
 Run command:
 
 ```bash
