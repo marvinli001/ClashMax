@@ -51,6 +51,146 @@ final class SystemProxyControllerTests: XCTestCase {
     XCTAssertFalse(script.contains("networksetup -set"))
   }
 
+  func testReleaseSmokeScriptCoversTwoLayerGateWithoutMutatingSigningState() throws {
+    let testFile = URL(fileURLWithPath: #filePath)
+    let projectRoot = testFile.deletingLastPathComponent().deletingLastPathComponent()
+    let script = try String(
+      contentsOf: projectRoot.appendingPathComponent("script/release_smoke_check.sh"),
+      encoding: .utf8
+    )
+
+    XCTAssertTrue(script.contains("set -euo pipefail"))
+    XCTAssertTrue(script.contains(#"DEFAULT_REPORT_DIR="dist/release-smoke""#))
+    XCTAssertTrue(script.contains("DEFAULT_SOAK_MINUTES=60"))
+    XCTAssertTrue(script.contains("--preflight-only"))
+    XCTAssertTrue(script.contains("--live"))
+    XCTAssertTrue(script.contains("--soak-minutes"))
+    XCTAssertTrue(script.contains("codesign --verify --strict --verbose=2"))
+    XCTAssertTrue(script.contains("spctl --assess --type execute --verbose"))
+    XCTAssertTrue(script.contains("hdiutil verify"))
+    XCTAssertTrue(script.contains("sparkle:shortVersionString"))
+    XCTAssertTrue(script.contains("REPLACE_WITH_SPARKLE_PUBLIC_ED_KEY"))
+    XCTAssertTrue(script.contains("security find-generic-password"))
+    XCTAssertTrue(script.contains("io.github.clashmax.ClashMax"))
+    XCTAssertTrue(script.contains("subscription."))
+    XCTAssertTrue(script.contains("profiles.json"))
+    XCTAssertTrue(script.contains("sanitize_url"))
+    XCTAssertTrue(script.contains("<redacted>"))
+    XCTAssertFalse(script.contains("xcodegen generate"))
+    XCTAssertFalse(script.contains("codesign --force"))
+    XCTAssertFalse(script.contains("sudo "))
+    XCTAssertFalse(script.contains("Config/ClashMax.entitlements"))
+    XCTAssertFalse(script.contains("Config/ClashMaxNetworkExtension.entitlements"))
+  }
+
+  func testReleaseSmokeDocumentationUsesScriptedGateAsReleaseEntryPoint() throws {
+    let testFile = URL(fileURLWithPath: #filePath)
+    let projectRoot = testFile.deletingLastPathComponent().deletingLastPathComponent()
+    let appUpdates = try String(
+      contentsOf: projectRoot.appendingPathComponent("docs/APP_UPDATES.md"),
+      encoding: .utf8
+    )
+    let development = try String(
+      contentsOf: projectRoot.appendingPathComponent("docs/DEVELOPMENT.md"),
+      encoding: .utf8
+    )
+    let tunRunbook = try String(
+      contentsOf: projectRoot.appendingPathComponent("docs/TUN_SMOKE_TEST.md"),
+      encoding: .utf8
+    )
+
+    XCTAssertTrue(appUpdates.contains("script/release_smoke_check.sh"))
+    XCTAssertTrue(appUpdates.contains("--preflight-only"))
+    XCTAssertTrue(appUpdates.contains("--live --soak-minutes 60"))
+    XCTAssertTrue(appUpdates.contains("dist/release-smoke"))
+    XCTAssertTrue(development.contains("script/release_smoke_check.sh"))
+    XCTAssertTrue(tunRunbook.contains("script/release_smoke_check.sh"))
+    XCTAssertFalse(appUpdates.contains("发布前检查导出的 app 和生成的更新源："))
+  }
+
+  func testReleaseSmokeFailurePathWritesMachineReadableSummary() throws {
+    let projectRoot = Self.projectRoot()
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxReleaseSmoke-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let homeDirectory = directory.appendingPathComponent("home", isDirectory: true)
+    try FileManager.default.createDirectory(at: homeDirectory, withIntermediateDirectories: true)
+    let reportDirectory = directory.appendingPathComponent("reports", isDirectory: true)
+    let missingApp = directory.appendingPathComponent("Missing.app")
+    let missingAppcast = directory.appendingPathComponent("missing-appcast.xml")
+    let missingDmg = directory.appendingPathComponent("missing.dmg")
+
+    let result = try Self.runProcess(
+      executable: projectRoot.appendingPathComponent("script/release_smoke_check.sh").path,
+      arguments: [
+        "--app", missingApp.path,
+        "--appcast", missingAppcast.path,
+        "--sparkle-dir", directory.appendingPathComponent("sparkle").path,
+        "--dmg", missingDmg.path,
+        "--report-dir", reportDirectory.path,
+        "--preflight-only",
+        "--allow-empty-subscriptions",
+      ],
+      currentDirectory: projectRoot,
+      environment: ["HOME": homeDirectory.path]
+    )
+
+    XCTAssertNotEqual(result.exitCode, 0)
+
+    let summaryURL = try XCTUnwrap(
+      try FileManager.default.contentsOfDirectory(at: reportDirectory, includingPropertiesForKeys: nil)
+        .first { $0.lastPathComponent.hasSuffix(".summary.json") }
+    )
+    let summary = try Self.jsonObject(at: summaryURL)
+    XCTAssertEqual(summary["app"] as? String, missingApp.path)
+    XCTAssertGreaterThan(summary["failures"] as? Int ?? 0, 0)
+
+    let eventsPath = try XCTUnwrap(summary["events"] as? String)
+    let events = try Self.jsonLines(at: URL(fileURLWithPath: eventsPath))
+    let appBundleEvent = try XCTUnwrap(
+      events.first { $0["event"] as? String == "app.bundle" }
+    )
+    let appBundleDetails = try XCTUnwrap(appBundleEvent["details"] as? [String: Any])
+    XCTAssertEqual(appBundleDetails["path"] as? String, missingApp.path)
+    XCTAssertNil(appBundleDetails["raw"])
+
+    let codesignEvent = try XCTUnwrap(
+      events.first { $0["event"] as? String == "codesign.app" }
+    )
+    let codesignDetails = try XCTUnwrap(codesignEvent["details"] as? [String: Any])
+    XCTAssertNotEqual(codesignDetails["exit_code"] as? Int, 0)
+  }
+
+  func testTunSmokeJsonSummaryKeepsFailingCommandExitCode() throws {
+    let projectRoot = Self.projectRoot()
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxTunSmoke-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let fakeApp = directory.appendingPathComponent("Unsigned.app", isDirectory: true)
+    try FileManager.default.createDirectory(at: fakeApp, withIntermediateDirectories: true)
+    let summaryURL = directory.appendingPathComponent("tun-summary.json")
+
+    let result = try Self.runProcess(
+      executable: projectRoot.appendingPathComponent("script/tun_smoke_check.sh").path,
+      arguments: ["--json", summaryURL.path, fakeApp.path],
+      currentDirectory: projectRoot
+    )
+
+    XCTAssertEqual(result.exitCode, 0)
+    let summary = try Self.jsonObject(at: summaryURL)
+    let checks = try XCTUnwrap(summary["checks"] as? [[String: Any]])
+    let codesignCheck = try XCTUnwrap(
+      checks.first { $0["name"] as? String == "codesign.app" }
+    )
+    let message = try XCTUnwrap(codesignCheck["message"] as? String)
+    XCTAssertTrue(message.contains("exited "))
+    XCTAssertFalse(message.contains("exited 0"))
+  }
+
   func testAppBundleExtendedAttributesAreClearedBeforeSigning() throws {
     let testFile = URL(fileURLWithPath: #filePath)
     let projectRoot = testFile.deletingLastPathComponent().deletingLastPathComponent()
@@ -785,6 +925,60 @@ final class SystemProxyControllerTests: XCTestCase {
     let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
     defaults.removePersistentDomain(forName: suiteName)
     return defaults
+  }
+}
+
+private extension SystemProxyControllerTests {
+  struct ProcessResult {
+    var exitCode: Int32
+    var output: String
+  }
+
+  static func projectRoot() -> URL {
+    let testFile = URL(fileURLWithPath: #filePath)
+    return testFile.deletingLastPathComponent().deletingLastPathComponent()
+  }
+
+  static func runProcess(
+    executable: String,
+    arguments: [String],
+    currentDirectory: URL,
+    environment: [String: String] = [:]
+  ) throws -> ProcessResult {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: executable)
+    process.arguments = arguments
+    process.currentDirectoryURL = currentDirectory
+    process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, override in
+      override
+    }
+
+    let pipe = Pipe()
+    process.standardOutput = pipe
+    process.standardError = pipe
+    try process.run()
+    process.waitUntilExit()
+
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    return ProcessResult(
+      exitCode: process.terminationStatus,
+      output: String(data: data, encoding: .utf8) ?? ""
+    )
+  }
+
+  static func jsonObject(at url: URL) throws -> [String: Any] {
+    let data = try Data(contentsOf: url)
+    return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+  }
+
+  static func jsonLines(at url: URL) throws -> [[String: Any]] {
+    let data = try Data(contentsOf: url)
+    let content = try XCTUnwrap(String(data: data, encoding: .utf8))
+    return try content.split(separator: "\n").map { line in
+      try XCTUnwrap(
+        JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
+      )
+    }
   }
 }
 

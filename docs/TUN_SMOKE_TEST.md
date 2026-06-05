@@ -11,13 +11,28 @@ Run:
 
 ```sh
 ./script/tun_smoke_check.sh /Applications/ClashMax.app
+./script/tun_smoke_check.sh --strict --json dist/release-smoke/tun-summary.json /Applications/ClashMax.app
 ```
 
 The script is intentionally read-only. It checks the installed bundle, embedded helper,
 LaunchDaemon plist, bundled Mihomo files, code signatures, current launchd helper state,
 current route table hints, current DNS resolver hints, and visible Mihomo processes. It
 does not register or unregister the helper, change DNS, change routes, start ClashMax, or
-require `sudo`.
+require elevated shell privileges. `--strict` turns missing bundle components, signature
+failures, and unreadable DNS/route snapshots into a non-zero exit. `--json` writes a
+machine-readable summary for release reports.
+
+For release candidates, use the full release smoke entrypoint instead:
+
+```sh
+./script/release_smoke_check.sh \
+  --app /Applications/ClashMax.app \
+  --appcast docs/appcast.xml \
+  --sparkle-dir dist/sparkle \
+  --dmg dist/dmg/ClashMax-X.Y.Z.dmg \
+  --report-dir dist/release-smoke \
+  --live --soak-minutes 60
+```
 
 ## Manual Installed-Bundle Matrix
 
@@ -55,4 +70,4 @@ require `sudo`.
     diagnostic in the final user-facing error.
 
 Record the app version, build number, macOS version, network type, helper status, DNS
-result, route result, UDP result, and any repair action used. The real installed-bundle TUN smoke remains manual because it depends on macOS system approval and live data-plane state.
+result, route result, UDP result, and any repair action used. The real installed-bundle TUN smoke remains manual because it depends on macOS system approval and live data-plane state, but release evidence must be captured in `dist/release-smoke` through `script/release_smoke_check.sh`.

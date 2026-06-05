@@ -77,13 +77,31 @@ Run this before shipping and after touching user-visible strings. The gate
 validates `Resources/Localizable.xcstrings`, dry-runs catalog compilation, and
 runs `LocalizationTests`, including the active-key stale check.
 
+Release smoke gate:
+
+```bash
+script/release_smoke_check.sh \
+  --app /Applications/ClashMax.app \
+  --appcast docs/appcast.xml \
+  --sparkle-dir dist/sparkle \
+  --dmg dist/dmg/ClashMax-X.Y.Z.dmg \
+  --report-dir dist/release-smoke \
+  --preflight-only
+```
+
+For RC builds, use `--live --soak-minutes 60` after installing the signed,
+notarized app in `/Applications`. The script records app, helper, Network
+Extension, DNS, route, non-proxy curl, subscription-pool, soak, and sleep/wake
+evidence under `dist/release-smoke`.
+
 Run command:
 
 ```bash
 ./script/build_and_run.sh
 ```
 
-Network Extension signed-build checks:
+Network Extension signed-build checks are covered by `script/release_smoke_check.sh`.
+For local diagnosis, these commands remain useful:
 
 ```bash
 codesign -dvvv --entitlements :- /path/to/ClashMax.app
@@ -110,7 +128,7 @@ before installing or starting the NE transparent proxy, using:
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f -R /Applications/ClashMax.app
 ```
 
-Manual installed-bundle NE smoke test:
+Manual installed-bundle NE smoke test, recorded through `script/release_smoke_check.sh --live --soak-minutes 60`:
 
 1. Build a signed app, copy it to `/Applications/ClashMax.app`, then approve the
    System Extension in System Settings.
@@ -125,7 +143,7 @@ Manual installed-bundle NE smoke test:
    only after NE shutdown, and System DNS returns to the pre-start snapshot. Use
    the `Repair DNS` action if restore reports a failure.
 
-Manual installed-bundle TUN validation matrix:
+Manual installed-bundle TUN validation matrix, recorded through `script/release_smoke_check.sh --live --soak-minutes 60`:
 
 Use this matrix for real macOS data-plane validation. Unit tests can prove
 runtime YAML, helper/XPC state, and repair semantics, but they cannot prove
