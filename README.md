@@ -9,7 +9,7 @@
   <p>
     <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%2026%2B-111111?logo=apple&logoColor=white">
     <img alt="Swift" src="https://img.shields.io/badge/Swift-6.0-F05138?logo=swift&logoColor=white">
-    <img alt="Mihomo" src="https://img.shields.io/badge/core-Mihomo%20v1.19.25-2f6fed">
+    <img alt="Mihomo" src="https://img.shields.io/badge/core-Mihomo%20v1.19.27-2f6fed">
     <img alt="License" src="https://img.shields.io/badge/license-GPL--3.0-2563eb">
   </p>
 </div>

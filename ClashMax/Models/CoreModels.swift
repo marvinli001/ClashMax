@@ -4082,6 +4082,25 @@ struct ProxyNode: Identifiable, Codable, Equatable, Sendable {
   }
 }
 
+enum MihomoBuiltInProxy {
+  static func type(for name: String) -> String? {
+    switch name.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() {
+    case "DIRECT":
+      return "direct"
+    case "REJECT", "REJECT-DROP":
+      return "reject"
+    case "PASS":
+      return "pass"
+    case "PASS-RULE":
+      return "pass-rule"
+    case "COMPATIBLE":
+      return "compatible"
+    default:
+      return nil
+    }
+  }
+}
+
 struct ProxyGroup: Identifiable, Codable, Equatable, Sendable {
   var id: String { name }
   var name: String

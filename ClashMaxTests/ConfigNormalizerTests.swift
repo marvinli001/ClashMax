@@ -2407,6 +2407,24 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(groups.first?.nodes.last?.xudpSupported, true)
   }
 
+  func testPreviewGroupsLabelMihomoBuiltInProxyPolicies() throws {
+    let source = """
+    proxy-groups:
+      - name: Main
+        type: select
+        proxies: [PASS, PASS-RULE, COMPATIBLE, REJECT-DROP, DIRECT]
+    rules:
+      - MATCH,Main
+    """
+
+    let groups = try ProfilePreviewBuilder().groups(from: source, profileName: "Built-ins")
+    let nodes = try XCTUnwrap(groups.first?.nodes)
+
+    XCTAssertEqual(nodes.map(\.name), ["PASS", "PASS-RULE", "COMPATIBLE", "REJECT-DROP", "DIRECT"])
+    XCTAssertEqual(nodes.map(\.type), ["pass", "pass-rule", "compatible", "reject", "direct"])
+    XCTAssertTrue(nodes.allSatisfy(\.isSelectable))
+  }
+
   func testPreviewGroupsExtractBase64URIProviderContent() throws {
     let source = """
     vless://00000000-0000-0000-0000-000000000000@example.com:443?security=tls&sni=example.com#VLESS%20Node

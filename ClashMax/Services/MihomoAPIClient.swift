@@ -143,7 +143,7 @@ struct MihomoAPIClient: Sendable {
         let proxyDetail = proxyDetails[proxyName] ?? [:]
         return ProxyNode(
           name: proxyName,
-          type: proxyTypes[proxyName] ?? "proxy",
+          type: proxyTypes[proxyName] ?? MihomoBuiltInProxy.type(for: proxyName) ?? "proxy",
           delay: Self.delay(for: proxyName, history: history),
           isSelectable: true,
           serverHost: proxyEndpoints[proxyName]?.host,
@@ -173,7 +173,7 @@ struct MihomoAPIClient: Sendable {
         guard let name = proxy["name"] as? String else { return nil }
         return ProxyNode(
           name: name,
-          type: proxy["type"] as? String ?? "proxy",
+          type: proxy["type"] as? String ?? MihomoBuiltInProxy.type(for: name) ?? "proxy",
           delay: nil,
           isSelectable: true,
           serverHost: proxy["server"] as? String,

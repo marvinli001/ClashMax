@@ -1,15 +1,15 @@
 {
   "upstream": "https://github.com/MetaCubeX/mihomo",
-  "version": "v1.19.25",
+  "version": "v1.19.27",
   "license": "GPL-3.0",
   "assets": [
     {
-      "name": "mihomo-darwin-arm64-v1.19.25.gz",
-      "sha256": "0478c9619d327fcb2b8e9998ac278142db931ba2087f1929a84b816a3f570836"
+      "name": "mihomo-darwin-arm64-v1.19.27.gz",
+      "sha256": "3617c9d8a5a55aecfe1ebd0f55ff59f2706c8ad68fd65c6c4e5f7cf2b74263f1"
     },
     {
-      "name": "mihomo-darwin-amd64-v1.19.25.gz",
-      "sha256": "946b0c1034782bdb014e92916601f8f1430e3efa8374292fdd8a811457676430"
+      "name": "mihomo-darwin-amd64-v1.19.27.gz",
+      "sha256": "5392bea435a1c4b0a496571daafa977f744207cfafac18fb78a9b7d0747585c2"
     }
   ]
 }

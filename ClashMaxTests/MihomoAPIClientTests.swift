@@ -107,7 +107,7 @@ final class MihomoAPIClientTests: XCTestCase {
         "Elite": {
           "type": "Selector",
           "now": "Japan",
-          "all": ["Japan", "DIRECT"],
+          "all": ["Japan", "PASS-RULE", "COMPATIBLE", "DIRECT"],
           "history": [
             { "name": "Japan", "delay": 157 }
           ]
@@ -130,7 +130,7 @@ final class MihomoAPIClientTests: XCTestCase {
     let group = try XCTUnwrap(groups.first)
 
     XCTAssertEqual(group.name, "Elite")
-    XCTAssertEqual(group.nodes.map(\.type), ["Hysteria2", "Direct"])
+    XCTAssertEqual(group.nodes.map(\.type), ["Hysteria2", "pass-rule", "compatible", "Direct"])
     XCTAssertEqual(group.nodes.first?.delay, 157)
   }
 

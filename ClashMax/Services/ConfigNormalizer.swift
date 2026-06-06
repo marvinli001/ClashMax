@@ -860,7 +860,7 @@ struct ProfilePreviewBuilder {
         proxyNodes[proxyName]
           ?? ProxyNode(
             name: proxyName,
-            type: groupTypes[proxyName] ?? builtInProxyType(for: proxyName) ?? "proxy",
+            type: groupTypes[proxyName] ?? MihomoBuiltInProxy.type(for: proxyName) ?? "proxy",
             delay: nil,
             isSelectable: true
           )
@@ -1043,17 +1043,6 @@ struct ProfilePreviewBuilder {
       return "wireguard"
     default:
       return scheme
-    }
-  }
-
-  private func builtInProxyType(for name: String) -> String? {
-    switch name.uppercased() {
-    case "DIRECT":
-      return "direct"
-    case "REJECT", "REJECT-DROP":
-      return "reject"
-    default:
-      return nil
     }
   }
 
