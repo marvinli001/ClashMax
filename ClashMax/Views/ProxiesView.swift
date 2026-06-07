@@ -397,27 +397,7 @@ struct ProxiesView: View {
   }
 
   private func sortedNodes(_ nodes: [ProxyNode]) -> [ProxyNode] {
-    switch appModel.proxyPageSettings.sortOrder {
-    case .name:
-      return nodes.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-    case .delay:
-      return nodes.sorted {
-        let first = $0.resolvedDelayState.measuredDelay ?? Int.max
-        let second = $1.resolvedDelayState.measuredDelay ?? Int.max
-        if first == second {
-          return $0.name.localizedStandardCompare($1.name) == .orderedAscending
-        }
-        return first < second
-      }
-    case .type:
-      return nodes.sorted {
-        let comparison = $0.type.localizedStandardCompare($1.type)
-        if comparison == .orderedSame {
-          return $0.name.localizedStandardCompare($1.name) == .orderedAscending
-        }
-        return comparison == .orderedAscending
-      }
-    }
+    ProxyNodeSorter.sorted(nodes, by: appModel.proxyPageSettings.sortOrder)
   }
 
   private func selectDefaultGroupIfNeeded(from groups: [ProxyGroup]) {
@@ -622,6 +602,39 @@ private struct ResolvedProxyCatalog {
       result.append(node)
     }
     return result
+  }
+}
+
+enum ProxyNodeSorter {
+  /// Orders the nodes inside a single proxy group for display.
+  ///
+  /// `.profile` keeps the incoming order untouched so the configured member order
+  /// (preview groups or Mihomo's `all` array) is preserved. The remaining modes
+  /// apply the user's explicit manual ordering.
+  static func sorted(_ nodes: [ProxyNode], by sortOrder: ProxyNodeSort) -> [ProxyNode] {
+    switch sortOrder {
+    case .profile:
+      return nodes
+    case .name:
+      return nodes.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    case .delay:
+      return nodes.sorted {
+        let first = $0.resolvedDelayState.measuredDelay ?? Int.max
+        let second = $1.resolvedDelayState.measuredDelay ?? Int.max
+        if first == second {
+          return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
+        return first < second
+      }
+    case .type:
+      return nodes.sorted {
+        let comparison = $0.type.localizedStandardCompare($1.type)
+        if comparison == .orderedSame {
+          return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
+        return comparison == .orderedAscending
+      }
+    }
   }
 }
 

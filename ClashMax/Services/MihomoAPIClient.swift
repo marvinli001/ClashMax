@@ -155,7 +155,9 @@ struct MihomoAPIClient: Sendable {
       }
       return ProxyGroup(name: name, type: type, selected: item["now"] as? String, nodes: nodes)
     }
-    .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    // Do not alphabetically sort groups here: the `/proxies` JSON object has no
+    // reliable ordering, so the configured `proxy-groups` order is restored later
+    // against the profile preview groups (see ProxyGroupProfileOrdering).
   }
 
   func proxyProviders() async throws -> [String: Any] {

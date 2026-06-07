@@ -402,6 +402,36 @@ enum ProviderSideLoadPreflightStatus: Equatable {
   }
 }
 
+enum ProxyGroupProfileOrdering {
+  /// Restores the configured proxy-group order on runtime groups.
+  ///
+  /// Mihomo's `/proxies` response is a JSON object with no reliable ordering, so
+  /// runtime groups are reordered to follow `profileOrder` (the profile preview
+  /// groups parsed from the YAML `proxy-groups` list). Groups missing from
+  /// `profileOrder` keep their original runtime order and are appended after the
+  /// configuration-ordered groups.
+  static func ordered(_ runtimeGroups: [ProxyGroup], matching profileOrder: [ProxyGroup]) -> [ProxyGroup] {
+    guard !profileOrder.isEmpty else { return runtimeGroups }
+    var rank: [String: Int] = [:]
+    for (index, group) in profileOrder.enumerated() where rank[group.name] == nil {
+      rank[group.name] = index
+    }
+    return runtimeGroups.enumerated().sorted { lhs, rhs in
+      switch (rank[lhs.element.name], rank[rhs.element.name]) {
+      case let (left?, right?):
+        return left == right ? lhs.offset < rhs.offset : left < right
+      case (.some, .none):
+        return true
+      case (.none, .some):
+        return false
+      case (.none, .none):
+        return lhs.offset < rhs.offset
+      }
+    }
+    .map(\.element)
+  }
+}
+
 @MainActor
 protocol ProviderSideLoadPreflightRunning {
   func preflight(
@@ -1143,7 +1173,8 @@ final class AppModel: ObservableObject {
       return mergedPreviewSelections(into: profilePreviewGroups)
     }
     if isCoreRunning {
-      return mergedPreviewSelections(into: proxyGroups)
+      let ordered = ProxyGroupProfileOrdering.ordered(proxyGroups, matching: profilePreviewGroups)
+      return mergedPreviewSelections(into: ordered)
     }
     return mergedPreviewSelections(into: profilePreviewGroups)
   }

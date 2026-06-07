@@ -3104,6 +3104,44 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(groupFiltered.first?.nodes.map(\.name), ["DIRECT"])
   }
 
+  func testProxyPageSettingsDefaultsToProfileSortOrder() {
+    XCTAssertEqual(ProxyPageSettings.default.sortOrder, .profile)
+  }
+
+  func testProxyGroupProfileOrderingFollowsConfiguredGroupOrder() {
+    func group(_ name: String) -> ProxyGroup {
+      ProxyGroup(name: name, type: "select", selected: nil, nodes: [])
+    }
+    let profileOrder = [group("B"), group("A")]
+
+    // Runtime returns [A, B] but the configured order is [B, A].
+    let ordered = ProxyGroupProfileOrdering.ordered([group("A"), group("B")], matching: profileOrder)
+    XCTAssertEqual(ordered.map(\.name), ["B", "A"])
+
+    // Groups missing from the profile keep their runtime order and move to the end.
+    let orderedWithExtras = ProxyGroupProfileOrdering.ordered(
+      [group("C"), group("A"), group("D"), group("B")],
+      matching: profileOrder
+    )
+    XCTAssertEqual(orderedWithExtras.map(\.name), ["B", "A", "C", "D"])
+
+    // Without a profile order to match, runtime order is preserved unchanged.
+    XCTAssertEqual(
+      ProxyGroupProfileOrdering.ordered([group("A"), group("B")], matching: []).map(\.name),
+      ["A", "B"]
+    )
+  }
+
+  func testProxyNodeSorterKeepsProfileOrderButSortsByNameOnDemand() {
+    let nodes = [
+      ProxyNode(name: "z", type: "vless", delay: nil, isSelectable: true),
+      ProxyNode(name: "a", type: "vless", delay: nil, isSelectable: true)
+    ]
+
+    XCTAssertEqual(ProxyNodeSorter.sorted(nodes, by: .profile).map(\.name), ["z", "a"])
+    XCTAssertEqual(ProxyNodeSorter.sorted(nodes, by: .name).map(\.name), ["a", "z"])
+  }
+
   func testProxyPreviewNoticeShowsOutsideDeveloperMode() {
     XCTAssertEqual(
       ProxyPreviewNoticeKind.resolve(

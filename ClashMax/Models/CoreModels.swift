@@ -1418,6 +1418,9 @@ struct DelayTestSettings: Codable, Equatable, Sendable {
 }
 
 enum ProxyNodeSort: String, Codable, CaseIterable, Equatable, Identifiable, Sendable {
+  /// Preserves the order declared by the active profile's `proxy-groups` and the
+  /// member order inside each group, instead of imposing an alphabetical order.
+  case profile
   case name
   case delay
   case type
@@ -1426,6 +1429,8 @@ enum ProxyNodeSort: String, Codable, CaseIterable, Equatable, Identifiable, Send
 
   var displayName: String {
     switch self {
+    case .profile:
+      return String(localized: "Profile")
     case .name:
       return String(localized: "Name")
     case .delay:
@@ -1487,7 +1492,7 @@ struct ProxyPageSettings: Codable, Equatable, Sendable {
 
   init(
     viewMode: ProxyPageViewMode = .groupDetail,
-    sortOrder: ProxyNodeSort = .name,
+    sortOrder: ProxyNodeSort = .profile,
     nodePresentation: ProxyNodePresentation = .grid,
     showsNodeDetails: Bool = true,
     closesOldConnectionsAfterSwitch: Bool = false,
