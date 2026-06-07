@@ -96,6 +96,10 @@ targets:
         PRODUCT_NAME: ClashMax
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_USER_SCRIPT_SANDBOXING: NO
+        # Use the Swift compiler to extract localizable strings (String(localized:),
+        # Text/Button/Label literals, etc.) into the String Catalog. Without this,
+        # extraction finds no Swift strings and marks active keys extractionState=stale.
+        SWIFT_EMIT_LOC_STRINGS: "YES"
         MARKETING_VERSION: 1.0.14
         CURRENT_PROJECT_VERSION: 20
         PROVISIONING_PROFILE_SPECIFIER: ClashMax Developer ID
