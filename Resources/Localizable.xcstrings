@@ -174,6 +174,7 @@
       }
     },
     "%lld changed line(s) omitted" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -190,6 +191,7 @@
       }
     },
     "%lld diff line(s) omitted" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -316,6 +318,7 @@
       }
     },
     "%lld removed and %lld added line(s) omitted" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -348,6 +351,7 @@
       }
     },
     "%lld snippets, %lld enabled" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -376,6 +380,7 @@
       }
     },
     "%lld unchanged line(s) omitted after the change" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -392,6 +397,7 @@
       }
     },
     "%lld unchanged line(s) omitted before the change" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -623,6 +629,7 @@
       }
     },
     "Active Profile" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -639,6 +646,7 @@
       }
     },
     "Active Snippets" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -1069,6 +1077,7 @@
       }
     },
     "Applies Here" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -2232,6 +2241,7 @@
       }
     },
     "Copy API Secret" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -2338,6 +2348,7 @@
       }
     },
     "Create a typed rule or DNS patch snippet to apply runtime changes safely." : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -2708,6 +2719,7 @@
       }
     },
     "Destination host or IP" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -3196,6 +3208,7 @@
       }
     },
     "Dst Port" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -4835,6 +4848,7 @@
       }
     },
     "In Port" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -5177,6 +5191,7 @@
       }
     },
     "Later" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -6532,6 +6547,7 @@
       }
     },
     "No runtime preflight required for this profile." : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -6548,6 +6564,7 @@
       }
     },
     "No Snippets" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -7333,6 +7350,7 @@
       }
     },
     "Process name or path" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -9085,6 +9103,7 @@
       }
     },
     "Rule value" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -9417,6 +9436,7 @@
       }
     },
     "Runtime config accepted by Mihomo preflight." : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -10079,6 +10099,7 @@
       }
     },
     "Skipped" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -10112,6 +10133,7 @@
       }
     },
     "Snippet Binding" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -10128,6 +10150,7 @@
       }
     },
     "Snippet Library" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -10262,6 +10285,7 @@
       }
     },
     "Source IP" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -10312,6 +10336,7 @@
       }
     },
     "Src Port" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -10345,6 +10370,7 @@
       }
     },
     "Start" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -10361,6 +10387,7 @@
       }
     },
     "Start / Stop Core" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -10377,6 +10404,7 @@
       }
     },
     "Start Core" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -10472,6 +10500,7 @@
       }
     },
     "Stop" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -10488,6 +10517,7 @@
       }
     },
     "Stop Core" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -11181,6 +11211,7 @@
       }
     },
     "Trust this dashboard to receive the API secret automatically" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -11197,6 +11228,7 @@
       }
     },
     "Trusted for automatic secret autofill" : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {
@@ -11455,6 +11487,7 @@
       }
     },
     "Typed snippets are merged into generated runtime YAML without editing original profiles." : {
+      "extractionState" : "stale",
       "localizations" : {
         "base" : {
           "stringUnit" : {

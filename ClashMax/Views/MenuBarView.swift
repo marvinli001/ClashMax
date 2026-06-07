@@ -328,6 +328,18 @@ struct MenuBarRuntimePresentation {
   }
 }
 
+/// Builds the compact upload/download label shown on the menu bar status item.
+///
+/// Reuses `TrafficSample.format(_:)` so the units stay consistent with the rest of
+/// the app, and keeps the "only while running with live data" decision in one
+/// testable place. Returns `nil` when the menu bar should show its icon alone.
+enum MenuBarTrafficStatusLabel {
+  static func text(showsTraffic: Bool, hasTrafficData: Bool, sample: TrafficSample) -> String? {
+    guard showsTraffic, hasTrafficData else { return nil }
+    return "↓ \(TrafficSample.format(sample.download)) ↑ \(TrafficSample.format(sample.upload))"
+  }
+}
+
 private struct MenuBarRoutingQuickButtons: View {
   @EnvironmentObject private var appModel: AppModel
 

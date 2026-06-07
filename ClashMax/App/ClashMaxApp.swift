@@ -156,18 +156,38 @@ struct ClashMaxApp: App {
 
 private struct MenuBarStatusLabel: View {
   @ObservedObject var appModel: AppModel
+  @ObservedObject var runtimeData: RuntimeDataStore
+
+  init(appModel: AppModel) {
+    self.appModel = appModel
+    self.runtimeData = appModel.runtimeData
+  }
 
   var body: some View {
     let runtime = MenuBarRuntimePresentation(appModel: appModel)
+    let trafficLabel = MenuBarTrafficStatusLabel.text(
+      showsTraffic: runtime.showsTraffic,
+      hasTrafficData: !runtimeData.trafficHistory.isEmpty,
+      sample: runtimeData.trafficSample
+    )
 
-    Image("ClashMaxMenuBarLogo")
-      .renderingMode(.template)
-      .resizable()
-      .scaledToFit()
-      .frame(width: 16, height: 16)
-      .foregroundStyle(runtime.tint)
-      .accessibilityLabel(Text("ClashMax \(runtime.title)"))
-      .help(runtime.detail ?? runtime.title)
+    HStack(spacing: 4) {
+      Image("ClashMaxMenuBarLogo")
+        .renderingMode(.template)
+        .resizable()
+        .scaledToFit()
+        .frame(width: 16, height: 16)
+        .foregroundStyle(runtime.tint)
+
+      if let trafficLabel {
+        Text(trafficLabel)
+          .font(.system(size: 11, weight: .medium).monospacedDigit())
+          .lineLimit(1)
+          .fixedSize()
+      }
+    }
+    .accessibilityLabel(Text("ClashMax \(runtime.title)"))
+    .help(runtime.detail ?? runtime.title)
   }
 }
 

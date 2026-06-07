@@ -118,3 +118,65 @@ final class MenuBarRuntimePresentationTests: XCTestCase {
     XCTAssertEqual(presentation.showsTraffic, showsTraffic, file: file, line: line)
   }
 }
+
+final class MenuBarTrafficStatusLabelTests: XCTestCase {
+  func testShowsCompactUpDownLabelWhileRunningWithData() {
+    let label = MenuBarTrafficStatusLabel.text(
+      showsTraffic: true,
+      hasTrafficData: true,
+      sample: TrafficSample(upload: 348, download: 2048)
+    )
+
+    XCTAssertEqual(label, "↓ 2 KB/s ↑ 348 B/s")
+  }
+
+  func testLabelStaysCompactAndCarriesBothDirections() {
+    let label = MenuBarTrafficStatusLabel.text(
+      showsTraffic: true,
+      hasTrafficData: true,
+      sample: TrafficSample(upload: 5 * 1024 * 1024, download: 12 * 1024 * 1024)
+    )
+
+    guard let label else {
+      return XCTFail("Expected a traffic label while running with live data")
+    }
+    XCTAssertTrue(label.contains("↓"))
+    XCTAssertTrue(label.contains("↑"))
+    // It must remain a short status label, never a full sentence or description.
+    XCTAssertLessThan(label.count, 32)
+    XCTAssertFalse(label.contains("Download"))
+    XCTAssertFalse(label.contains("Upload"))
+  }
+
+  func testHiddenWhenNotRunning() {
+    let label = MenuBarTrafficStatusLabel.text(
+      showsTraffic: false,
+      hasTrafficData: true,
+      sample: TrafficSample(upload: 100, download: 200)
+    )
+
+    XCTAssertNil(label)
+  }
+
+  func testHiddenWhenRunningButNoSamplesYet() {
+    let label = MenuBarTrafficStatusLabel.text(
+      showsTraffic: true,
+      hasTrafficData: false,
+      sample: .zero
+    )
+
+    XCTAssertNil(label)
+  }
+
+  func testShownForIdleRunningSampleToAvoidFlicker() {
+    // Running with at least one sample but currently idle keeps a stable
+    // 0 B/s label instead of flickering the status item text in and out.
+    let label = MenuBarTrafficStatusLabel.text(
+      showsTraffic: true,
+      hasTrafficData: true,
+      sample: .zero
+    )
+
+    XCTAssertEqual(label, "↓ 0 B/s ↑ 0 B/s")
+  }
+}
