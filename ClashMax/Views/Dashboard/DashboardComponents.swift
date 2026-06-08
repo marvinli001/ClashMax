@@ -301,12 +301,12 @@ private struct NetworkExtensionSettingsPopover: View {
 }
 
 private struct SettingsRuntimeLine: View {
-  let title: String
+  let title: LocalizedStringResource
   let value: String
 
   var body: some View {
     HStack(spacing: 12) {
-      Text(LocalizedStringKey(title))
+      Text(title)
         .foregroundStyle(.secondary)
       Spacer()
       Text(localizedDashboardText(value))
@@ -317,12 +317,12 @@ private struct SettingsRuntimeLine: View {
 }
 
 private struct DiagnosticEventList: View {
-  let title: String
+  let title: LocalizedStringResource
   let events: [NetworkExtensionDiagnosticEvent]
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
-      Text(LocalizedStringKey(title))
+      Text(title)
         .font(.caption)
         .foregroundStyle(.secondary)
       if events.isEmpty {
@@ -775,9 +775,9 @@ private struct CurrentSystemProxySummary: View {
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 
-  private func summaryRow<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+  private func summaryRow<Content: View>(_ title: LocalizedStringResource, @ViewBuilder content: () -> Content) -> some View {
     HStack(alignment: .firstTextBaseline, spacing: 12) {
-      Text(LocalizedStringKey(title))
+      Text(title)
         .foregroundStyle(.secondary)
         .frame(width: 104, alignment: .trailing)
 
@@ -1006,14 +1006,14 @@ private struct EditableKeyValueList: View {
 }
 
 private struct WrappingTokenList: View {
-  let title: String?
+  let title: LocalizedStringResource?
   let values: [String]
   var removeAction: ((String) -> Void)?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
       if let title {
-        Text(LocalizedStringKey(title))
+        Text(title)
           .font(.caption)
           .foregroundStyle(.secondary)
       }
@@ -1049,9 +1049,13 @@ private struct WrappingTokenList: View {
   }
 }
 
-private func popoverHeader(_ title: String, systemImage: String) -> some View {
-  Label(LocalizedStringKey(title), systemImage: systemImage)
-    .font(.title3.weight(.semibold))
+private func popoverHeader(_ title: LocalizedStringResource, systemImage: String) -> some View {
+  Label {
+    Text(title)
+  } icon: {
+    Image(systemName: systemImage)
+  }
+  .font(.title3.weight(.semibold))
 }
 
 private func localizedDashboardText(_ value: String) -> String {
@@ -1159,14 +1163,18 @@ struct DashboardMetricTile: View {
 }
 
 struct DashboardSectionHeader: View {
-  let title: String
+  let title: LocalizedStringResource
   let symbolName: String
   var trailing: String?
 
   var body: some View {
     HStack(spacing: 8) {
-      Label(LocalizedStringKey(title), systemImage: symbolName)
-        .font(.headline)
+      Label {
+        Text(title)
+      } icon: {
+        Image(systemName: symbolName)
+      }
+      .font(.headline)
       Spacer()
       if let trailing {
         Text(trailing)

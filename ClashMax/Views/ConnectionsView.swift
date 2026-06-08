@@ -287,9 +287,9 @@ struct ConnectionsView: View {
     }
   }
 
-  private func detailRow(_ title: String, _ value: String) -> some View {
+  private func detailRow(_ title: LocalizedStringResource, _ value: String) -> some View {
     VStack(alignment: .leading, spacing: 2) {
-      Text(LocalizedStringKey(title))
+      Text(title)
         .font(.caption2)
         .foregroundStyle(.tertiary)
       Text(value)

@@ -1681,11 +1681,11 @@ private enum SubRuleNetworkCondition: String, CaseIterable, Identifiable {
 
 private struct RuleOverlayEditorSection<Content: View>: View {
   @Environment(\.colorScheme) private var colorScheme
-  let title: String
+  let title: LocalizedStringResource
   let systemImage: String
   let content: Content
 
-  init(title: String, systemImage: String, @ViewBuilder content: () -> Content) {
+  init(title: LocalizedStringResource, systemImage: String, @ViewBuilder content: () -> Content) {
     self.title = title
     self.systemImage = systemImage
     self.content = content()
@@ -1694,10 +1694,14 @@ private struct RuleOverlayEditorSection<Content: View>: View {
   var body: some View {
     let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
     VStack(alignment: .leading, spacing: 10) {
-      Label(LocalizedStringKey(title), systemImage: systemImage)
-        .font(.caption.weight(.semibold))
-        .foregroundStyle(.secondary)
-        .lineLimit(1)
+      Label {
+        Text(title)
+      } icon: {
+        Image(systemName: systemImage)
+      }
+      .font(.caption.weight(.semibold))
+      .foregroundStyle(.secondary)
+      .lineLimit(1)
 
       content
     }
@@ -1711,13 +1715,13 @@ private struct RuleOverlayEditorSection<Content: View>: View {
 }
 
 private struct RuleOverlayRuleList: View {
-  let title: String
+  let title: LocalizedStringResource
   @Binding var rules: [ManagedRuleOverlayRule]
   @State private var draggedRuleID: UUID?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      Text(LocalizedStringKey(title))
+      Text(title)
         .font(.caption)
         .foregroundStyle(.secondary)
 
@@ -2144,9 +2148,9 @@ private struct HelperStatusDetailView: View {
     return yesNo(detail.running)
   }
 
-  private func helperStatusRow(_ title: String, value: String, positive: Bool) -> some View {
+  private func helperStatusRow(_ title: LocalizedStringResource, value: String, positive: Bool) -> some View {
     HStack(alignment: .firstTextBaseline, spacing: 12) {
-      Text(LocalizedStringKey(title))
+      Text(title)
         .foregroundStyle(.secondary)
       Spacer()
       Text(value)
@@ -2838,9 +2842,13 @@ private func localizedSettingsText(_ value: String) -> String {
   NSLocalizedString(value, comment: "")
 }
 
-private func popoverHeader(_ title: String, systemImage: String) -> some View {
-  Label(LocalizedStringKey(title), systemImage: systemImage)
-    .font(.title3.weight(.semibold))
+private func popoverHeader(_ title: LocalizedStringResource, systemImage: String) -> some View {
+  Label {
+    Text(title)
+  } icon: {
+    Image(systemName: systemImage)
+  }
+  .font(.title3.weight(.semibold))
 }
 
 private struct PortControl: View {

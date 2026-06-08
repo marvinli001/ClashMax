@@ -1932,13 +1932,13 @@ private struct RecentLogsRuntimeCard: View {
 }
 
 private struct RuntimeStat: View {
-  let title: String
+  let title: LocalizedStringResource
   let value: String
   let tint: Color
 
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
-      Text(LocalizedStringKey(title))
+      Text(title)
         .font(.caption)
         .foregroundStyle(.secondary)
       Text(localizedRuntimeText(value))
@@ -1952,12 +1952,12 @@ private struct RuntimeStat: View {
 }
 
 private struct RuntimeLine: View {
-  let title: String
+  let title: LocalizedStringResource
   let value: String
 
   var body: some View {
     HStack {
-      Text(LocalizedStringKey(title))
+      Text(title)
         .foregroundStyle(.secondary)
       Spacer()
       Text(localizedRuntimeText(value))

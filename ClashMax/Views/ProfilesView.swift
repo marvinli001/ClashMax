@@ -708,9 +708,9 @@ private struct ClientMigrationReportSheet: View {
     }
   }
 
-  private func migrationSection(_ title: String, values: [String]) -> some View {
+  private func migrationSection(_ title: LocalizedStringResource, values: [String]) -> some View {
     VStack(alignment: .leading, spacing: 6) {
-      Text(LocalizedStringKey(title))
+      Text(title)
         .font(.headline)
       if values.isEmpty {
         Text("Empty")
@@ -993,13 +993,13 @@ private struct ProviderInsightsMetricGrid: View {
     ]
   }
 
-  private func metric(_ title: String, _ value: String, _ symbolName: String) -> some View {
+  private func metric(_ title: LocalizedStringResource, _ value: String, _ symbolName: String) -> some View {
     HStack(spacing: 8) {
       Image(systemName: symbolName)
         .foregroundStyle(.secondary)
         .frame(width: 16)
       VStack(alignment: .leading, spacing: 2) {
-        Text(LocalizedStringKey(title))
+        Text(title)
           .font(.caption2)
           .foregroundStyle(.tertiary)
         Text(value)
@@ -1091,9 +1091,9 @@ private struct ProviderInsightRow: View {
     .padding(.vertical, 8)
   }
 
-  private func fact(_ title: String, _ value: String) -> some View {
+  private func fact(_ title: LocalizedStringResource, _ value: String) -> some View {
     VStack(alignment: .leading, spacing: 2) {
-      Text(LocalizedStringKey(title))
+      Text(title)
         .font(.caption2)
         .foregroundStyle(.tertiary)
       Text(value)
@@ -1105,9 +1105,9 @@ private struct ProviderInsightRow: View {
     .frame(width: 74, alignment: .leading)
   }
 
-  private func detail(_ title: String, _ value: String, tint: Color = .secondary) -> some View {
+  private func detail(_ title: LocalizedStringResource, _ value: String, tint: Color = .secondary) -> some View {
     HStack(alignment: .firstTextBaseline, spacing: 5) {
-      Text(LocalizedStringKey(title))
+      Text(title)
         .foregroundStyle(.tertiary)
       Text(value)
         .foregroundStyle(tint)

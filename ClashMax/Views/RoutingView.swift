@@ -692,9 +692,9 @@ struct RoutingView: View {
     }
   }
 
-  private func diffSection(title: String, values: [String]) -> some View {
+  private func diffSection(title: LocalizedStringResource, values: [String]) -> some View {
     VStack(alignment: .leading, spacing: 6) {
-      Text(LocalizedStringKey(title))
+      Text(title)
         .font(.caption)
         .foregroundStyle(.secondary)
       if values.isEmpty {
@@ -1203,10 +1203,10 @@ private struct RuntimeSnippetRow: View {
 }
 
 private struct RoutingEditRow<Content: View>: View {
-  let title: String
+  let title: LocalizedStringResource
   let content: Content
 
-  init(_ title: String, @ViewBuilder content: () -> Content) {
+  init(_ title: LocalizedStringResource, @ViewBuilder content: () -> Content) {
     self.title = title
     self.content = content()
   }
@@ -1214,7 +1214,7 @@ private struct RoutingEditRow<Content: View>: View {
   var body: some View {
     ViewThatFits(in: .horizontal) {
       HStack(alignment: .center, spacing: 12) {
-        Text(LocalizedStringKey(title))
+        Text(title)
           .font(.caption.weight(.medium))
           .foregroundStyle(.secondary)
           .frame(width: 112, alignment: .leading)
@@ -1222,7 +1222,7 @@ private struct RoutingEditRow<Content: View>: View {
       }
 
       VStack(alignment: .leading, spacing: 6) {
-        Text(LocalizedStringKey(title))
+        Text(title)
           .font(.caption.weight(.medium))
           .foregroundStyle(.secondary)
         content
@@ -1300,13 +1300,13 @@ private struct RuntimeDNSPatchEditor: View {
     }
   }
 
-  private func dnsListEditor(_ title: String, keyPath: WritableKeyPath<TunDNSSettings, [String]>) -> some View {
+  private func dnsListEditor(_ title: LocalizedStringResource, keyPath: WritableKeyPath<TunDNSSettings, [String]>) -> some View {
     RoutingEditRow(title) {
       textArea("One value per line", text: listBinding(keyPath), minHeight: 54)
     }
   }
 
-  private func dnsMapEditor(_ title: String, keyPath: WritableKeyPath<TunDNSSettings, [String: String]>) -> some View {
+  private func dnsMapEditor(_ title: LocalizedStringResource, keyPath: WritableKeyPath<TunDNSSettings, [String: String]>) -> some View {
     RoutingEditRow(title) {
       textArea("key = value", text: mapBinding(keyPath), minHeight: 54)
     }
@@ -1486,7 +1486,7 @@ private struct RoutingWorkspaceSurface<Content: View>: View {
 }
 
 private struct RoutingWorkspaceNotice: View {
-  let title: String
+  let title: LocalizedStringResource
   let systemImage: String
   let message: String
 
@@ -1497,7 +1497,7 @@ private struct RoutingWorkspaceNotice: View {
         .frame(width: 18)
 
       VStack(alignment: .leading, spacing: 2) {
-        Text(LocalizedStringKey(title))
+        Text(title)
           .font(.callout.weight(.medium))
         Text(LocalizedStringKey(message))
           .font(.caption)
@@ -1511,11 +1511,11 @@ private struct RoutingWorkspaceNotice: View {
 
 private struct RoutingInspectorPanel<Content: View>: View {
   @Environment(\.colorScheme) private var colorScheme
-  let title: String
+  let title: LocalizedStringResource
   let systemImage: String
   let content: Content
 
-  init(title: String, systemImage: String, @ViewBuilder content: () -> Content) {
+  init(title: LocalizedStringResource, systemImage: String, @ViewBuilder content: () -> Content) {
     self.title = title
     self.systemImage = systemImage
     self.content = content()
@@ -1524,9 +1524,13 @@ private struct RoutingInspectorPanel<Content: View>: View {
   var body: some View {
     let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
     VStack(alignment: .leading, spacing: 10) {
-      Label(LocalizedStringKey(title), systemImage: systemImage)
-        .font(.headline)
-        .lineLimit(1)
+      Label {
+        Text(title)
+      } icon: {
+        Image(systemName: systemImage)
+      }
+      .font(.headline)
+      .lineLimit(1)
 
       content
     }
@@ -1541,11 +1545,11 @@ private struct RoutingInspectorPanel<Content: View>: View {
 
 private struct RoutingCompactFact: Identifiable {
   let id: String
-  let title: String
+  let title: LocalizedStringResource
   let value: String
 
-  init(title: String, value: String) {
-    self.id = title
+  init(title: LocalizedStringResource, value: String) {
+    self.id = String(localized: title)
     self.title = title
     self.value = value
   }
@@ -1556,7 +1560,7 @@ private struct RoutingCompactDetailItem: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 3) {
-      Text(LocalizedStringKey(fact.title))
+      Text(fact.title)
         .font(.caption2)
         .foregroundStyle(.tertiary)
         .lineLimit(1)
@@ -1575,14 +1579,14 @@ private struct RoutingCompactDetailItem: View {
 }
 
 private struct RoutingDetailRow: View {
-  let title: String
+  let title: LocalizedStringResource
   let value: String
   var isProminent = false
   var lineLimit = 2
 
   var body: some View {
     VStack(alignment: .leading, spacing: 3) {
-      Text(LocalizedStringKey(title))
+      Text(title)
         .font(.caption2)
         .foregroundStyle(.tertiary)
       Text(value)
