@@ -88,6 +88,10 @@ struct MenuBarView: View {
           .menuBarPopupPickerStyle(disabled: appModel.profileStore.profiles.isEmpty)
         }
 
+        if !nodeSelectorGroups.isEmpty {
+          MenuBarNodeSelectionRow(groups: nodeSelectorGroups)
+        }
+
         MenuBarControlRow(title: String(localized: "Proxy Routing"), systemImage: appModel.proxyRoutingMode.symbolName) {
           Picker("Proxy Routing", selection: Binding(
             get: { appModel.proxyRoutingMode },
@@ -191,6 +195,13 @@ struct MenuBarView: View {
 
   private var activeProfileName: String {
     appModel.profileStore.activeProfile?.name ?? String(localized: "No Profile")
+  }
+
+  private var nodeSelectorGroups: [ProxyGroup] {
+    MenuBarNodeSelection.selectorGroups(
+      from: appModel.visibleProxyGroups,
+      runMode: appModel.overrides.mode
+    )
   }
 
   private var primaryActionDisabled: Bool {
@@ -366,6 +377,78 @@ private struct MenuBarRoutingQuickButtons: View {
   }
 }
 
+/// Decides which proxy groups the menu bar node-selection popup offers.
+///
+/// Mirrors the proxies page: only Selector groups accept manual selection, and
+/// the built-in GLOBAL group is only actionable while Mihomo runs in global
+/// mode. Groups without selectable nodes would render an empty menu, so they
+/// are dropped as well. Profile order is preserved.
+enum MenuBarNodeSelection {
+  static let globalGroupName = "GLOBAL"
+
+  static func selectorGroups(from groups: [ProxyGroup], runMode: RunMode) -> [ProxyGroup] {
+    groups.filter { group in
+      guard group.allowsManualProxySelection else { return false }
+      guard group.nodes.contains(where: \.isSelectable) else { return false }
+      if group.name == globalGroupName {
+        return runMode == .global
+      }
+      return true
+    }
+  }
+
+  static func popupTitle(for groups: [ProxyGroup]) -> String {
+    if groups.count == 1, let selected = groups[0].selected, !selected.isEmpty {
+      return selected
+    }
+    return String(localized: "Select")
+  }
+}
+
+private struct MenuBarNodeSelectionRow: View {
+  @EnvironmentObject private var appModel: AppModel
+  let groups: [ProxyGroup]
+
+  var body: some View {
+    MenuBarControlRow(title: String(localized: "Node Selection"), systemImage: "arrow.triangle.swap") {
+      Menu {
+        if groups.count == 1, let group = groups.first {
+          MenuBarGroupNodeButtons(group: group)
+        } else {
+          ForEach(groups) { group in
+            Menu(group.name) {
+              MenuBarGroupNodeButtons(group: group)
+            }
+          }
+        }
+      } label: {
+        MenuBarPinnedGroupSelectionLabel(title: MenuBarNodeSelection.popupTitle(for: groups))
+      }
+      .controlSize(.small)
+      .disabled(!appModel.canSelectProxyNodesFromMenuBar)
+    }
+  }
+}
+
+private struct MenuBarGroupNodeButtons: View {
+  @EnvironmentObject private var appModel: AppModel
+  let group: ProxyGroup
+
+  var body: some View {
+    ForEach(group.nodes.filter(\.isSelectable)) { node in
+      Button {
+        appModel.selectProxy(
+          group: group,
+          node: node,
+          closeOldConnections: appModel.proxyPageSettings.closesOldConnectionsAfterSwitch
+        )
+      } label: {
+        Label(node.name, systemImage: node.name == group.selected ? "checkmark.circle.fill" : "circle")
+      }
+    }
+  }
+}
+
 private struct MenuBarPinnedGroupsSection: View {
   @EnvironmentObject private var appModel: AppModel
   let groups: [ProxyGroup]
@@ -375,18 +458,12 @@ private struct MenuBarPinnedGroupsSection: View {
       ForEach(groups.prefix(MenuBarPinnedGroupSettings.maximumPinnedGroups)) { group in
         MenuBarControlRow(title: group.name, systemImage: "pin.fill") {
           Menu {
-            ForEach(group.nodes.filter(\.isSelectable)) { node in
-              Button {
-                appModel.selectProxy(group: group, node: node)
-              } label: {
-                Label(node.name, systemImage: node.name == group.selected ? "checkmark.circle.fill" : "circle")
-              }
-            }
+            MenuBarGroupNodeButtons(group: group)
           } label: {
             MenuBarPinnedGroupSelectionLabel(title: group.selected ?? String(localized: "Select"))
           }
           .controlSize(.small)
-          .disabled(!appModel.canControlRuntimeProxies || group.nodes.filter(\.isSelectable).isEmpty)
+          .disabled(!appModel.canSelectProxyNodesFromMenuBar || group.nodes.filter(\.isSelectable).isEmpty)
         }
       }
     }
@@ -569,6 +646,14 @@ struct MenuBarFooterButtonLabel: View {
       .truncationMode(.tail)
       .minimumScaleFactor(0.78)
       .frame(minWidth: MenuBarPanelLayout.footerButtonMinWidth, maxWidth: .infinity)
+  }
+}
+
+private extension AppModel {
+  /// Same gate the proxies page uses for node selection: live runtime control,
+  /// or offline preview selection that is persisted for the next start.
+  var canSelectProxyNodesFromMenuBar: Bool {
+    canControlRuntimeProxies || canSelectProxyOffline
   }
 }
 

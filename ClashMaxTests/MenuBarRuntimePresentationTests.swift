@@ -180,3 +180,84 @@ final class MenuBarTrafficStatusLabelTests: XCTestCase {
     XCTAssertEqual(label, "↓ 0 B/s ↑ 0 B/s")
   }
 }
+
+final class MenuBarNodeSelectionTests: XCTestCase {
+  func testSelectorGroupsKeepOnlyManualSelectorGroupsInProfileOrder() {
+    let groups = [
+      group(name: "Fallback", type: "Fallback"),
+      group(name: "Auto", type: "URLTest"),
+      group(name: "Elite", type: "Selector"),
+      group(name: "Region", type: "select")
+    ]
+
+    let result = MenuBarNodeSelection.selectorGroups(from: groups, runMode: .rule)
+
+    XCTAssertEqual(result.map(\.name), ["Elite", "Region"])
+  }
+
+  func testGlobalGroupOnlyAppearsInGlobalMode() {
+    let groups = [
+      group(name: "Elite", type: "Selector"),
+      group(name: "GLOBAL", type: "Selector")
+    ]
+
+    XCTAssertEqual(
+      MenuBarNodeSelection.selectorGroups(from: groups, runMode: .rule).map(\.name),
+      ["Elite"]
+    )
+    XCTAssertEqual(
+      MenuBarNodeSelection.selectorGroups(from: groups, runMode: .direct).map(\.name),
+      ["Elite"]
+    )
+    XCTAssertEqual(
+      MenuBarNodeSelection.selectorGroups(from: groups, runMode: .global).map(\.name),
+      ["Elite", "GLOBAL"]
+    )
+  }
+
+  func testSelectorGroupsSkipGroupsWithoutSelectableNodes() {
+    let groups = [
+      group(name: "Elite", type: "Selector"),
+      ProxyGroup(
+        name: "Empty",
+        type: "Selector",
+        selected: nil,
+        nodes: [node("Locked", selectable: false)]
+      )
+    ]
+
+    XCTAssertEqual(
+      MenuBarNodeSelection.selectorGroups(from: groups, runMode: .rule).map(\.name),
+      ["Elite"]
+    )
+  }
+
+  func testPopupTitleShowsSelectionOnlyForSingleGroup() {
+    let elite = group(name: "Elite", type: "Selector", selected: "[vless]JP Nano")
+    let region = group(name: "Region", type: "Selector", selected: "US")
+
+    XCTAssertEqual(MenuBarNodeSelection.popupTitle(for: [elite]), "[vless]JP Nano")
+    XCTAssertEqual(
+      MenuBarNodeSelection.popupTitle(for: [elite, region]),
+      String(localized: "Select")
+    )
+    XCTAssertEqual(
+      MenuBarNodeSelection.popupTitle(for: [group(name: "Elite", type: "Selector")]),
+      String(localized: "Select")
+    )
+    XCTAssertEqual(MenuBarNodeSelection.popupTitle(for: []), String(localized: "Select"))
+  }
+
+  private func group(name: String, type: String, selected: String? = nil) -> ProxyGroup {
+    ProxyGroup(
+      name: name,
+      type: type,
+      selected: selected,
+      nodes: [node("[vless]JP Nano"), node("[vless]US LAS")]
+    )
+  }
+
+  private func node(_ name: String, selectable: Bool = true) -> ProxyNode {
+    ProxyNode(name: name, type: "vless", delay: nil, isSelectable: selectable)
+  }
+}

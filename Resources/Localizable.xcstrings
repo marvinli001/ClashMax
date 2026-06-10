@@ -6607,6 +6607,16 @@
         }
       }
     },
+    "Node Selection" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "节点选择"
+          }
+        }
+      }
+    },
     "nodes" : {
       "localizations" : {
         "base" : {
@@ -9698,6 +9708,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "密钥已存储在 Keychain 中"
+          }
+        }
+      }
+    },
+    "Select" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择"
           }
         }
       }
