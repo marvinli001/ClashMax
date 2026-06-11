@@ -1234,30 +1234,11 @@ private struct StatusFactTile: View {
 }
 
 private struct DashboardInsetSurfaceModifier: ViewModifier {
-  @Environment(\.colorScheme) private var colorScheme
-
   func body(content: Content) -> some View {
     let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
     content
-      .background {
-        if colorScheme == .dark {
-          ZStack {
-            shape.fill(.thinMaterial)
-            shape.fill(Color.primary.opacity(0.035))
-          }
-        } else {
-          ZStack {
-            shape.fill(Color(nsColor: .textBackgroundColor).opacity(0.86))
-            shape.fill(Color(nsColor: .controlBackgroundColor).opacity(0.12))
-          }
-        }
-      }
-      .overlay {
-        shape.stroke(
-          Color(nsColor: .separatorColor).opacity(colorScheme == .dark ? 0.30 : 0.28),
-          lineWidth: 1
-        )
-      }
+      .background(.insetSurface, in: shape)
+      .overlay(shape.strokeBorder(.separator.opacity(0.6), lineWidth: 1))
   }
 }
 
@@ -1268,12 +1249,8 @@ private extension View {
 
   func statusFactSurface() -> some View {
     let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
-    return background {
-      shape.fill(Color.primary.opacity(0.035))
-    }
-    .overlay {
-      shape.stroke(Color(nsColor: .separatorColor).opacity(0.36), lineWidth: 0.75)
-    }
+    return background(.tileSurface, in: shape)
+      .overlay(shape.strokeBorder(.separator.opacity(0.7), lineWidth: 0.75))
   }
 }
 

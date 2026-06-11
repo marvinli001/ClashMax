@@ -2430,9 +2430,7 @@ private struct ExternalControlSettingsRow: View {
       suppressControllerPresentation = true
       resetDashboardDraft()
       isDashboardProfilesPresented = true
-      DispatchQueue.main.async {
-        suppressControllerPresentation = false
-      }
+      Task { suppressControllerPresentation = false }
     } label: {
       Image(systemName: "rectangle.3.group")
         .frame(width: 22, height: 22)
@@ -2471,9 +2469,7 @@ private struct ExternalControlSettingsRow: View {
       suppressControllerPresentation = true
       syncCORSDraft()
       isCORSPresented = true
-      DispatchQueue.main.async {
-        suppressControllerPresentation = false
-      }
+      Task { suppressControllerPresentation = false }
     } label: {
       Image(systemName: "gearshape")
         .font(.system(size: 12, weight: .semibold))

@@ -811,7 +811,6 @@ struct ProxySearchQuery {
 }
 
 private struct ProxyWorkspaceSurface<Content: View>: View {
-  @Environment(\.colorScheme) private var colorScheme
   let content: Content
 
   init(@ViewBuilder content: () -> Content) {
@@ -824,20 +823,9 @@ private struct ProxyWorkspaceSurface<Content: View>: View {
       content
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    .background {
-      if colorScheme == .dark {
-        ZStack {
-          shape.fill(.regularMaterial)
-          shape.fill(ProxySurface.group(for: colorScheme))
-        }
-      } else {
-        shape.fill(ProxySurface.group(for: colorScheme))
-      }
-    }
+    .background(.cardSurface, in: shape)
     .clipShape(shape)
-    .overlay {
-      shape.strokeBorder(ProxySurface.border(for: colorScheme), lineWidth: 1)
-    }
+    .overlay(shape.strokeBorder(.separator, lineWidth: 1))
   }
 }
 
@@ -900,7 +888,6 @@ private struct ProxyGroupSplitView: View {
 }
 
 private struct ProxyGroupNavigator: View {
-  @Environment(\.colorScheme) private var colorScheme
   let groups: [ProxyGroup]
   @Binding var selectedGroupID: ProxyGroup.ID?
 
@@ -921,7 +908,7 @@ private struct ProxyGroupNavigator: View {
       .padding(8)
       .frame(maxWidth: .infinity, alignment: .topLeading)
     }
-    .background(ProxySurface.navigator(for: colorScheme))
+    .background(.cardSurface)
   }
 
   private func isSelected(_ group: ProxyGroup) -> Bool {
@@ -1318,7 +1305,6 @@ private struct ProxyDelayBatchMetric: View {
 private struct ProxyProviderList: View {
   @EnvironmentObject private var appModel: AppModel
   @EnvironmentObject private var runtimeData: RuntimeDataStore
-  @Environment(\.colorScheme) private var colorScheme
   let providers: [ProxyProvider]
 
   var body: some View {
@@ -1398,10 +1384,10 @@ private struct ProxyProviderList: View {
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
-    .background(ProxySurface.secondary(for: colorScheme), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .background(.insetSurface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     .overlay {
       RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .strokeBorder(ProxySurface.border(for: colorScheme), lineWidth: 1)
+        .strokeBorder(.separator, lineWidth: 1)
     }
   }
 
@@ -1417,7 +1403,6 @@ private struct ProxyProviderList: View {
 
 private struct ProxyGroupCard: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @Environment(\.colorScheme) private var colorScheme
   let group: ProxyGroup
   let customDelayTestURL: URL?
   let showsDeveloperDetails: Bool
@@ -1443,10 +1428,10 @@ private struct ProxyGroupCard: View {
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(ProxySurface.group(for: colorScheme), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .background(.cardSurface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     .overlay {
       RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .strokeBorder(ProxySurface.border(for: colorScheme), lineWidth: 1)
+        .strokeBorder(.separator, lineWidth: 1)
     }
   }
 
@@ -1576,7 +1561,6 @@ private struct ProxyGroupCard: View {
 private struct ProxyNodeCard: View {
   @EnvironmentObject private var appModel: AppModel
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @Environment(\.colorScheme) private var colorScheme
   @GestureState private var isPressing = false
   let group: ProxyGroup
   let node: ProxyNode
@@ -1659,14 +1643,14 @@ private struct ProxyNodeCard: View {
     .scaleEffect(nodeScale(canSelect: canSelect))
     .background {
       RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .fill(ProxySurface.node(for: colorScheme))
+        .fill(.insetSurface)
       RoundedRectangle(cornerRadius: 8, style: .continuous)
         .fill(nodeInteractionTint(isSelected: isSelected, canSelect: canSelect))
     }
     .overlay {
       RoundedRectangle(cornerRadius: 8, style: .continuous)
         .strokeBorder(
-          nodeBorder(isSelected: isSelected, canSelect: canSelect, colorScheme: colorScheme),
+          nodeBorder(isSelected: isSelected, canSelect: canSelect),
           lineWidth: isSelected || (isPressing && canSelect) ? 1.2 : 1
         )
     }
@@ -1700,14 +1684,14 @@ private struct ProxyNodeCard: View {
     return .clear
   }
 
-  private func nodeBorder(isSelected: Bool, canSelect: Bool, colorScheme: ColorScheme) -> Color {
+  private func nodeBorder(isSelected: Bool, canSelect: Bool) -> AnyShapeStyle {
     if isSelected {
-      return .green.opacity(0.75)
+      return AnyShapeStyle(.green.opacity(0.75))
     }
     if canSelect, isPressing {
-      return Color.accentColor.opacity(0.35)
+      return AnyShapeStyle(Color.accentColor.opacity(0.35))
     }
-    return ProxySurface.border(for: colorScheme)
+    return AnyShapeStyle(.separator)
   }
 
   private func pressGesture(isEnabled: Bool) -> some Gesture {
@@ -1762,28 +1746,6 @@ private struct ProxyNodeMetadataRow: View {
         ProxyTypeBadge(text: providerName, isSelectable: node.isSelectable)
       }
     }
-  }
-}
-
-private enum ProxySurface {
-  static func group(for colorScheme: ColorScheme) -> Color {
-    colorScheme == .dark ? Color.primary.opacity(0.032) : Color(nsColor: .textBackgroundColor)
-  }
-
-  static func navigator(for colorScheme: ColorScheme) -> Color {
-    colorScheme == .dark ? Color.primary.opacity(0.024) : Color(nsColor: .textBackgroundColor)
-  }
-
-  static func node(for colorScheme: ColorScheme) -> Color {
-    colorScheme == .dark ? Color.primary.opacity(0.045) : Color(nsColor: .textBackgroundColor)
-  }
-
-  static func secondary(for colorScheme: ColorScheme) -> Color {
-    colorScheme == .dark ? Color.primary.opacity(0.040) : Color(nsColor: .controlBackgroundColor)
-  }
-
-  static func border(for colorScheme: ColorScheme) -> Color {
-    Color(nsColor: .separatorColor).opacity(colorScheme == .dark ? 0.34 : 0.55)
   }
 }
 

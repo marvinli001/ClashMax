@@ -8658,12 +8658,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(DashboardRuntimeState.running.isVisualActive)
   }
 
-  func testDashboardCardSurfaceAdaptsToColorScheme() {
-    XCTAssertEqual(DashboardCardSurfaceStyle.surfaceID(for: .light), "light-flat-dashboard-card")
-    XCTAssertNotEqual(
-      DashboardCardSurfaceStyle.shadowOpacity(for: .light),
-      DashboardCardSurfaceStyle.shadowOpacity(for: .dark)
-    )
+  func testDashboardCardModifierKeepsInteractiveAPI() {
+    XCTAssertTrue(DashboardCardModifier(interactive: true).interactive)
   }
 
   func testNetworkErrorsAreSummarizedForStatusSurfaces() {

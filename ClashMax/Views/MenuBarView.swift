@@ -190,7 +190,6 @@ struct MenuBarView: View {
     }
     .padding(MenuBarPanelLayout.padding)
     .frame(width: MenuBarPanelLayout.width)
-    .background(.regularMaterial)
   }
 
   private var activeProfileName: String {
@@ -540,7 +539,7 @@ struct MenuBarStatusMessage: View {
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(7)
-    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: MenuBarPanelLayout.statusCornerRadius, style: .continuous))
+    .background(.quaternary, in: RoundedRectangle(cornerRadius: MenuBarPanelLayout.statusCornerRadius, style: .continuous))
   }
 }
 

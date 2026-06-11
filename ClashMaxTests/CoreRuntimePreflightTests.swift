@@ -50,7 +50,10 @@ final class CoreRuntimePreflightTests: XCTestCase {
     let configURL = directory.appendingPathComponent("runtime.yaml")
     try runtimeYAML.write(to: configURL, atomically: true, encoding: .utf8)
 
-    let validator = MihomoRuntimeConfigValidator(timeout: 10)
+    // Generous timeout: validation finishes in ~0.15s in isolation, but spawning the
+    // bundled core can exceed 10s under full-suite CPU load. The timeout only guards
+    // against a hung process; the assertion is that validation succeeds.
+    let validator = MihomoRuntimeConfigValidator(timeout: 30)
     try await validator.validate(coreURL: coreURL, configURL: configURL, workDirectory: directory)
   }
 

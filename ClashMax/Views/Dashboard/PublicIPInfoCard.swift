@@ -161,7 +161,7 @@ struct PublicIPInfoCard: View {
     }
     .padding(.horizontal, 10)
     .padding(.vertical, 7)
-    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .background(.tileSurface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
   }
 
   private func placeholderBody(title: String, symbolName: String, message: String? = nil) -> some View {

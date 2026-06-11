@@ -1195,7 +1195,7 @@ private struct RuntimeSnippetRow: View {
       .buttonStyle(.borderless)
     }
     .padding(8)
-    .background(isSelected ? Color.accentColor.opacity(0.14) : RoutingSurface.secondary(for: .light).opacity(0), in: shape)
+    .background(isSelected ? Color.accentColor.opacity(0.14) : Color.clear, in: shape)
     .overlay {
       shape.strokeBorder(isSelected ? Color.accentColor.opacity(0.45) : Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 1)
     }
@@ -1455,7 +1455,6 @@ private enum RuntimeOptionalBoolChoice: String, CaseIterable, Identifiable {
 }
 
 private struct RoutingWorkspaceSurface<Content: View>: View {
-  @Environment(\.colorScheme) private var colorScheme
   let content: Content
 
   init(@ViewBuilder content: () -> Content) {
@@ -1468,20 +1467,9 @@ private struct RoutingWorkspaceSurface<Content: View>: View {
       content
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    .background {
-      if colorScheme == .dark {
-        ZStack {
-          shape.fill(.regularMaterial)
-          shape.fill(RoutingSurface.workspace(for: colorScheme))
-        }
-      } else {
-        shape.fill(RoutingSurface.workspace(for: colorScheme))
-      }
-    }
+    .background(.cardSurface, in: shape)
     .clipShape(shape)
-    .overlay {
-      shape.strokeBorder(RoutingSurface.border(for: colorScheme), lineWidth: 1)
-    }
+    .overlay(shape.strokeBorder(.separator, lineWidth: 1))
   }
 }
 
@@ -1510,7 +1498,6 @@ private struct RoutingWorkspaceNotice: View {
 }
 
 private struct RoutingInspectorPanel<Content: View>: View {
-  @Environment(\.colorScheme) private var colorScheme
   let title: LocalizedStringResource
   let systemImage: String
   let content: Content
@@ -1536,10 +1523,8 @@ private struct RoutingInspectorPanel<Content: View>: View {
     }
     .padding(12)
     .frame(maxWidth: .infinity, alignment: .topLeading)
-    .background(RoutingSurface.secondary(for: colorScheme), in: shape)
-    .overlay {
-      shape.strokeBorder(RoutingSurface.border(for: colorScheme).opacity(0.82), lineWidth: 1)
-    }
+    .background(.insetSurface, in: shape)
+    .overlay(shape.strokeBorder(.separator.opacity(0.82), lineWidth: 1))
   }
 }
 
@@ -1597,19 +1582,5 @@ private struct RoutingDetailRow: View {
         .textSelection(.enabled)
     }
     .frame(maxWidth: .infinity, alignment: .leading)
-  }
-}
-
-private enum RoutingSurface {
-  static func workspace(for colorScheme: ColorScheme) -> Color {
-    colorScheme == .dark ? Color.primary.opacity(0.032) : Color(nsColor: .textBackgroundColor)
-  }
-
-  static func secondary(for colorScheme: ColorScheme) -> Color {
-    colorScheme == .dark ? Color.primary.opacity(0.040) : Color(nsColor: .controlBackgroundColor)
-  }
-
-  static func border(for colorScheme: ColorScheme) -> Color {
-    Color(nsColor: .separatorColor).opacity(colorScheme == .dark ? 0.34 : 0.55)
   }
 }

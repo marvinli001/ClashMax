@@ -325,11 +325,10 @@ private struct LaunchStatusMessage: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .background(presentation.color.opacity(0.07), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(presentation.color.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay {
           RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .stroke(presentation.color.opacity(0.22), lineWidth: 1)
+            .strokeBorder(presentation.color.opacity(0.22), lineWidth: 1)
         }
         .changeEffect(.shake, value: presentation.shakesOnChange ? presentation.message : "")
     }

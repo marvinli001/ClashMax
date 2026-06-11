@@ -1098,11 +1098,10 @@ struct DashboardStatusPill: View {
     }
     .padding(.horizontal, 10)
     .padding(.vertical, 7)
-    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-    .background(tint.opacity(0.055), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     .overlay {
       RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .stroke(tint.opacity(0.20), lineWidth: 1)
+        .strokeBorder(tint.opacity(0.20), lineWidth: 1)
     }
   }
 }
@@ -1212,18 +1211,46 @@ struct DashboardEmptyRuntimeView: View {
   }
 }
 
-enum DashboardCardSurfaceStyle {
-  static func surfaceID(for colorScheme: ColorScheme) -> String {
-    colorScheme == .dark ? "dark-material-dashboard-card" : "light-flat-dashboard-card"
+/// App-wide adaptive content surfaces, resolved once via the environment so
+/// individual views never branch on color scheme. Light keeps the classic
+/// bright-white card look (system text background); dark keeps the elevated
+/// semantic hierarchy.
+struct CardSurface: ShapeStyle {
+  func resolve(in environment: EnvironmentValues) -> AnyShapeStyle {
+    environment.colorScheme == .dark
+      ? AnyShapeStyle(.background.secondary)
+      : AnyShapeStyle(Color(nsColor: .textBackgroundColor))
   }
+}
 
-  static func shadowOpacity(for colorScheme: ColorScheme) -> Double {
-    colorScheme == .dark ? 0.16 : 0.04
+/// Inset blocks sitting on a `CardSurface` (node tiles, inspector panels).
+struct InsetSurface: ShapeStyle {
+  func resolve(in environment: EnvironmentValues) -> AnyShapeStyle {
+    environment.colorScheme == .dark
+      ? AnyShapeStyle(.fill.tertiary)
+      : AnyShapeStyle(Color(nsColor: .textBackgroundColor))
   }
+}
 
-  static func strokeOpacity(for colorScheme: ColorScheme) -> Double {
-    colorScheme == .dark ? 0.30 : 0.55
+/// Subtle fact tiles on a `CardSurface` (status fact grid).
+struct TileSurface: ShapeStyle {
+  func resolve(in environment: EnvironmentValues) -> AnyShapeStyle {
+    environment.colorScheme == .dark
+      ? AnyShapeStyle(.quinary)
+      : AnyShapeStyle(Color.primary.opacity(0.035))
   }
+}
+
+extension ShapeStyle where Self == CardSurface {
+  static var cardSurface: CardSurface { CardSurface() }
+}
+
+extension ShapeStyle where Self == InsetSurface {
+  static var insetSurface: InsetSurface { InsetSurface() }
+}
+
+extension ShapeStyle where Self == TileSurface {
+  static var tileSurface: TileSurface { TileSurface() }
 }
 
 struct DashboardCardModifier: ViewModifier {
@@ -1232,30 +1259,14 @@ struct DashboardCardModifier: ViewModifier {
 
   func body(content: Content) -> some View {
     let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
-    let card = content
-      .background {
-        if colorScheme == .dark {
-          ZStack {
-            shape.fill(.regularMaterial)
-            shape.fill(Color.primary.opacity(0.040))
-          }
-        } else {
-          shape.fill(Color(nsColor: .windowBackgroundColor))
-        }
-      }
-      .overlay {
-        shape.stroke(
-          Color(nsColor: .separatorColor).opacity(DashboardCardSurfaceStyle.strokeOpacity(for: colorScheme)),
-          lineWidth: 1
-        )
-      }
-      .shadow(color: .black.opacity(DashboardCardSurfaceStyle.shadowOpacity(for: colorScheme)), radius: colorScheme == .dark ? 16 : 10, x: 0, y: colorScheme == .dark ? 8 : 2)
-
-    if colorScheme == .dark {
-      card.glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
-    } else {
-      card
-    }
+    content
+      .background(.cardSurface, in: shape)
+      .overlay(shape.strokeBorder(.separator, lineWidth: 1))
+      .shadow(
+        color: .black.opacity(colorScheme == .dark ? 0.16 : 0.04),
+        radius: colorScheme == .dark ? 16 : 10,
+        y: colorScheme == .dark ? 8 : 2
+      )
   }
 }
 
