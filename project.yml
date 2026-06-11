@@ -100,8 +100,8 @@ targets:
         # Text/Button/Label literals, etc.) into the String Catalog. Without this,
         # extraction finds no Swift strings and marks active keys extractionState=stale.
         SWIFT_EMIT_LOC_STRINGS: "YES"
-        MARKETING_VERSION: 1.0.14
-        CURRENT_PROJECT_VERSION: 20
+        MARKETING_VERSION: 1.0.15
+        CURRENT_PROJECT_VERSION: 21
         PROVISIONING_PROFILE_SPECIFIER: ClashMax Developer ID
     entitlements:
       path: Config/ClashMax.entitlements
@@ -271,8 +271,8 @@ targets:
         PRODUCT_MODULE_NAME: ClashMaxNetworkExtension
         INFOPLIST_FILE: Config/ClashMaxNetworkExtension-Info.plist
         ENABLE_USER_SCRIPT_SANDBOXING: NO
-        MARKETING_VERSION: 1.0.14
-        CURRENT_PROJECT_VERSION: 20
+        MARKETING_VERSION: 1.0.15
+        CURRENT_PROJECT_VERSION: 21
         PROVISIONING_PROFILE_SPECIFIER: ClashMax NetworkExtension Developer ID
     entitlements:
       path: Config/ClashMaxNetworkExtension.entitlements
