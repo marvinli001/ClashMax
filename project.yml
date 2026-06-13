@@ -28,7 +28,7 @@ settings:
 packages:
   Yams:
     url: https://github.com/jpsim/Yams.git
-    from: "6.2.1"
+    from: "6.2.2"
   Pow:
     url: https://github.com/EmergeTools/Pow.git
     from: "1.0.0"
@@ -37,7 +37,7 @@ packages:
     from: "1.5.1"
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
-    from: "2.9.2"
+    from: "2.9.3"
 targets:
   ClashMax:
     type: application
