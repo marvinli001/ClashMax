@@ -7,7 +7,7 @@
   <p><strong>English</strong> | <a href="README.zh-CN.md">简体中文</a></p>
   <p>A native Mihomo proxy client for macOS, focused on profile management, runtime control, proxy groups, connections, rules, logs, and system integration.</p>
   <p>
-    <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%2026%2B-111111?logo=apple&logoColor=white">
+    <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%2015%2B-111111?logo=apple&logoColor=white">
     <img alt="Swift" src="https://img.shields.io/badge/Swift-6.0-F05138?logo=swift&logoColor=white">
     <img alt="Mihomo" src="https://img.shields.io/badge/core-Mihomo%20v1.19.27-2f6fed">
     <img alt="License" src="https://img.shields.io/badge/license-GPL--3.0-2563eb">
@@ -50,7 +50,7 @@ The interface stays restrained, compact, and easy to scan. The first screen is t
 
 ## Requirements
 
-- macOS 26+
+- macOS 15+
 - Apple Silicon or Intel Mac
 - TUN mode requires approving helper permissions when prompted by macOS on first use
 

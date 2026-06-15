@@ -7,7 +7,7 @@
   <p><a href="README.md">English</a> | <strong>简体中文</strong></p>
   <p>面向 macOS 的原生 Mihomo 代理客户端，聚焦配置管理、运行控制、代理组、连接、规则、日志和系统集成。</p>
   <p>
-    <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%2026%2B-111111?logo=apple&logoColor=white">
+    <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%2015%2B-111111?logo=apple&logoColor=white">
     <img alt="Swift" src="https://img.shields.io/badge/Swift-6.0-F05138?logo=swift&logoColor=white">
     <img alt="Mihomo" src="https://img.shields.io/badge/core-Mihomo%20v1.19.27-2f6fed">
     <img alt="License" src="https://img.shields.io/badge/license-GPL--3.0-2563eb">
@@ -50,7 +50,7 @@ ClashMax 是一个使用 SwiftUI 构建的原生 macOS Mihomo 图形客户端。
 
 ## 系统要求
 
-- macOS 26+
+- macOS 15+
 - Apple Silicon 或 Intel Mac
 - 首次使用 TUN 模式时，需要按系统提示批准 helper 权限
 

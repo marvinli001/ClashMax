@@ -7,7 +7,10 @@ discipline is recorded.
 
 ## Product Direction
 
-- Build ClashMax as a native macOS 26+ SwiftUI app.
+- Build ClashMax as a native macOS 15+ SwiftUI app. Keep the UI aligned with
+  the current Apple platform visual language, but gate newer platform APIs with
+  availability checks and practical fallbacks when they are above the deployment
+  target.
 - Keep the first screen as the actual proxy client, not a marketing page.
 - Prioritize a quiet operational interface for profiles, proxy groups,
   connections, rules, logs, runtime settings, and menu bar controls.
