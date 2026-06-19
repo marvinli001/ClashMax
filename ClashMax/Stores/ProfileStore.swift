@@ -97,10 +97,15 @@ struct NoopSubscriptionProfilePreflightValidator: SubscriptionProfilePreflightVa
 
 struct SubscriptionPreflightValidationError: Error, LocalizedError, CustomStringConvertible {
   var message: String
+  var fullMessage: String?
   var diagnostics: SubscriptionPreflightDiagnostics
 
   init(error: Error, diagnostics: SubscriptionPreflightDiagnostics) {
-    self.message = UserFacingError.message(for: error)
+    // Prefer the extracted short summary (the actual Mihomo failure line) over the
+    // raw error text, which UserFacingError truncates to its first ~217 chars and
+    // would surface only the benign log head (see issue #7).
+    self.message = diagnostics.localizedMessage ?? UserFacingError.message(for: error)
+    self.fullMessage = diagnostics.fullMessage
     self.diagnostics = diagnostics
   }
 
@@ -1303,12 +1308,32 @@ final class ProfileStore: ObservableObject {
         messageKind: .mihomoAccepted
       )
     } catch {
+      let fullDiagnostic = Self.fullPreflightDiagnostic(from: error)
+      let summary = fullDiagnostic.flatMap(SubscriptionPreflightDiagnosticFormatter.summary(fromFullMessage:))
+        ?? UserFacingError.message(for: error)
       let diagnostics = SubscriptionPreflightDiagnostics(
         result: .failed,
-        message: UserFacingError.message(for: error)
+        message: summary,
+        fullMessage: fullDiagnostic
       )
       throw SubscriptionPreflightValidationError(error: error, diagnostics: diagnostics)
     }
+  }
+
+  nonisolated private static func fullPreflightDiagnostic(from error: Error) -> String? {
+    if case let AppError.configValidationFailed(payload) = error {
+      return SubscriptionPreflightDiagnosticFormatter.fullDiagnostic(fromFullMessage: payload)
+    }
+    let nsError = error as NSError
+    let described = String(describing: error)
+    let localized = nsError.localizedDescription
+    let candidates = [described, localized].filter { !$0.isEmpty }
+    for candidate in candidates {
+      if candidate.contains("\n") || candidate.count > SubscriptionPreflightDiagnosticFormatter.summaryCharacterLimit {
+        return SubscriptionPreflightDiagnosticFormatter.fullDiagnostic(fromFullMessage: candidate)
+      }
+    }
+    return nil
   }
 
   nonisolated private static func requiresSubscriptionPreflight(

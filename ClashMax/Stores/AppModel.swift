@@ -656,12 +656,29 @@ final class AppModel: ObservableObject {
   @Published var routingSimulationRequest: RoutingSimulationRequest?
   private var lastErrorOrigin: LastErrorOrigin?
   private var isPublishingNetworkExtensionLastError = false
+  private var isPublishingLastErrorWithDetails = false
   @Published var lastError: String? {
     didSet {
       if !isPublishingNetworkExtensionLastError {
         lastErrorOrigin = nil
       }
+      if !isPublishingLastErrorWithDetails {
+        lastErrorDetails = nil
+      }
     }
+  }
+  @Published private(set) var lastErrorDetails: String?
+
+  func publishSubscriptionFailure(_ error: Error) {
+    let preflightError = error as? SubscriptionPreflightValidationError
+    // The preflight wrapper already carries the extracted short summary; using it
+    // avoids re-truncating to the benign Mihomo log head (issue #7).
+    let summary = preflightError?.message ?? UserFacingError.message(for: error)
+    let details = preflightError?.fullMessage
+    isPublishingLastErrorWithDetails = true
+    lastError = summary
+    isPublishingLastErrorWithDetails = false
+    lastErrorDetails = details
   }
   @Published private(set) var currentNetworkSSID: String?
   @Published private(set) var networkPolicyStatusMessage: String?
@@ -1675,7 +1692,7 @@ final class AppModel: ObservableObject {
       return true
     } catch {
       profileCoordinator.clearMessage()
-      lastError = UserFacingError.message(for: error)
+      publishSubscriptionFailure(error)
       return false
     }
   }
@@ -2242,7 +2259,7 @@ final class AppModel: ObservableObject {
       return updated
     } catch {
       profileCoordinator.clearMessage()
-      lastError = UserFacingError.message(for: error)
+      publishSubscriptionFailure(error)
       return false
     }
   }
@@ -2274,7 +2291,7 @@ final class AppModel: ObservableObject {
       return updated
     } catch {
       profileCoordinator.clearMessage()
-      lastError = UserFacingError.message(for: error)
+      publishSubscriptionFailure(error)
       return false
     }
   }
@@ -2297,7 +2314,7 @@ final class AppModel: ObservableObject {
       return true
     } catch {
       profileCoordinator.clearMessage()
-      lastError = UserFacingError.message(for: error)
+      publishSubscriptionFailure(error)
       return false
     }
   }
@@ -2335,7 +2352,7 @@ final class AppModel: ObservableObject {
       return updated
     } catch {
       profileCoordinator.clearMessage()
-      lastError = UserFacingError.message(for: error)
+      publishSubscriptionFailure(error)
       return false
     }
   }

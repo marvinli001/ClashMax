@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 import Yams
@@ -92,10 +93,10 @@ struct ProfilesView: View {
         }
 
         if let error = appModel.lastError {
-          Label(error, systemImage: "exclamationmark.triangle.fill")
-            .font(.callout)
-            .foregroundStyle(.red)
-            .lineLimit(3)
+          GlobalErrorBanner(
+            message: error,
+            details: appModel.lastErrorDetails
+          )
         }
       }
     }
@@ -1564,11 +1565,96 @@ private struct SubscriptionUpdatePolicyEditor: View {
   }
 }
 
+private struct GlobalErrorBanner: View {
+  let message: String
+  let details: String?
+  @State private var isDetailsExpanded = false
+  @State private var copyConfirmation: Date?
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(alignment: .top, spacing: 8) {
+        Label(message, systemImage: "exclamationmark.triangle.fill")
+          .font(.callout)
+          .foregroundStyle(.red)
+          .lineLimit(3)
+          .textSelection(.enabled)
+        Spacer(minLength: 0)
+        if details != nil {
+          Button {
+            withAnimation(.easeInOut(duration: 0.16)) {
+              isDetailsExpanded.toggle()
+            }
+          } label: {
+            Label(
+              isDetailsExpanded ? "Hide Details" : "Show Details",
+              systemImage: isDetailsExpanded ? "chevron.up" : "chevron.down"
+            )
+            .labelStyle(.titleOnly)
+            .font(.caption)
+          }
+          .buttonStyle(.borderless)
+          Button {
+            copyDetails()
+          } label: {
+            Label(
+              copyConfirmation == nil ? "Copy Details" : "Copied",
+              systemImage: copyConfirmation == nil ? "doc.on.doc" : "checkmark"
+            )
+            .labelStyle(.titleAndIcon)
+            .font(.caption)
+          }
+          .buttonStyle(.borderless)
+        }
+      }
+
+      if isDetailsExpanded, let details {
+        ScrollView(.vertical, showsIndicators: true) {
+          Text(details)
+            .font(.system(.caption, design: .monospaced))
+            .foregroundStyle(.primary)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(8)
+        }
+        .frame(maxHeight: 220)
+        .background(
+          .quaternary,
+          in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+        )
+
+        Text("Review before sharing: this may include hostnames, ports, or other details from your profile.")
+          .font(.caption2)
+          .foregroundStyle(.tertiary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private func copyDetails() {
+    guard let details else { return }
+    let pasteboard = NSPasteboard.general
+    pasteboard.clearContents()
+    pasteboard.setString(details, forType: .string)
+    let stamp = Date()
+    copyConfirmation = stamp
+    Task { @MainActor in
+      try? await Task.sleep(nanoseconds: 1_600_000_000)
+      if copyConfirmation == stamp {
+        copyConfirmation = nil
+      }
+    }
+  }
+}
+
 private struct SubscriptionDiagnosticsView: View {
   let profile: Profile
   let subscriptionURL: String
   let defaultUpdateIntervalMinutes: Int
   @State private var isExpanded = true
+  @State private var isPreflightOutputExpanded = false
+  @State private var preflightCopyConfirmation: Date?
 
   private var diagnostics: SubscriptionDiagnostics {
     profile.subscriptionDiagnostics
@@ -1578,11 +1664,22 @@ private struct SubscriptionDiagnosticsView: View {
     diagnostics.latestFetch
   }
 
+  private var latestPreflight: SubscriptionPreflightDiagnostics? {
+    diagnostics.latestPreflight
+  }
+
+  private var preflightFullOutput: String? {
+    latestPreflight?.fullMessage
+  }
+
   var body: some View {
     ProfileEditDisclosureRow("Subscription Diagnostics", isExpanded: $isExpanded) {
       ProfileEditInfoRow {
         VStack(alignment: .leading, spacing: 12) {
           diagnosticsGrid
+          if preflightFullOutput != nil {
+            preflightOutputSection
+          }
           historySection
         }
       }
@@ -1602,6 +1699,79 @@ private struct SubscriptionDiagnosticsView: View {
       diagnosticValue("Charset", charsetSummary)
       diagnosticValue("Preflight", preflightSummary)
       diagnosticValue("Update Interval Source", updateIntervalSourceSummary)
+    }
+  }
+
+  private var preflightOutputSection: some View {
+    VStack(alignment: .leading, spacing: 7) {
+      HStack(alignment: .firstTextBaseline, spacing: 8) {
+        Button {
+          withAnimation(.easeInOut(duration: 0.16)) {
+            isPreflightOutputExpanded.toggle()
+          }
+        } label: {
+          HStack(spacing: 5) {
+            Image(systemName: "chevron.right")
+              .font(.caption.weight(.semibold))
+              .rotationEffect(.degrees(isPreflightOutputExpanded ? 90 : 0))
+              .frame(width: 10)
+            Text("Preflight Output")
+              .font(.caption.weight(.semibold))
+              .foregroundStyle(.secondary)
+          }
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        Spacer(minLength: 0)
+        Button {
+          copyPreflightFullOutput()
+        } label: {
+          Label(
+            preflightCopyConfirmation == nil ? "Copy" : "Copied",
+            systemImage: preflightCopyConfirmation == nil ? "doc.on.doc" : "checkmark"
+          )
+          .labelStyle(.titleAndIcon)
+          .font(.caption)
+        }
+        .buttonStyle(.borderless)
+        .disabled(preflightFullOutput == nil)
+      }
+
+      if isPreflightOutputExpanded, let fullOutput = preflightFullOutput {
+        ScrollView(.vertical, showsIndicators: true) {
+          Text(fullOutput)
+            .font(.system(.caption, design: .monospaced))
+            .foregroundStyle(.primary)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(8)
+        }
+        .frame(maxHeight: 220)
+        .background(
+          .quaternary,
+          in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+        )
+
+        Text("Review before sharing: this may include hostnames, ports, or other details from your profile.")
+          .font(.caption2)
+          .foregroundStyle(.tertiary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+  }
+
+  private func copyPreflightFullOutput() {
+    guard let fullOutput = preflightFullOutput else { return }
+    let pasteboard = NSPasteboard.general
+    pasteboard.clearContents()
+    pasteboard.setString(fullOutput, forType: .string)
+    let stamp = Date()
+    preflightCopyConfirmation = stamp
+    Task { @MainActor in
+      try? await Task.sleep(nanoseconds: 1_600_000_000)
+      if preflightCopyConfirmation == stamp {
+        preflightCopyConfirmation = nil
+      }
     }
   }
 

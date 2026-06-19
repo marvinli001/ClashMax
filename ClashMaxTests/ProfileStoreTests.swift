@@ -883,6 +883,123 @@ final class ProfileStoreTests: XCTestCase {
     XCTAssertEqual(try String(contentsOfFile: profile.originalConfigPath, encoding: .utf8), originalConfig)
   }
 
+  func testSubscriptionPreflightFailurePreservesFullMihomoOutputForDiagnostics() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let secrets = InMemorySecretStore()
+    let store = ProfileStore(paths: fixture.paths, keychain: secrets)
+    let providerContent = "trojan://password@example.com:443?sni=example.com#Trojan%20Node\n"
+    let profile = try await store.addSubscription(
+      name: "Remote",
+      url: URL(string: "https://example.com/sub")!,
+      session: URLSession(configuration: URLProtocolRecorder.configurationReturning(providerContent))
+    )
+
+    // Mirrors real bundled Mihomo v1.19.27 `-t` output: a benign info line
+    // (the part previously surfaced by issue #7), the real cause as a logfmt
+    // `level=error` line, then a generic trailer last.
+    let multilineMihomoOutput = """
+    time="2026-06-19T10:21:33+08:00" level=info msg="Start initial configuration in progress"
+    time="2026-06-19T10:21:33+08:00" level=warning msg="[Config] geox-url not configured, fallback to internal default"
+    time="2026-06-19T10:21:34+08:00" level=error msg="proxy 0: '' has unset fields: cipher, password"
+    configuration file /tmp/runtime.yaml test failed
+    """
+
+    let validator = RecordingSubscriptionPreflightValidator(
+      result: .failure(AppError.configValidationFailed(multilineMihomoOutput))
+    )
+
+    await XCTAssertThrowsErrorAsync {
+      try await store.updateSubscription(
+        profile,
+        session: URLSession(configuration: URLProtocolRecorder.configurationReturning(providerContent)),
+        preflightValidator: validator
+      )
+    } handler: { error in
+      let preflightError = error as? SubscriptionPreflightValidationError
+      XCTAssertNotNil(preflightError, "Expected wrapped SubscriptionPreflightValidationError, got \(error)")
+      let fullMessage = preflightError?.fullMessage ?? ""
+      XCTAssertTrue(
+        fullMessage.contains(#"level=error msg="proxy 0: '' has unset fields: cipher, password""#),
+        "Full preflight message should retain the real error line, got: \(fullMessage)"
+      )
+      // The wrapped error's headline message (used for the global banner) must be
+      // the extracted cause, not the truncated Mihomo log head.
+      XCTAssertEqual(preflightError?.message, "proxy 0: '' has unset fields: cipher, password")
+    }
+
+    let persistedPreflight = store.profiles.first?.subscriptionDiagnostics.latestPreflight
+    XCTAssertEqual(persistedPreflight?.result, .failed)
+    let persistedFull = try XCTUnwrap(persistedPreflight?.fullMessage)
+    XCTAssertTrue(
+      persistedFull.contains(#"level=error msg="proxy 0: '' has unset fields: cipher, password""#),
+      "Persisted fullMessage lost the real error line: \(persistedFull)"
+    )
+    XCTAssertTrue(
+      persistedFull.contains("Start initial configuration in progress"),
+      "Persisted fullMessage should keep the earlier log lines too"
+    )
+    XCTAssertTrue(
+      persistedFull.contains("test failed"),
+      "Persisted fullMessage should keep the trailing line too"
+    )
+
+    let summary = try XCTUnwrap(persistedPreflight?.message)
+    XCTAssertEqual(
+      summary,
+      "proxy 0: '' has unset fields: cipher, password",
+      "Short summary should be the extracted error cause, not the info head or trailer"
+    )
+  }
+
+  func testAppModelPublishesPreflightSummaryAsLastErrorAndFullOutputAsDetails() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let store = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
+    let model = AppModel(paths: fixture.paths, profileStore: store)
+
+    let fullOutput = """
+    time="2026-06-19T10:21:33+08:00" level=info msg="Start initial configuration in progress"
+    time="2026-06-19T10:21:34+08:00" level=error msg="proxy 0: '' has unset fields: cipher, password"
+    configuration file /tmp/runtime.yaml test failed
+    """
+    let diagnostics = SubscriptionPreflightDiagnostics(
+      result: .failed,
+      message: SubscriptionPreflightDiagnosticFormatter.summary(fromFullMessage: fullOutput),
+      fullMessage: SubscriptionPreflightDiagnosticFormatter.fullDiagnostic(fromFullMessage: fullOutput)
+    )
+    let wrapped = SubscriptionPreflightValidationError(
+      error: AppError.configValidationFailed(fullOutput),
+      diagnostics: diagnostics
+    )
+
+    model.publishSubscriptionFailure(wrapped)
+
+    XCTAssertEqual(
+      model.lastError,
+      "proxy 0: '' has unset fields: cipher, password",
+      "Global banner headline should be the extracted cause, not the truncated log head"
+    )
+    XCTAssertEqual(
+      model.lastErrorDetails,
+      diagnostics.fullMessage,
+      "Global banner should expose the full Mihomo output for copying"
+    )
+
+    // Assigning a new lastError must clear the stale details (didSet behavior).
+    model.lastError = "Some unrelated error"
+    XCTAssertNil(model.lastErrorDetails)
+  }
+
+  func testAppModelPublishesNonPreflightFailureWithoutDetails() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let store = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
+    let model = AppModel(paths: fixture.paths, profileStore: store)
+
+    model.publishSubscriptionFailure(AppError.invalidSubscriptionResponse)
+
+    XCTAssertEqual(model.lastError, UserFacingError.message(for: AppError.invalidSubscriptionResponse))
+    XCTAssertNil(model.lastErrorDetails, "Non-preflight failures have no copyable full diagnostic")
+  }
+
   func testImportRejectsConfigWithoutProxyDefinitions() async throws {
     let fixture = try TemporaryProfileFixture(config: "mixed-port: 7890\nrules: []\n")
     let store = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())

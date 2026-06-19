@@ -1046,6 +1046,129 @@ struct SubscriptionFetchDiagnostics: Codable, Equatable, Sendable {
   }
 }
 
+enum SubscriptionPreflightDiagnosticFormatter {
+  static let summaryCharacterLimit = 220
+
+  // logrus levels (logfmt `level=...`) that indicate the real failure cause.
+  // Bundled Mihomo emits e.g. `time="..." level=error msg="proxy 0: ..."`.
+  private static let failureLevels = ["panic", "fatal", "error"]
+  // Legacy bracketed console prefixes (e.g. `FATA[0000] ...`) some cores emit.
+  private static let legacyFailurePrefixes = ["panic", "fatal", "fata", "error", "erro"]
+
+  /// Produces a short, single-line summary that points at the actual failure.
+  ///
+  /// Mihomo `-t` prints info/warn lines first, the real cause as a
+  /// `level=error`/`level=fatal` line, then a generic
+  /// `configuration file ... test failed` trailer last. Naively taking the last
+  /// line surfaces the trailer (or a benign info line) and hides the cause, so
+  /// we prefer the last failure-level line and extract its `msg=` value.
+  static func summary(fromFullMessage fullMessage: String) -> String? {
+    let trimmed = fullMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    let lines = trimmed.components(separatedBy: .newlines)
+      .map { $0.trimmingCharacters(in: .whitespaces) }
+      .filter { !$0.isEmpty }
+    guard let chosen = chooseSummaryLine(from: lines) else {
+      return clampedSingleLine(trimmed)
+    }
+    return clampedSingleLine(displayText(for: chosen))
+  }
+
+  /// Picks the most informative line: the last failure-level logfmt line, else
+  /// the last legacy bracketed failure line, else the last line that isn't the
+  /// generic `configuration file ... test failed` trailer.
+  private static func chooseSummaryLine(from lines: [String]) -> String? {
+    guard !lines.isEmpty else { return nil }
+    if let failureLine = lines.last(where: isLogfmtFailureLine) {
+      return failureLine
+    }
+    if let legacyLine = lines.last(where: hasLegacyFailurePrefix) {
+      return legacyLine
+    }
+    return lines.last(where: { !isGenericTrailer($0) }) ?? lines[lines.count - 1]
+  }
+
+  /// Renders a chosen line for the summary: a logfmt line collapses to its `msg=`
+  /// value; other lines are shown verbatim.
+  private static func displayText(for line: String) -> String {
+    if logfmtLevel(from: line) != nil, let message = logfmtMessageValue(from: line) {
+      return message
+    }
+    return line
+  }
+
+  static func fullDiagnostic(fromFullMessage fullMessage: String) -> String? {
+    let trimmed = fullMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+  }
+
+  /// Returns the lowercased value of the logfmt `level=` field, if the line has
+  /// one at a field boundary (start of line or after whitespace).
+  private static func logfmtLevel(from line: String) -> String? {
+    guard let range = line.range(of: "level=") else { return nil }
+    if range.lowerBound != line.startIndex {
+      let preceding = line[line.index(before: range.lowerBound)]
+      guard preceding.isWhitespace else { return nil }
+    }
+    let value = line[range.upperBound...].prefix { !$0.isWhitespace }
+    return value.isEmpty ? nil : value.lowercased()
+  }
+
+  private static func isLogfmtFailureLine(_ line: String) -> Bool {
+    guard let level = logfmtLevel(from: line) else { return false }
+    return failureLevels.contains(level)
+  }
+
+  /// Extracts the `msg=` value from a logfmt line, unescaping a quoted value.
+  private static func logfmtMessageValue(from line: String) -> String? {
+    guard let range = line.range(of: "msg=") else { return nil }
+    let remainder = line[range.upperBound...]
+    guard let first = remainder.first else { return nil }
+    if first == "\"" {
+      var result = ""
+      var index = remainder.index(after: remainder.startIndex)
+      var isEscaped = false
+      while index < remainder.endIndex {
+        let character = remainder[index]
+        if isEscaped {
+          result.append(character)
+          isEscaped = false
+        } else if character == "\\" {
+          isEscaped = true
+        } else if character == "\"" {
+          break
+        } else {
+          result.append(character)
+        }
+        index = remainder.index(after: index)
+      }
+      return result.isEmpty ? nil : result
+    }
+    let unquoted = remainder.prefix { !$0.isWhitespace }
+    return unquoted.isEmpty ? nil : String(unquoted)
+  }
+
+  private static func hasLegacyFailurePrefix(_ line: String) -> Bool {
+    let lowered = line.lowercased()
+    return legacyFailurePrefixes.contains { lowered.hasPrefix($0) }
+  }
+
+  private static func isGenericTrailer(_ line: String) -> Bool {
+    let lowered = line.lowercased()
+    return lowered.hasPrefix("configuration file") && lowered.contains("test failed")
+  }
+
+  private static func clampedSingleLine(_ raw: String) -> String {
+    let collapsed = raw
+      .replacingOccurrences(of: "\r", with: " ")
+      .replacingOccurrences(of: "\n", with: " ")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard collapsed.count > summaryCharacterLimit else { return collapsed }
+    let cutoff = max(0, summaryCharacterLimit - 3)
+    return "\(collapsed.prefix(cutoff))..."
+  }
+}
+
 enum SubscriptionPreflightResult: String, Codable, Equatable, Sendable {
   case skipped
   case succeeded
@@ -1078,18 +1201,40 @@ struct SubscriptionPreflightDiagnostics: Codable, Equatable, Sendable {
   var checkedAt: Date
   var result: SubscriptionPreflightResult
   var message: String?
+  var fullMessage: String?
   var messageKind: SubscriptionPreflightDiagnosticMessage?
+
+  private enum CodingKeys: String, CodingKey {
+    case checkedAt
+    case result
+    case message
+    case fullMessage
+    case messageKind
+  }
 
   init(
     checkedAt: Date = Date(),
     result: SubscriptionPreflightResult,
     message: String? = nil,
+    fullMessage: String? = nil,
     messageKind: SubscriptionPreflightDiagnosticMessage? = nil
   ) {
     self.checkedAt = checkedAt
     self.result = result
     self.message = message?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    self.fullMessage = fullMessage?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     self.messageKind = messageKind
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    self.init(
+      checkedAt: try container.decodeIfPresent(Date.self, forKey: .checkedAt) ?? Date(),
+      result: try container.decode(SubscriptionPreflightResult.self, forKey: .result),
+      message: try container.decodeIfPresent(String.self, forKey: .message),
+      fullMessage: try container.decodeIfPresent(String.self, forKey: .fullMessage),
+      messageKind: try container.decodeIfPresent(SubscriptionPreflightDiagnosticMessage.self, forKey: .messageKind)
+    )
   }
 
   var localizedMessage: String? {
