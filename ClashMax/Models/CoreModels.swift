@@ -1049,6 +1049,23 @@ struct SubscriptionFetchDiagnostics: Codable, Equatable, Sendable {
 enum SubscriptionPreflightDiagnosticFormatter {
   static let summaryCharacterLimit = 220
 
+  // Actionable summary for a preflight that timed out while Mihomo was still
+  // fetching geodata. Kept as plain English (like the raw Mihomo lines this
+  // formatter otherwise surfaces) so the type stays a pure, bundle-independent
+  // utility; the full diagnostic is preserved separately for the details view.
+  static let geodataTimeoutSummary =
+    "Mihomo preflight timed out while preparing geodata. Retry after geodata downloads or check network access."
+
+  // Distinctive markers Mihomo prints while downloading geodata (e.g.
+  // `Can't find GeoSite.dat, start download`). These are the benign progress
+  // lines a geodata-stall timeout leaves behind.
+  private static let geodataDownloadMarkers = [
+    "can't find mmdb",
+    "can't find geosite",
+    "can't find geoip",
+    "start download"
+  ]
+
   // logrus levels (logfmt `level=...`) that indicate the real failure cause.
   // Bundled Mihomo emits e.g. `time="..." level=error msg="proxy 0: ..."`.
   private static let failureLevels = ["panic", "fatal", "error"]
@@ -1068,6 +1085,9 @@ enum SubscriptionPreflightDiagnosticFormatter {
     let lines = trimmed.components(separatedBy: .newlines)
       .map { $0.trimmingCharacters(in: .whitespaces) }
       .filter { !$0.isEmpty }
+    if let synthesized = synthesizedSummary(from: lines) {
+      return synthesized
+    }
     guard let chosen = chooseSummaryLine(from: lines) else {
       return clampedSingleLine(trimmed)
     }
@@ -1086,6 +1106,37 @@ enum SubscriptionPreflightDiagnosticFormatter {
       return legacyLine
     }
     return lines.last(where: { !isGenericTrailer($0) }) ?? lines[lines.count - 1]
+  }
+
+  /// When a preflight *times out* with no failure-level line and clear evidence
+  /// that Mihomo was downloading geodata, the trailing lines are benign progress
+  /// markers ("Can't find GeoSite.dat, start download"). Surfacing one of those
+  /// as the cause is misleading, so return an actionable hint instead. A genuine
+  /// `level=error`/`fatal` line is checked first and always wins, so this never
+  /// masks a real configuration failure.
+  private static func synthesizedSummary(from lines: [String]) -> String? {
+    guard !lines.contains(where: isLogfmtFailureLine),
+          !lines.contains(where: hasLegacyFailurePrefix),
+          indicatesTimeout(lines),
+          hasGeodataDownloadMarkers(lines)
+    else {
+      return nil
+    }
+    return geodataTimeoutSummary
+  }
+
+  private static func indicatesTimeout(_ lines: [String]) -> Bool {
+    lines.contains { line in
+      let lowered = line.lowercased()
+      return lowered.contains("timed out") || lowered.contains("timeout")
+    }
+  }
+
+  private static func hasGeodataDownloadMarkers(_ lines: [String]) -> Bool {
+    lines.contains { line in
+      let lowered = line.lowercased()
+      return geodataDownloadMarkers.contains { lowered.contains($0) }
+    }
   }
 
   /// Renders a chosen line for the summary: a logfmt line collapses to its `msg=`

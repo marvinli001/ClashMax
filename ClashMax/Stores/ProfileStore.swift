@@ -187,10 +187,17 @@ struct MihomoSubscriptionProfilePreflightValidator: SubscriptionProfilePreflight
         options: preflightOptions
       )
     )
+    // Validate with the *persistent* runtime directory as Mihomo's `-d` working
+    // dir (it also seeds SAFE_PATHS). Mihomo downloads GeoSite.dat / geoip.metadb
+    // into `-d`; pointing it at the ephemeral preflight subdir (deleted below)
+    // forced a fresh geodata download on every import, which is slow and can
+    // exhaust the preflight timeout. `paths.runtime` is a parent of
+    // `preflightDirectory`, so the temporary artifacts (referenced by absolute
+    // path) stay inside SAFE_PATHS while the geodata cache persists for reuse.
     try await runtimeConfigValidator.validate(
       coreURL: try coreURLProvider(),
       configURL: runtimeConfigURL,
-      workDirectory: preflightDirectory
+      workDirectory: paths.runtime
     )
   }
 }
@@ -1327,7 +1334,16 @@ final class ProfileStore: ObservableObject {
     let nsError = error as NSError
     let described = String(describing: error)
     let localized = nsError.localizedDescription
-    let candidates = [described, localized].filter { !$0.isEmpty }
+    // Prefer `localizedDescription` over `String(describing:)`. Validator errors
+    // (e.g. the runtime config timeout) put the actionable text — the headline
+    // plus the captured Mihomo log — in `localizedDescription`, while
+    // `String(describing:)` wraps that same text in the noisy
+    // `Error Domain=… Code=… "…" UserInfo={…}` form. Feeding the wrapper to the
+    // formatter both masks heuristics (the leading "Error …" line trips the
+    // failure-prefix detector) and leaks internal plumbing into the details view.
+    // For generic errors `localizedDescription` is a short one-liner that fails
+    // the multiline/length guard below, so we still fall through to `described`.
+    let candidates = [localized, described].filter { !$0.isEmpty }
     for candidate in candidates {
       if candidate.contains("\n") || candidate.count > SubscriptionPreflightDiagnosticFormatter.summaryCharacterLimit {
         return SubscriptionPreflightDiagnosticFormatter.fullDiagnostic(fromFullMessage: candidate)

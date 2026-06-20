@@ -951,6 +951,86 @@ final class ProfileStoreTests: XCTestCase {
     )
   }
 
+  // A geodata-stall preflight timeout arrives as a *raw* NSError from
+  // `MihomoRuntimeConfigValidator` (domain "ClashMax.CoreValidation", ETIMEDOUT),
+  // not as an `AppError.configValidationFailed`. Its `localizedDescription` carries
+  // the clean "timed out…" headline plus the captured Mihomo log, whereas
+  // `String(describing:)` wraps the same text in the noisy
+  // `Error Domain=… Code=… "…" UserInfo={…}` form. The diagnostics surfaced to the
+  // user must come from the clean copy: the actionable geodata-timeout hint as the
+  // summary, and a full message free of the NSError wrapper (which would otherwise
+  // both mask the hint and leak internal error plumbing into the details view).
+  func testSubscriptionPreflightTimeoutSurfacesGeodataHintFromCleanNSError() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let secrets = InMemorySecretStore()
+    let store = ProfileStore(paths: fixture.paths, keychain: secrets)
+    let providerContent = "trojan://password@example.com:443?sni=example.com#Trojan%20Node\n"
+    let profile = try await store.addSubscription(
+      name: "Remote",
+      url: URL(string: "https://example.com/sub")!,
+      session: URLSession(configuration: URLProtocolRecorder.configurationReturning(providerContent))
+    )
+
+    // Synthetic geodata-stall log: only benign info lines plus geodata download
+    // markers, with no failure-level line. (No real subscription content.)
+    let geodataStallOutput = """
+    time="2026-06-20T10:00:00+12:00" level=info msg="Start initial configuration in progress"
+    time="2026-06-20T10:00:00+12:00" level=info msg="Geodata Loader mode: memconservative"
+    time="2026-06-20T10:00:00+12:00" level=info msg="Can't find MMDB, start download"
+    time="2026-06-20T10:00:30+12:00" level=info msg="Can't find GeoSite.dat, start download"
+    """
+    let timeoutError = NSError(
+      domain: "ClashMax.CoreValidation",
+      code: Int(ETIMEDOUT),
+      userInfo: [
+        NSLocalizedDescriptionKey: "Runtime config validation timed out after 30.0s.\n\(geodataStallOutput)"
+      ]
+    )
+    let validator = RecordingSubscriptionPreflightValidator(result: .failure(timeoutError))
+
+    let geodataHint =
+      "Mihomo preflight timed out while preparing geodata. Retry after geodata downloads or check network access."
+
+    await XCTAssertThrowsErrorAsync {
+      try await store.updateSubscription(
+        profile,
+        session: URLSession(configuration: URLProtocolRecorder.configurationReturning(providerContent)),
+        preflightValidator: validator
+      )
+    } handler: { error in
+      let preflightError = error as? SubscriptionPreflightValidationError
+      XCTAssertNotNil(preflightError, "Expected wrapped SubscriptionPreflightValidationError, got \(error)")
+      XCTAssertEqual(
+        preflightError?.message,
+        geodataHint,
+        "Headline should be the actionable geodata-timeout hint, not the NSError head"
+      )
+      let fullMessage = preflightError?.fullMessage ?? ""
+      XCTAssertFalse(
+        fullMessage.contains("Error Domain="),
+        "Full message must come from the clean localizedDescription, not the NSError wrapper: \(fullMessage)"
+      )
+    }
+
+    let persistedPreflight = store.profiles.first?.subscriptionDiagnostics.latestPreflight
+    XCTAssertEqual(persistedPreflight?.result, .failed)
+    XCTAssertEqual(
+      persistedPreflight?.message,
+      geodataHint,
+      "Persisted summary should be the geodata-timeout hint"
+    )
+    let persistedFull = try XCTUnwrap(persistedPreflight?.fullMessage)
+    XCTAssertFalse(
+      persistedFull.contains("Error Domain="),
+      "Persisted fullMessage leaked the NSError wrapper: \(persistedFull)"
+    )
+    // The full diagnostic still preserves the captured geodata log for the details view.
+    XCTAssertTrue(
+      persistedFull.contains("Can't find GeoSite.dat, start download"),
+      "Persisted fullMessage should retain the raw geodata log for the details view: \(persistedFull)"
+    )
+  }
+
   func testAppModelPublishesPreflightSummaryAsLastErrorAndFullOutputAsDetails() async throws {
     let fixture = try TemporaryProfileFixture()
     let store = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())

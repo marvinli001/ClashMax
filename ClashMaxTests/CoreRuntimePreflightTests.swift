@@ -10,6 +10,78 @@ final class CoreRuntimePreflightTests: XCTestCase {
     XCTAssertEqual(validator.timeout, 30)
   }
 
+  // A self-contained Clash config (inline direct proxy) so materialization needs
+  // no network and never touches the real subscription sample.
+  private static let syntheticPreflightClashConfig = """
+  proxies:
+    - name: DIRECT-NODE
+      type: direct
+  proxy-groups:
+    - name: Proxy
+      type: select
+      proxies: [DIRECT-NODE, DIRECT]
+  rules:
+    - MATCH,Proxy
+  """
+
+  func testSubscriptionPreflightValidatesAgainstPersistentRuntimeDirectoryForGeodataReuse() async throws {
+    let fixture = try PreflightPathsFixture()
+    let recordingValidator = RecordingRuntimeConfigValidator(result: .success(()))
+    let validator = MihomoSubscriptionProfilePreflightValidator(
+      paths: fixture.paths,
+      overrides: .defaultForLaunch(secret: "secret-token"),
+      coreURLProvider: { URL(fileURLWithPath: "/tmp/mihomo") },
+      runtimeConfigValidator: recordingValidator
+    )
+
+    try await validator.validate(
+      subscriptionSource: Self.syntheticPreflightClashConfig,
+      profileID: nil,
+      profileName: "Preflight Test",
+      providerOptions: .default
+    )
+
+    // Mihomo's geodata cache (GeoSite.dat / geoip.metadb) is downloaded into its
+    // `-d` working directory. That must be the persistent Runtime dir so the cache
+    // survives and is reused across imports — not the per-run preflight subdir,
+    // which is deleted as soon as validation returns.
+    XCTAssertEqual(recordingValidator.validatedWorkDirectory, fixture.paths.runtime)
+  }
+
+  func testSubscriptionPreflightKeepsArtifactsInDeletableSubdirectoryThatIsCleanedUp() async throws {
+    let fixture = try PreflightPathsFixture()
+    let recordingValidator = RecordingRuntimeConfigValidator(result: .success(()))
+    let validator = MihomoSubscriptionProfilePreflightValidator(
+      paths: fixture.paths,
+      overrides: .defaultForLaunch(secret: "secret-token"),
+      coreURLProvider: { URL(fileURLWithPath: "/tmp/mihomo") },
+      runtimeConfigValidator: recordingValidator
+    )
+
+    try await validator.validate(
+      subscriptionSource: Self.syntheticPreflightClashConfig,
+      profileID: nil,
+      profileName: "Preflight Test",
+      providerOptions: .default
+    )
+
+    let configURL = try XCTUnwrap(recordingValidator.validatedConfigURL)
+    let artifactDirectory = configURL.deletingLastPathComponent()
+
+    // The generated runtime YAML (and any provider artifact) stays isolated in a
+    // per-run `subscription-preflight-*` subdir of the persistent Runtime dir...
+    XCTAssertEqual(
+      artifactDirectory.deletingLastPathComponent().standardizedFileURL.path,
+      fixture.paths.runtime.standardizedFileURL.path
+    )
+    XCTAssertTrue(artifactDirectory.lastPathComponent.hasPrefix("subscription-preflight-"))
+
+    // ...which is removed once preflight completes, while the persistent Runtime
+    // dir (home of the reusable geodata cache) survives.
+    XCTAssertFalse(FileManager.default.fileExists(atPath: artifactDirectory.path))
+    XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.paths.runtime.path))
+  }
+
   func testBundledMihomoAcceptsAdvancedProviderRuntimeMaterialization() async throws {
     guard let coreURL = Self.bundledCoreURL() else {
       throw XCTSkip("Bundled Mihomo core is unavailable in Resources/Core.")
@@ -230,6 +302,25 @@ final class CoreRuntimePreflightTests: XCTestCase {
 private struct EmptyRuntimePortChecker: RuntimePortChecking {
   func listeners(on ports: [Int]) async -> [PortListener] {
     []
+  }
+}
+
+private struct PreflightPathsFixture {
+  let root: URL
+  let paths: RuntimePaths
+
+  init() throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxPreflightTests-\(UUID().uuidString)", isDirectory: true)
+    self.root = root
+    paths = RuntimePaths(
+      appSupport: root,
+      profiles: root.appendingPathComponent("Profiles", isDirectory: true),
+      runtime: root.appendingPathComponent("Runtime", isDirectory: true),
+      subscriptions: root.appendingPathComponent("Subscriptions", isDirectory: true),
+      logs: root.appendingPathComponent("Logs", isDirectory: true)
+    )
+    try paths.prepareDirectories()
   }
 }
 

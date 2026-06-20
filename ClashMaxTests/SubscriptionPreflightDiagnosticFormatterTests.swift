@@ -23,6 +23,58 @@ final class SubscriptionPreflightDiagnosticFormatterTests: XCTestCase {
     XCTAssertFalse(summary?.contains("test failed") ?? true)
   }
 
+  // A geodata-stall timeout: the validator's "timed out" wrapper plus only
+  // benign info-level geodata-download progress. There is no failure-level line,
+  // so the naive fallback would surface "Can't find GeoSite.dat, start download"
+  // as if it were the cause.
+  private let geodataTimeoutOutput = """
+  Runtime config validation timed out after 30s.
+  time="2026-06-20T10:00:00.000000000+12:00" level=info msg="Start initial configuration in progress"
+  time="2026-06-20T10:00:00.001000000+12:00" level=info msg="Geodata Loader mode: memconservative"
+  time="2026-06-20T10:00:00.002000000+12:00" level=info msg="Can't find MMDB, start download"
+  time="2026-06-20T10:00:30.000000000+12:00" level=info msg="Can't find GeoSite.dat, start download"
+  """
+
+  func testSummaryReportsGeodataTimeoutInsteadOfBenignDownloadProgress() {
+    let summary = SubscriptionPreflightDiagnosticFormatter.summary(fromFullMessage: geodataTimeoutOutput)
+    XCTAssertEqual(
+      summary,
+      "Mihomo preflight timed out while preparing geodata. Retry after geodata downloads or check network access."
+    )
+  }
+
+  func testSummaryForGeodataTimeoutOmitsBenignInfoAndDownloadLines() {
+    let summary = SubscriptionPreflightDiagnosticFormatter.summary(fromFullMessage: geodataTimeoutOutput)
+    XCTAssertNotNil(summary)
+    XCTAssertFalse(summary?.contains("start download") ?? true)
+    XCTAssertFalse(summary?.contains("Start initial configuration") ?? true)
+    XCTAssertFalse(summary?.contains("Geodata Loader mode") ?? true)
+  }
+
+  // The geodata-timeout heuristic must never mask a real failure: when the core
+  // does emit a `level=error` line, that cause still wins over the hint.
+  func testSummaryStillPrefersFailureLineOverGeodataTimeoutHint() {
+    let output = """
+    Runtime config validation timed out after 30s.
+    time="t1" level=info msg="Geodata Loader mode: memconservative"
+    time="t2" level=info msg="Can't find GeoSite.dat, start download"
+    time="t3" level=error msg="proxy 0: '' has unset fields: cipher, password"
+    """
+    let summary = SubscriptionPreflightDiagnosticFormatter.summary(fromFullMessage: output)
+    XCTAssertEqual(summary, "proxy 0: '' has unset fields: cipher, password")
+  }
+
+  // A timeout with no geodata markers should keep the existing fallback rather
+  // than misattribute the stall to geodata.
+  func testSummaryDoesNotClaimGeodataWhenTimeoutHasNoGeodataMarkers() {
+    let output = """
+    Runtime config validation timed out after 30s.
+    time="t1" level=info msg="Compiling rules"
+    """
+    let summary = SubscriptionPreflightDiagnosticFormatter.summary(fromFullMessage: output)
+    XCTAssertEqual(summary, "Compiling rules")
+  }
+
   func testSummaryHandlesYamlSyntaxErrorWithEmbeddedColonQuotes() {
     let output = """
     time="2026-06-19T18:47:40.740384000+12:00" level=error msg="yaml: line 4: could not find expected ':'"
