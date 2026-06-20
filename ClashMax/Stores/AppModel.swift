@@ -6545,9 +6545,7 @@ final class AppModel: ObservableObject {
       Task { [weak self] in
         do {
           for try await snapshot in client.connectionStream(interval: 1000) {
-            await MainActor.run {
-              self?.runtimeData.replaceConnections(snapshot)
-            }
+            await self?.runtimeData.updateConnections(snapshot)
           }
         } catch {}
       }
