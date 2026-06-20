@@ -4,6 +4,12 @@ import XCTest
 
 @MainActor
 final class CoreRuntimePreflightTests: XCTestCase {
+  func testRuntimeConfigValidatorDefaultTimeoutAllowsSlowMihomoInitialization() {
+    let validator = MihomoRuntimeConfigValidator()
+
+    XCTAssertEqual(validator.timeout, 30)
+  }
+
   func testBundledMihomoAcceptsAdvancedProviderRuntimeMaterialization() async throws {
     guard let coreURL = Self.bundledCoreURL() else {
       throw XCTSkip("Bundled Mihomo core is unavailable in Resources/Core.")

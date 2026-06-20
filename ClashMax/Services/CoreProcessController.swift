@@ -850,7 +850,7 @@ struct MihomoOrphanProcessReaper: CoreProcessReaping {
 struct MihomoRuntimeConfigValidator: RuntimeConfigValidating {
   let timeout: TimeInterval
 
-  init(timeout: TimeInterval = 5) {
+  init(timeout: TimeInterval = 30) {
     self.timeout = timeout
   }
 
