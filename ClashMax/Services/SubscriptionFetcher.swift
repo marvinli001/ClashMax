@@ -118,7 +118,9 @@ enum SubscriptionURLResolver {
 }
 
 struct SubscriptionFetcher {
-  typealias Attempt = @Sendable (SubscriptionFetchStrategy) async throws -> (Data, URLResponse)
+  /// Performs a single fetch for the given strategy using the supplied User-Agent. The UA is
+  /// passed per attempt so the fetcher can retry the same strategy with a compatibility UA.
+  typealias Attempt = @Sendable (SubscriptionFetchStrategy, String) async throws -> (Data, URLResponse)
 
   private struct DecodeContext {
     var sanitizedURL: String
@@ -128,12 +130,16 @@ struct SubscriptionFetcher {
     var requestHeaders: [SubscriptionHeaderDiagnostic]
   }
 
-  func request(url: URL, options: SubscriptionFetchOptions = SubscriptionFetchOptions()) -> URLRequest {
+  func request(
+    url: URL,
+    options: SubscriptionFetchOptions = SubscriptionFetchOptions(),
+    userAgent: String? = nil
+  ) -> URLRequest {
     let target = SubscriptionURLResolver.requestTarget(for: url)
     var request = URLRequest(url: target.url)
     request.httpMethod = "GET"
     request.timeoutInterval = options.timeout
-    request.setValue(options.userAgent, forHTTPHeaderField: "User-Agent")
+    request.setValue(userAgent ?? options.userAgent, forHTTPHeaderField: "User-Agent")
     request.setValue("text/yaml, application/yaml, text/plain, */*", forHTTPHeaderField: "Accept")
     if let authorization = target.authorization {
       request.setValue(authorization, forHTTPHeaderField: "Authorization")
@@ -145,7 +151,7 @@ struct SubscriptionFetcher {
   }
 
   func fetch(url: URL, options: SubscriptionFetchOptions = SubscriptionFetchOptions()) async throws -> SubscriptionFetchResult {
-    try await fetch(url: url, options: options) { strategy in
+    try await fetch(url: url, options: options) { strategy, userAgent in
       let configuration = URLSessionConfiguration.ephemeral
       configuration.timeoutIntervalForRequest = options.timeout
       configuration.timeoutIntervalForResource = options.timeout
@@ -153,7 +159,7 @@ struct SubscriptionFetcher {
       let delegate = options.allowsInsecureTLS ? SubscriptionInsecureTrustDelegate() : nil
       let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
       defer { session.finishTasksAndInvalidate() }
-      return try await session.data(for: request(url: url, options: options))
+      return try await session.data(for: request(url: url, options: options, userAgent: userAgent))
     }
   }
 
@@ -165,40 +171,124 @@ struct SubscriptionFetcher {
     let request = request(url: url, options: options)
     let requestHeaders = requestHeaderDiagnostics(for: request)
     let sanitizedURL = Self.sanitizedURL(request.url ?? url)
+    let compatibilityUserAgent = Self.compatibilityUserAgent(for: options)
     var attemptedStrategies: [SubscriptionFetchStrategy] = []
     var lastError: Error?
     for strategy in options.retryOrder {
       attemptedStrategies.append(strategy)
       do {
-        let (data, response) = try await attempt(strategy)
-        return try decode(
-          data: data,
-          response: response,
-          context: DecodeContext(
-            sanitizedURL: sanitizedURL,
-            userAgent: options.userAgent,
-            attemptedStrategies: attemptedStrategies,
-            successfulStrategy: strategy,
-            requestHeaders: requestHeaders
-          )
+        return try await attemptFetch(
+          strategy: strategy,
+          userAgent: options.userAgent,
+          sanitizedURL: sanitizedURL,
+          attemptedStrategies: attemptedStrategies,
+          requestHeaders: requestHeaders,
+          attempt: attempt
         )
       } catch let error as SubscriptionFetchError {
         lastError = error
-      } catch {
-        lastError = SubscriptionFetchError(
-          kind: Self.failureKind(for: error),
-          message: "Subscription fetch failed: \(error.localizedDescription)",
-          diagnostics: SubscriptionFetchDiagnostics(
+        guard
+          let compatibilityUserAgent,
+          Self.shouldFallBackToCompatibilityUserAgent(for: error.kind)
+        else {
+          continue
+        }
+        // The panel rejected the user-configured UA; retry the same strategy once as the
+        // bundled Mihomo core would identify itself.
+        do {
+          return try await attemptFetch(
+            strategy: strategy,
+            userAgent: compatibilityUserAgent,
             sanitizedURL: sanitizedURL,
-            userAgent: options.userAgent,
+            attemptedStrategies: attemptedStrategies,
+            requestHeaders: requestHeaders,
+            attempt: attempt
+          )
+        } catch let fallbackError as SubscriptionFetchError {
+          lastError = fallbackError
+        } catch {
+          lastError = transportError(
+            error,
+            userAgent: compatibilityUserAgent,
+            sanitizedURL: sanitizedURL,
             attemptedStrategies: attemptedStrategies,
             requestHeaders: requestHeaders
           )
+        }
+      } catch {
+        lastError = transportError(
+          error,
+          userAgent: options.userAgent,
+          sanitizedURL: sanitizedURL,
+          attemptedStrategies: attemptedStrategies,
+          requestHeaders: requestHeaders
         )
       }
     }
 
     throw lastError ?? AppError.invalidSubscriptionResponse
+  }
+
+  private func attemptFetch(
+    strategy: SubscriptionFetchStrategy,
+    userAgent: String,
+    sanitizedURL: String,
+    attemptedStrategies: [SubscriptionFetchStrategy],
+    requestHeaders: [SubscriptionHeaderDiagnostic],
+    attempt: Attempt
+  ) async throws -> SubscriptionFetchResult {
+    let (data, response) = try await attempt(strategy, userAgent)
+    return try decode(
+      data: data,
+      response: response,
+      context: DecodeContext(
+        sanitizedURL: sanitizedURL,
+        userAgent: userAgent,
+        attemptedStrategies: attemptedStrategies,
+        successfulStrategy: strategy,
+        requestHeaders: requestHeaders
+      )
+    )
+  }
+
+  private func transportError(
+    _ error: Error,
+    userAgent: String,
+    sanitizedURL: String,
+    attemptedStrategies: [SubscriptionFetchStrategy],
+    requestHeaders: [SubscriptionHeaderDiagnostic]
+  ) -> SubscriptionFetchError {
+    SubscriptionFetchError(
+      kind: Self.failureKind(for: error),
+      message: "Subscription fetch failed: \(error.localizedDescription)",
+      diagnostics: SubscriptionFetchDiagnostics(
+        sanitizedURL: sanitizedURL,
+        userAgent: userAgent,
+        attemptedStrategies: attemptedStrategies,
+        requestHeaders: requestHeaders
+      )
+    )
+  }
+
+  /// Only HTML/panel and invalid-profile responses warrant a UA fallback. Network errors,
+  /// cancellation, non-2xx HTTP, decoding and TLS failures keep the existing retry behavior.
+  private static func shouldFallBackToCompatibilityUserAgent(for kind: SubscriptionUpdateFailureKind) -> Bool {
+    switch kind {
+    case .panelResponse, .invalidProfile:
+      return true
+    default:
+      return false
+    }
+  }
+
+  /// Resolves the effective compatibility UA, or nil when it is absent, blank, or identical
+  /// to the primary UA (in which case retrying would be pointless).
+  private static func compatibilityUserAgent(for options: SubscriptionFetchOptions) -> String? {
+    guard let raw = options.compatibilityUserAgent else { return nil }
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    guard trimmed != options.userAgent.trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
+    return trimmed
   }
 
   func decode(data: Data, response: URLResponse) throws -> SubscriptionFetchResult {

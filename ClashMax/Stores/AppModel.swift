@@ -2474,8 +2474,13 @@ final class AppModel: ObservableObject {
     runtimeData.setConnection(id, closing: isClosing)
   }
 
+  private let bundledCoreInfo = BundledCoreInfo()
+
   private var subscriptionFetchOptions: SubscriptionFetchOptions {
-    settings.subscriptionFetchSettings.fetchOptions(currentMixedPort: currentRuntimeMixedPort)
+    settings.subscriptionFetchSettings.fetchOptions(
+      currentMixedPort: currentRuntimeMixedPort,
+      compatibilityUserAgent: bundledCoreInfo.subscriptionCompatibilityUserAgent
+    )
   }
 
   private func subscriptionFetchOptions(for profile: Profile) -> SubscriptionFetchOptions {

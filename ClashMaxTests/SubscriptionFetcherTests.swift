@@ -335,7 +335,7 @@ final class SubscriptionFetcherTests: XCTestCase {
         retryOrder: attempts,
         customHeaders: ["X-Panel-Token": "secret"]
       )
-    ) { strategy in
+    ) { strategy, _ in
       let attemptCount = await recorder.record(strategy)
       if attemptCount < 3 {
         throw URLError(.cannotConnectToHost)
@@ -356,6 +356,175 @@ final class SubscriptionFetcherTests: XCTestCase {
     )
     XCTAssertEqual(result.diagnostics.requestHeaders.map(\.hasValue), [true, true, true, true])
   }
+
+  func testInvalidProfileResponseRetriesOnceWithBundledCompatibilityUserAgent() async throws {
+    let fetcher = SubscriptionFetcher()
+    let recorder = UserAgentAttemptRecorder()
+    let response = HTTPURLResponse(
+      url: URL(string: "https://example.com/sub")!,
+      statusCode: 200,
+      httpVersion: nil,
+      headerFields: ["Content-Type": "text/yaml; charset=utf-8"]
+    )!
+    // Valid YAML mapping but no proxies/proxy-providers -> classified as invalidProfile, not a panel error.
+    let invalidProfile = "mixed-port: 7890\nrules:\n  - MATCH,DIRECT\n"
+    let validProfile = "proxies:\n  - name: DIRECT\n    type: direct\n"
+
+    let result = try await fetcher.fetch(
+      url: URL(string: "https://example.com/sub")!,
+      options: SubscriptionFetchOptions(
+        userAgent: "clash.meta",
+        retryOrder: [.direct],
+        compatibilityUserAgent: "mihomo/1.19.27"
+      )
+    ) { _, userAgent in
+      await recorder.record(userAgent)
+      let body = userAgent == "clash.meta" ? invalidProfile : validProfile
+      return (Data(body.utf8), response)
+    }
+
+    let userAgents = await recorder.userAgents()
+    XCTAssertEqual(userAgents, ["clash.meta", "mihomo/1.19.27"])
+    XCTAssertEqual(result.source, validProfile)
+    XCTAssertEqual(result.diagnostics.userAgent, "mihomo/1.19.27")
+  }
+
+  func testPanelErrorResponseRetriesOnceWithBundledCompatibilityUserAgent() async throws {
+    let fetcher = SubscriptionFetcher()
+    let recorder = UserAgentAttemptRecorder()
+    let panelResponse = HTTPURLResponse(
+      url: URL(string: "https://example.com/sub")!,
+      statusCode: 200,
+      httpVersion: nil,
+      headerFields: ["Content-Type": "text/html; charset=utf-8"]
+    )!
+    let yamlResponse = HTTPURLResponse(
+      url: URL(string: "https://example.com/sub")!,
+      statusCode: 200,
+      httpVersion: nil,
+      headerFields: ["Content-Type": "text/yaml; charset=utf-8"]
+    )!
+    let validProfile = "proxies:\n  - name: DIRECT\n    type: direct\n"
+
+    let result = try await fetcher.fetch(
+      url: URL(string: "https://example.com/sub")!,
+      options: SubscriptionFetchOptions(
+        userAgent: "clash.meta",
+        retryOrder: [.direct],
+        compatibilityUserAgent: "mihomo/1.19.27"
+      )
+    ) { _, userAgent in
+      await recorder.record(userAgent)
+      if userAgent == "clash.meta" {
+        return (Data("<!doctype html><html><title>Login</title></html>".utf8), panelResponse)
+      }
+      return (Data(validProfile.utf8), yamlResponse)
+    }
+
+    let userAgents = await recorder.userAgents()
+    XCTAssertEqual(userAgents, ["clash.meta", "mihomo/1.19.27"])
+    XCTAssertEqual(result.source, validProfile)
+    XCTAssertEqual(result.diagnostics.userAgent, "mihomo/1.19.27")
+  }
+
+  func testHTTPStatusErrorDoesNotTriggerCompatibilityUserAgentFallback() async throws {
+    let fetcher = SubscriptionFetcher()
+    let recorder = UserAgentAttemptRecorder()
+    let response = HTTPURLResponse(
+      url: URL(string: "https://example.com/sub")!,
+      statusCode: 500,
+      httpVersion: nil,
+      headerFields: ["Content-Type": "text/plain"]
+    )!
+
+    do {
+      _ = try await fetcher.fetch(
+        url: URL(string: "https://example.com/sub")!,
+        options: SubscriptionFetchOptions(
+          userAgent: "clash.meta",
+          retryOrder: [.direct, .localClashProxy],
+          compatibilityUserAgent: "mihomo/1.19.27"
+        )
+      ) { _, userAgent in
+        await recorder.record(userAgent)
+        return (Data("Server Error".utf8), response)
+      }
+      XCTFail("Expected HTTP 500 to throw a fetch error")
+    } catch {
+      XCTAssertEqual((error as? SubscriptionFetchError)?.kind, .httpStatus)
+    }
+
+    let userAgents = await recorder.userAgents()
+    XCTAssertEqual(userAgents, ["clash.meta", "clash.meta"])
+  }
+
+  func testNetworkErrorDoesNotTriggerCompatibilityUserAgentFallback() async throws {
+    let fetcher = SubscriptionFetcher()
+    let recorder = UserAgentAttemptRecorder()
+
+    do {
+      _ = try await fetcher.fetch(
+        url: URL(string: "https://example.com/sub")!,
+        options: SubscriptionFetchOptions(
+          userAgent: "clash.meta",
+          retryOrder: [.direct],
+          compatibilityUserAgent: "mihomo/1.19.27"
+        )
+      ) { _, userAgent in
+        await recorder.record(userAgent)
+        throw URLError(.cannotConnectToHost)
+      }
+      XCTFail("Expected network error to throw a fetch error")
+    } catch {
+      XCTAssertEqual((error as? SubscriptionFetchError)?.kind, .network)
+    }
+
+    let userAgents = await recorder.userAgents()
+    XCTAssertEqual(userAgents, ["clash.meta"])
+  }
+
+  func testBlankOrMatchingCompatibilityUserAgentDoesNotTriggerFallback() async throws {
+    let fetcher = SubscriptionFetcher()
+    let recorder = UserAgentAttemptRecorder()
+    let response = HTTPURLResponse(
+      url: URL(string: "https://example.com/sub")!,
+      statusCode: 200,
+      httpVersion: nil,
+      headerFields: ["Content-Type": "text/yaml; charset=utf-8"]
+    )!
+    let invalidProfile = "mixed-port: 7890\nrules:\n  - MATCH,DIRECT\n"
+
+    do {
+      _ = try await fetcher.fetch(
+        url: URL(string: "https://example.com/sub")!,
+        options: SubscriptionFetchOptions(
+          userAgent: "clash.meta",
+          retryOrder: [.direct],
+          compatibilityUserAgent: "  clash.meta  "
+        )
+      ) { _, userAgent in
+        await recorder.record(userAgent)
+        return (Data(invalidProfile.utf8), response)
+      }
+      XCTFail("Expected invalid profile to throw a fetch error")
+    } catch {
+      XCTAssertEqual((error as? SubscriptionFetchError)?.kind, .invalidProfile)
+    }
+
+    let userAgents = await recorder.userAgents()
+    XCTAssertEqual(userAgents, ["clash.meta"])
+  }
+
+  func testFetchSettingsInjectBundledCompatibilityUserAgentIntoOptions() throws {
+    let settings = SubscriptionFetchSettings(userAgent: "clash.meta")
+
+    let injected = settings.fetchOptions(currentMixedPort: 7890, compatibilityUserAgent: "mihomo/1.19.27")
+    XCTAssertEqual(injected.userAgent, "clash.meta")
+    XCTAssertEqual(injected.compatibilityUserAgent, "mihomo/1.19.27")
+
+    let pure = settings.fetchOptions(currentMixedPort: 7890)
+    XCTAssertNil(pure.compatibilityUserAgent)
+  }
 }
 
 private actor StrategyAttemptRecorder {
@@ -368,5 +537,17 @@ private actor StrategyAttemptRecorder {
 
   func strategies() -> [SubscriptionFetchStrategy] {
     attemptedStrategies
+  }
+}
+
+private actor UserAgentAttemptRecorder {
+  private var recordedUserAgents: [String] = []
+
+  func record(_ userAgent: String) {
+    recordedUserAgents.append(userAgent)
+  }
+
+  func userAgents() -> [String] {
+    recordedUserAgents
   }
 }

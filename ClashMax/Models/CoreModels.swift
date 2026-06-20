@@ -5785,6 +5785,10 @@ struct SubscriptionFetchOptions: Equatable, Sendable {
   var allowsInsecureTLS: Bool
   var retryOrder: [SubscriptionFetchStrategy]
   var customHeaders: [String: String]
+  /// Optional fallback User-Agent (e.g. `mihomo/1.19.27`) retried once per strategy when the
+  /// primary `userAgent` yields a panel/invalid-profile response. Not part of user settings;
+  /// injected from the bundled core. Ignored when nil, blank, or equal to `userAgent`.
+  var compatibilityUserAgent: String?
 
   init(
     userAgent: String = "clash.meta",
@@ -5793,7 +5797,8 @@ struct SubscriptionFetchOptions: Equatable, Sendable {
     localProxyPort: Int = 7890,
     allowsInsecureTLS: Bool = false,
     retryOrder: [SubscriptionFetchStrategy] = SubscriptionFetchStrategy.defaultRetryOrder,
-    customHeaders: [String: String] = [:]
+    customHeaders: [String: String] = [:],
+    compatibilityUserAgent: String? = nil
   ) {
     self.userAgent = userAgent
     self.timeout = timeout
@@ -5802,6 +5807,7 @@ struct SubscriptionFetchOptions: Equatable, Sendable {
     self.allowsInsecureTLS = allowsInsecureTLS
     self.retryOrder = retryOrder
     self.customHeaders = customHeaders
+    self.compatibilityUserAgent = compatibilityUserAgent
   }
 }
 
@@ -5948,6 +5954,15 @@ struct SubscriptionFetchSettings: Codable, Equatable, Sendable {
       allowsInsecureTLS: allowsInsecureTLS,
       retryOrder: retryOrder
     )
+  }
+
+  /// Builds fetch options from the user's settings, injecting a compatibility fallback
+  /// User-Agent supplied by the caller (the bundled core). Keeps `fetchOptions(currentMixedPort:)`
+  /// pure user configuration while letting the app wire in `mihomo/<version>` as a fallback.
+  func fetchOptions(currentMixedPort: Int, compatibilityUserAgent: String?) -> SubscriptionFetchOptions {
+    var options = fetchOptions(currentMixedPort: currentMixedPort)
+    options.compatibilityUserAgent = compatibilityUserAgent
+    return options
   }
 }
 

@@ -1277,8 +1277,8 @@ final class ProfileStore: ObservableObject {
     guard session !== URLSession.shared else {
       return try await subscriptionFetcher.fetch(url: url, options: options)
     }
-    return try await subscriptionFetcher.fetch(url: url, options: options) { _ in
-      try await session.data(for: subscriptionFetcher.request(url: url, options: options))
+    return try await subscriptionFetcher.fetch(url: url, options: options) { _, userAgent in
+      try await session.data(for: subscriptionFetcher.request(url: url, options: options, userAgent: userAgent))
     }
   }
 
