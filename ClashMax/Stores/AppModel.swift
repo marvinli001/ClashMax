@@ -2784,16 +2784,57 @@ final class AppModel: ObservableObject {
     let shouldRestart = isRunning || startInFlight
     if mode != .systemProxy, systemProxyEnabled {
       stopSystemProxyGuard()
+      // Serialize System Proxy teardown ahead of the runtime transition: only
+      // switch mode / start / restart the runtime once restoration SUCCEEDS. If
+      // it fails we stay in System Proxy (handled below) — otherwise (issue #19)
+      // TUN can come up while macOS still points HTTP/HTTPS at a dead ClashMax
+      // port and apps time out.
       Task { @MainActor [weak self] in
         guard let self else { return }
         do {
           _ = try await restoreSystemProxyState(disableWhenNoSnapshot: true)
-          systemProxyEnabled = false
         } catch {
-          lastError = UserFacingError.message(for: error)
+          // Restore failed: macOS may still route through a ClashMax local port.
+          // Do NOT switch modes or start/restart the runtime — that would bring
+          // TUN/core up behind a dead System Proxy (issue #19). Stay in the
+          // current System Proxy state (re-arm its guard) and surface the failure.
+          try? await activateSystemProxyGuardIfNeeded()
+          let detail = UserFacingError.message(for: error)
+          lastError = detail
+          appNotice = AppNotice(
+            message: String(
+              format: String(localized: "Could not turn off the System Proxy: %@. It stayed on, so your network still routes through ClashMax. Try again, or disable it in System Settings."),
+              detail
+            ),
+            tone: .info
+          )
+          return
         }
+        systemProxyEnabled = false
+        applyProxyRoutingModeTransition(
+          to: mode,
+          shouldRestart: shouldRestart,
+          preserveNetworkPolicyRestoreSnapshotOnRestart: preserveNetworkPolicyRestoreSnapshotOnRestart
+        )
       }
+      return
     }
+    applyProxyRoutingModeTransition(
+      to: mode,
+      shouldRestart: shouldRestart,
+      preserveNetworkPolicyRestoreSnapshotOnRestart: preserveNetworkPolicyRestoreSnapshotOnRestart
+    )
+  }
+
+  /// Applies the published mode change and any TUN/helper/core (re)start the new
+  /// routing mode requires. When leaving an enabled System Proxy this runs only
+  /// after `restoreSystemProxyState` has resolved, so runtime startup is
+  /// serialized behind System Proxy cleanup (issue #19).
+  private func applyProxyRoutingModeTransition(
+    to mode: ProxyRoutingMode,
+    shouldRestart: Bool,
+    preserveNetworkPolicyRestoreSnapshotOnRestart: Bool
+  ) {
     proxyRoutingMode = mode
     if mode == .tun {
       resumeInitialTunHelperPromptDeferralForExplicitAction()
@@ -5606,8 +5647,22 @@ final class AppModel: ObservableObject {
     return try await systemProxy.restore(
       settings: appliedSnapshot?.systemProxySettings ?? systemProxySettings,
       mixedPort: appliedSnapshot?.overrides.mixedPort ?? overrides.mixedPort,
+      additionalPorts: knownLocalProxyPorts(),
       disableWhenNoSnapshot: disableWhenNoSnapshot
     )
+  }
+
+  /// Local proxy ports ClashMax may have pointed System Proxy at across its own
+  /// runtimes: the current mixed port, the last applied mixed port, and the
+  /// preview runtime port. Residual cleanup must consider all of them so a stale
+  /// proxy left on a non-current port — notably the preview port 17890 — is still
+  /// detected and disabled instead of being silently "verified" away (issue #19).
+  private func knownLocalProxyPorts() -> Set<Int> {
+    var ports: Set<Int> = [overrides.mixedPort, Self.previewRuntimeMixedPort]
+    if let appliedPort = settings.appliedRuntimeSettingsSnapshot?.overrides.mixedPort {
+      ports.insert(appliedPort)
+    }
+    return ports
   }
 
   var needsTerminationCleanup: Bool {
@@ -6527,18 +6582,16 @@ final class AppModel: ObservableObject {
       Task { [weak self] in
         do {
           for try await sample in client.trafficStream() {
-            await MainActor.run {
-              self?.appendTrafficSample(sample)
-            }
+            // This Task inherits the enclosing @MainActor method's isolation, so
+            // the loop body already runs on the main actor — no MainActor.run hop.
+            self?.appendTrafficSample(sample)
           }
         } catch {}
       },
       Task { [weak self] in
         do {
           for try await entry in client.logStream(level: logLevel) {
-            await MainActor.run {
-              self?.runtimeData.appendLog(entry)
-            }
+            self?.runtimeData.appendLog(entry)
           }
         } catch {}
       },
@@ -6611,12 +6664,13 @@ final class AppModel: ObservableObject {
     systemProxy.recoverDanglingIfNeeded(
       settingsProvider: { [weak self] in
         guard let self else {
-          return (.default, RuntimeOverrides.defaultForLaunch().mixedPort)
+          let fallbackPort = RuntimeOverrides.defaultForLaunch().mixedPort
+          return (.default, fallbackPort, [fallbackPort, AppModel.previewRuntimeMixedPort])
         }
         if let snapshot = settings.appliedRuntimeSettingsSnapshot {
-          return (snapshot.systemProxySettings, snapshot.overrides.mixedPort)
+          return (snapshot.systemProxySettings, snapshot.overrides.mixedPort, knownLocalProxyPorts())
         }
-        return (systemProxySettings, overrides.mixedPort)
+        return (systemProxySettings, overrides.mixedPort, knownLocalProxyPorts())
       },
       onRecovered: { [weak self] in
         self?.appendAppLog(level: "info", message: "Cleared stale System Proxy settings left by a previous ClashMax session after restore verification.")

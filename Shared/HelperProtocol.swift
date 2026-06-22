@@ -622,6 +622,7 @@ enum HelperRuntimeError: Error, CustomStringConvertible {
   }
 }
 
+// Thread-safety: XPC methods may be invoked from arbitrary threads; process state is guarded by stateLock and the log buffer by logLock.
 final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Sendable {
   // Guard every read/write of process with stateLock via withStateLock or *Locked helpers.
   private var process: Process?

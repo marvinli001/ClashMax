@@ -689,6 +689,7 @@ private final class SystemExtensionDelegate: NSObject, OSSystemExtensionRequestD
   }
 }
 
+// Thread-safety: only wraps NEVPNConnection and reads its status on the MainActor; exposes no mutable state.
 private struct SendableVPNConnectionStatusReader: @unchecked Sendable {
   let connection: NEVPNConnection
 
@@ -927,6 +928,7 @@ final class NETransparentProxyManagerAdapter: TransparentProxyManaging {
   }
 }
 
+// Thread-safety: only ferries a non-Sendable NetworkExtension completion value back across a checked continuation boundary; exposes no concurrent mutable state.
 private final class NonSendableBox<Value>: @unchecked Sendable {
   let value: Value
 

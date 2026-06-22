@@ -869,6 +869,40 @@ final class SystemProxyControllerTests: XCTestCase {
     XCTAssertFalse(controller.hasManagedSystemProxyState)
   }
 
+  @MainActor
+  func testCoordinatorRestoreDisablesResidualProxyOnAdditionalKnownPort() async throws {
+    // Regression for issue #19: restore must consider every ClashMax-owned local
+    // port, not only the current mixed port. A residual proxy left on the preview
+    // runtime port (17890) while the current mixed port is 7890 must still be
+    // detected and disabled rather than silently "verified" and cleared.
+    let defaults = try Self.makeIsolatedDefaults()
+    let runner = SequencedCommandRunner(outputs: [
+      "/usr/sbin/networksetup -listallnetworkservices": Array(repeating: "Wi-Fi\n", count: 6),
+      "/usr/sbin/networksetup -getwebproxy Wi-Fi": [
+        "Enabled: Yes\nServer: 127.0.0.1\nPort: 17890\n",
+        "Enabled: Yes\nServer: 127.0.0.1\nPort: 17890\n",
+        "Enabled: No\nServer:\nPort: 0\n",
+        "Enabled: No\nServer:\nPort: 0\n"
+      ],
+      "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi": Array(repeating: "Enabled: No\nServer:\nPort: 0\n", count: 6),
+      "/usr/sbin/networksetup -getsocksfirewallproxy Wi-Fi": Array(repeating: "Enabled: No\nServer:\nPort: 0\n", count: 6),
+      "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": Array(repeating: "There aren't any bypass domains set.\n", count: 6)
+    ])
+    let controller = SystemProxyController(commandRunner: runner, snapshotDefaults: defaults)
+    let coordinator = SystemProxyCoordinator(controller: controller, defaults: defaults)
+
+    let result = try await coordinator.restore(
+      settings: .default,
+      mixedPort: 7890,
+      additionalPorts: [17_890],
+      disableWhenNoSnapshot: false
+    )
+
+    XCTAssertTrue(result.didFallbackDisable)
+    XCTAssertTrue(result.verified)
+    XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setwebproxystate Wi-Fi off"))
+  }
+
   func testRestoreAndVerifySetHostsMatchesResidualProxyCaseInsensitively() async throws {
     let runner = SequencedRecordingCommandRunner(outputs: [
       "/usr/sbin/networksetup -listallnetworkservices": [

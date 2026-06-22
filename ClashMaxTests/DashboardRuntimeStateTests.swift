@@ -258,12 +258,16 @@ final class DashboardRuntimeStateTests: XCTestCase {
       portChecker: EmptyRuntimePortChecker()
     )
     let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
+    // Validate the snippet preflight against a stub core instead of spawning the
+    // real bundled mihomo, which the unsigned test host kills (SIGKILL → exit 9).
+    let preflightCore = try Self.makeRuleOverlayPreflightCore(in: paths.appSupport, rejectedToken: "never-matched")
     let model = AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       apiClient: client,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: try Self.makeIsolatedDefaults(),
+      bundledCoreURLProvider: { preflightCore }
     )
     try await controller.startUserMode(
       coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
@@ -411,12 +415,16 @@ final class DashboardRuntimeStateTests: XCTestCase {
       testDelayResult: 0,
       reloadFailureMessage: "reload rejected"
     )
+    // Stub the preflight core (real bundled mihomo is SIGKILLed in the unsigned
+    // test host); the preflight must pass so the reload step can be exercised.
+    let preflightCore = try Self.makeRuleOverlayPreflightCore(in: paths.appSupport, rejectedToken: "never-matched")
     let model = AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       apiClient: client,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: try Self.makeIsolatedDefaults(),
+      bundledCoreURLProvider: { preflightCore }
     )
     try await controller.startUserMode(
       coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
@@ -2436,6 +2444,177 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(model.networkPolicyStatusMessage?.localizedCaseInsensitiveContains("corpnet") == true)
   }
 
+  @MainActor
+  func testLeavingRunningSystemProxySerializesRestoreBeforeRuntimeRestart() async throws {
+    // Regression for issue #19: leaving an enabled System Proxy must finish the
+    // System Proxy restore (teardown) BEFORE the runtime transition starts or
+    // restarts the core. A fire-and-forget restore lets the core come up while
+    // macOS still points HTTP/HTTPS at a now-dead ClashMax port. This drives the
+    // same `setProxyRoutingMode` serialization the System Proxy -> TUN switch
+    // uses; it targets `.neProxy` because that path restarts the core directly
+    // and is observable, whereas the TUN helper path opens System Settings.
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let launcher = CountingProcessLauncher()
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let runner = GateableCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: SystemProxyController(commandRunner: runner),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    // Bring the core up so leaving System Proxy will trigger a restart.
+    try await controller.startUserMode(
+      coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+      configURL: configURL,
+      workDirectory: paths.runtime,
+      api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+    )
+    for _ in 0..<500 where !model.isRunning {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    XCTAssertTrue(model.isRunning)
+
+    // Enable System Proxy (commands pass straight through while un-armed).
+    model.setSystemProxyEnabled(true)
+    for _ in 0..<500 where !(model.systemProxyEnabled && model.proxyRoutingMode == .systemProxy) {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    XCTAssertTrue(model.systemProxyEnabled)
+    XCTAssertEqual(model.proxyRoutingMode, .systemProxy)
+
+    let launchesBeforeLeaving = launcher.launchCount
+
+    // Stall the restore mid-flight, then leave System Proxy for .neProxy.
+    runner.arm()
+    model.setProxyRoutingMode(.neProxy)
+    for _ in 0..<500 where !runner.gateReached {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    XCTAssertTrue(runner.gateReached, "restore should have started and suspended")
+
+    // While restore is in flight the transition must not have proceeded: the mode
+    // is unchanged, System Proxy is still marked enabled, and the core has not
+    // been restarted.
+    XCTAssertEqual(model.proxyRoutingMode, .systemProxy)
+    XCTAssertTrue(model.systemProxyEnabled)
+    XCTAssertEqual(launcher.launchCount, launchesBeforeLeaving, "core must not restart until restore completes")
+
+    // Let the restore finish; only now may the transition and core restart run.
+    runner.release()
+    for _ in 0..<500 where !(model.proxyRoutingMode == .neProxy && !model.systemProxyEnabled) {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    XCTAssertEqual(model.proxyRoutingMode, .neProxy)
+    XCTAssertFalse(model.systemProxyEnabled)
+
+    for _ in 0..<500 where launcher.launchCount <= launchesBeforeLeaving {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    XCTAssertGreaterThan(
+      launcher.launchCount,
+      launchesBeforeLeaving,
+      "core should restart once the System Proxy restore has completed"
+    )
+  }
+
+  @MainActor
+  func testLeavingSystemProxyAbortsTransitionWhenRestoreFails() async throws {
+    // Regression for issue #19: if the System Proxy restore FAILS while leaving an
+    // enabled System Proxy, the app must NOT switch modes or start/restart the
+    // runtime — that would bring TUN/core up while macOS still routes through a
+    // now-dead ClashMax local port. The previous mode and System Proxy state must
+    // be preserved and the failure surfaced. Uses `.neProxy` to drive the shared
+    // transition path (the TUN helper path opens System Settings).
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let launcher = CountingProcessLauncher()
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let runner = FailableCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: SystemProxyController(commandRunner: runner),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    try await controller.startUserMode(
+      coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+      configURL: configURL,
+      workDirectory: paths.runtime,
+      api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+    )
+    for _ in 0..<500 where !model.isRunning {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    XCTAssertTrue(model.isRunning)
+
+    model.setSystemProxyEnabled(true)
+    for _ in 0..<500 where !(model.systemProxyEnabled && model.proxyRoutingMode == .systemProxy) {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    XCTAssertTrue(model.systemProxyEnabled)
+    XCTAssertEqual(model.proxyRoutingMode, .systemProxy)
+
+    let launchesBeforeLeaving = launcher.launchCount
+
+    // Make the restore fail, then attempt to leave System Proxy.
+    runner.startFailing()
+    model.setProxyRoutingMode(.neProxy)
+
+    // Wait for whichever outcome lands: the regressed path flips the mode; the
+    // fixed path surfaces a notice and stays in System Proxy.
+    for _ in 0..<500 where model.proxyRoutingMode != .neProxy && model.appNotice == nil {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    // A failed restore must leave mode + System Proxy untouched, not restart the
+    // runtime, and surface the failure.
+    XCTAssertEqual(model.proxyRoutingMode, .systemProxy)
+    XCTAssertTrue(model.systemProxyEnabled)
+    XCTAssertEqual(launcher.launchCount, launchesBeforeLeaving)
+    XCTAssertNotNil(model.appNotice, "restore failure should surface an actionable notice")
+    XCTAssertNotNil(model.lastError)
+
+    // Confirm no deferred restart sneaks in afterwards.
+    for _ in 0..<50 {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    XCTAssertEqual(model.proxyRoutingMode, .systemProxy)
+    XCTAssertEqual(launcher.launchCount, launchesBeforeLeaving)
+  }
+
   func testManualApplyCurrentRestoresPreviousStateWhenNoSSIDMatches() async throws {
     let paths = try Self.makeRuntimePaths()
     let defaults = try Self.makeIsolatedDefaults()
@@ -2975,6 +3154,48 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setwebproxystate Wi-Fi off"))
     XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setsecurewebproxystate Wi-Fi off"))
     XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setsocksfirewallproxystate Wi-Fi off"))
+  }
+
+  func testLaunchRecoveryDisablesDanglingPreviewPortSystemProxy() async throws {
+    // Regression for issue #19: a previous ClashMax session can leave the system
+    // proxy pointed at the preview runtime port (127.0.0.1:17890) with the managed
+    // flag still set. Launch recovery must detect and disable that dangling proxy
+    // even though the *current* mixed port is 7890; otherwise apps that honor the
+    // system proxy connect to a dead listener and time out.
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    defaults.set(true, forKey: SystemProxyCoordinator.managedDefaultsKey)
+    let commandRunner = SequencedRecordingCommandRunner(outputs: [
+      "/usr/sbin/networksetup -listallnetworkservices": Array(repeating: "Wi-Fi\n", count: 6),
+      "/usr/sbin/networksetup -getwebproxy Wi-Fi": [
+        "Enabled: Yes\nServer: 127.0.0.1\nPort: 17890\n",
+        "Enabled: Yes\nServer: 127.0.0.1\nPort: 17890\n",
+        "Enabled: No\nServer:\nPort: 0\n",
+        "Enabled: No\nServer:\nPort: 0\n"
+      ],
+      "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi": Array(repeating: "Enabled: No\nServer:\nPort: 0\n", count: 6),
+      "/usr/sbin/networksetup -getsocksfirewallproxy Wi-Fi": Array(repeating: "Enabled: No\nServer:\nPort: 0\n", count: 6),
+      "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": Array(repeating: "There aren't any bypass domains set.\n", count: 6)
+    ])
+    let controller = SystemProxyController(commandRunner: commandRunner, snapshotDefaults: defaults)
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      systemProxyController: controller,
+      defaults: defaults
+    )
+
+    let disableWebProxyCommand = "/usr/sbin/networksetup -setwebproxystate Wi-Fi off"
+    for _ in 0..<200 where !commandRunner.commands.contains(disableWebProxyCommand) {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 2_000_000)
+    }
+
+    XCTAssertTrue(
+      commandRunner.commands.contains(disableWebProxyCommand),
+      "Launch recovery must disable the dangling system proxy left on preview port 17890"
+    )
+    withExtendedLifetime(model) {}
   }
 
   func testStopAndTerminationShareSingleRuntimeTeardown() async throws {
@@ -5532,7 +5753,14 @@ final class DashboardRuntimeStateTests: XCTestCase {
       url: URL(string: "https://example.com/sub")!,
       session: initialSession
     )
-    let model = AppModel(paths: paths, profileStore: store)
+    // Stub the subscription preflight core; the real bundled mihomo is SIGKILLed
+    // (exit 9) in the unsigned test host, which would fail the update spuriously.
+    let preflightCore = try Self.makeRuleOverlayPreflightCore(in: paths.appSupport, rejectedToken: "never-matched")
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      bundledCoreURLProvider: { preflightCore }
+    )
 
     let updateSession = URLSession(configuration: URLProtocolRecorder.configurationReturning("""
     proxies:
@@ -7278,8 +7506,15 @@ final class DashboardRuntimeStateTests: XCTestCase {
     model.lastError = nil
     model.repairTunDNS()
 
-    for _ in 0..<160 where commandRunner.commands.filter({ $0 == applyCommand }).count <= initialApplyCount
-      || model.tunDiagnostics.updatedAt != repaired.updatedAt {
+    // Wait on the exact observable state the assertions check, not just the
+    // re-apply command + diagnostics timestamp. `tunDiagnostics == repaired` is
+    // the terminal write of the repair path (refreshTunDiagnostics's detached
+    // task sets it after recording the includeExternal:false inspect config and
+    // after tunSystemDNSState is already .applied), so polling on it makes the
+    // DNS-state and recorded-config assertions deterministic under load.
+    for _ in 0..<500 where commandRunner.commands.filter({ $0 == applyCommand }).count <= initialApplyCount
+      || model.tunSystemDNSState != .applied(serviceCount: 1)
+      || model.tunDiagnostics != repaired {
       await Task.yield()
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
@@ -10384,6 +10619,116 @@ private final class SlowRecordingCommandRunner: CommandRunning, @unchecked Senda
       _commands.append(command)
     }
     try? await Task.sleep(nanoseconds: delayNanoseconds)
+    return outputs[command] ?? ""
+  }
+}
+
+/// Command runner that can suspend the next command issued after `arm()` until
+/// the test calls `release()`. Used to stall the System Proxy restore mid-flight
+/// so a test can observe whether the runtime transition is serialized behind it.
+private final class GateableCommandRunner: CommandRunning, @unchecked Sendable {
+  let outputs: [String: String]
+  private let lock = NSLock()
+  private var _commands: [String] = []
+  private var armed = false
+  private var released = false
+  private var _gateReached = false
+  private var continuation: CheckedContinuation<Void, Never>?
+
+  init(outputs: [String: String]) {
+    self.outputs = outputs
+  }
+
+  var commands: [String] {
+    lock.lock(); defer { lock.unlock() }
+    return _commands
+  }
+
+  /// True once the gated command has actually suspended.
+  var gateReached: Bool {
+    lock.lock(); defer { lock.unlock() }
+    return _gateReached
+  }
+
+  /// Suspend the next command this runner receives until `release()` is called.
+  func arm() {
+    lock.lock(); defer { lock.unlock() }
+    armed = true
+  }
+
+  /// Let a gated command resume (and unblock any command armed but not yet run).
+  func release() {
+    lock.lock()
+    released = true
+    let pending = continuation
+    continuation = nil
+    lock.unlock()
+    pending?.resume()
+  }
+
+  func run(_ executable: String, _ arguments: [String]) async throws -> String {
+    let command = ([executable] + arguments).joined(separator: " ")
+    let shouldGate: Bool = {
+      lock.lock(); defer { lock.unlock() }
+      _commands.append(command)
+      guard armed else { return false }
+      armed = false
+      _gateReached = true
+      return true
+    }()
+    if shouldGate {
+      await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+        lock.lock()
+        if released {
+          lock.unlock()
+          continuation.resume()
+        } else {
+          self.continuation = continuation
+          lock.unlock()
+        }
+      }
+    }
+    return outputs[command] ?? ""
+  }
+}
+
+/// Command runner that returns canned output until `startFailing()` is called,
+/// after which every command throws. Lets a test enable System Proxy normally and
+/// then make the subsequent restore fail.
+private final class FailableCommandRunner: CommandRunning, @unchecked Sendable {
+  let outputs: [String: String]
+  private let lock = NSLock()
+  private var _commands: [String] = []
+  private var failing = false
+
+  init(outputs: [String: String]) {
+    self.outputs = outputs
+  }
+
+  var commands: [String] {
+    lock.lock(); defer { lock.unlock() }
+    return _commands
+  }
+
+  func startFailing() {
+    lock.lock(); defer { lock.unlock() }
+    failing = true
+  }
+
+  func run(_ executable: String, _ arguments: [String]) async throws -> String {
+    let command = ([executable] + arguments).joined(separator: " ")
+    let shouldFail: Bool = {
+      lock.lock(); defer { lock.unlock() }
+      _commands.append(command)
+      return failing
+    }()
+    if shouldFail {
+      throw NSError(
+        domain: "ClashMaxTests.FailableCommandRunner",
+        code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "simulated networksetup failure"]
+      )
+    }
     return outputs[command] ?? ""
   }
 }

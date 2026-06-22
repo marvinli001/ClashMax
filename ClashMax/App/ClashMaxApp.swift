@@ -340,6 +340,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       object: nil
     )
     if UserDefaults.standard.bool(forKey: AppModel.silentStartDefaultsKey) {
+      // Intentionally deferred to the next main runloop: WindowGroup windows are
+      // not all instantiated synchronously during launch, so order them out only
+      // after AppKit/SwiftUI has finished creating them.
       DispatchQueue.main.async {
         NSApp.windows.forEach { $0.orderOut(nil) }
         Self.refreshActivationPolicyForCurrentWindows()
@@ -405,6 +408,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     sharedDelegate?.appModel?.resumeDeferredInitialTunHelperPromptAfterUserOpen()
     activateRegularWindows()
+    // Intentionally deferred to the next main runloop: activation does not
+    // reliably take on the first call during the .accessory -> .regular policy
+    // transition, so re-activate once AppKit has applied the new policy.
     DispatchQueue.main.async {
       activateRegularWindows()
     }
@@ -432,6 +438,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   private static func scheduleActivationPolicyRefresh() {
+    // Intentionally deferred to the next main runloop: callers such as
+    // windowWillClose fire while the closing window is still in NSApp.windows,
+    // so recompute the activation policy after it has actually been removed.
     DispatchQueue.main.async {
       refreshActivationPolicyForCurrentWindows()
     }

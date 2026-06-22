@@ -872,6 +872,7 @@ private enum HelperXPCConnectionMessage {
   static let invalidated = "Helper connection invalidated. Open System Settings > General > Login Items & Extensions, approve ClashMax, then click Repair Helper or restart macOS."
 }
 
+// Thread-safety: continuation, cleanup, pendingResult, and the cleanup flags are all serialized by `lock` (NSLock).
 final class ContinuationBox<Value: Sendable>: @unchecked Sendable {
   private let lock = NSLock()
   private var continuation: CheckedContinuation<Value, Error>?

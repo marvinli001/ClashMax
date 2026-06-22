@@ -77,12 +77,13 @@ final class SystemProxyCoordinator: ObservableObject {
   func restore(
     settings: SystemProxySettings,
     mixedPort: Int,
+    additionalPorts: Set<Int> = [],
     disableWhenNoSnapshot: Bool
   ) async throws -> SystemProxyRestoreResult {
     stopGuard()
     let result = try await controller.restoreAndVerify(
       hosts: Self.localProxyHosts(for: settings),
-      ports: [mixedPort],
+      ports: Set([mixedPort]).union(additionalPorts),
       disableWhenNoSnapshot: disableWhenNoSnapshot
     )
     if !controller.hasManagedSystemProxyState {
@@ -93,7 +94,7 @@ final class SystemProxyCoordinator: ObservableObject {
   }
 
   func recoverDanglingIfNeeded(
-    settingsProvider: @escaping @MainActor () -> (settings: SystemProxySettings, mixedPort: Int),
+    settingsProvider: @escaping @MainActor () -> (settings: SystemProxySettings, mixedPort: Int, additionalPorts: Set<Int>),
     onRecovered: @escaping @MainActor () -> Void,
     onError: @escaping @MainActor (Error) -> Void
   ) {
@@ -105,6 +106,7 @@ final class SystemProxyCoordinator: ObservableObject {
         let result = try await restore(
           settings: values.settings,
           mixedPort: values.mixedPort,
+          additionalPorts: values.additionalPorts,
           disableWhenNoSnapshot: false
         )
         if result.didFallbackDisable {

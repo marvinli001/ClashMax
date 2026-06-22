@@ -70,9 +70,14 @@ final class GlobalShortcutManager {
 @MainActor
 final class CarbonGlobalShortcutRegistrar: GlobalShortcutRegistering {
   private static let signature: OSType = 0x436C4D78 // ClMx
-  nonisolated(unsafe) private static var handlers: [UInt32: @MainActor () -> Void] = [:]
-  nonisolated(unsafe) private static var nextID: UInt32 = 1
-  nonisolated(unsafe) private static var eventHandlerInstalled = false
+  // Mutated only from this @MainActor type's methods and read only from the
+  // Carbon hotkey callback, which Carbon delivers on the main thread (enforced
+  // by the assertion in installEventHandlerIfNeeded). Keeping them MainActor-
+  // isolated lets the compiler verify that invariant instead of relying on an
+  // unchecked nonisolated(unsafe) escape hatch.
+  private static var handlers: [UInt32: @MainActor () -> Void] = [:]
+  private static var nextID: UInt32 = 1
+  private static var eventHandlerInstalled = false
 
   private var hotKeyRefs: [EventHotKeyRef?] = []
 
@@ -175,10 +180,14 @@ final class CarbonGlobalShortcutRegistrar: GlobalShortcutRegistering {
         guard status == noErr, hotKeyID.signature == CarbonGlobalShortcutRegistrar.signature else {
           return noErr
         }
-        DispatchQueue.main.async {
-          Task { @MainActor in
-            CarbonGlobalShortcutRegistrar.handlers[hotKeyID.id]?()
-          }
+        // Carbon delivers hotkey events on the main thread's run loop, so assume
+        // main-actor isolation synchronously instead of hopping through
+        // DispatchQueue.main.async + Task. This makes the previously implicit
+        // "callback runs on main" invariant explicit and compiler-enforced.
+        assert(Thread.isMainThread, "Carbon hotkey callback expected on the main thread")
+        let handlerID = hotKeyID.id
+        MainActor.assumeIsolated {
+          CarbonGlobalShortcutRegistrar.handlers[handlerID]?()
         }
         return noErr
       },

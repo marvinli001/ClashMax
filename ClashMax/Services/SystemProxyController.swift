@@ -102,6 +102,7 @@ struct SystemProxyRestoreVerificationError: LocalizedError, Equatable, Sendable 
   }
 }
 
+// Thread-safety: mutable state is serialized by `lock` (NSLock); async operations are serialized by `operationGate` (AsyncOperationGate).
 final class SystemProxyController: @unchecked Sendable {
   static let defaultBypassDomains = SystemProxySettings.defaultBypassDomains
 
@@ -876,6 +877,7 @@ private enum ProxyKind {
   }
 }
 
+// Thread-safety: Sendable escape is backed by AsyncOperationGateState actor isolation; this type only holds an immutable reference to that actor.
 final class AsyncOperationGate: @unchecked Sendable {
   private let state = AsyncOperationGateState()
 
