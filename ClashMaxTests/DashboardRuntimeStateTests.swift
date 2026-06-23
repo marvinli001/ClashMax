@@ -7459,17 +7459,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
   }
 
   func testRepairTunDNSReappliesOverrideAndRefreshesDiagnostics() async throws {
-    let paths = try Self.makeRuntimePaths()
-    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
-    try Self.writeProxyConfig(named: "Japan", to: configURL)
-    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
-    _ = try await store.importLocalConfig(from: configURL)
-    let helper = TunnelHelperClient(
-      transport: ReadyTunnelHelperTransport(),
-      service: StaticHelperService(status: .enabled),
-      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
-      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
-    )
+    let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
+    let helperTransport = ReadyTunnelHelperTransport()
     let first = Self.tunDiagnosticsSnapshot(
       checks: [TunDiagnosticCheck(id: "system-dns", title: "System DNS", status: .pass, message: "applied")],
       includeExternal: true,
@@ -7482,36 +7473,37 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
     let inspector = RecordingTunRuntimeInspector(snapshots: [first, repaired])
     let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
-    let model = AppModel(
-      paths: paths,
-      profileStore: store,
-      systemProxyController: SystemProxyController(commandRunner: commandRunner),
-      helperClient: helper,
-      tunnelReadinessProbe: RecordingCoreReadinessProbe(),
+    // Build a running TUN model via makeRunningTunnelModel (mock controller, no
+    // real start()) instead of AppModel.start(). The real start() creates a real
+    // MihomoAPIClient and opens real 127.0.0.1:9097 HTTP/websocket connections
+    // whose failures clobbered lastError and starved the repair task — the source
+    // of this test's residual flake. repairTunDNS only needs tunnel running state.
+    let model = try await makeRunningTunnelModel(
+      client: client,
+      helperTransport: helperTransport,
       tunRuntimeInspector: inspector,
-      defaults: try Self.makeIsolatedDefaults()
+      systemProxyController: SystemProxyController(commandRunner: commandRunner)
     )
-    model.requestProxyRoutingMode(.tun)
-    for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
-      await Task.yield()
-    }
-    model.start()
-    for _ in 0..<160 where model.tunDiagnostics.updatedAt != first.updatedAt && model.lastError == nil {
+    model.tunSettings = .default
+
+    // Establish the pre-repair "applied" diagnostics baseline that the real start
+    // sequence would have produced (refreshTunDiagnostics(includeExternal: true)
+    // at the end of runStartSequence), consuming the inspector's `first` snapshot
+    // so the single repair refresh below dispenses `repaired`.
+    model.refreshTunDiagnostics(includeExternal: true)
+    for _ in 0..<500 where model.tunDiagnostics.updatedAt != first.updatedAt {
       await Task.yield()
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
 
     let applyCommand = "/usr/sbin/networksetup -setdnsservers Wi-Fi 114.114.114.114"
     let initialApplyCount = commandRunner.commands.filter { $0 == applyCommand }.count
-    model.lastError = nil
     model.repairTunDNS()
 
-    // Wait on the exact observable state the assertions check, not just the
-    // re-apply command + diagnostics timestamp. `tunDiagnostics == repaired` is
-    // the terminal write of the repair path (refreshTunDiagnostics's detached
-    // task sets it after recording the includeExternal:false inspect config and
-    // after tunSystemDNSState is already .applied), so polling on it makes the
-    // DNS-state and recorded-config assertions deterministic under load.
+    // Wait on the exact observable state the assertions check. `tunDiagnostics ==
+    // repaired` is the repair path's terminal write (refreshTunDiagnostics's
+    // detached task sets it after recording the includeExternal:false inspect
+    // config and after tunSystemDNSState is already .applied).
     for _ in 0..<500 where commandRunner.commands.filter({ $0 == applyCommand }).count <= initialApplyCount
       || model.tunSystemDNSState != .applied(serviceCount: 1)
       || model.tunDiagnostics != repaired {
