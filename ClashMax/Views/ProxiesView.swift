@@ -4,6 +4,7 @@ struct ProxiesView: View {
   @EnvironmentObject private var appModel: AppModel
   @EnvironmentObject private var runtimeData: RuntimeDataStore
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @StateObject private var searchCoordinator = ProxySearchCoordinator()
   @State private var searchText = ""
   @State private var expandedGroupIDs: Set<String>?
   @State private var selectedGroupID: ProxyGroup.ID?
@@ -11,16 +12,15 @@ struct ProxiesView: View {
 
   var body: some View {
     let pageSettings = appModel.proxyPageSettings
-    let runtimeGroups = appModel.visibleProxyGroups
-    let unfilteredGroups = ResolvedProxyCatalog(
-      groups: runtimeGroups,
-      providers: runtimeData.proxyProviders
-    ).groups
-    let searchQuery = ProxySearchQuery(rawValue: searchText)
-    let groups = ProxyGroupSearchFilter.filteredGroups(
-      from: sortedGroups(from: unfilteredGroups),
-      searchQuery: searchQuery
-    )
+    // Raw groups are cheap to read and `ResolvedProxyCatalog` preserves group identity 1:1, so the
+    // skeleton / empty-state gates use the raw count instead of resolving on the main thread.
+    let rawGroups = appModel.visibleProxyGroups
+    // The heavy resolve/sort/filter happens off-main in the coordinator; the body just reads the
+    // most recently published snapshot.
+    let snapshot = searchCoordinator.snapshot
+    let groups = snapshot.filteredGroups
+    let searchQuery = snapshot.query
+    let dataSignature = ProxySearchInputSignature(groups: rawGroups, providers: runtimeData.proxyProviders)
     let visibleExpandedGroupIDs = ProxyGroupExpansionPolicy.resolvedExpansion(
       current: expandedGroupIDs,
       groups: groups,
@@ -63,17 +63,17 @@ struct ProxiesView: View {
       }
       .disabled(!ProxiesPageActionState.canRefresh(isStarting: isStarting))
     } content: {
-      if showsLoadingSkeleton(unfilteredGroups: unfilteredGroups) {
+      if showsLoadingSkeleton(rawGroupCount: rawGroups.count) {
         ScrollView {
           ClashMaxProxyGroupSkeletonList(groupCount: 3)
             .padding(.vertical, 2)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-      } else if groups.isEmpty {
+      } else if showsEmptyState(rawGroups: rawGroups, snapshot: snapshot) {
         CenteredUnavailableState(
-          title: emptyStateTitle(unfilteredGroups: unfilteredGroups, searchQuery: searchQuery),
+          title: emptyStateTitle(rawGroups: rawGroups, searchQuery: searchQuery),
           systemImage: "point.3.connected.trianglepath.dotted",
-          message: emptyStateMessage(unfilteredGroups: unfilteredGroups, searchQuery: searchQuery)
+          message: emptyStateMessage(rawGroups: rawGroups, searchQuery: searchQuery)
         )
       } else {
         VStack(alignment: .leading, spacing: 10) {
@@ -87,10 +87,24 @@ struct ProxiesView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       }
     }
+    .task {
+      // First population: build the snapshot off-main so the initial paint of a large config
+      // doesn't block the main thread.
+      searchCoordinator.submit(makeSearchInput(searchText: searchText), reason: .initial)
+    }
     .onAppear {
       selectDefaultGroupIfNeeded(from: groups)
     }
-    .onChange(of: appModel.visibleProxyGroups.map(\.id) + runtimeData.proxyGroups.map(\.id)) { _, _ in
+    .onChange(of: searchText) { _, newValue in
+      searchCoordinator.submit(makeSearchInput(searchText: newValue), reason: .searchText)
+    }
+    .onChange(of: pageSettings.sortOrder) { _, _ in
+      searchCoordinator.submit(makeSearchInput(searchText: searchText), reason: .sort)
+    }
+    .onChange(of: dataSignature) { _, _ in
+      searchCoordinator.submit(makeSearchInput(searchText: searchText), reason: .data)
+    }
+    .onChange(of: snapshot.resultIdentity) { _, _ in
       selectDefaultGroupIfNeeded(from: groups)
       withAnimation(ProxyInteractionAnimation.list(reduceMotion: reduceMotion)) {
         expandedGroupIDs = ProxyGroupExpansionPolicy.retainedExpansion(
@@ -99,18 +113,31 @@ struct ProxiesView: View {
         )
       }
     }
-    .onChange(of: groups.map(\.id)) { _, _ in
-      selectDefaultGroupIfNeeded(from: groups)
-    }
   }
 
-  private func showsLoadingSkeleton(unfilteredGroups: [ProxyGroup]) -> Bool {
+  private func makeSearchInput(searchText: String) -> ProxySearchPipeline.Input {
+    ProxySearchPipeline.Input(
+      groups: appModel.visibleProxyGroups,
+      providers: runtimeData.proxyProviders,
+      sortOrder: appModel.proxyPageSettings.sortOrder,
+      searchText: searchText
+    )
+  }
+
+  private func showsLoadingSkeleton(rawGroupCount: Int) -> Bool {
     ProxyPageVisibilityPolicy.showsLoadingSkeleton(
-      unfilteredGroupCount: unfilteredGroups.count,
+      unfilteredGroupCount: rawGroupCount,
       hasActiveProfile: appModel.profileStore.activeProfile != nil,
       isRuntimeDataLoading: appModel.runtimeDataLoading,
       isStarting: appModel.dashboardRuntimeState.isStarting
     )
+  }
+
+  /// Show the empty-state only once the pipeline has actually resolved and produced no matches, so a
+  /// large config doesn't flash "No proxy groups" during the first off-main computation.
+  private func showsEmptyState(rawGroups: [ProxyGroup], snapshot: ProxySearchSnapshot) -> Bool {
+    if rawGroups.isEmpty { return true }
+    return snapshot.hasResolved && snapshot.filteredGroups.isEmpty
   }
 
   private func subtitle(for groups: [ProxyGroup]) -> String {
@@ -233,9 +260,21 @@ struct ProxiesView: View {
   }
 
   private var searchField: some View {
-    TextField("Search", text: $searchText)
-      .textFieldStyle(.roundedBorder)
-      .frame(minWidth: 180, idealWidth: 260, maxWidth: 340)
+    HStack(spacing: 8) {
+      TextField("Search", text: $searchText)
+        .textFieldStyle(.roundedBorder)
+        .frame(minWidth: 180, idealWidth: 260, maxWidth: 340)
+      if ProxySearchActivityPolicy.showsSearchProgress(
+        searchText: searchText,
+        isComputing: searchCoordinator.isComputing
+      ) {
+        ProgressView()
+          .controlSize(.small)
+          .help("Updating search results…")
+          .transition(.opacity)
+      }
+    }
+    .animation(.easeInOut(duration: 0.15), value: searchCoordinator.isComputing)
   }
 
   private var proxyWorkspaceControlStrip: some View {
@@ -374,30 +413,18 @@ struct ProxiesView: View {
     )
   }
 
-  private func sortedGroups(from groups: [ProxyGroup]) -> [ProxyGroup] {
-    groups.map { group in
-      var group = group
-      group.nodes = sortedNodes(group.nodes)
-      return group
-    }
-  }
-
-  private func emptyStateTitle(unfilteredGroups: [ProxyGroup], searchQuery: ProxySearchQuery) -> String {
-    if !searchQuery.isEmpty, !unfilteredGroups.isEmpty {
+  private func emptyStateTitle(rawGroups: [ProxyGroup], searchQuery: ProxySearchQuery) -> String {
+    if !searchQuery.isEmpty, !rawGroups.isEmpty {
       return String(localized: "No matching proxies")
     }
     return String(localized: "No proxy groups")
   }
 
-  private func emptyStateMessage(unfilteredGroups: [ProxyGroup], searchQuery: ProxySearchQuery) -> String {
-    if !searchQuery.isEmpty, !unfilteredGroups.isEmpty {
+  private func emptyStateMessage(rawGroups: [ProxyGroup], searchQuery: ProxySearchQuery) -> String {
+    if !searchQuery.isEmpty, !rawGroups.isEmpty {
       return String(localized: "No proxy groups match the current search.")
     }
     return appModel.proxyGroupsUnavailableMessage
-  }
-
-  private func sortedNodes(_ nodes: [ProxyNode]) -> [ProxyNode] {
-    ProxyNodeSorter.sorted(nodes, by: appModel.proxyPageSettings.sortOrder)
   }
 
   private func selectDefaultGroupIfNeeded(from groups: [ProxyGroup]) {
@@ -484,6 +511,66 @@ private struct ProxyNodeGridAnimationState: Equatable {
   }
 }
 
+/// Cheap fingerprint of the raw group/provider data that feeds the search pipeline.
+///
+/// Computed in `body` (O(node count) of integer/string hashes — far cheaper than the resolve/sort/
+/// filter it replaces) and watched with `.onChange` so the coordinator only reschedules a recompute
+/// when something that actually affects results changed (names, types, providers, selection, or a
+/// node's resolved delay state). Bursty per-node delay-batch updates therefore coalesce into a few
+/// debounced background recomputes instead of recomputing on the main thread per node.
+private struct ProxySearchInputSignature: Equatable {
+  let groupCount: Int
+  let providerCount: Int
+  let nodeCount: Int
+  let contentHash: Int
+
+  init(groups: [ProxyGroup], providers: [ProxyProvider]) {
+    var hasher = Hasher()
+    var nodeCount = 0
+    for group in groups {
+      hasher.combine(group.name)
+      hasher.combine(group.type)
+      hasher.combine(group.selected)
+      for node in group.nodes {
+        Self.combine(node: node, into: &hasher)
+        nodeCount += 1
+      }
+    }
+    for provider in providers {
+      hasher.combine(provider.name)
+      for node in provider.proxies {
+        Self.combine(node: node, into: &hasher)
+        nodeCount += 1
+      }
+    }
+    self.groupCount = groups.count
+    self.providerCount = providers.count
+    self.nodeCount = nodeCount
+    self.contentHash = hasher.finalize()
+  }
+
+  private static func combine(node: ProxyNode, into hasher: inout Hasher) {
+    hasher.combine(node.name)
+    hasher.combine(node.type)
+    hasher.combine(node.providerName)
+    hasher.combine(node.isSelectable)
+    switch node.resolvedDelayState {
+    case .unknown:
+      hasher.combine(0)
+    case .testing:
+      hasher.combine(1)
+    case .timeout:
+      hasher.combine(2)
+    case let .measured(delay):
+      hasher.combine(3)
+      hasher.combine(delay)
+    case let .error(message):
+      hasher.combine(4)
+      hasher.combine(message)
+    }
+  }
+}
+
 enum ProxyPageVisibilityPolicy {
   static func showsProviderSummary(developerMode: Bool, providerCount: Int) -> Bool {
     developerMode && providerCount > 0
@@ -551,60 +638,6 @@ enum ProxyGroupExpansionPolicy {
   }
 }
 
-private struct ResolvedProxyCatalog {
-  var groups: [ProxyGroup]
-
-  init(groups: [ProxyGroup], providers: [ProxyProvider]) {
-    let providerNodes = Dictionary(uniqueKeysWithValues: providers.map { provider in
-      (provider.name, provider.proxies.map { node -> ProxyNode in
-        var node = node
-        node.providerName = provider.name
-        return node
-      })
-    })
-
-    self.groups = groups.map { group in
-      var group = group
-      var expandedNodes: [ProxyNode] = []
-      for node in group.nodes {
-        if node.type.caseInsensitiveCompare("provider") == .orderedSame,
-           let providerName = Self.providerName(from: node),
-           let nodes = providerNodes[providerName],
-           !nodes.isEmpty {
-          expandedNodes.append(contentsOf: nodes.map { providerNode in
-            var providerNode = providerNode
-            providerNode.isSelectable = group.allowsManualProxySelection
-            return providerNode
-          })
-        } else {
-          expandedNodes.append(node)
-        }
-      }
-      group.nodes = Self.deduplicated(expandedNodes)
-      return group
-    }
-  }
-
-  private static func providerName(from node: ProxyNode) -> String? {
-    if let providerName = node.providerName?.trimmingCharacters(in: .whitespacesAndNewlines), !providerName.isEmpty {
-      return providerName
-    }
-    let prefix = "Provider:"
-    guard node.name.hasPrefix(prefix) else { return nil }
-    return String(node.name.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
-  }
-
-  private static func deduplicated(_ nodes: [ProxyNode]) -> [ProxyNode] {
-    var seen = Set<String>()
-    var result: [ProxyNode] = []
-    for node in nodes {
-      guard seen.insert(node.id).inserted else { continue }
-      result.append(node)
-    }
-    return result
-  }
-}
-
 enum ProxyNodeSorter {
   /// Orders the nodes inside a single proxy group for display.
   ///
@@ -651,7 +684,7 @@ struct ProxyGroupSearchFilter {
   }
 }
 
-struct ProxySearchQuery {
+struct ProxySearchQuery: Equatable, Sendable {
   let rawValue: String
   private let terms: [String]
   private let isCaseSensitive: Bool
