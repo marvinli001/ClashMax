@@ -293,20 +293,28 @@ final class ProxySearchPipelineTests: XCTestCase {
     XCTAssertEqual(snapshotEmissions, 2, "a changed result publishes")
   }
 
-  /// Counterpoint that pins the corrected understanding: while a search is active, changing a node
-  /// that's filtered *out* still alters `unfilteredGroups`, so the snapshot is NOT identical and the
-  /// guard does NOT skip it (only `filteredGroups` is unchanged).
-  func testFilteredOutNodeChangeStillUpdatesSnapshotDuringSearch() {
-    let base = Fixture.make()
-    func snapshot(_ providers: [ProxyProvider]) -> ProxySearchSnapshot {
-      ProxySearchPipeline.run(
-        ProxySearchPipeline.Input(groups: base.groups, providers: providers, sortOrder: .profile, searchText: "韩国")
-      )
-    }
-    let before = snapshot(base.providers)
+  /// Issue #11: while searching "韩国", a delay-batch data refresh that only changes a filtered-out
+  /// "美国" node must NOT push a new snapshot — otherwise every batched result during "Test All"
+  /// would re-diff the displayed list and stutter scrolling.
+  func testCoordinatorSkipsRepublishWhenOnlyFilteredOutNodeDelayChanges() async {
+    let coordinator = ProxySearchCoordinator()
+    coordinator.searchDebounce = .zero
+    coordinator.dataDebounce = .zero
 
-    var providers = base.providers
-    providers[0].proxies = providers[0].proxies.map { node in
+    let base = Fixture.make()
+    var snapshotEmissions = 0
+    let cancellable = coordinator.$snapshot.dropFirst().sink { _ in snapshotEmissions += 1 }
+    defer { cancellable.cancel() }
+
+    coordinator.submit(
+      ProxySearchPipeline.Input(groups: base.groups, providers: base.providers, sortOrder: .profile, searchText: "韩国"),
+      reason: .searchText
+    )
+    await coordinator.settleForTesting()
+    XCTAssertEqual(snapshotEmissions, 1, "first 韩国 result publishes once")
+
+    var bumped = base.providers
+    bumped[0].proxies = bumped[0].proxies.map { node in
       guard node.name.hasPrefix("美国") else { return node }
       return ProxyNode(
         name: node.name,
@@ -316,9 +324,138 @@ final class ProxySearchPipelineTests: XCTestCase {
         providerName: node.providerName
       )
     }
-    let after = snapshot(providers)
+    coordinator.submit(
+      ProxySearchPipeline.Input(groups: base.groups, providers: bumped, sortOrder: .profile, searchText: "韩国"),
+      reason: .data
+    )
+    await coordinator.settleForTesting()
+    XCTAssertEqual(
+      snapshotEmissions,
+      1,
+      "a delay change on a filtered-out 美国 node must not republish the 韩国 result during search"
+    )
+  }
 
-    XCTAssertEqual(after.filteredGroups, before.filteredGroups, "displayed 韩国 result is unchanged")
-    XCTAssertNotEqual(after, before, "unfilteredGroups still tracks the changed 美国 node, so the guard would not skip")
+  /// Counterpoint: a delay change on a node that *is* displayed (matches "韩国") must republish so
+  /// the visible delay updates.
+  func testCoordinatorRepublishesWhenDisplayedNodeDelayChanges() async {
+    let coordinator = ProxySearchCoordinator()
+    coordinator.searchDebounce = .zero
+    coordinator.dataDebounce = .zero
+
+    let base = Fixture.make()
+    var snapshotEmissions = 0
+    let cancellable = coordinator.$snapshot.dropFirst().sink { _ in snapshotEmissions += 1 }
+    defer { cancellable.cancel() }
+
+    coordinator.submit(
+      ProxySearchPipeline.Input(groups: base.groups, providers: base.providers, sortOrder: .profile, searchText: "韩国"),
+      reason: .searchText
+    )
+    await coordinator.settleForTesting()
+    XCTAssertEqual(snapshotEmissions, 1)
+
+    var bumped = base.providers
+    bumped[0].proxies = bumped[0].proxies.map { node in
+      guard node.name.hasPrefix("韩国") else { return node }
+      return ProxyNode(
+        name: node.name,
+        type: node.type,
+        delay: (node.delay ?? 0) + 500,
+        isSelectable: node.isSelectable,
+        providerName: node.providerName
+      )
+    }
+    coordinator.submit(
+      ProxySearchPipeline.Input(groups: base.groups, providers: bumped, sortOrder: .profile, searchText: "韩国"),
+      reason: .data
+    )
+    await coordinator.settleForTesting()
+    XCTAssertEqual(snapshotEmissions, 2, "a delay change on a displayed 韩国 node must update the view")
+  }
+
+  /// Issue #11: while a search is active, a delay change on a node that's filtered *out* (only
+  /// reflected in the unfiltered side) must leave the snapshot equal so the coordinator can skip a
+  /// redundant publish. A *structural* change (node removed) still alters `unfilteredIdentity` and
+  /// makes the snapshot unequal, so counts / empty-state stay correct.
+  func testFilteredOutNodeDelayChangeKeepsSnapshotEqualDuringSearch() {
+    let base = Fixture.make()
+    func snapshot(_ providers: [ProxyProvider]) -> ProxySearchSnapshot {
+      ProxySearchPipeline.run(
+        ProxySearchPipeline.Input(groups: base.groups, providers: providers, sortOrder: .profile, searchText: "韩国")
+      )
+    }
+    let before = snapshot(base.providers)
+
+    var bumped = base.providers
+    bumped[0].proxies = bumped[0].proxies.map { node in
+      guard node.name.hasPrefix("美国") else { return node }
+      return ProxyNode(
+        name: node.name,
+        type: node.type,
+        delay: (node.delay ?? 0) + 500,
+        isSelectable: node.isSelectable,
+        providerName: node.providerName
+      )
+    }
+    let afterDelayBump = snapshot(bumped)
+
+    XCTAssertEqual(afterDelayBump.filteredGroups, before.filteredGroups, "displayed 韩国 result is unchanged")
+    XCTAssertEqual(
+      afterDelayBump,
+      before,
+      "a delay change on a filtered-out 美国 node must keep the snapshot equal during search"
+    )
+
+    // A structural change (drop a 美国 node) must still be observed via unfilteredIdentity.
+    var removed = base.providers
+    removed[0].proxies = removed[0].proxies.filter { $0.name != "美国 001" }
+    let afterRemoval = snapshot(removed)
+    XCTAssertNotEqual(
+      afterRemoval,
+      before,
+      "removing a node changes unfilteredIdentity and must republish so counts stay correct"
+    )
+  }
+
+  /// Sort stability (issue #11): a delay change may reorder nodes only under `.delay`. Under
+  /// `.profile` / `.name` / `.type` the order must not move because of measured delays, so the list
+  /// doesn't jump around while "Test All" runs.
+  func testSortOrderStabilityUnderDelayChanges() {
+    func nodes(_ delays: [Int]) -> [ProxyNode] {
+      [
+        ProxyNode(name: "z-node", type: "trojan", delay: delays[0], isSelectable: true),
+        ProxyNode(name: "a-node", type: "vless", delay: delays[1], isSelectable: true),
+        ProxyNode(name: "m-node", type: "vmess", delay: delays[2], isSelectable: true)
+      ]
+    }
+    func order(_ sort: ProxyNodeSort, _ delays: [Int]) -> [String] {
+      ProxySearchPipeline.run(
+        ProxySearchPipeline.Input(
+          groups: [ProxyGroup(name: "Proxy", type: "select", selected: nil, nodes: nodes(delays))],
+          providers: [],
+          sortOrder: sort,
+          searchText: ""
+        )
+      )
+      .filteredGroups.first?.nodes.map(\.name) ?? []
+    }
+
+    // Same nodes, different measured delays.
+    let slow = [300, 50, 120]
+    let fast = [40, 260, 90]
+
+    for sort in [ProxyNodeSort.profile, .name, .type] {
+      XCTAssertEqual(
+        order(sort, slow),
+        order(sort, fast),
+        "\(sort) ordering must not change when only delays change"
+      )
+    }
+    XCTAssertNotEqual(
+      order(.delay, slow),
+      order(.delay, fast),
+      "delay ordering must react to delay changes"
+    )
   }
 }

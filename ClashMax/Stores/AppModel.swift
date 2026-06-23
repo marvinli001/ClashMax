@@ -799,6 +799,12 @@ final class AppModel: ObservableObject {
   private static let previewRuntimeMixedPort = 17_890
   private static let previewRuntimeControllerPort = 19_097
   private static let proxyDelayBatchConcurrencyLimit = 6
+  // Issue #11: batch delay results are coalesced before touching `@Published` state. A flush
+  // happens once `proxyDelayBatchFlushCount` results have accumulated or once
+  // `proxyDelayBatchFlushIntervalMs` has elapsed since the last flush, whichever comes first
+  // (the very first result flushes immediately so results start appearing without delay).
+  private static let proxyDelayBatchFlushCount = 24
+  private static let proxyDelayBatchFlushIntervalMs: Double = 120
   private static let tunHelperApprovalPollingAttempts = 8
   private static let tunHelperApprovalPollingIntervalNanoseconds: UInt64 = 1_000_000_000
   private static let tunControllerCleanupTimeoutSeconds: TimeInterval = 2
@@ -4401,10 +4407,14 @@ final class AppModel: ObservableObject {
     let token = UUID()
     proxyDelayBatchToken = token
     proxyDelayBatchProgress = .started(total: items.count)
+    // Issue #11: mark every node testing in one coalesced write instead of one publish per node.
+    var testingStates: [ProxyNodeKey: ProxyDelayState] = [:]
+    testingStates.reserveCapacity(items.count)
     for item in items {
       cancelDelayTestTask(for: item.taskKey)
-      applyDelayState(.testing, to: item.nodeKey)
+      testingStates[item.nodeKey] = .testing
     }
+    applyDelayStates(testingStates)
 
     proxyDelayBatchTask = Task { @MainActor [weak self] in
       guard let self else { return }
@@ -4426,10 +4436,48 @@ final class AppModel: ObservableObject {
     token: UUID
   ) async {
     var completedKeys = Set<ProxyNodeKey>()
+    // Issue #11: accumulate per-result node states and progress mutations, then publish them in
+    // coalesced flushes (by count or elapsed time) instead of once per result, so the list stays
+    // scrollable while "Test All" runs over a large catalog.
+    var pendingStates: [ProxyNodeKey: ProxyDelayState] = [:]
+    var pendingProgress: [(inout ProxyDelayBatchProgress) -> Void] = []
+    var processedSinceFlush = 0
+    var lastFlushNanos: UInt64 = 0
     defer {
       if proxyDelayBatchToken == token {
         proxyDelayBatchTask = nil
         proxyDelayBatchToken = nil
+      }
+    }
+
+    func flushPending() {
+      if !pendingStates.isEmpty {
+        applyDelayStates(pendingStates)
+        pendingStates.removeAll(keepingCapacity: true)
+      }
+      if !pendingProgress.isEmpty {
+        let mutations = pendingProgress
+        pendingProgress.removeAll(keepingCapacity: true)
+        updateProxyDelayBatchProgress(token: token) { progress in
+          for mutate in mutations {
+            mutate(&progress)
+          }
+        }
+      }
+      processedSinceFlush = 0
+      lastFlushNanos = DispatchTime.now().uptimeNanoseconds
+    }
+
+    func flushIfThresholdReached() {
+      guard processedSinceFlush > 0 else { return }
+      // A zero sentinel forces the very first result to flush immediately (so results start
+      // appearing right away); subsequent results coalesce up to the count or time threshold.
+      let elapsedMs = lastFlushNanos == 0
+        ? .greatestFiniteMagnitude
+        : Double(DispatchTime.now().uptimeNanoseconds &- lastFlushNanos) / 1_000_000
+      if processedSinceFlush >= Self.proxyDelayBatchFlushCount
+        || elapsedMs >= Self.proxyDelayBatchFlushIntervalMs {
+        flushPending()
       }
     }
 
@@ -4462,30 +4510,30 @@ final class AppModel: ObservableObject {
         switch result.outcome {
         case let .success(delay):
           completedKeys.insert(result.item.nodeKey)
-          applyDelayState(.measured(delay), to: result.item.nodeKey)
-          updateProxyDelayBatchProgress(token: token) { progress in
-            progress.recordSuccess()
-          }
+          pendingStates[result.item.nodeKey] = .measured(delay)
+          pendingProgress.append { progress in progress.recordSuccess() }
+          processedSinceFlush += 1
         case let .failure(kind, message):
           guard kind != .cancelled else {
-            restoreDelayStateAfterCancelledBatchItem(result.item)
+            // Restoration is handled in one batch by `restoreCancelledBatchItems` once the loop
+            // unwinds, so cancelled in-flight results need no per-item publish here.
             continue
           }
           completedKeys.insert(result.item.nodeKey)
-          applyDelayState(delayState(kind: kind, message: message), to: result.item.nodeKey)
-          updateProxyDelayBatchProgress(token: token) { progress in
-            progress.recordFailure(
-              ProxyDelayBatchFailure(
-                nodeKey: result.item.nodeKey,
-                groupName: result.item.groupName,
-                nodeName: result.item.node.name,
-                providerName: result.item.node.providerName,
-                kind: kind,
-                message: message
-              )
-            )
-          }
+          pendingStates[result.item.nodeKey] = delayState(kind: kind, message: message)
+          let failure = ProxyDelayBatchFailure(
+            nodeKey: result.item.nodeKey,
+            groupName: result.item.groupName,
+            nodeName: result.item.node.name,
+            providerName: result.item.node.providerName,
+            kind: kind,
+            message: message
+          )
+          pendingProgress.append { progress in progress.recordFailure(failure) }
+          processedSinceFlush += 1
         }
+
+        flushIfThresholdReached()
 
         if nextIndex < items.count {
           let item = items[nextIndex]
@@ -4501,6 +4549,9 @@ final class AppModel: ObservableObject {
         }
       }
     }
+
+    // Always force a final flush so completed results / progress land even below the threshold.
+    flushPending()
 
     guard proxyDelayBatchToken == token else { return }
     if Task.isCancelled {
@@ -6146,59 +6197,138 @@ final class AppModel: ObservableObject {
   }
 
   private func applyDelayState(_ state: ProxyDelayState, to nodeKey: ProxyNodeKey) {
-    recordDelayState(state, for: nodeKey)
-    updateProxyGroupCollections { groups in
-      for groupIndex in groups.indices {
-        guard groups[groupIndex].name == nodeKey.groupName else { continue }
-        for nodeIndex in groups[groupIndex].nodes.indices where self.nodeMatches(
-          groups[groupIndex].nodes[nodeIndex],
-          key: nodeKey
-        ) {
-          self.applyDelayState(state, to: &groups[groupIndex].nodes[nodeIndex])
-        }
+    applyDelayStates([nodeKey: state])
+  }
+
+  /// Applies a batch of delay-state updates with at most one `@Published` write per affected
+  /// collection.
+  ///
+  /// Issue #11: `startProxyDelayBatch` / `runProxyDelayBatch` previously called the single-node
+  /// `applyDelayState` once per node — each call re-assigned `proxyGroups`,
+  /// `profilePreviewGroups`, and `proxyProviders` and re-pruned the cache — so a "Test All" over
+  /// 1000+ nodes published thousands of times and froze list scrolling. Coalescing the writes
+  /// (cache recorded once, each collection rebuilt in a single pass and only re-assigned when a
+  /// node actually changed) keeps the list smooth while the batch runs.
+  private func applyDelayStates(_ updates: [ProxyNodeKey: ProxyDelayState], now: Date = Date()) {
+    guard !updates.isEmpty else { return }
+
+    // Record every cache entry first, then prune a single time.
+    for (key, state) in updates {
+      if state == .unknown {
+        delayStateCache.removeValue(forKey: key)
+      } else {
+        delayStateCache[key] = ProxyDelayCacheEntry(state: state, recordedAt: now)
       }
     }
+    pruneExpiredDelayStates(now: now)
+
+    // Build lookup indexes that mirror `nodeMatches` / provider matching so each collection can
+    // resolve every node's new state in a single O(nodes + updates) pass. A `nil` key provider is
+    // a wildcard that matches any node with that name (matching the previous single-node logic).
+    var exactByProvider: [String: ProxyDelayState] = [:]
+    var wildcardByName: [String: ProxyDelayState] = [:]
+    var providerByName: [String: ProxyDelayState] = [:]
+    for (key, state) in updates {
+      if let providerName = key.providerName {
+        exactByProvider[Self.nodeMatchKey(group: key.groupName, node: key.nodeName, provider: providerName)] = state
+        providerByName[Self.providerMatchKey(provider: providerName, node: key.nodeName)] = state
+      } else {
+        wildcardByName[Self.nodeMatchKey(group: key.groupName, node: key.nodeName)] = state
+      }
+    }
+
+    // Update the runtime + preview group collections, each with at most one publish.
+    if !proxyGroups.isEmpty {
+      var groups = proxyGroups
+      if applyDelayStates(exactByProvider: exactByProvider, wildcardByName: wildcardByName, to: &groups) {
+        proxyGroups = groups
+      }
+    }
+    if !profilePreviewGroups.isEmpty {
+      var preview = profilePreviewGroups
+      if applyDelayStates(exactByProvider: exactByProvider, wildcardByName: wildcardByName, to: &preview) {
+        profilePreviewGroups = preview
+      }
+    }
+
     // Provider-backed nodes are surfaced in ProxiesView by expanding `proxyProviders`
-    // (see ResolvedProxyCatalog), which `updateProxyGroupCollections` never touches.
-    // Keep the provider copy in sync so the visible node reflects the live delay state.
-    updateProxyProviderProxies(matching: nodeKey) { node in
-      self.applyDelayState(state, to: &node)
+    // (see ResolvedProxyCatalog), which the group collections never touch. Keep the provider copy
+    // in sync so the visible node reflects the live delay state (issue #12).
+    if !providerByName.isEmpty, !proxyProviders.isEmpty {
+      var providers = proxyProviders
+      var didChange = false
+      for providerIndex in providers.indices {
+        guard let providerName = providers[providerIndex].name
+          .trimmingCharacters(in: .whitespacesAndNewlines).nonEmptyString
+        else { continue }
+        for nodeIndex in providers[providerIndex].proxies.indices {
+          let nodeName = providers[providerIndex].proxies[nodeIndex].name
+          guard let state = providerByName[Self.providerMatchKey(provider: providerName, node: nodeName)]
+          else { continue }
+          if applyDelayState(state, to: &providers[providerIndex].proxies[nodeIndex]) {
+            didChange = true
+          }
+        }
+      }
+      if didChange {
+        proxyProviders = providers
+      }
     }
   }
 
-  private func applyDelayState(_ state: ProxyDelayState, to node: inout ProxyNode) {
+  /// Applies the prepared indexes to one group collection in a single pass, returning whether any
+  /// node actually changed (so the caller can skip a redundant `@Published` write).
+  private func applyDelayStates(
+    exactByProvider: [String: ProxyDelayState],
+    wildcardByName: [String: ProxyDelayState],
+    to groups: inout [ProxyGroup]
+  ) -> Bool {
+    var didChange = false
+    for groupIndex in groups.indices {
+      let groupName = groups[groupIndex].name
+      for nodeIndex in groups[groupIndex].nodes.indices {
+        let node = groups[groupIndex].nodes[nodeIndex]
+        let resolved: ProxyDelayState?
+        if let providerName = node.providerName,
+           let match = exactByProvider[Self.nodeMatchKey(group: groupName, node: node.name, provider: providerName)] {
+          resolved = match
+        } else {
+          resolved = wildcardByName[Self.nodeMatchKey(group: groupName, node: node.name)]
+        }
+        guard let state = resolved else { continue }
+        if applyDelayState(state, to: &groups[groupIndex].nodes[nodeIndex]) {
+          didChange = true
+        }
+      }
+    }
+    return didChange
+  }
+
+  private static func nodeMatchKey(group: String, node: String, provider: String) -> String {
+    "\(group)\u{1}\(node)\u{1}\(provider)"
+  }
+
+  private static func nodeMatchKey(group: String, node: String) -> String {
+    "\(group)\u{1}\(node)"
+  }
+
+  private static func providerMatchKey(provider: String, node: String) -> String {
+    "\(provider)\u{1}\(node)"
+  }
+
+  /// Mutates a node's delay state, returning whether anything actually changed so batch callers
+  /// can avoid republishing an unchanged collection.
+  @discardableResult
+  private func applyDelayState(_ state: ProxyDelayState, to node: inout ProxyNode) -> Bool {
+    let previousState = node.delayState
+    let previousDelay = node.delay
     node.delayState = state
     if case let .measured(delay) = state, delay >= 0 {
       node.delay = delay
     } else if state == .timeout || isErrorDelayState(state) {
       node.delay = nil
     }
-  }
-
-  private func updateProxyProviderProxies(
-    matching nodeKey: ProxyNodeKey,
-    _ transform: (inout ProxyNode) -> Void
-  ) {
-    guard let providerName = nodeKey.providerName, !proxyProviders.isEmpty else { return }
-    var providers = proxyProviders
-    var didChange = false
-    for providerIndex in providers.indices
-    where providers[providerIndex].name.trimmingCharacters(in: .whitespacesAndNewlines).nonEmptyString == providerName {
-      for nodeIndex in providers[providerIndex].proxies.indices
-      where providers[providerIndex].proxies[nodeIndex].name == nodeKey.nodeName {
-        transform(&providers[providerIndex].proxies[nodeIndex])
-        didChange = true
-      }
-    }
-    if didChange {
-      proxyProviders = providers
-    }
-  }
-
-  private func nodeMatches(_ node: ProxyNode, key: ProxyNodeKey) -> Bool {
-    guard node.name == key.nodeName else { return false }
-    guard let providerName = key.providerName else { return true }
-    return node.providerName == providerName
+    return node.delayState != previousState || node.delay != previousDelay
   }
 
   private func isErrorDelayState(_ state: ProxyDelayState) -> Bool {
@@ -6223,15 +6353,6 @@ final class AppModel: ObservableObject {
     else { return }
     update(&progress)
     proxyDelayBatchProgress = progress
-  }
-
-  private func recordDelayState(_ state: ProxyDelayState, for key: ProxyNodeKey, now: Date = Date()) {
-    if state == .unknown {
-      delayStateCache.removeValue(forKey: key)
-    } else {
-      delayStateCache[key] = ProxyDelayCacheEntry(state: state, recordedAt: now)
-    }
-    pruneExpiredDelayStates(now: now)
   }
 
   private func pruneExpiredDelayStates(now: Date = Date()) {
@@ -6294,14 +6415,11 @@ final class AppModel: ObservableObject {
   }
 
   private func restoreCancelledBatchItems(_ items: [ProxyDelayBatchItem], completedKeys: Set<ProxyNodeKey>) {
+    var updates: [ProxyNodeKey: ProxyDelayState] = [:]
     for item in items where !completedKeys.contains(item.nodeKey) {
-      restoreDelayStateAfterCancelledBatchItem(item)
+      updates[item.nodeKey] = item.previousState == .testing ? .unknown : item.previousState
     }
-  }
-
-  private func restoreDelayStateAfterCancelledBatchItem(_ item: ProxyDelayBatchItem) {
-    let restoredState: ProxyDelayState = item.previousState == .testing ? .unknown : item.previousState
-    applyDelayState(restoredState, to: item.nodeKey)
+    applyDelayStates(updates)
   }
 
   private func proxyNodeKey(group: ProxyGroup, node: ProxyNode, testURL: URL = AppConstants.defaultDelayTestURL) -> ProxyNodeKey {

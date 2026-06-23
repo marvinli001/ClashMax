@@ -53,6 +53,7 @@ enum ProxySearchPipeline {
       unfilteredGroups: sorted,
       filteredGroups: filtered,
       resultIdentity: Self.identity(of: filtered),
+      unfilteredIdentity: Self.identity(of: sorted),
       sourceNodeCount: sorted.reduce(0) { $0 + $1.nodes.count },
       resultNodeCount: filtered.reduce(0) { $0 + $1.nodes.count },
       durationMs: durationMs,
@@ -86,6 +87,10 @@ struct ProxySearchSnapshot: Sendable {
   /// Resolved + sorted + filtered groups actually shown.
   var filteredGroups: [ProxyGroup]
   var resultIdentity: [String]
+  /// Structural fingerprint of `unfilteredGroups` (group/selection/node ids, *no* delay values).
+  /// Lets equality detect node add/remove/selection changes while ignoring delay-only churn on
+  /// nodes that are currently filtered out of the displayed result (issue #11).
+  var unfilteredIdentity: [String]
   var sourceNodeCount: Int
   var resultNodeCount: Int
   var durationMs: Double
@@ -99,6 +104,7 @@ struct ProxySearchSnapshot: Sendable {
     unfilteredGroups: [],
     filteredGroups: [],
     resultIdentity: [],
+    unfilteredIdentity: [],
     sourceNodeCount: 0,
     resultNodeCount: 0,
     durationMs: 0,
@@ -110,11 +116,16 @@ struct ProxySearchSnapshot: Sendable {
 
 extension ProxySearchSnapshot: Equatable {
   static func == (lhs: ProxySearchSnapshot, rhs: ProxySearchSnapshot) -> Bool {
+    // `filteredGroups` is compared in full (it carries the delays of the *displayed* nodes), while
+    // the unfiltered side is compared only by its structural identity. So when a search is active,
+    // a delay change on a filtered-*out* node leaves both `filteredGroups` and `unfilteredIdentity`
+    // unchanged and the snapshot is considered equal — the coordinator then skips a redundant
+    // publish (issue #11). Node add/remove/selection still alters `unfilteredIdentity` and republishes.
     lhs.searchText == rhs.searchText
       && lhs.sortOrder == rhs.sortOrder
       && lhs.hasResolved == rhs.hasResolved
       && lhs.resultIdentity == rhs.resultIdentity
-      && lhs.unfilteredGroups == rhs.unfilteredGroups
+      && lhs.unfilteredIdentity == rhs.unfilteredIdentity
       && lhs.filteredGroups == rhs.filteredGroups
   }
 }

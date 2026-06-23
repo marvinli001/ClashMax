@@ -5241,6 +5241,71 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
   }
 
+  func testBatchDelayTestingCoalescesProxyGroupPublishesForLargeNodeSet() async throws {
+    // Issue #11: batch delay testing of a large node set used to publish `proxyGroups`
+    // (and `proxyDelayBatchProgress`) once per node for the `.testing` phase and again per
+    // result — ~192 `proxyGroups` updates for 96 nodes — which froze list scrolling while
+    // "Test All" ran. The coalesced pipeline must keep the publish count far below the
+    // per-node baseline while still landing every node's final measured state.
+    let nodeCount = 96
+    let nodes = (0..<nodeCount).map { index in
+      ProxyNode(name: "Node \(String(format: "%03d", index))", type: "vless", delay: nil, isSelectable: true)
+    }
+    let group = ProxyGroup(name: "Proxy", type: "select", selected: "Node 000", nodes: nodes)
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [group],
+      testDelayResults: Array(repeating: 50, count: nodeCount)
+    )
+    let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [group])
+
+    // Let any startup runtime load settle before we start counting publishes.
+    for _ in 0..<200 where model.runtimeDataLoading {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    await Task.yield()
+
+    var proxyGroupPublishes = 0
+    var progressPublishes = 0
+    var cancellables = Set<AnyCancellable>()
+    model.runtimeData.$proxyGroups
+      .sink { _ in proxyGroupPublishes += 1 }
+      .store(in: &cancellables)
+    model.$proxyDelayBatchProgress
+      .sink { _ in progressPublishes += 1 }
+      .store(in: &cancellables)
+    defer { cancellables.forEach { $0.cancel() } }
+
+    model.testDelayForAllProxyGroups()
+    try await waitForBatchProgress(model) { !$0.isRunning && $0.completed == nodeCount }
+    // Include the trailing runtime reload in the count by letting it settle.
+    for _ in 0..<200 where model.runtimeDataLoading {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let progress = try XCTUnwrap(model.proxyDelayBatchProgress)
+    XCTAssertEqual(progress.completed, nodeCount)
+    XCTAssertEqual(progress.succeeded, nodeCount)
+    XCTAssertEqual(progress.failureCount, 0)
+    let allNodes = model.proxyGroups.flatMap(\.nodes)
+    XCTAssertEqual(allNodes.count, nodeCount)
+    XCTAssertEqual(allNodes.filter { $0.resolvedDelayState == .measured(50) }.count, nodeCount)
+    XCTAssertFalse(allNodes.contains { $0.resolvedDelayState == .testing })
+
+    // The coalesced pipeline must batch publishes well below the per-node baseline (~192).
+    XCTAssertLessThan(
+      proxyGroupPublishes,
+      30,
+      "proxyGroups must not publish per-node during a large batch (got \(proxyGroupPublishes))"
+    )
+    XCTAssertLessThan(
+      progressPublishes,
+      30,
+      "batch progress must be coalesced, not published per-node (got \(progressPublishes))"
+    )
+  }
+
   func testDelayCacheTTLStopsPreservingExpiredDelayAcrossReloads() async throws {
     let group = ProxyGroup(
       name: "Proxy",
