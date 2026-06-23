@@ -4009,7 +4009,7 @@ final class AppModel: ObservableObject {
           didRefreshProviders = false
         }
         guard runtimeReloadToken == token, !Task.isCancelled else { return }
-        proxyProviders = refreshedProviders
+        proxyProviders = providersPreservingKnownDelayStates(refreshedProviders)
         let refreshedRuleProviders: [RuleProvider]
         let didRefreshRuleProviders: Bool
         do {
@@ -5837,7 +5837,7 @@ final class AppModel: ObservableObject {
         let cachedRuntimeGroups = proxyGroups
         let runtimeGroups = try await client.proxyGroups()
         let providers = (try? await client.structuredProxyProviders()) ?? []
-        proxyProviders = providers
+        proxyProviders = providersPreservingKnownDelayStates(providers)
         proxyGroups = enrichProxyGroupsWithKnownEndpoints(
           runtimeGroups,
           providers: providers,
@@ -6150,18 +6150,48 @@ final class AppModel: ObservableObject {
     updateProxyGroupCollections { groups in
       for groupIndex in groups.indices {
         guard groups[groupIndex].name == nodeKey.groupName else { continue }
-        for nodeIndex in groups[groupIndex].nodes.indices where nodeMatches(
+        for nodeIndex in groups[groupIndex].nodes.indices where self.nodeMatches(
           groups[groupIndex].nodes[nodeIndex],
           key: nodeKey
         ) {
-          groups[groupIndex].nodes[nodeIndex].delayState = state
-          if case let .measured(delay) = state, delay >= 0 {
-            groups[groupIndex].nodes[nodeIndex].delay = delay
-          } else if state == .timeout || isErrorDelayState(state) {
-            groups[groupIndex].nodes[nodeIndex].delay = nil
-          }
+          self.applyDelayState(state, to: &groups[groupIndex].nodes[nodeIndex])
         }
       }
+    }
+    // Provider-backed nodes are surfaced in ProxiesView by expanding `proxyProviders`
+    // (see ResolvedProxyCatalog), which `updateProxyGroupCollections` never touches.
+    // Keep the provider copy in sync so the visible node reflects the live delay state.
+    updateProxyProviderProxies(matching: nodeKey) { node in
+      self.applyDelayState(state, to: &node)
+    }
+  }
+
+  private func applyDelayState(_ state: ProxyDelayState, to node: inout ProxyNode) {
+    node.delayState = state
+    if case let .measured(delay) = state, delay >= 0 {
+      node.delay = delay
+    } else if state == .timeout || isErrorDelayState(state) {
+      node.delay = nil
+    }
+  }
+
+  private func updateProxyProviderProxies(
+    matching nodeKey: ProxyNodeKey,
+    _ transform: (inout ProxyNode) -> Void
+  ) {
+    guard let providerName = nodeKey.providerName, !proxyProviders.isEmpty else { return }
+    var providers = proxyProviders
+    var didChange = false
+    for providerIndex in providers.indices
+    where providers[providerIndex].name.trimmingCharacters(in: .whitespacesAndNewlines).nonEmptyString == providerName {
+      for nodeIndex in providers[providerIndex].proxies.indices
+      where providers[providerIndex].proxies[nodeIndex].name == nodeKey.nodeName {
+        transform(&providers[providerIndex].proxies[nodeIndex])
+        didChange = true
+      }
+    }
+    if didChange {
+      proxyProviders = providers
     }
   }
 
@@ -6329,6 +6359,53 @@ final class AppModel: ObservableObject {
     delayStateCache
       .filter { cachedKey, _ in
         cachedKey.matchesNodeIdentity(of: key)
+      }
+      .max { lhs, rhs in
+        lhs.value.recordedAt < rhs.value.recordedAt
+      }?
+      .value
+  }
+
+  /// Re-applies cached delay states onto freshly fetched providers so a runtime reload or
+  /// provider-metadata refresh does not blank the delay of provider-backed visible nodes
+  /// (issue #12). The cache is the source of truth; nodes with no live cache entry stay as-is.
+  private func providersPreservingKnownDelayStates(_ providers: [ProxyProvider]) -> [ProxyProvider] {
+    guard !providers.isEmpty else { return providers }
+    pruneExpiredDelayStates()
+    let activeProfileID = profileStore.activeProfileID?.uuidString
+    return providers.map { provider in
+      guard let providerName = provider.name.trimmingCharacters(in: .whitespacesAndNewlines).nonEmptyString
+      else { return provider }
+      var provider = provider
+      provider.proxies = provider.proxies.map { node in
+        guard let entry = latestProviderDelayCacheEntry(
+          providerName: providerName,
+          nodeName: node.name,
+          profileID: activeProfileID
+        ) else {
+          return node
+        }
+        var node = node
+        node.delayState = entry.state
+        if let delay = entry.state.measuredDelay, node.delay == nil {
+          node.delay = delay
+        }
+        return node
+      }
+      return provider
+    }
+  }
+
+  private func latestProviderDelayCacheEntry(
+    providerName: String,
+    nodeName: String,
+    profileID: String?
+  ) -> ProxyDelayCacheEntry? {
+    delayStateCache
+      .filter { key, _ in
+        key.profileID == profileID
+          && key.providerName == providerName
+          && key.nodeName == nodeName
       }
       .max { lhs, rhs in
         lhs.value.recordedAt < rhs.value.recordedAt

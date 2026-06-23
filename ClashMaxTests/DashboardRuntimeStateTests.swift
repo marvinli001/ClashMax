@@ -5281,6 +5281,112 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(model.proxyGroups.first?.nodes.first?.resolvedDelayState, .unknown)
   }
 
+  func testMeasuredDelaySurvivesExplicitRuntimeReloadWhenHistoryMissing() async throws {
+    let group = ProxyGroup(
+      name: "Proxy",
+      type: "select",
+      selected: "Japan",
+      nodes: [ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true)]
+    )
+    // Both reload responses omit any delay history; the measured result must persist.
+    let client = RecordingMihomoController(
+      proxyGroupsResponses: [[group], [group], [group]],
+      testDelayResults: [73]
+    )
+    let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [group])
+
+    model.testDelay(in: group, for: group.nodes[0])
+    for _ in 0..<200 where model.proxyGroups.first?.nodes.first?.resolvedDelayState != .measured(73) {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    XCTAssertEqual(model.proxyGroups.first?.nodes.first?.resolvedDelayState, .measured(73))
+
+    // An explicit reload (e.g. switching back to the Proxies tab) must not flash Unknown.
+    let requestCountBeforeReload = await client.proxyGroupsRequestCount()
+    model.reloadRuntimeData()
+    for _ in 0..<200 {
+      let requestCount = await client.proxyGroupsRequestCount()
+      if requestCount > requestCountBeforeReload, !model.runtimeDataLoading {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(model.proxyGroups.first?.nodes.first?.delay, 73)
+    XCTAssertEqual(model.proxyGroups.first?.nodes.first?.resolvedDelayState, .measured(73))
+  }
+
+  func testMeasuredDelaySurvivesProviderRefreshForProviderBackedVisibleNodes() async throws {
+    // The group surfaces its selectable nodes from a provider: ProxiesView expands the
+    // "provider"-type placeholder against runtimeData.proxyProviders, so the measured delay
+    // lives on a provider proxy. A runtime reload / provider-metadata refresh must not wipe it.
+    let providerNode = ProxyNode(
+      name: "Japan",
+      type: "vless",
+      delay: nil,
+      isSelectable: true,
+      providerName: "Remote"
+    )
+    let provider = ProxyProvider(
+      name: "Remote",
+      type: "http",
+      vehicleType: "HTTP",
+      updatedAt: nil,
+      proxies: [providerNode]
+    )
+    let placeholderGroup = ProxyGroup(
+      name: "Proxy",
+      type: "select",
+      selected: "Japan",
+      nodes: [ProxyNode(name: "Provider: Remote", type: "provider", delay: nil, isSelectable: false)]
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponses: [[placeholderGroup], [placeholderGroup], [placeholderGroup]],
+      proxyProvidersResponse: [provider],
+      testDelayResults: [73]
+    )
+    let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [placeholderGroup])
+    model.proxyProviders = [provider]
+
+    // Measure the delay on the catalog-expanded provider node (providerName-scoped key).
+    let expandedGroup = ProxyGroup(
+      name: "Proxy",
+      type: "select",
+      selected: "Japan",
+      nodes: [providerNode]
+    )
+    model.testDelay(in: expandedGroup, for: providerNode)
+    for _ in 0..<200 {
+      let delayRequests = await client.delayRequestCount()
+      let groupRequests = await client.proxyGroupsRequestCount()
+      if delayRequests >= 1, groupRequests >= 1, !model.runtimeDataLoading,
+         model.proxyProviders.first?.proxies.first != nil {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    // An explicit reload refreshes proxyProviders from the API (no delay history). The
+    // provider-backed visible node must still resolve to the cached measured delay.
+    let requestCountBeforeReload = await client.proxyGroupsRequestCount()
+    model.reloadRuntimeData()
+    for _ in 0..<200 {
+      let requestCount = await client.proxyGroupsRequestCount()
+      if requestCount > requestCountBeforeReload, !model.runtimeDataLoading {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let providerProxy = try XCTUnwrap(model.proxyProviders.first?.proxies.first)
+    XCTAssertEqual(providerProxy.resolvedDelayState, .measured(73))
+    XCTAssertEqual(providerProxy.delay, 73)
+  }
+
   func testProviderHealthCheckIgnoresDuplicateProviderWhileRunning() async throws {
     let provider = ProxyProvider(name: "Remote", type: "http", vehicleType: "HTTP", updatedAt: nil, proxies: [])
     let client = RecordingMihomoController(
