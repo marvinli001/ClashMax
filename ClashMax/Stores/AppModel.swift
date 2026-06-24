@@ -1202,6 +1202,19 @@ final class AppModel: ObservableObject {
     return mergedPreviewSelections(into: profilePreviewGroups)
   }
 
+  /// Single source of truth for the proxy-search/resolve pipeline shared by the Proxies page and the
+  /// dashboard Current Node card. Both consume `visibleProxyGroups` (profile order + preview
+  /// selections) plus `proxyProviders` so the dashboard resolves provider-backed members exactly like
+  /// the Proxies page instead of reading the raw, unexpanded `runtimeData.proxyGroups` (issue #14).
+  func proxySearchInput(searchText: String) -> ProxySearchPipeline.Input {
+    ProxySearchPipeline.Input(
+      groups: visibleProxyGroups,
+      providers: proxyProviders,
+      sortOrder: proxyPageSettings.sortOrder,
+      searchText: searchText
+    )
+  }
+
   var isShowingProxyPreview: Bool {
     !isCoreRunning && !profilePreviewGroups.isEmpty
   }

@@ -3580,6 +3580,128 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(group.name, "Elite")
   }
 
+  func testDashboardCurrentNodeDoesNotFallBackToDirectWhenSelectedNodeMissing() throws {
+    // Issue #14: a provider-backed selection (韩国 SK…) is configured, but the raw runtime group only
+    // carries the unexpanded provider placeholder + DIRECT, so the named node is absent. The dashboard
+    // current-node resolver must NOT silently fall back to DIRECT (or any other selectable node) — that
+    // is exactly what made the dashboard show DIRECT while the selector group held a Korea node.
+    let group = ProxyGroup(
+      name: "Proxy",
+      type: "select",
+      selected: "韩国 SK[M][Trojan][倍率:0.6]",
+      nodes: [
+        ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: true)
+      ]
+    )
+
+    XCTAssertNil(DashboardProxySelectionState.currentNode(in: group))
+  }
+
+  func testDashboardCurrentNodeFallsBackToFirstSelectableOnlyWhenNoSelection() throws {
+    // Guard the fallback that the missing-selection fix must preserve: with no `selected`, the dashboard
+    // still surfaces the first selectable node so an unconfigured selector is not left blank.
+    let group = ProxyGroup(
+      name: "Proxy",
+      type: "select",
+      selected: nil,
+      nodes: [
+        ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: true),
+        ProxyNode(name: "Tokyo", type: "vless", delay: 64, isSelectable: true)
+      ]
+    )
+
+    XCTAssertEqual(DashboardProxySelectionState.currentNode(in: group)?.name, "DIRECT")
+  }
+
+  func testDashboardCurrentNodeResolvesProviderBackedSelectedNode() throws {
+    // Issue #14: the selector points at a provider-backed Korea node, but the raw runtime group only
+    // carries a `Provider:` placeholder + DIRECT. The dashboard must resolve providers (the same way
+    // the Proxies page does) before picking the current node, so it surfaces the Korea node, not DIRECT.
+    let korean = "韩国 SK[M][Trojan][倍率:0.6]"
+    let group = ProxyGroup(
+      name: "Proxy",
+      type: "select",
+      selected: korean,
+      nodes: [
+        ProxyNode(name: "Provider: Remote", type: "provider", delay: nil, isSelectable: true),
+        ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: true)
+      ]
+    )
+    let provider = ProxyProvider(
+      name: "Remote",
+      type: "http",
+      vehicleType: nil,
+      updatedAt: nil,
+      proxies: [ProxyNode(name: korean, type: "trojan", delay: 142, isSelectable: true)]
+    )
+
+    let model = AppModel(paths: try Self.makeRuntimePaths(), defaults: try Self.makeIsolatedDefaults())
+    model.profilePreviewGroups = [group]
+    model.proxyProviders = [provider]
+
+    // Without provider resolution (the old raw-runtime-group data source) the Korea node is absent,
+    // so the current node would be nil/DIRECT — exactly the issue #14 symptom.
+    let rawGroup = try XCTUnwrap(
+      DashboardProxySelectionState.resolvedGroup(
+        from: DashboardProxySelectionState.selectableGroups(from: model.visibleProxyGroups),
+        preferredName: "Proxy"
+      )
+    )
+    XCTAssertNil(rawGroup.nodes.first(where: { $0.name == korean }))
+    XCTAssertNil(DashboardProxySelectionState.currentNode(in: rawGroup))
+
+    // The dashboard's resolved data source (shared with the Proxies page) surfaces the Korea node.
+    let snapshot = ProxySearchPipeline.run(model.proxySearchInput(searchText: ""))
+    let resolvedGroup = try XCTUnwrap(
+      DashboardProxySelectionState.resolvedGroup(
+        from: DashboardProxySelectionState.selectableGroups(from: snapshot.unfilteredGroups),
+        preferredName: "Proxy"
+      )
+    )
+    let node = try XCTUnwrap(DashboardProxySelectionState.currentNode(in: resolvedGroup))
+    XCTAssertEqual(node.name, korean)
+    XCTAssertNotEqual(node.name, "DIRECT")
+    XCTAssertFalse(DashboardProxySelectionState.hasMissingSelection(in: resolvedGroup))
+  }
+
+  func testDashboardProxySearchInputUsesVisibleProxyGroupsNotRawRuntimeGroups() throws {
+    // The dashboard current-node dropdown must consume the same source as the Proxies page —
+    // `visibleProxyGroups` (profile order + preview selections) plus `proxyProviders` — rather than the
+    // raw `runtimeData.proxyGroups`, which omits preview groups and provider expansion (issue #14).
+    let korean = "韩国 SK[M][Trojan][倍率:0.6]"
+    let group = ProxyGroup(
+      name: "Proxy",
+      type: "select",
+      selected: korean,
+      nodes: [
+        ProxyNode(name: "Provider: Remote", type: "provider", delay: nil, isSelectable: true),
+        ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: true)
+      ]
+    )
+    let provider = ProxyProvider(
+      name: "Remote",
+      type: "http",
+      vehicleType: nil,
+      updatedAt: nil,
+      proxies: [ProxyNode(name: korean, type: "trojan", delay: 142, isSelectable: true)]
+    )
+
+    let model = AppModel(paths: try Self.makeRuntimePaths(), defaults: try Self.makeIsolatedDefaults())
+    model.profilePreviewGroups = [group]
+    model.proxyProviders = [provider]
+
+    let input = model.proxySearchInput(searchText: "")
+    XCTAssertEqual(input.groups, model.visibleProxyGroups)
+    XCTAssertEqual(input.providers, model.proxyProviders)
+    XCTAssertEqual(input.sortOrder, model.proxyPageSettings.sortOrder)
+    XCTAssertEqual(input.searchText, "")
+    // Guard against regressing to the raw runtime groups: here the core is stopped so the raw runtime
+    // groups are empty while the visible (preview) groups carry the selector.
+    XCTAssertTrue(model.proxyGroups.isEmpty)
+    XCTAssertNotEqual(input.groups, model.proxyGroups)
+    XCTAssertFalse(input.groups.isEmpty)
+  }
+
   func testRunningWithoutRuntimeProxyGroupsDoesNotFallBackToStoppedPreview() async throws {
     let paths = try Self.makeRuntimePaths()
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")

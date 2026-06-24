@@ -116,12 +116,8 @@ struct ProxiesView: View {
   }
 
   private func makeSearchInput(searchText: String) -> ProxySearchPipeline.Input {
-    ProxySearchPipeline.Input(
-      groups: appModel.visibleProxyGroups,
-      providers: runtimeData.proxyProviders,
-      sortOrder: appModel.proxyPageSettings.sortOrder,
-      searchText: searchText
-    )
+    // Shares the dashboard's data source so both pages resolve provider-backed members identically.
+    appModel.proxySearchInput(searchText: searchText)
   }
 
   private func showsLoadingSkeleton(rawGroupCount: Int) -> Bool {
@@ -508,66 +504,6 @@ private struct ProxyNodeGridAnimationState: Equatable {
   init(group: ProxyGroup) {
     nodeIDs = group.nodes.map(\.id)
     selected = group.selected
-  }
-}
-
-/// Cheap fingerprint of the raw group/provider data that feeds the search pipeline.
-///
-/// Computed in `body` (O(node count) of integer/string hashes — far cheaper than the resolve/sort/
-/// filter it replaces) and watched with `.onChange` so the coordinator only reschedules a recompute
-/// when something that actually affects results changed (names, types, providers, selection, or a
-/// node's resolved delay state). Bursty per-node delay-batch updates therefore coalesce into a few
-/// debounced background recomputes instead of recomputing on the main thread per node.
-private struct ProxySearchInputSignature: Equatable {
-  let groupCount: Int
-  let providerCount: Int
-  let nodeCount: Int
-  let contentHash: Int
-
-  init(groups: [ProxyGroup], providers: [ProxyProvider]) {
-    var hasher = Hasher()
-    var nodeCount = 0
-    for group in groups {
-      hasher.combine(group.name)
-      hasher.combine(group.type)
-      hasher.combine(group.selected)
-      for node in group.nodes {
-        Self.combine(node: node, into: &hasher)
-        nodeCount += 1
-      }
-    }
-    for provider in providers {
-      hasher.combine(provider.name)
-      for node in provider.proxies {
-        Self.combine(node: node, into: &hasher)
-        nodeCount += 1
-      }
-    }
-    self.groupCount = groups.count
-    self.providerCount = providers.count
-    self.nodeCount = nodeCount
-    self.contentHash = hasher.finalize()
-  }
-
-  private static func combine(node: ProxyNode, into hasher: inout Hasher) {
-    hasher.combine(node.name)
-    hasher.combine(node.type)
-    hasher.combine(node.providerName)
-    hasher.combine(node.isSelectable)
-    switch node.resolvedDelayState {
-    case .unknown:
-      hasher.combine(0)
-    case .testing:
-      hasher.combine(1)
-    case .timeout:
-      hasher.combine(2)
-    case let .measured(delay):
-      hasher.combine(3)
-      hasher.combine(delay)
-    case let .error(message):
-      hasher.combine(4)
-      hasher.combine(message)
-    }
   }
 }
 

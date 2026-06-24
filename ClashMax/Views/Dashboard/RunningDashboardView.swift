@@ -4,6 +4,7 @@ import SwiftUI
 struct RunningDashboardView: View {
   @EnvironmentObject private var appModel: AppModel
   @EnvironmentObject private var runtimeData: RuntimeDataStore
+  @StateObject private var currentNodeCoordinator = ProxySearchCoordinator()
   @State private var selectedProxyGroupName: String?
   let state: DashboardRuntimeState
   let namespace: Namespace.ID
@@ -23,6 +24,8 @@ struct RunningDashboardView: View {
         CurrentProxyRuntimeCard(
           state: state,
           availableWidth: runtimeInfoCardWidth,
+          resolvedGroups: currentNodeCoordinator.snapshot.unfilteredGroups,
+          isLoading: currentNodeIsLoading,
           selectedGroupName: $selectedProxyGroupName
         )
       } trailing: {
@@ -96,6 +99,34 @@ struct RunningDashboardView: View {
       }
       .staggeredArrival(index: 6, reduceMotion: reduceMotion, trigger: state)
     }
+    .task {
+      // First population: resolve providers off-main so the dashboard never expands a large config
+      // synchronously in the body (issue #10).
+      currentNodeCoordinator.submit(appModel.proxySearchInput(searchText: ""), reason: .initial)
+    }
+    .onChange(of: appModel.proxyPageSettings.sortOrder) { _, _ in
+      currentNodeCoordinator.submit(appModel.proxySearchInput(searchText: ""), reason: .sort)
+    }
+    .onChange(of: currentNodeDataSignature) { _, _ in
+      currentNodeCoordinator.submit(appModel.proxySearchInput(searchText: ""), reason: .data)
+    }
+  }
+
+  /// Watches the same group/provider fingerprint the Proxies page does, so the off-main resolve only
+  /// reruns when something that affects the current node actually changed.
+  private var currentNodeDataSignature: ProxySearchInputSignature {
+    ProxySearchInputSignature(groups: appModel.visibleProxyGroups, providers: runtimeData.proxyProviders)
+  }
+
+  /// Shows the skeleton only during genuine async loading — while starting, while runtime data is
+  /// loading with nothing resolved yet, or before the off-main pipeline has produced its first
+  /// result for a non-empty config — never in place of the empty/recovery states (AGENTS.md).
+  private var currentNodeIsLoading: Bool {
+    if state.isStarting { return true }
+    let snapshot = currentNodeCoordinator.snapshot
+    if appModel.runtimeDataLoading && snapshot.unfilteredGroups.isEmpty { return true }
+    if !snapshot.hasResolved && !appModel.visibleProxyGroups.isEmpty { return true }
+    return false
   }
 
   private var metricColumns: [GridItem] {
@@ -382,11 +413,23 @@ enum DashboardProxySelectionState {
   }
 
   static func currentNode(in group: ProxyGroup) -> ProxyNode? {
-    if let selected = group.selected,
-       let node = group.nodes.first(where: { $0.name == selected }) {
-      return node
+    // A configured selection must resolve to that exact node. If the named node is absent (e.g. a
+    // provider-backed member that has not been expanded yet, or a profile/provider mismatch) do NOT
+    // fall back to the first selectable node — that is what surfaced DIRECT as the dashboard's
+    // current node while the selector group actually pointed at a Korea node (issue #14). Only an
+    // unset selection falls back to the first selectable node.
+    if let selected = group.selected, !selected.isEmpty {
+      return group.nodes.first(where: { $0.name == selected })
     }
     return group.nodes.first(where: \.isSelectable)
+  }
+
+  /// `true` when the group has a named selection that is not present among its (resolved) nodes.
+  /// The dashboard uses this to show an explicit refresh/recovery state instead of a misleading
+  /// node or a loading skeleton (issue #14).
+  static func hasMissingSelection(in group: ProxyGroup) -> Bool {
+    guard let selected = group.selected, !selected.isEmpty else { return false }
+    return !group.nodes.contains(where: { $0.name == selected })
   }
 
   static func delayLabel(for node: ProxyNode?) -> String {
@@ -411,13 +454,19 @@ enum DashboardProxySelectionState {
 
 private struct CurrentProxyRuntimeCard: View {
   @EnvironmentObject private var appModel: AppModel
-  @EnvironmentObject private var runtimeData: RuntimeDataStore
   let state: DashboardRuntimeState
   let availableWidth: CGFloat
+  /// Provider-resolved + sorted groups supplied by `RunningDashboardView` (shares the Proxies page's
+  /// off-main pipeline). The card never resolves providers itself, so the heavy expansion stays off
+  /// the SwiftUI body hot path (issue #10 / #14).
+  let resolvedGroups: [ProxyGroup]
+  /// `true` only during genuine async runtime/pipeline loading, so the skeleton never replaces a
+  /// failure/recovery or empty state (AGENTS.md).
+  let isLoading: Bool
   @Binding var selectedGroupName: String?
 
   var body: some View {
-    let groups = DashboardProxySelectionState.selectableGroups(from: runtimeData.proxyGroups)
+    let groups = DashboardProxySelectionState.selectableGroups(from: resolvedGroups)
     let group = DashboardProxySelectionState.resolvedGroup(from: groups, preferredName: selectedGroupName)
     let node = group.flatMap(DashboardProxySelectionState.currentNode)
 
@@ -450,21 +499,39 @@ private struct CurrentProxyRuntimeCard: View {
             .frame(minWidth: 0, maxWidth: .infinity)
             .layoutPriority(2)
         }
-      } else if state.isStarting || (appModel.runtimeDataLoading && runtimeData.proxyGroups.isEmpty) {
+      } else if isLoading {
         ClashMaxCurrentNodeSkeleton(isCompact: availableWidth < 460)
+      } else if let group, DashboardProxySelectionState.hasMissingSelection(in: group) {
+        // A node is selected but absent from the resolved data (runtime not yet refreshed, or a
+        // profile/provider mismatch). Surface an explicit recovery state — never DIRECT, never a
+        // skeleton — and keep the refresh affordance above (issue #14).
+        selectionUnavailableView(group: group)
       } else {
         DashboardEmptyRuntimeView(
-          title: state.isStarting ? "Waiting for runtime data" : "No selectable proxy groups",
-          symbolName: state.isStarting ? "hourglass" : "point.3.connected.trianglepath.dotted",
-          message: state.isStarting
-            ? "Node selection becomes available after the controller is ready."
-            : "Refresh runtime data or check the active profile's proxy-groups."
+          title: "No selectable proxy groups",
+          symbolName: "point.3.connected.trianglepath.dotted",
+          message: "Refresh runtime data or check the active profile's proxy-groups."
         )
       }
     }
     .padding(14)
     .frame(maxWidth: .infinity, minHeight: availableWidth < 460 ? 190 : 210, alignment: .topLeading)
     .dashboardCard(interactive: true)
+  }
+
+  private func selectionUnavailableView(group: ProxyGroup) -> some View {
+    DashboardEmptyRuntimeView(
+      title: "Selected node unavailable",
+      symbolName: "exclamationmark.triangle",
+      message: selectionUnavailableMessage(group: group)
+    )
+  }
+
+  private func selectionUnavailableMessage(group: ProxyGroup) -> String {
+    guard let selected = group.selected, !selected.isEmpty else {
+      return "Refresh runtime data or check the active profile's proxy-groups."
+    }
+    return "\"\(selected)\" isn't in the current runtime data for \(group.name). Refresh runtime data, or check the profile/provider for a mismatch."
   }
 
   private func currentNodeSummary(group: ProxyGroup, node: ProxyNode) -> some View {
