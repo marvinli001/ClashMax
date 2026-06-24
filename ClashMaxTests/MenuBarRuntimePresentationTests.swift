@@ -127,7 +127,24 @@ final class MenuBarTrafficStatusLabelTests: XCTestCase {
       sample: TrafficSample(upload: 348, download: 2048)
     )
 
-    XCTAssertEqual(label, "↓ 2 KB/s ↑ 348 B/s")
+    XCTAssertEqual(label, "↓2KB/s ↑348B/s")
+  }
+
+  func testLabelStripsInternalUnitSpacingToStayNarrow() {
+    let label = MenuBarTrafficStatusLabel.text(
+      showsTraffic: true,
+      hasTrafficData: true,
+      sample: TrafficSample(upload: 48, download: 22 * 1024)
+    )
+
+    // Reuses TrafficSample.format units (KB/s, B/s) so the menu bar stays
+    // consistent with the rest of the app, but drops the internal number/unit
+    // spacing so the status item is narrower and stays on one line (Discussion #20).
+    XCTAssertEqual(label, "↓22KB/s ↑48B/s")
+    guard let label else { return XCTFail("Expected a traffic label") }
+    XCTAssertFalse(label.contains(" KB/s"))
+    XCTAssertFalse(label.contains(" B/s"))
+    XCTAssertTrue(label.contains("KB/s"))
   }
 
   func testLabelStaysCompactAndCarriesBothDirections() {
@@ -177,7 +194,7 @@ final class MenuBarTrafficStatusLabelTests: XCTestCase {
       sample: .zero
     )
 
-    XCTAssertEqual(label, "↓ 0 B/s ↑ 0 B/s")
+    XCTAssertEqual(label, "↓0B/s ↑0B/s")
   }
 }
 
@@ -232,20 +249,130 @@ final class MenuBarNodeSelectionTests: XCTestCase {
     )
   }
 
-  func testPopupTitleShowsSelectionOnlyForSingleGroup() {
-    let elite = group(name: "Elite", type: "Selector", selected: "[vless]JP Nano")
-    let region = group(name: "Region", type: "Selector", selected: "US")
+  func testSelectorGroupsExcludePinnedGroupsToAvoidDuplicateRows() {
+    let groups = [
+      group(name: "Elite", type: "Selector"),
+      group(name: "Region", type: "select"),
+      group(name: "Backup", type: "Selector")
+    ]
 
-    XCTAssertEqual(MenuBarNodeSelection.popupTitle(for: [elite]), "[vless]JP Nano")
+    // Pinned groups already render as their own flat rows, so the node-selection
+    // section must drop them (case-insensitively) to avoid duplicate rows.
     XCTAssertEqual(
-      MenuBarNodeSelection.popupTitle(for: [elite, region]),
-      String(localized: "Select")
+      MenuBarNodeSelection.selectorGroups(
+        from: groups,
+        runMode: .rule,
+        excludingPinned: ["region"]
+      ).map(\.name),
+      ["Elite", "Backup"]
+    )
+
+    // Back-compatible default keeps every selector group when nothing is pinned.
+    XCTAssertEqual(
+      MenuBarNodeSelection.selectorGroups(from: groups, runMode: .rule).map(\.name),
+      ["Elite", "Region", "Backup"]
+    )
+  }
+
+  func testCurrentSelectionLabelPrefersConfiguredSelectionThenFirstSelectable() {
+    let configured = ProxyGroup(
+      name: "Elite",
+      type: "Selector",
+      selected: "JP",
+      nodes: [node("JP"), node("US")]
+    )
+    XCTAssertEqual(MenuBarNodeSelection.currentSelectionLabel(for: configured), "JP")
+
+    let unset = ProxyGroup(
+      name: "Region",
+      type: "Selector",
+      selected: nil,
+      nodes: [node("Locked", selectable: false), node("HK")]
+    )
+    XCTAssertEqual(MenuBarNodeSelection.currentSelectionLabel(for: unset), "HK")
+
+    let empty = ProxyGroup(
+      name: "Empty",
+      type: "Selector",
+      selected: nil,
+      nodes: [node("Locked", selectable: false)]
     )
     XCTAssertEqual(
-      MenuBarNodeSelection.popupTitle(for: [group(name: "Elite", type: "Selector")]),
+      MenuBarNodeSelection.currentSelectionLabel(for: empty),
       String(localized: "Select")
     )
-    XCTAssertEqual(MenuBarNodeSelection.popupTitle(for: []), String(localized: "Select"))
+  }
+
+  func testCurrentDelayDisplayReusesProxiesPageSemantics() {
+    let measured = ProxyGroup(
+      name: "Elite",
+      type: "Selector",
+      selected: "JP",
+      nodes: [node("JP", delayState: .measured(73)), node("US", delayState: .timeout)]
+    )
+    XCTAssertEqual(
+      MenuBarNodeSelection.currentDelayDisplay(for: measured),
+      ProxyDelayDisplay(state: .measured(73))
+    )
+    XCTAssertEqual(MenuBarNodeSelection.currentDelayDisplay(for: measured).label, "73 ms")
+
+    // No explicit selection falls back to the first selectable node's delay.
+    let unset = ProxyGroup(
+      name: "Region",
+      type: "Selector",
+      selected: nil,
+      nodes: [node("HK", delayState: .testing), node("SG", delayState: .measured(120))]
+    )
+    XCTAssertEqual(MenuBarNodeSelection.currentDelayDisplay(for: unset).label, "Testing")
+
+    // A configured selection that is absent resolves to Unknown (issue #14 semantics).
+    let missing = ProxyGroup(
+      name: "Gone",
+      type: "Selector",
+      selected: "Ghost",
+      nodes: [node("HK", delayState: .measured(50))]
+    )
+    XCTAssertEqual(MenuBarNodeSelection.currentDelayDisplay(for: missing).label, "Unknown")
+
+    let timeout = ProxyGroup(
+      name: "T",
+      type: "Selector",
+      selected: "X",
+      nodes: [node("X", delayState: .timeout)]
+    )
+    XCTAssertEqual(MenuBarNodeSelection.currentDelayDisplay(for: timeout).label, "Timeout")
+
+    let errored = ProxyGroup(
+      name: "E",
+      type: "Selector",
+      selected: "X",
+      nodes: [node("X", delayState: .error("boom"))]
+    )
+    XCTAssertEqual(MenuBarNodeSelection.currentDelayDisplay(for: errored).label, "Error")
+  }
+
+  func testNodeMenuTitleAppendsDelayExceptWhenUnknown() {
+    XCTAssertEqual(
+      MenuBarNodeSelection.nodeMenuTitle(for: node("JP", delayState: .measured(73))),
+      "JP · 73 ms"
+    )
+    XCTAssertEqual(
+      MenuBarNodeSelection.nodeMenuTitle(for: node("JP", delayState: .testing)),
+      "JP · Testing"
+    )
+    XCTAssertEqual(
+      MenuBarNodeSelection.nodeMenuTitle(for: node("JP", delayState: .timeout)),
+      "JP · Timeout"
+    )
+    XCTAssertEqual(
+      MenuBarNodeSelection.nodeMenuTitle(for: node("JP", delayState: .error("x"))),
+      "JP · Error"
+    )
+    // Unknown is omitted so large node menus stay readable.
+    XCTAssertEqual(
+      MenuBarNodeSelection.nodeMenuTitle(for: node("JP", delayState: .unknown)),
+      "JP"
+    )
   }
 
   private func group(name: String, type: String, selected: String? = nil) -> ProxyGroup {
@@ -257,7 +384,11 @@ final class MenuBarNodeSelectionTests: XCTestCase {
     )
   }
 
-  private func node(_ name: String, selectable: Bool = true) -> ProxyNode {
-    ProxyNode(name: name, type: "vless", delay: nil, isSelectable: selectable)
+  private func node(
+    _ name: String,
+    selectable: Bool = true,
+    delayState: ProxyDelayState = .unknown
+  ) -> ProxyNode {
+    ProxyNode(name: name, type: "vless", delay: nil, isSelectable: selectable, delayState: delayState)
   }
 }

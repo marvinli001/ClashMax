@@ -4,6 +4,9 @@ enum MenuBarPanelLayout {
   static let width: CGFloat = 312
   static let padding: CGFloat = 9
   static let controlWidth: CGFloat = 108
+  /// Wider than `controlWidth` so a group row can show the current node name and a
+  /// delay chip side by side; the node name truncates before the group name does.
+  static let selectionLabelMaxWidth: CGFloat = 176
   static let statusCornerRadius: CGFloat = 8
   static let trafficChartHeight: CGFloat = 52
   static let footerButtonMinWidth: CGFloat = 0
@@ -88,8 +91,8 @@ struct MenuBarView: View {
           .menuBarPopupPickerStyle(disabled: appModel.profileStore.profiles.isEmpty)
         }
 
-        if !nodeSelectorGroups.isEmpty {
-          MenuBarNodeSelectionRow(groups: nodeSelectorGroups)
+        ForEach(nodeSelectorGroups) { group in
+          MenuBarGroupSelectionRow(group: group, systemImage: MenuBarNodeSelection.groupSymbolName)
         }
 
         MenuBarControlRow(title: String(localized: "Proxy Routing"), systemImage: appModel.proxyRoutingMode.symbolName) {
@@ -199,7 +202,8 @@ struct MenuBarView: View {
   private var nodeSelectorGroups: [ProxyGroup] {
     MenuBarNodeSelection.selectorGroups(
       from: appModel.visibleProxyGroups,
-      runMode: appModel.overrides.mode
+      runMode: appModel.overrides.mode,
+      excludingPinned: appModel.pinnedMenuBarProxyGroups.map(\.name)
     )
   }
 
@@ -346,7 +350,15 @@ struct MenuBarRuntimePresentation {
 enum MenuBarTrafficStatusLabel {
   static func text(showsTraffic: Bool, hasTrafficData: Bool, sample: TrafficSample) -> String? {
     guard showsTraffic, hasTrafficData else { return nil }
-    return "↓ \(TrafficSample.format(sample.download)) ↑ \(TrafficSample.format(sample.upload))"
+    return "↓\(compact(sample.download)) ↑\(compact(sample.upload))"
+  }
+
+  /// Reuses `TrafficSample.format` so the menu bar units stay consistent with the
+  /// rest of the app, then strips the internal number/unit spacing so the status
+  /// item is narrower and stays on a single line (Discussion #20). This is the
+  /// same unit rule, not a second one.
+  private static func compact(_ bytesPerSecond: Int) -> String {
+    TrafficSample.format(bytesPerSecond).replacingOccurrences(of: " ", with: "")
   }
 }
 
@@ -385,10 +397,21 @@ private struct MenuBarRoutingQuickButtons: View {
 enum MenuBarNodeSelection {
   static let globalGroupName = "GLOBAL"
 
-  static func selectorGroups(from groups: [ProxyGroup], runMode: RunMode) -> [ProxyGroup] {
-    groups.filter { group in
+  /// Stable fallback symbol for a selector-group row. The runtime model does not
+  /// expose a per-group icon yet (Discussion #20 treats icons as non-blocking), so
+  /// this reuses the glyph the Proxies navigator already uses for selectable groups.
+  static let groupSymbolName = "point.3.connected.trianglepath.dotted"
+
+  static func selectorGroups(
+    from groups: [ProxyGroup],
+    runMode: RunMode,
+    excludingPinned pinnedNames: [String] = []
+  ) -> [ProxyGroup] {
+    let pinned = Set(pinnedNames.map { $0.lowercased() })
+    return groups.filter { group in
       guard group.allowsManualProxySelection else { return false }
       guard group.nodes.contains(where: \.isSelectable) else { return false }
+      if pinned.contains(group.name.lowercased()) { return false }
       if group.name == globalGroupName {
         return runMode == .global
       }
@@ -396,35 +419,60 @@ enum MenuBarNodeSelection {
     }
   }
 
-  static func popupTitle(for groups: [ProxyGroup]) -> String {
-    if groups.count == 1, let selected = groups[0].selected, !selected.isEmpty {
+  /// Name shown as the group's current selection in its menu-bar row. Mirrors the
+  /// dashboard's issue-#14 resolution: a configured selection wins, otherwise the
+  /// first selectable node, otherwise a neutral "Select" placeholder.
+  static func currentSelectionLabel(for group: ProxyGroup) -> String {
+    if let selected = group.selected, !selected.isEmpty {
       return selected
+    }
+    if let first = group.nodes.first(where: \.isSelectable) {
+      return first.name
     }
     return String(localized: "Select")
   }
+
+  /// Delay status for the group's current node, reusing the Proxies-page
+  /// `ProxyDelayDisplay` semantics and the dashboard's `currentNode` resolution so
+  /// all three surfaces agree. Unresolvable selections render as `.unknown`.
+  static func currentDelayDisplay(for group: ProxyGroup) -> ProxyDelayDisplay {
+    let state = DashboardProxySelectionState.currentNode(in: group)?.resolvedDelayState ?? .unknown
+    return ProxyDelayDisplay(state: state)
+  }
+
+  /// Title for a node row inside a group menu: the node name plus its delay,
+  /// reusing `ProxyDelayDisplay`. The `Unknown` state is omitted so large node
+  /// menus stay readable; measured/testing/timeout/error are always shown.
+  static func nodeMenuTitle(for node: ProxyNode) -> String {
+    let state = node.resolvedDelayState
+    if case .unknown = state {
+      return node.name
+    }
+    return "\(node.name) · \(ProxyDelayDisplay(state: state).label)"
+  }
 }
 
-private struct MenuBarNodeSelectionRow: View {
+/// One flat row per manually-selectable group. Replaces the old nested
+/// "Node Selection" entry so each group's current node, delay, and node list are
+/// one click closer (Discussion #20). Node lists stay inside a native `Menu` so a
+/// group with hundreds of nodes still scrolls natively.
+private struct MenuBarGroupSelectionRow: View {
   @EnvironmentObject private var appModel: AppModel
-  let groups: [ProxyGroup]
+  let group: ProxyGroup
+  let systemImage: String
 
   var body: some View {
-    MenuBarControlRow(title: String(localized: "Node Selection"), systemImage: "arrow.triangle.swap") {
+    MenuBarControlRow(title: group.name, systemImage: systemImage) {
       Menu {
-        if groups.count == 1, let group = groups.first {
-          MenuBarGroupNodeButtons(group: group)
-        } else {
-          ForEach(groups) { group in
-            Menu(group.name) {
-              MenuBarGroupNodeButtons(group: group)
-            }
-          }
-        }
+        MenuBarGroupNodeButtons(group: group)
       } label: {
-        MenuBarPinnedGroupSelectionLabel(title: MenuBarNodeSelection.popupTitle(for: groups))
+        MenuBarGroupSelectionLabel(
+          selectedNode: MenuBarNodeSelection.currentSelectionLabel(for: group),
+          delay: MenuBarNodeSelection.currentDelayDisplay(for: group)
+        )
       }
       .controlSize(.small)
-      .disabled(!appModel.canSelectProxyNodesFromMenuBar)
+      .disabled(!appModel.canSelectProxyNodesFromMenuBar || group.nodes.filter(\.isSelectable).isEmpty)
     }
   }
 }
@@ -442,28 +490,22 @@ private struct MenuBarGroupNodeButtons: View {
           closeOldConnections: appModel.proxyPageSettings.closesOldConnectionsAfterSwitch
         )
       } label: {
-        Label(node.name, systemImage: node.name == group.selected ? "checkmark.circle.fill" : "circle")
+        Label(
+          MenuBarNodeSelection.nodeMenuTitle(for: node),
+          systemImage: node.name == group.selected ? "checkmark.circle.fill" : "circle"
+        )
       }
     }
   }
 }
 
 private struct MenuBarPinnedGroupsSection: View {
-  @EnvironmentObject private var appModel: AppModel
   let groups: [ProxyGroup]
 
   var body: some View {
     VStack(spacing: 7) {
       ForEach(groups.prefix(MenuBarPinnedGroupSettings.maximumPinnedGroups)) { group in
-        MenuBarControlRow(title: group.name, systemImage: "pin.fill") {
-          Menu {
-            MenuBarGroupNodeButtons(group: group)
-          } label: {
-            MenuBarPinnedGroupSelectionLabel(title: group.selected ?? String(localized: "Select"))
-          }
-          .controlSize(.small)
-          .disabled(!appModel.canSelectProxyNodesFromMenuBar || group.nodes.filter(\.isSelectable).isEmpty)
-        }
+        MenuBarGroupSelectionRow(group: group, systemImage: "pin.fill")
       }
     }
   }
@@ -624,14 +666,27 @@ struct MenuBarControlRow<Control: View>: View {
   }
 }
 
-struct MenuBarPinnedGroupSelectionLabel: View {
-  let title: String
+/// Trailing label for a group-selection row: the current node (truncated) plus a
+/// compact delay chip that reuses the Proxies-page `ProxyDelayDisplay` semantics
+/// and colors. Capped so a long node name truncates instead of pushing the group
+/// name off the row (Discussion #20).
+struct MenuBarGroupSelectionLabel: View {
+  let selectedNode: String
+  let delay: ProxyDelayDisplay
 
   var body: some View {
-    Label(title, systemImage: "point.3.connected.trianglepath.dotted")
-      .lineLimit(1)
-      .truncationMode(.middle)
-      .frame(width: MenuBarPanelLayout.controlWidth, alignment: .trailing)
+    HStack(spacing: 5) {
+      Text(selectedNode)
+        .lineLimit(1)
+        .truncationMode(.middle)
+
+      Text(delay.label)
+        .font(.caption2.monospacedDigit())
+        .foregroundStyle(delay.tone.color)
+        .lineLimit(1)
+        .fixedSize()
+    }
+    .frame(maxWidth: MenuBarPanelLayout.selectionLabelMaxWidth, alignment: .trailing)
   }
 }
 

@@ -138,13 +138,14 @@ final class MenuBarPanelLayoutTests: XCTestCase {
     XCTAssertLessThanOrEqual(size.height, 52)
   }
 
-  func testPinnedGroupStyleRowKeepsLongGroupAndNodeNamesInsidePanelWidth() {
+  func testGroupSelectionRowKeepsLongGroupNodeAndDelayInsidePanelWidth() {
     let view = MenuBarControlRow(
       title: "Proxy Group - 香港 日本 美国 自动选择 - Very Long Provider Alias",
-      systemImage: "pin.fill"
+      systemImage: "point.3.connected.trianglepath.dotted"
     ) {
-      MenuBarPinnedGroupSelectionLabel(
-        title: "Auto Select - Hong Kong Premium Relay With A Very Long Name"
+      MenuBarGroupSelectionLabel(
+        selectedNode: "Auto Select - Hong Kong Premium Relay With A Very Long Name",
+        delay: ProxyDelayDisplay(state: .measured(8888))
       )
     }
     .padding(MenuBarPanelLayout.padding)
