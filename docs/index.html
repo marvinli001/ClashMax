@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="ClashMax is a native macOS Mihomo proxy client built with SwiftUI.">
+  <meta name="description" content="ClashMax is a native macOS Mihomo proxy client with profiles, proxy groups, rules, logs, system proxy, and TUN controls.">
   <meta property="og:title" content="ClashMax">
-  <meta property="og:description" content="A native macOS Mihomo proxy console.">
+  <meta property="og:description" content="Native macOS control for Mihomo profiles, proxy groups, TUN, logs, and system proxy recovery.">
   <meta property="og:image" content="https://marvinli001.github.io/ClashMax/assets/clashmax-icon.png">
   <meta property="og:type" content="website">
   <link rel="icon" type="image/png" href="assets/clashmax-icon.png">
@@ -14,19 +14,28 @@
   <style>
     :root {
       color-scheme: dark;
-      --bg: #050606;
-      --panel: #0d0f0f;
-      --panel-strong: #121616;
-      --ink: #f3f7f2;
-      --muted: #9ba39b;
-      --soft: #646d66;
-      --line: #242a27;
-      --line-soft: rgba(255, 255, 255, 0.08);
-      --accent: #19e6c2;
-      --accent-2: #f2a84b;
-      --danger: #ff6a5f;
+      --bg: #080a09;
+      --bg-2: #0d1110;
+      --surface: #111614;
+      --surface-2: #171d1b;
+      --surface-3: #1f2623;
+      --glass: rgba(13, 17, 16, 0.72);
+      --ink: #f5f8f6;
+      --ink-soft: #d5ded9;
+      --muted: #9aa8a2;
+      --quiet: #6f7b76;
+      --line: rgba(255, 255, 255, 0.11);
+      --line-strong: rgba(255, 255, 255, 0.18);
+      --accent: #49decf;
+      --accent-strong: #c9fff8;
+      --warning: #f2ba68;
+      --danger: #ff766d;
+      --shadow: rgba(0, 0, 0, 0.38);
       --max: 1180px;
-      --radius: 8px;
+      --radius: 14px;
+      --radius-sm: 10px;
+      --font: ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
     }
 
     * {
@@ -35,18 +44,37 @@
 
     html {
       scroll-behavior: smooth;
+      background: var(--bg);
     }
 
     body {
-      margin: 0;
       min-width: 320px;
+      margin: 0;
       background:
-        linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0) 36rem),
-        radial-gradient(circle at 80% 0%, rgba(25, 230, 194, 0.08), transparent 28rem),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 340px),
+        linear-gradient(90deg, rgba(73, 222, 207, 0.055), transparent 42%, rgba(242, 186, 104, 0.045)),
         var(--bg);
       color: var(--ink);
-      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+      font-family: var(--font);
       letter-spacing: 0;
+    }
+
+    body::before {
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+      content: "";
+      background-image:
+        linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+      background-size: 88px 88px;
+      mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.75), transparent 78%);
+    }
+
+    img {
+      max-width: 100%;
+      display: block;
     }
 
     a {
@@ -54,15 +82,41 @@
       text-decoration: none;
     }
 
+    button,
+    a {
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .skip-link {
+      position: fixed;
+      z-index: 100;
+      top: 12px;
+      left: 12px;
+      padding: 10px 14px;
+      border-radius: 999px;
+      background: var(--accent-strong);
+      color: #061311;
+      font-size: 13px;
+      font-weight: 700;
+      transform: translateY(-160%);
+      transition: transform 180ms ease;
+    }
+
+    .skip-link:focus {
+      transform: translateY(0);
+      outline: 0;
+    }
+
     .site-header {
       position: fixed;
-      z-index: 10;
+      z-index: 30;
       top: 0;
       right: 0;
       left: 0;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.07);
-      background: rgba(5, 6, 6, 0.76);
-      backdrop-filter: blur(18px);
+      border-bottom: 1px solid var(--line);
+      background: rgba(8, 10, 9, 0.74);
+      backdrop-filter: blur(22px) saturate(150%);
+      -webkit-backdrop-filter: blur(22px) saturate(150%);
     }
 
     .nav {
@@ -70,47 +124,58 @@
       align-items: center;
       justify-content: space-between;
       width: min(100% - 40px, var(--max));
-      height: 68px;
+      height: 66px;
       margin: 0 auto;
+      gap: 20px;
     }
 
     .brand {
       display: inline-flex;
       align-items: center;
+      min-height: 44px;
       gap: 12px;
       font-size: 15px;
-      font-weight: 650;
+      font-weight: 720;
     }
 
     .brand img {
       width: 34px;
       height: 34px;
-      border-radius: 8px;
+      border-radius: 9px;
+      box-shadow: 0 12px 34px rgba(73, 222, 207, 0.18);
     }
 
     .nav-links {
       display: flex;
       align-items: center;
-      gap: 26px;
+      justify-content: flex-end;
+      min-width: 0;
+      gap: 22px;
       color: var(--muted);
       font-size: 13px;
-      font-weight: 560;
+      font-weight: 640;
+      white-space: nowrap;
     }
 
-    .nav-links a {
+    .nav-links a:not(.nav-download) {
       transition: color 160ms ease;
     }
 
-    .nav-links a:hover {
+    .nav-links a:not(.nav-download):hover {
       color: var(--ink);
     }
 
     .nav-download {
-      padding: 9px 13px;
-      border: 1px solid var(--line);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 40px;
+      padding: 0 15px;
+      border: 1px solid rgba(73, 222, 207, 0.36);
       border-radius: 999px;
+      background: rgba(73, 222, 207, 0.11);
       color: var(--ink);
-      background: rgba(255, 255, 255, 0.04);
+      transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
     }
 
     .language-toggle {
@@ -127,11 +192,11 @@
       padding: var(--toggle-padding);
       border: 1px solid var(--line);
       border-radius: 999px;
-      background: rgba(255, 255, 255, 0.035);
-      color: var(--soft);
+      background: rgba(255, 255, 255, 0.055);
+      color: var(--quiet);
       font: inherit;
       font-size: 12px;
-      font-weight: 720;
+      font-weight: 760;
       cursor: pointer;
     }
 
@@ -142,9 +207,9 @@
       left: var(--toggle-padding);
       width: var(--toggle-segment);
       height: calc(100% - (var(--toggle-padding) * 2));
-      border: 1px solid rgba(25, 230, 194, 0.38);
+      border: 1px solid rgba(73, 222, 207, 0.4);
       border-radius: 999px;
-      background: rgba(25, 230, 194, 0.16);
+      background: rgba(73, 222, 207, 0.16);
       content: "";
       transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
     }
@@ -170,468 +235,718 @@
       color: var(--ink);
     }
 
-    .language-toggle:hover {
-      border-color: rgba(255, 255, 255, 0.24);
+    .language-toggle:hover,
+    .nav-download:hover {
+      border-color: rgba(73, 222, 207, 0.72);
+      background: rgba(73, 222, 207, 0.16);
     }
 
-    .language-toggle:focus-visible {
-      outline: 2px solid rgba(25, 230, 194, 0.52);
-      outline-offset: 3px;
+    .nav-download:active,
+    .button:active {
+      transform: translateY(1px) scale(0.99);
     }
 
-    .hero {
-      position: relative;
-      display: grid;
-      align-items: center;
-      min-height: 92svh;
-      padding: 112px 0 44px;
-      overflow: hidden;
-      border-bottom: 1px solid var(--line-soft);
-    }
-
-    .hero::before {
-      position: absolute;
-      inset: 0;
-      pointer-events: none;
-      content: "";
-      background-image:
-        linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
-      background-size: 72px 72px;
-      mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.9), transparent 78%);
-    }
-
-    .hero-inner {
-      position: relative;
-      display: grid;
-      grid-template-columns: minmax(0, 0.88fr) minmax(420px, 1.12fr);
-      gap: 64px;
-      align-items: center;
-      width: min(100% - 40px, var(--max));
-      margin: 0 auto;
-    }
-
-    .hero-copy {
-      max-width: 530px;
-    }
-
-    .logo-mark {
-      width: 72px;
-      height: 72px;
-      margin-bottom: 30px;
-      border-radius: 18px;
-      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.36);
-    }
-
-    h1 {
-      margin: 0;
-      font-size: 76px;
-      line-height: 0.94;
-      font-weight: 760;
-      letter-spacing: 0;
-    }
-
-    .hero-copy p {
-      margin: 26px 0 0;
-      color: #c8cec8;
-      font-size: 20px;
-      line-height: 1.65;
-    }
-
-    .hero-actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 12px;
-      margin-top: 34px;
-    }
-
-    .button {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      min-height: 44px;
-      padding: 0 18px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      font-size: 14px;
-      font-weight: 650;
-      transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
-    }
-
-    .button.primary {
-      border-color: rgba(25, 230, 194, 0.64);
-      background: #dffdf6;
-      color: #06110f;
-    }
-
-    .button:hover {
-      transform: translateY(-1px);
-      border-color: rgba(255, 255, 255, 0.24);
-      background: rgba(255, 255, 255, 0.07);
-    }
-
-    .button.primary:hover {
-      background: #f5fffc;
-      border-color: #f5fffc;
-    }
-
-    .facts {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 1px;
-      max-width: 500px;
-      margin-top: 42px;
-      border: 1px solid var(--line);
-      background: var(--line);
-    }
-
-    .fact {
-      min-height: 74px;
-      padding: 15px 16px;
-      background: rgba(13, 15, 15, 0.9);
-    }
-
-    .fact strong {
-      display: block;
-      font-size: 14px;
-      line-height: 1.35;
-    }
-
-    .fact span {
-      display: block;
-      margin-top: 7px;
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.35;
-    }
-
-    .runtime-plane {
-      position: relative;
-      min-height: 610px;
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      border-radius: var(--radius);
-      background:
-        linear-gradient(135deg, rgba(255, 255, 255, 0.07), transparent 34%),
-        linear-gradient(180deg, rgba(18, 22, 22, 0.92), rgba(8, 10, 10, 0.95));
-      box-shadow: 0 50px 110px rgba(0, 0, 0, 0.38);
-      overflow: hidden;
-      animation: surface-in 680ms ease both;
-    }
-
-    .runtime-plane::after {
-      position: absolute;
-      right: -6%;
-      bottom: -10%;
-      width: 48%;
-      height: 42%;
-      border: 1px solid rgba(25, 230, 194, 0.18);
-      content: "";
-      transform: rotate(-8deg);
-      background:
-        linear-gradient(90deg, transparent 49%, rgba(25, 230, 194, 0.22) 50%, transparent 51%),
-        linear-gradient(180deg, transparent 49%, rgba(242, 168, 75, 0.18) 50%, transparent 51%);
-      background-size: 34px 34px;
-      opacity: 0.64;
-    }
-
-    .plane-top {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      min-height: 58px;
-      padding: 0 20px;
-      border-bottom: 1px solid var(--line);
-      color: var(--muted);
-      font-size: 12px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    }
-
-    .status {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      color: #d9e2dc;
-    }
-
-    .dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--accent);
-      box-shadow: 0 0 0 4px rgba(25, 230, 194, 0.12);
-    }
-
-    .plane-body {
-      position: relative;
-      z-index: 1;
-      display: grid;
-      grid-template-columns: 1.1fr 0.9fr;
-      gap: 1px;
-      min-height: 552px;
-      background: var(--line);
-    }
-
-    .ops-column,
-    .route-column {
-      padding: 22px;
-      background: rgba(8, 10, 10, 0.86);
-    }
-
-    .section-label {
-      margin: 0 0 18px;
-      color: var(--muted);
-      font-size: 11px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-    }
-
-    .metric-row {
-      display: grid;
-      grid-template-columns: 1fr auto;
-      gap: 14px;
-      padding: 15px 0;
-      border-bottom: 1px solid var(--line);
-    }
-
-    .metric-row:last-child {
-      border-bottom: 0;
-    }
-
-    .metric-row span {
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.4;
-    }
-
-    .metric-row strong {
-      font-size: 14px;
-      line-height: 1.4;
-      text-align: right;
-    }
-
-    .route-map {
-      position: relative;
-      min-height: 226px;
-      margin-top: 20px;
-      border: 1px solid var(--line);
-      background:
-        linear-gradient(90deg, transparent 49%, rgba(255, 255, 255, 0.06) 50%, transparent 51%),
-        linear-gradient(180deg, transparent 49%, rgba(255, 255, 255, 0.06) 50%, transparent 51%);
-      background-size: 48px 48px;
-    }
-
-    .route-map span {
-      position: absolute;
-      display: inline-flex;
-      align-items: center;
-      min-height: 26px;
-      padding: 0 9px;
-      border: 1px solid var(--line);
-      background: rgba(13, 15, 15, 0.92);
-      color: #dbe4de;
-      font-size: 12px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    }
-
-    .node-a {
-      top: 28px;
-      left: 22px;
-    }
-
-    .node-b {
-      top: 92px;
-      right: 22px;
-    }
-
-    .node-c {
-      bottom: 28px;
-      left: 64px;
-    }
-
-    .route-line {
-      position: absolute;
-      inset: 44px 58px 52px 78px;
-      border-top: 1px solid rgba(25, 230, 194, 0.48);
-      border-right: 1px solid rgba(242, 168, 75, 0.48);
-      transform: skewY(-11deg);
-    }
-
-    .log-stream {
-      margin-top: 24px;
-      padding: 16px;
-      border: 1px solid var(--line);
-      background: rgba(255, 255, 255, 0.025);
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 12px;
-      line-height: 1.85;
-      color: #bcc6bf;
-    }
-
-    .log-stream b {
-      color: var(--accent);
-      font-weight: 650;
+    :focus-visible {
+      outline: 2px solid rgba(73, 222, 207, 0.72);
+      outline-offset: 4px;
     }
 
     main {
       overflow: hidden;
     }
 
+    .hero {
+      position: relative;
+      isolation: isolate;
+      display: flex;
+      align-items: flex-end;
+      min-height: 84dvh;
+      padding: 120px 0 9dvh;
+      overflow: hidden;
+      border-bottom: 1px solid var(--line);
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.055), transparent 38%),
+        linear-gradient(118deg, rgba(73, 222, 207, 0.12), transparent 34%, rgba(242, 186, 104, 0.075) 72%, transparent),
+        var(--bg);
+    }
+
+    .hero::before {
+      position: absolute;
+      inset: -1px;
+      z-index: 0;
+      pointer-events: none;
+      content: "";
+      background-image:
+        linear-gradient(rgba(255, 255, 255, 0.055) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px),
+        linear-gradient(116deg, transparent 0 28%, rgba(73, 222, 207, 0.12) 28.12% 28.3%, transparent 28.42%),
+        linear-gradient(64deg, transparent 0 60%, rgba(242, 186, 104, 0.09) 60.1% 60.28%, transparent 60.4%);
+      background-size: 92px 92px, 92px 92px, 100% 100%, 100% 100%;
+      opacity: 0.86;
+      -webkit-mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.94), rgba(0, 0, 0, 0.7) 68%, transparent 100%);
+      mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.94), rgba(0, 0, 0, 0.7) 68%, transparent 100%);
+    }
+
+    .hero::after {
+      position: absolute;
+      inset: auto 0 0;
+      z-index: 1;
+      height: 44%;
+      pointer-events: none;
+      content: "";
+      background: linear-gradient(180deg, transparent, rgba(8, 10, 9, 0.9) 82%, var(--bg));
+    }
+
+    .hero-inner {
+      position: relative;
+      z-index: 2;
+      display: grid;
+      grid-template-columns: minmax(0, 660px) minmax(260px, 1fr);
+      gap: clamp(28px, 7vw, 110px);
+      align-items: end;
+      width: min(100% - 40px, var(--max));
+      margin: 0 auto;
+    }
+
+    .hero-copy {
+      max-width: 660px;
+    }
+
+    .hero-brand-field {
+      position: relative;
+      display: grid;
+      place-items: center;
+      justify-self: end;
+      width: min(36vw, 420px);
+      min-width: 286px;
+      aspect-ratio: 1;
+    }
+
+    .hero-brand-field::before,
+    .hero-brand-field::after {
+      position: absolute;
+      content: "";
+    }
+
+    .hero-brand-field::before {
+      inset: 0;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 42px;
+      background:
+        linear-gradient(135deg, rgba(255, 255, 255, 0.08), transparent 36%),
+        repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.055) 0 1px, transparent 1px 28px),
+        repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.045) 0 1px, transparent 1px 28px),
+        rgba(255, 255, 255, 0.035);
+      box-shadow: inset 0 0 0 1px rgba(73, 222, 207, 0.09), 0 34px 86px rgba(0, 0, 0, 0.28);
+    }
+
+    .hero-brand-field::after {
+      inset: 34px;
+      border: 1px solid rgba(73, 222, 207, 0.24);
+      border-radius: 32px;
+      background:
+        linear-gradient(90deg, transparent 49.8%, rgba(73, 222, 207, 0.42) 50%, transparent 50.2%),
+        linear-gradient(0deg, transparent 49.8%, rgba(73, 222, 207, 0.26) 50%, transparent 50.2%);
+      opacity: 0.62;
+    }
+
+    .hero-brand-icon {
+      position: relative;
+      z-index: 2;
+      width: clamp(92px, 12vw, 156px);
+      height: clamp(92px, 12vw, 156px);
+      border-radius: 32px;
+      box-shadow: 0 24px 74px rgba(73, 222, 207, 0.22), 0 0 0 1px rgba(255, 255, 255, 0.18);
+    }
+
+    .hero-signal {
+      position: absolute;
+      z-index: 3;
+      display: inline-flex;
+      align-items: center;
+      min-height: 32px;
+      gap: 8px;
+      padding: 0 11px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 999px;
+      background: rgba(8, 10, 9, 0.68);
+      color: var(--ink-soft);
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1;
+      box-shadow: 0 18px 46px rgba(0, 0, 0, 0.24);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+    }
+
+    .hero-signal::before {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--accent);
+      content: "";
+      box-shadow: 0 0 0 4px rgba(73, 222, 207, 0.12);
+    }
+
+    .signal-a {
+      top: 15%;
+      left: 7%;
+    }
+
+    .signal-b {
+      top: 31%;
+      right: 7%;
+    }
+
+    .signal-c {
+      bottom: 22%;
+      left: 12%;
+    }
+
+    .signal-d {
+      right: 12%;
+      bottom: 8%;
+    }
+
+    .hero-kicker {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      padding: 0 11px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 999px;
+      background: rgba(8, 10, 9, 0.52);
+      color: var(--ink-soft);
+      font-size: 13px;
+      font-weight: 680;
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin-top: 0;
+    }
+
+    h1 {
+      max-width: 680px;
+      margin: 22px 0 0;
+      font-size: clamp(50px, 9vw, 104px);
+      line-height: 0.9;
+      font-weight: 790;
+      letter-spacing: 0;
+    }
+
+    .hero-copy p {
+      max-width: 620px;
+      margin: 24px 0 0;
+      color: var(--ink-soft);
+      font-size: clamp(17px, 2.2vw, 22px);
+      line-height: 1.55;
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 32px;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 132px;
+      min-height: 46px;
+      padding: 0 18px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--ink);
+      font-size: 14px;
+      font-weight: 720;
+      transition: transform 160ms ease, border-color 160ms ease, background 160ms ease, color 160ms ease;
+      white-space: nowrap;
+    }
+
+    .button.primary {
+      border-color: var(--accent-strong);
+      background: var(--accent-strong);
+      color: #061311;
+      box-shadow: 0 18px 44px rgba(73, 222, 207, 0.18);
+    }
+
+    .button:hover {
+      transform: translateY(-1px);
+      border-color: rgba(255, 255, 255, 0.32);
+      background: rgba(255, 255, 255, 0.09);
+    }
+
+    .button.primary:hover {
+      border-color: #ffffff;
+      background: #ffffff;
+      color: #061311;
+    }
+
+    .version-strip {
+      border-bottom: 1px solid var(--line);
+      background: rgba(8, 10, 9, 0.78);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+    }
+
+    .version-inner {
+      display: grid;
+      grid-template-columns: 1.15fr repeat(3, minmax(0, 1fr));
+      width: min(100% - 40px, var(--max));
+      margin: 0 auto;
+      border-right: 1px solid var(--line);
+      border-left: 1px solid var(--line);
+    }
+
+    .version-tile {
+      min-height: 126px;
+      padding: 20px;
+      border-right: 1px solid var(--line);
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent),
+        rgba(255, 255, 255, 0.018);
+    }
+
+    .version-tile:last-child {
+      border-right: 0;
+    }
+
+    .version-tile .label,
+    .mini-label {
+      display: block;
+      color: var(--quiet);
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .version-tile strong {
+      display: block;
+      margin-top: 12px;
+      font-size: clamp(24px, 4vw, 36px);
+      line-height: 1;
+      font-weight: 760;
+      letter-spacing: 0;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .version-tile span:last-child {
+      display: block;
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .github-state {
+      display: inline-flex;
+      align-items: center;
+      min-height: 26px;
+      gap: 8px;
+      padding: 0 10px;
+      border: 1px solid rgba(73, 222, 207, 0.3);
+      border-radius: 999px;
+      background: rgba(73, 222, 207, 0.1);
+      color: var(--accent-strong);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .github-state::before {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--accent);
+      content: "";
+      box-shadow: 0 0 0 4px rgba(73, 222, 207, 0.12);
+    }
+
+    .github-state[data-state="fallback"] {
+      border-color: rgba(242, 186, 104, 0.36);
+      background: rgba(242, 186, 104, 0.1);
+      color: #ffe1af;
+    }
+
+    .github-state[data-state="fallback"]::before {
+      background: var(--warning);
+      box-shadow: 0 0 0 4px rgba(242, 186, 104, 0.12);
+    }
+
     .section {
       width: min(100% - 40px, var(--max));
       margin: 0 auto;
-      padding: 118px 0;
-      border-bottom: 1px solid var(--line-soft);
+      padding: 104px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .section.compact {
+      padding-top: 82px;
     }
 
     .section-heading {
-      display: grid;
-      grid-template-columns: minmax(0, 0.84fr) minmax(260px, 0.5fr);
-      gap: 56px;
-      align-items: end;
-      margin-bottom: 54px;
+      max-width: 780px;
+      margin-bottom: 42px;
     }
 
     h2 {
       margin: 0;
-      max-width: 760px;
-      font-size: 42px;
-      line-height: 1.08;
-      font-weight: 740;
+      font-size: clamp(34px, 5vw, 58px);
+      line-height: 1.02;
+      font-weight: 780;
       letter-spacing: 0;
     }
 
     .section-heading p,
     .section-copy {
-      margin: 0;
+      max-width: 680px;
+      margin: 18px 0 0;
       color: var(--muted);
       font-size: 16px;
       line-height: 1.72;
     }
 
-    .flow {
+    .config-flow {
       display: grid;
-      grid-template-columns: 0.92fr 1.08fr;
-      gap: 1px;
-      border: 1px solid var(--line);
-      background: var(--line);
+      grid-template-columns: 0.88fr 1.12fr 0.88fr;
+      gap: 14px;
+      align-items: stretch;
     }
 
-    .flow-pane {
-      min-height: 330px;
-      padding: 28px;
-      background: var(--panel);
+    .process-panel,
+    .feature-card,
+    .security-item,
+    .download-panel {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018)),
+        var(--surface);
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.18);
+    }
+
+    .process-panel {
+      min-height: 292px;
+      padding: 24px;
+    }
+
+    .process-panel h3,
+    .feature-card h3,
+    .security-item h3,
+    .download-panel h3 {
+      margin: 0;
+      color: var(--ink);
+      font-size: 20px;
+      line-height: 1.22;
+      font-weight: 720;
+    }
+
+    .process-panel p,
+    .feature-card p,
+    .security-item p,
+    .download-panel p {
+      margin: 14px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.62;
     }
 
     .code-block {
-      margin: 24px 0 0;
-      color: #cdd6cf;
-      font-size: 13px;
-      line-height: 1.85;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      margin: 22px 0 0;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: rgba(0, 0, 0, 0.18);
+      color: #dbe5df;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      line-height: 1.8;
       white-space: pre-wrap;
     }
 
     .code-block .accent {
-      color: var(--accent);
+      color: var(--accent-strong);
     }
 
     .code-block .warn {
-      color: var(--accent-2);
+      color: #ffd99b;
     }
 
-    .control-grid {
+    .run-list {
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 1px;
+      gap: 12px;
+      margin-top: 22px;
+    }
+
+    .run-item {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 14px;
+      align-items: center;
+      min-height: 44px;
+      padding: 0 13px;
       border: 1px solid var(--line);
-      background: var(--line);
-    }
-
-    .control {
-      min-height: 158px;
-      padding: 22px;
-      background: var(--panel);
-      transition: background 160ms ease, transform 160ms ease;
-    }
-
-    .control:hover {
-      transform: translateY(-2px);
-      background: var(--panel-strong);
-    }
-
-    .control small {
-      display: block;
-      color: var(--soft);
-      font-size: 11px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    }
-
-    .control strong {
-      display: block;
-      margin-top: 34px;
-      font-size: 19px;
-      line-height: 1.25;
-    }
-
-    .control span {
-      display: block;
-      margin-top: 10px;
-      color: var(--muted);
+      border-radius: var(--radius-sm);
+      background: rgba(255, 255, 255, 0.035);
+      color: var(--ink-soft);
       font-size: 13px;
-      line-height: 1.55;
+      line-height: 1.35;
     }
 
-    .boundary {
+    .run-item strong {
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 720;
+      white-space: nowrap;
+    }
+
+    .bento {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      grid-auto-rows: minmax(174px, auto);
+      gap: 14px;
+    }
+
+    .feature-card {
+      position: relative;
+      min-height: 174px;
+      padding: 22px;
+      overflow: hidden;
+      transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
+    }
+
+    .feature-card::after {
+      position: absolute;
+      inset: auto 18px 18px auto;
+      width: 42px;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(73, 222, 207, 0.75));
+      content: "";
+    }
+
+    .feature-card:hover {
+      transform: translateY(-2px);
+      border-color: rgba(73, 222, 207, 0.34);
+      background:
+        linear-gradient(180deg, rgba(73, 222, 207, 0.075), rgba(255, 255, 255, 0.018)),
+        var(--surface-2);
+    }
+
+    .feature-card.wide {
+      grid-column: span 3;
+    }
+
+    .feature-card.large {
+      grid-column: span 4;
+      grid-row: span 2;
+      min-height: 362px;
+      background:
+        linear-gradient(135deg, rgba(73, 222, 207, 0.12), rgba(255, 255, 255, 0.018) 45%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.055), transparent),
+        var(--surface);
+    }
+
+    .feature-card.tall {
+      grid-column: span 2;
+      grid-row: span 2;
+      background:
+        linear-gradient(180deg, rgba(242, 186, 104, 0.11), transparent 48%),
+        var(--surface);
+    }
+
+    .feature-card.small {
+      grid-column: span 2;
+    }
+
+    .feature-meta {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 0 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--ink-soft);
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1;
+    }
+
+    .feature-card h3 {
+      margin-top: 22px;
+      font-size: clamp(20px, 3vw, 30px);
+    }
+
+    .feature-card.small h3,
+    .feature-card.wide h3 {
+      font-size: 22px;
+    }
+
+    .terminal-preview {
+      display: grid;
+      gap: 10px;
+      margin-top: 28px;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--ink-soft);
+    }
+
+    .terminal-preview div {
+      display: grid;
+      grid-template-columns: 72px 1fr auto;
+      gap: 12px;
+      min-height: 38px;
+      align-items: center;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: rgba(0, 0, 0, 0.18);
+    }
+
+    .terminal-preview b {
+      color: var(--accent-strong);
+      font-weight: 760;
+    }
+
+    .terminal-preview span:last-child {
+      color: var(--muted);
+      text-align: right;
+    }
+
+    .security-grid {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 1px;
-      border: 1px solid var(--line);
-      background: var(--line);
+      gap: 14px;
     }
 
-    .boundary-item {
-      min-height: 240px;
-      padding: 26px;
-      background: var(--panel);
+    .security-item {
+      min-height: 245px;
+      padding: 24px;
     }
 
-    .boundary-item strong {
-      display: block;
-      font-size: 20px;
-      line-height: 1.25;
-    }
-
-    .boundary-item p {
-      margin: 18px 0 0;
-      color: var(--muted);
-      font-size: 14px;
-      line-height: 1.7;
-    }
-
-    .boundary-item code {
-      color: #dce5df;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    .security-item code {
+      color: var(--ink-soft);
+      font-family: var(--mono);
       font-size: 13px;
+    }
+
+    .download-board {
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(300px, 0.95fr);
+      gap: 14px;
+      align-items: stretch;
+    }
+
+    .download-panel {
+      min-height: 330px;
+      padding: 28px;
+    }
+
+    .release-facts {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 28px;
+    }
+
+    .release-fact {
+      min-height: 94px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: rgba(255, 255, 255, 0.035);
+    }
+
+    .release-fact span {
+      display: block;
+      color: var(--quiet);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .release-fact strong {
+      display: block;
+      margin-top: 10px;
+      font-size: 20px;
+      font-weight: 760;
+      line-height: 1.12;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .asset-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 28px;
+    }
+
+    .source-links {
+      display: grid;
+      gap: 12px;
+      margin-top: 28px;
+    }
+
+    .source-link {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 54px;
+      gap: 14px;
+      padding: 0 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: rgba(255, 255, 255, 0.035);
+      color: var(--ink-soft);
+      font-size: 14px;
+      transition: border-color 160ms ease, background 160ms ease;
+    }
+
+    .source-link:hover {
+      border-color: rgba(73, 222, 207, 0.36);
+      background: rgba(73, 222, 207, 0.07);
+    }
+
+    .source-link span:last-child {
+      color: var(--quiet);
+      font-family: var(--mono);
+      font-size: 12px;
     }
 
     .closing {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: 40px;
-      align-items: center;
       width: min(100% - 40px, var(--max));
       margin: 0 auto;
       padding: 92px 0 98px;
     }
 
+    .closing-inner {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 42px;
+      align-items: center;
+      padding: 34px;
+      border: 1px solid var(--line);
+      border-radius: calc(var(--radius) + 4px);
+      background:
+        linear-gradient(90deg, rgba(73, 222, 207, 0.11), transparent 54%),
+        var(--surface);
+      box-shadow: 0 28px 80px rgba(0, 0, 0, 0.22);
+    }
+
     .closing h2 {
-      max-width: 720px;
+      max-width: 780px;
+      font-size: clamp(30px, 5vw, 48px);
     }
 
     .closing p {
       max-width: 720px;
-      margin: 20px 0 0;
+      margin: 16px 0 0;
       color: var(--muted);
       font-size: 16px;
       line-height: 1.72;
@@ -641,12 +956,12 @@
       display: flex;
       flex-direction: column;
       gap: 12px;
-      min-width: 190px;
+      min-width: 180px;
     }
 
     footer {
-      border-top: 1px solid var(--line-soft);
-      color: var(--soft);
+      border-top: 1px solid var(--line);
+      color: var(--quiet);
       font-size: 13px;
     }
 
@@ -656,16 +971,60 @@
       justify-content: space-between;
       gap: 20px;
       width: min(100% - 40px, var(--max));
-      min-height: 76px;
+      min-height: 78px;
       margin: 0 auto;
     }
 
     .footer-links {
       display: flex;
+      flex-wrap: wrap;
       gap: 20px;
     }
 
-    @keyframes surface-in {
+    .footer-links a:hover {
+      color: var(--ink-soft);
+    }
+
+    @media (prefers-reduced-transparency: reduce) {
+      .site-header,
+      .hero-kicker,
+      .hero-signal,
+      .version-strip {
+        background: var(--bg-2);
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+      }
+    }
+
+    @media (prefers-reduced-motion: no-preference) {
+      .hero-copy,
+      .hero-brand-field,
+      .version-tile,
+      .section-heading,
+      .process-panel,
+      .feature-card,
+      .security-item,
+      .download-panel,
+      .closing-inner {
+        animation: rise-in 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+      }
+
+      .version-tile:nth-child(2),
+      .process-panel:nth-child(2),
+      .feature-card:nth-child(2),
+      .security-item:nth-child(2) {
+        animation-delay: 70ms;
+      }
+
+      .version-tile:nth-child(3),
+      .process-panel:nth-child(3),
+      .feature-card:nth-child(3),
+      .security-item:nth-child(3) {
+        animation-delay: 120ms;
+      }
+    }
+
+    @keyframes rise-in {
       from {
         opacity: 0;
         transform: translateY(18px);
@@ -691,43 +1050,33 @@
       }
     }
 
-    @media (max-width: 980px) {
-      .hero {
-        min-height: auto;
-        padding-top: 106px;
-      }
-
-      .hero-inner,
-      .section-heading,
-      .flow,
-      .closing {
+    @media (max-width: 1040px) {
+      .version-inner,
+      .config-flow,
+      .download-board,
+      .closing-inner {
         grid-template-columns: 1fr;
       }
 
-      .runtime-plane {
-        min-height: auto;
+      .version-inner {
+        border-bottom: 1px solid var(--line);
       }
 
-      .control-grid,
-      .boundary {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+      .version-tile {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
       }
 
-      h1 {
-        font-size: 58px;
+      .version-tile:last-child {
+        border-bottom: 0;
       }
 
-      .hero-copy p {
-        font-size: 18px;
-      }
-
-      .closing-actions {
-        flex-direction: row;
-        flex-wrap: wrap;
+      .security-grid {
+        grid-template-columns: 1fr;
       }
     }
 
-    @media (max-width: 720px) {
+    @media (max-width: 860px) {
       .nav {
         width: min(100% - 28px, var(--max));
       }
@@ -741,7 +1090,7 @@
       }
 
       .nav-download {
-        padding: 8px 11px;
+        padding: 0 12px;
       }
 
       .language-toggle {
@@ -750,7 +1099,13 @@
         font-size: 11px;
       }
 
+      .hero {
+        min-height: 80dvh;
+        padding: 104px 0 8dvh;
+      }
+
       .hero-inner,
+      .version-inner,
       .section,
       .closing,
       .footer-inner {
@@ -758,67 +1113,61 @@
       }
 
       .hero-inner {
-        gap: 42px;
-      }
-
-      .logo-mark {
-        width: 62px;
-        height: 62px;
-        margin-bottom: 24px;
-      }
-
-      h1 {
-        font-size: 46px;
-      }
-
-      h2 {
-        font-size: 32px;
-      }
-
-      .hero-copy p,
-      .section-heading p,
-      .section-copy,
-      .closing p {
-        font-size: 15px;
-      }
-
-      .facts,
-      .plane-body,
-      .control-grid,
-      .boundary {
         grid-template-columns: 1fr;
       }
 
-      .runtime-plane {
-        min-height: 0;
-      }
-
-      .plane-top {
-        align-items: flex-start;
-        justify-content: center;
-        min-height: 76px;
-        padding: 12px 16px;
-        flex-direction: column;
-        gap: 6px;
-      }
-
-      .plane-top > span:last-child {
-        max-width: 100%;
-        overflow-wrap: anywhere;
-        font-size: 11px;
-        line-height: 1.45;
-      }
-
-      .ops-column {
-        padding: 18px;
-      }
-
-      .route-column {
+      .hero-brand-field {
         display: none;
       }
 
+      .hero-signal {
+        display: none;
+      }
+
+      h1 {
+        max-width: 560px;
+      }
+
+      .hero-copy p {
+        max-width: 520px;
+      }
+
       .section {
-        padding: 86px 0;
+        padding: 82px 0;
+      }
+
+      .bento {
+        grid-template-columns: 1fr;
+        grid-auto-rows: auto;
+      }
+
+      .feature-card,
+      .feature-card.wide,
+      .feature-card.large,
+      .feature-card.tall,
+      .feature-card.small {
+        grid-column: auto;
+        grid-row: auto;
+        min-height: 190px;
+      }
+
+      .terminal-preview div {
+        grid-template-columns: 1fr;
+        min-height: auto;
+        padding: 12px;
+      }
+
+      .terminal-preview span:last-child {
+        text-align: left;
+      }
+
+      .release-facts {
+        grid-template-columns: 1fr;
+      }
+
+      .closing-actions {
+        flex-direction: row;
+        flex-wrap: wrap;
       }
 
       .footer-inner {
@@ -829,14 +1178,29 @@
       }
     }
 
-    @media (max-width: 380px) {
+    @media (max-width: 420px) {
       .brand span {
         display: none;
+      }
+
+      .button {
+        width: 100%;
+      }
+
+      .hero-actions,
+      .asset-actions,
+      .closing-actions {
+        width: 100%;
+      }
+
+      .closing-inner {
+        padding: 24px;
       }
     }
   </style>
 </head>
 <body>
+  <a class="skip-link" href="#main" data-i18n="nav.skip">Skip to content</a>
   <header class="site-header">
     <nav class="nav" aria-label="Primary navigation" data-i18n-aria-label="nav.primary">
       <a class="brand" href="#top" aria-label="ClashMax home" data-i18n-aria-label="nav.homeAria">
@@ -846,210 +1210,230 @@
       <div class="nav-links">
         <a href="#runtime" data-i18n="nav.runtime">Runtime</a>
         <a href="#controls" data-i18n="nav.controls">Controls</a>
+        <a href="#versions" data-i18n="nav.versions">Versions</a>
         <a href="#security" data-i18n="nav.security">Security</a>
         <button class="language-toggle" type="button" data-lang="en" data-language-toggle aria-label="Switch language, English selected" aria-pressed="false">
           <span class="language-option language-option-en">EN</span>
           <span class="language-option language-option-zh">中</span>
         </button>
-        <a class="nav-download" href="https://github.com/marvinli001/ClashMax/releases/latest" data-latest-download data-i18n="nav.download" data-i18n-aria-label="download.aria">Download</a>
+        <a class="nav-download" href="https://github.com/marvinli001/ClashMax/releases/latest" data-primary-download data-i18n="nav.download" data-i18n-aria-label="download.aria">Download</a>
       </div>
     </nav>
   </header>
 
-  <main id="top">
-    <section class="hero" aria-labelledby="hero-title">
+  <main id="main">
+    <section class="hero" id="top" aria-labelledby="hero-title">
       <div class="hero-inner">
         <div class="hero-copy">
-          <img class="logo-mark" src="assets/clashmax-icon.png" width="72" height="72" alt="ClashMax icon" data-i18n-alt="hero.iconAlt">
+          <span class="hero-kicker" data-i18n="hero.kicker">Native macOS proxy client</span>
           <h1 id="hero-title">ClashMax</h1>
-          <p data-i18n="hero.copy">A native macOS Mihomo proxy console that brings profiles, proxy groups, connections, rules, logs, and system proxy/TUN controls into a quiet, scannable SwiftUI workspace.</p>
+          <p data-i18n="hero.copy">Native macOS control for Mihomo profiles, proxy groups, TUN, logs, and system proxy recovery.</p>
           <div class="hero-actions" aria-label="Project links" data-i18n-aria-label="hero.actionsAria">
-            <a class="button primary" href="https://github.com/marvinli001/ClashMax/releases/latest" data-latest-download data-i18n="nav.download" data-i18n-aria-label="download.aria">Download</a>
+            <a class="button primary" href="https://github.com/marvinli001/ClashMax/releases/latest" data-primary-download data-i18n="hero.download" data-i18n-aria-label="download.aria">Download DMG</a>
             <a class="button" href="https://github.com/marvinli001/ClashMax">GitHub</a>
-            <a class="button" href="https://github.com/marvinli001/ClashMax/issues" data-i18n="hero.issue">Issue</a>
-          </div>
-          <div class="facts" aria-label="Project facts" data-i18n-aria-label="hero.factsAria">
-            <div class="fact">
-              <strong>SwiftUI</strong>
-              <span data-i18n="facts.swiftui">native macOS 15+</span>
-            </div>
-            <div class="fact">
-              <strong>Mihomo v1.19.27</strong>
-              <span data-i18n="facts.mihomo">bundled sidecar core</span>
-            </div>
-            <div class="fact">
-              <strong>GPL-3.0</strong>
-              <span data-i18n="facts.license">open source boundary</span>
-            </div>
+            <a class="button" href="https://github.com/marvinli001/ClashMax/issues" data-i18n="hero.issue">Open Issue</a>
           </div>
         </div>
-
-        <div class="runtime-plane" aria-label="ClashMax runtime preview" data-i18n-aria-label="runtime.previewAria">
-          <div class="plane-top">
-            <span class="status"><span class="dot"></span> <span data-i18n="runtime.status">running</span></span>
-            <span data-i18n="runtime.controller">127.0.0.1 controller / bearer auth</span>
-          </div>
-          <div class="plane-body">
-            <div class="ops-column">
-              <p class="section-label" data-i18n="runtime.snapshot">Runtime snapshot</p>
-              <div class="metric-row">
-                <span data-i18n="runtime.profile">Profile</span>
-                <strong>default.yaml</strong>
-              </div>
-              <div class="metric-row">
-                <span data-i18n="runtime.mode">Mode</span>
-                <strong data-i18n="runtime.modeValue">Rule</strong>
-              </div>
-              <div class="metric-row">
-                <span data-i18n="runtime.systemProxy">System proxy</span>
-                <strong data-i18n="runtime.managed">managed</strong>
-              </div>
-              <div class="metric-row">
-                <span>TUN</span>
-                <strong data-i18n="runtime.helperPath">helper path</strong>
-              </div>
-              <div class="metric-row">
-                <span data-i18n="runtime.secret">Controller secret</span>
-                <strong data-i18n="runtime.perRun">per run</strong>
-              </div>
-              <div class="log-stream" aria-label="Runtime log preview" data-i18n-aria-label="runtime.logAria">
-                <div><b>proxy</b> <span data-i18n="runtime.logProxy">provider health check completed</span></div>
-                <div><b>rule</b> <span data-i18n="runtime.logRule">GEOIP matched direct</span></div>
-                <div><b>conn</b> <span data-i18n="runtime.logConn">closed stale tcp session</span></div>
-                <div><b>tun</b> <span data-i18n="runtime.logTun">macOS runtime without auto-redirect</span></div>
-              </div>
-            </div>
-            <div class="route-column">
-              <p class="section-label" data-i18n="runtime.routeSurface">Route surface</p>
-              <div class="route-map" aria-hidden="true">
-                <div class="route-line"></div>
-                <span class="node-a">DIRECT</span>
-                <span class="node-b">PROXY</span>
-                <span class="node-c">REJECT</span>
-              </div>
-              <div class="metric-row">
-                <span data-i18n="runtime.proxyGroups">Proxy groups</span>
-                <strong data-i18n="runtime.switchable">switchable</strong>
-              </div>
-              <div class="metric-row">
-                <span data-i18n="runtime.connections">Connections</span>
-                <strong data-i18n="runtime.inspectable">inspectable</strong>
-              </div>
-              <div class="metric-row">
-                <span data-i18n="runtime.logs">Logs</span>
-                <strong data-i18n="runtime.streaming">streaming</strong>
-              </div>
-            </div>
-          </div>
+        <div class="hero-brand-field" aria-hidden="true">
+          <img class="hero-brand-icon" src="assets/clashmax-icon.png" width="156" height="156" alt="" fetchpriority="high" decoding="async">
+          <span class="hero-signal signal-a">127.0.0.1</span>
+          <span class="hero-signal signal-b">Bearer</span>
+          <span class="hero-signal signal-c">TUN</span>
+          <span class="hero-signal signal-d">Mihomo</span>
         </div>
       </div>
     </section>
 
-    <section class="section" id="runtime" aria-labelledby="runtime-title">
-      <div class="section-heading">
-        <h2 id="runtime-title" data-i18n="sections.runtimeTitle">Source profiles stay untouched. ClashMax owns the runtime config.</h2>
-        <p data-i18n="sections.runtimeCopy">Daily use should not rewrite your subscription files. Before launch, ClashMax generates runtime YAML for ports, controller, secret, DNS, TUN, and operating mode.</p>
+    <section class="version-strip" aria-label="Live project facts" data-i18n-aria-label="versions.stripAria">
+      <div class="version-inner">
+        <div class="version-tile">
+          <span class="github-state" data-release-state data-state="fallback" data-i18n="versions.checking">Checking GitHub</span>
+          <strong data-app-version>v1.0.18</strong>
+          <span><span data-i18n="versions.appCopy">Latest ClashMax release</span> <span data-app-published>Jun 23, 2026</span></span>
+        </div>
+        <div class="version-tile">
+          <span class="label" data-i18n="versions.buildLabel">Build</span>
+          <strong data-app-build>24</strong>
+          <span data-i18n="versions.buildCopy">Read from the current release channel</span>
+        </div>
+        <div class="version-tile">
+          <span class="label" data-i18n="versions.coreLabel">Mihomo core</span>
+          <strong data-mihomo-version>v1.19.27</strong>
+          <span><span data-i18n="versions.coreCopy">Latest upstream release</span> <span data-mihomo-published>Jun 6, 2026</span></span>
+        </div>
+        <div class="version-tile">
+          <span class="label" data-i18n="versions.platformLabel">Platform</span>
+          <strong>macOS 15+</strong>
+          <span data-i18n="versions.platformCopy">SwiftUI app, GPL-3.0 boundary</span>
+        </div>
       </div>
-      <div class="flow">
-        <div class="flow-pane">
-          <p class="section-label" data-i18n="sections.inputProfile">Input profile</p>
-          <div class="code-block" data-i18n-html="sections.inputCode">profiles/
+    </section>
+
+    <section class="section compact" id="runtime" aria-labelledby="runtime-title">
+      <div class="section-heading">
+        <h2 id="runtime-title" data-i18n="sections.runtimeTitle">Source profiles stay untouched. Runtime config is app-managed.</h2>
+        <p data-i18n="sections.runtimeCopy">ClashMax keeps original YAML profiles intact, then generates runtime YAML for ports, controller auth, DNS, TUN, and launch mode.</p>
+      </div>
+      <div class="config-flow">
+        <article class="process-panel">
+          <h3 data-i18n="runtime.sourceTitle">Profile source</h3>
+          <p data-i18n="runtime.sourceCopy">Subscriptions and local YAML remain readable, recoverable, and separate from launch-time wiring.</p>
+          <div class="code-block" data-i18n-html="runtime.sourceCode">profiles/
   default.yaml
   work.yaml
   lab.yaml
 
-subscription url -> Keychain
-source yaml -> local storage</div>
-        </div>
-        <div class="flow-pane">
-          <p class="section-label" data-i18n="sections.managedRuntime">Managed runtime</p>
-          <div class="code-block" data-i18n-html="sections.runtimeCode"><span class="accent">external-controller</span>: 127.0.0.1:&lt;port&gt;
+subscription URL -> Keychain
+source YAML -> local storage</div>
+        </article>
+        <article class="process-panel">
+          <h3 data-i18n="runtime.managedTitle">Managed launch</h3>
+          <p data-i18n="runtime.managedCopy">The app writes the values Mihomo needs without mutating the user profile.</p>
+          <div class="run-list" aria-label="Managed runtime values" data-i18n-aria-label="runtime.valuesAria">
+            <div class="run-item"><span data-i18n="runtime.controller">Controller</span><strong>127.0.0.1</strong></div>
+            <div class="run-item"><span data-i18n="runtime.secret">Secret</span><strong data-i18n="runtime.perRun">per run</strong></div>
+            <div class="run-item"><span data-i18n="runtime.systemProxy">System proxy</span><strong data-i18n="runtime.snapshot">snapshot</strong></div>
+            <div class="run-item"><span>TUN</span><strong data-i18n="runtime.helper">helper</strong></div>
+          </div>
+        </article>
+        <article class="process-panel">
+          <h3 data-i18n="runtime.coreTitle">Mihomo boundary</h3>
+          <p data-i18n="runtime.coreCopy">The controller stays local, uses Bearer auth, and avoids Linux-only TUN keys on macOS.</p>
+          <div class="code-block" data-i18n-html="runtime.managedCode"><span class="accent">external-controller</span>: 127.0.0.1:&lt;port&gt;
 <span class="accent">secret</span>: generated per run
-<span class="warn">tun</span>: helper-owned path on macOS
-system proxy: snapshot -> set -> restore
+<span class="warn">tun</span>: no auto-redirect on macOS
 controller access: Bearer auth</div>
-        </div>
+        </article>
       </div>
     </section>
 
     <section class="section" id="controls" aria-labelledby="controls-title">
       <div class="section-heading">
-        <h2 id="controls-title" data-i18n="sections.controlsTitle">The first screen is the proxy client, not a marketing page.</h2>
-        <p data-i18n="sections.controlsCopy">ClashMax aims for moderate density, explicit state, and quick operation. Common pages are built around Mihomo's control plane.</p>
+        <h2 id="controls-title" data-i18n="sections.controlsTitle">The first screen is the proxy client.</h2>
+        <p data-i18n="sections.controlsCopy">The portal mirrors the product direction: dense enough for operations, calm enough for daily use.</p>
       </div>
-      <div class="control-grid">
-        <div class="control">
-          <small>01</small>
-          <strong>Dashboard</strong>
-          <span data-i18n="controls.dashboard">Start, stop, run mode, system proxy, and TUN state.</span>
-        </div>
-        <div class="control">
-          <small>02</small>
-          <strong>Profiles</strong>
-          <span data-i18n="controls.profiles">Import local YAML, manage subscriptions, update, rename, and delete.</span>
-        </div>
-        <div class="control">
-          <small>03</small>
-          <strong>Proxies</strong>
-          <span data-i18n="controls.proxies">Switch proxy groups, test latency, and run provider health checks.</span>
-        </div>
-        <div class="control">
-          <small>04</small>
-          <strong>Connections</strong>
-          <span data-i18n="controls.connections">Inspect sessions, destinations, matched rules, and live traffic.</span>
-        </div>
-        <div class="control">
-          <small>05</small>
-          <strong>Rules</strong>
-          <span data-i18n="controls.rules">Review runtime rule lists and trace configuration hit paths.</span>
-        </div>
-        <div class="control">
-          <small>06</small>
-          <strong>Logs</strong>
-          <span data-i18n="controls.logs">Watch Mihomo logs while debugging config and network issues.</span>
-        </div>
-        <div class="control">
-          <small>07</small>
-          <strong>Settings</strong>
-          <span data-i18n="controls.settings">Manage the core, helper, update source, and runtime parameters.</span>
-        </div>
-        <div class="control">
-          <small>08</small>
-          <strong>Menu Bar</strong>
-          <span data-i18n="controls.menuBar">Check status and run lightweight actions from the menu bar.</span>
-        </div>
+      <div class="bento">
+        <article class="feature-card large">
+          <span class="feature-meta">Dashboard</span>
+          <h3 data-i18n="controls.dashboardTitle">Runtime state stays explicit.</h3>
+          <p data-i18n="controls.dashboardCopy">Start, stop, switch modes, inspect TUN/helper readiness, and recover system proxy state without guessing what the app is doing.</p>
+          <div class="terminal-preview" aria-label="Runtime log preview" data-i18n-aria-label="controls.logAria">
+            <div><b>proxy</b><span data-i18n="controls.logProfile">profile loaded</span><span>09:41:12</span></div>
+            <div><b>rule</b><span data-i18n="controls.logRule">GEOIP matched direct</span><span>09:41:15</span></div>
+            <div><b>tun</b><span data-i18n="controls.logTun">helper route active</span><span>09:41:20</span></div>
+          </div>
+        </article>
+        <article class="feature-card tall">
+          <span class="feature-meta">Proxies</span>
+          <h3 data-i18n="controls.proxiesTitle">Groups are quick to scan.</h3>
+          <p data-i18n="controls.proxiesCopy">Switch proxy groups, run latency checks, and read provider health state where decisions happen.</p>
+        </article>
+        <article class="feature-card small">
+          <span class="feature-meta">Profiles</span>
+          <h3 data-i18n="controls.profilesTitle">Imports stay reversible.</h3>
+          <p data-i18n="controls.profilesCopy">Local files and subscription URLs keep clear ownership and update paths.</p>
+        </article>
+        <article class="feature-card small">
+          <span class="feature-meta">Connections</span>
+          <h3 data-i18n="controls.connectionsTitle">Traffic is inspectable.</h3>
+          <p data-i18n="controls.connectionsCopy">Review sessions, destinations, matched rules, upload, download, and close stale flows.</p>
+        </article>
+        <article class="feature-card wide">
+          <span class="feature-meta">Rules</span>
+          <h3 data-i18n="controls.rulesTitle">Rule paths are visible.</h3>
+          <p data-i18n="controls.rulesCopy">Trace why traffic went direct, proxied, or rejected without opening raw config first.</p>
+        </article>
+        <article class="feature-card small">
+          <span class="feature-meta">Logs</span>
+          <h3 data-i18n="controls.logsTitle">Logs are part of the workflow.</h3>
+          <p data-i18n="controls.logsCopy">Mihomo logs sit near runtime controls for config and network debugging.</p>
+        </article>
+        <article class="feature-card small">
+          <span class="feature-meta">Menu Bar</span>
+          <h3 data-i18n="controls.menuTitle">Lightweight actions stay close.</h3>
+          <p data-i18n="controls.menuCopy">Check status and run quick controls from the macOS menu bar.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="versions" aria-labelledby="versions-title">
+      <div class="section-heading">
+        <h2 id="versions-title" data-i18n="sections.versionsTitle">Versions come from GitHub at page load.</h2>
+        <p data-i18n="sections.versionsCopy">The app release and Mihomo core cards refresh from GitHub API endpoints, with local fallback values when the API is unavailable.</p>
+      </div>
+      <div class="download-board">
+        <article class="download-panel">
+          <span class="mini-label" data-i18n="download.releaseLabel">ClashMax release</span>
+          <h3><span data-app-version>v1.0.18</span> <span class="mini-label" data-app-build-inline>build 24</span></h3>
+          <p data-i18n="download.releaseCopy">Download links are selected from the latest GitHub release asset list.</p>
+          <div class="release-facts">
+            <div class="release-fact">
+              <span data-i18n="download.published">Published</span>
+              <strong data-app-published-long>Jun 23, 2026</strong>
+            </div>
+            <div class="release-fact">
+              <span data-i18n="download.asset">Primary asset</span>
+              <strong data-primary-asset>DMG</strong>
+            </div>
+          </div>
+          <div class="asset-actions">
+            <a class="button primary" href="https://github.com/marvinli001/ClashMax/releases/latest" data-primary-download data-i18n="hero.download" data-i18n-aria-label="download.aria">Download DMG</a>
+            <a class="button" href="https://github.com/marvinli001/ClashMax/releases/latest" data-zip-download data-i18n="download.zip" data-i18n-aria-label="download.zipAria">Download ZIP</a>
+          </div>
+        </article>
+        <article class="download-panel">
+          <span class="mini-label" data-i18n="download.sourcesLabel">Release sources</span>
+          <h3 data-i18n="download.sourcesTitle">Public links stay inspectable.</h3>
+          <p data-i18n="download.sourcesCopy">The page uses GitHub release metadata, the Sparkle appcast, and the upstream Mihomo release feed.</p>
+          <div class="source-links">
+            <a class="source-link" href="https://github.com/marvinli001/ClashMax/releases/latest" data-release-link>
+              <span data-i18n="download.githubRelease">GitHub release</span>
+              <span>ClashMax</span>
+            </a>
+            <a class="source-link" href="appcast.xml">
+              <span data-i18n="download.appcast">Sparkle appcast</span>
+              <span>XML</span>
+            </a>
+            <a class="source-link" href="https://github.com/MetaCubeX/mihomo/releases/latest" data-mihomo-link>
+              <span data-i18n="download.mihomoRelease">Mihomo release</span>
+              <span data-mihomo-version>v1.19.27</span>
+            </a>
+          </div>
+        </article>
       </div>
     </section>
 
     <section class="section" id="security" aria-labelledby="security-title">
       <div class="section-heading">
-        <h2 id="security-title" data-i18n="sections.securityTitle">Security boundaries are explicit, and privileged paths stay narrow.</h2>
-        <p data-i18n="sections.securityCopy">A proxy client touches system network settings, so default behavior must be concrete, inspectable, and recoverable.</p>
+        <h2 id="security-title" data-i18n="sections.securityTitle">Security-sensitive behavior is not vague.</h2>
+        <p data-i18n="sections.securityCopy">A proxy client touches local networking, so the portal calls out the same boundaries the app enforces.</p>
       </div>
-      <div class="boundary">
-        <div class="boundary-item">
-          <strong data-i18n="security.localController">Local controller</strong>
-          <p data-i18n-html="security.localControllerCopy">The Mihomo controller listens on <code>127.0.0.1</code> by default, so the control plane is not exposed to the LAN.</p>
-        </div>
-        <div class="boundary-item">
-          <strong data-i18n="security.perRunSecret">Per-run secret</strong>
-          <p data-i18n="security.perRunSecretCopy">Each launch generates a new controller secret and uses Bearer auth for Mihomo REST/WebSocket access.</p>
-        </div>
-        <div class="boundary-item">
-          <strong data-i18n="security.helperBoundary">Helper boundary</strong>
-          <p data-i18n="security.helperBoundaryCopy">Normal system proxy runs through the user-mode core. TUN capabilities go through the privileged helper, with app-owned core/config paths validated.</p>
-        </div>
+      <div class="security-grid">
+        <article class="security-item">
+          <h3 data-i18n="security.localController">Local controller</h3>
+          <p data-i18n-html="security.localControllerCopy">Mihomo controller access is bound to <code>127.0.0.1</code> by default and protected with Bearer auth.</p>
+        </article>
+        <article class="security-item">
+          <h3 data-i18n="security.perRunSecret">Per-run secret</h3>
+          <p data-i18n="security.perRunSecretCopy">Each launch generates a fresh controller secret instead of relying on a shared static credential.</p>
+        </article>
+        <article class="security-item">
+          <h3 data-i18n="security.helperBoundary">Helper boundary</h3>
+          <p data-i18n="security.helperBoundaryCopy">User-mode owns normal system proxy. The privileged helper owns TUN and validates app-owned core/config paths.</p>
+        </article>
       </div>
     </section>
 
     <section class="closing" aria-labelledby="closing-title">
-      <div>
-        <h2 id="closing-title" data-i18n="closing.title">Open source, early, and direct about issues.</h2>
-        <p data-i18n="closing.copy">ClashMax is released under GPL-3.0. If you hit a stable repro, open an Issue directly. If this direction is useful, a GitHub Star helps.</p>
-      </div>
-      <div class="closing-actions">
-        <a class="button primary" href="https://github.com/marvinli001/ClashMax" data-i18n="closing.star">Star on GitHub</a>
-        <a class="button" href="https://github.com/marvinli001/ClashMax/issues" data-i18n="closing.report">Report issue</a>
+      <div class="closing-inner">
+        <div>
+          <h2 id="closing-title" data-i18n="closing.title">Open source, early, and direct about issues.</h2>
+          <p data-i18n="closing.copy">ClashMax is GPL-3.0 compatible because it distributes and controls Mihomo. Reproducible bugs belong in GitHub Issues.</p>
+        </div>
+        <div class="closing-actions">
+          <a class="button primary" href="https://github.com/marvinli001/ClashMax" data-i18n="closing.star">Star on GitHub</a>
+          <a class="button" href="https://github.com/marvinli001/ClashMax/issues" data-i18n="closing.report">Report issue</a>
+        </div>
       </div>
     </section>
   </main>
@@ -1070,85 +1454,106 @@ controller access: Bearer auth</div>
       const translations = {
         zh: {
           "page.title": "ClashMax - 原生 macOS Mihomo 客户端",
-          "meta.description": "ClashMax 是使用 SwiftUI 构建的原生 macOS Mihomo 代理客户端。",
-          "meta.ogDescription": "原生 macOS Mihomo 代理控制台。",
-          "language.toggleAria": "切换语言，当前为中文",
-          "language.toggleTitle": "切换语言",
+          "meta.description": "ClashMax 是原生 macOS Mihomo 代理客户端，提供配置、代理组、规则、日志、系统代理和 TUN 控制。",
+          "meta.ogDescription": "原生 macOS 控制 Mihomo 配置、代理组、TUN、日志和系统代理恢复。",
+          "nav.skip": "跳到内容",
           "nav.primary": "主导航",
           "nav.homeAria": "ClashMax 首页",
           "nav.runtime": "运行态",
           "nav.controls": "控制台",
+          "nav.versions": "版本",
           "nav.security": "安全",
           "nav.download": "下载",
-          "download.aria": "下载最新 ClashMax zip",
-          "hero.iconAlt": "ClashMax 图标",
-          "hero.copy": "原生 macOS Mihomo 代理控制台。把配置、代理组、连接、规则、日志和系统代理/TUN 收进一个安静、可扫描的 SwiftUI 工作面。",
+          "download.aria": "下载最新 ClashMax DMG",
+          "download.zipAria": "下载最新 ClashMax ZIP",
+          "language.toggleAria": "切换语言，当前为中文",
+          "language.toggleTitle": "切换语言",
+          "hero.kicker": "原生 macOS 代理客户端",
+          "hero.copy": "原生 macOS 控制 Mihomo 配置、代理组、TUN、日志和系统代理恢复。",
           "hero.actionsAria": "项目链接",
-          "hero.issue": "Issue",
-          "hero.factsAria": "项目信息",
-          "facts.swiftui": "原生 macOS 15+",
-          "facts.mihomo": "随附 sidecar core",
-          "facts.license": "开源边界",
-          "runtime.previewAria": "ClashMax 运行态预览",
-          "runtime.status": "运行中",
-          "runtime.controller": "127.0.0.1 控制面 / Bearer 认证",
-          "runtime.snapshot": "运行态快照",
-          "runtime.profile": "配置",
-          "runtime.mode": "模式",
-          "runtime.modeValue": "规则",
-          "runtime.systemProxy": "系统代理",
-          "runtime.managed": "托管",
-          "runtime.helperPath": "helper 路径",
-          "runtime.secret": "控制密钥",
-          "runtime.perRun": "每次启动",
-          "runtime.logAria": "运行日志预览",
-          "runtime.logProxy": "provider health check 完成",
-          "runtime.logRule": "GEOIP 命中直连",
-          "runtime.logConn": "关闭过期 TCP 连接",
-          "runtime.logTun": "macOS 运行态不写入 auto-redirect",
-          "runtime.routeSurface": "路由视图",
-          "runtime.proxyGroups": "代理组",
-          "runtime.switchable": "可切换",
-          "runtime.connections": "连接",
-          "runtime.inspectable": "可检查",
-          "runtime.logs": "日志",
-          "runtime.streaming": "实时流",
-          "sections.runtimeTitle": "原始 profile 保持不动，运行态配置由 ClashMax 托管。",
-          "sections.runtimeCopy": "日常使用不应该把订阅文件改得面目全非。ClashMax 在启动前生成 runtime YAML，用来注入端口、controller、secret、DNS、TUN 和运行模式。",
-          "sections.inputProfile": "输入配置",
-          "sections.inputCode": `profiles/
+          "hero.download": "下载 DMG",
+          "hero.issue": "提交 Issue",
+          "versions.stripAria": "实时项目信息",
+          "versions.checking": "正在检查 GitHub",
+          "versions.live": "GitHub 实时",
+          "versions.fallback": "本地 fallback",
+          "versions.appCopy": "最新 ClashMax 发布",
+          "versions.buildLabel": "构建号",
+          "versions.buildCopy": "来自当前 release channel",
+          "versions.coreLabel": "Mihomo 内核",
+          "versions.coreCopy": "最新上游 release",
+          "versions.platformLabel": "平台",
+          "versions.platformCopy": "SwiftUI app，GPL-3.0 边界",
+          "versions.buildInline": "build",
+          "sections.runtimeTitle": "原始 profile 保持不动，运行态配置由应用托管。",
+          "sections.runtimeCopy": "ClashMax 保留原始 YAML，在启动前生成 runtime YAML，用来写入端口、controller auth、DNS、TUN 和运行模式。",
+          "runtime.sourceTitle": "配置来源",
+          "runtime.sourceCopy": "订阅和本地 YAML 保持可读、可恢复，并与启动时注入的配置分开。",
+          "runtime.sourceCode": `profiles/
   default.yaml
   work.yaml
   lab.yaml
 
 订阅 URL -> Keychain
 源 YAML -> 本地存储`,
-          "sections.managedRuntime": "托管运行态",
-          "sections.runtimeCode": `<span class="accent">external-controller</span>: 127.0.0.1:&lt;port&gt;
+          "runtime.managedTitle": "托管启动",
+          "runtime.managedCopy": "应用只写 Mihomo 启动需要的值，不改写用户 profile。",
+          "runtime.valuesAria": "托管运行态值",
+          "runtime.controller": "控制面",
+          "runtime.secret": "密钥",
+          "runtime.perRun": "每次启动",
+          "runtime.systemProxy": "系统代理",
+          "runtime.snapshot": "快照",
+          "runtime.helper": "helper",
+          "runtime.coreTitle": "Mihomo 边界",
+          "runtime.coreCopy": "控制面保持本地监听，使用 Bearer auth，并且不会在 macOS TUN 配置中写 Linux-only 字段。",
+          "runtime.managedCode": `<span class="accent">external-controller</span>: 127.0.0.1:&lt;port&gt;
 <span class="accent">secret</span>: 每次启动生成
-<span class="warn">tun</span>: macOS 上由 helper 持有路径
-系统代理: 快照 -> 设置 -> 恢复
+<span class="warn">tun</span>: macOS 不写 auto-redirect
 控制面访问: Bearer auth`,
-          "sections.controlsTitle": "第一屏就是代理客户端，不绕到营销页。",
-          "sections.controlsCopy": "ClashMax 的界面方向是密度适中、状态明确、可快速操作。常用页面围绕 Mihomo 控制面展开。",
-          "controls.dashboard": "启动、停止、运行模式、系统代理和 TUN 状态。",
-          "controls.profiles": "导入本地 YAML，管理订阅，更新、重命名和删除。",
-          "controls.proxies": "代理组切换、延迟测试、provider health check。",
-          "controls.connections": "查看连接、目标地址、规则命中和实时流量。",
-          "controls.rules": "检查运行时规则列表，定位配置命中路径。",
-          "controls.logs": "观察 Mihomo 日志，排查配置和网络异常。",
-          "controls.settings": "管理 core、helper、更新源和运行参数。",
-          "controls.menuBar": "从菜单栏快速查看状态和执行轻量操作。",
-          "sections.securityTitle": "安全边界写清楚，权限路径尽量窄。",
-          "sections.securityCopy": "代理客户端会触碰系统网络设置，所以默认行为必须具体、可检查、可恢复。",
+          "sections.controlsTitle": "第一屏就是代理客户端。",
+          "sections.controlsCopy": "门户页延续产品方向：密度足够支持操作，视觉足够安静，适合日常使用。",
+          "controls.dashboardTitle": "运行状态必须明确。",
+          "controls.dashboardCopy": "启动、停止、切换模式、检查 TUN/helper ready 状态，并在系统代理异常时给出恢复路径。",
+          "controls.logAria": "运行日志预览",
+          "controls.logProfile": "profile 已载入",
+          "controls.logRule": "GEOIP 命中直连",
+          "controls.logTun": "helper route 已启用",
+          "controls.proxiesTitle": "代理组快速可扫。",
+          "controls.proxiesCopy": "在决策发生的位置切换代理组、执行延迟测试，并读取 provider 健康状态。",
+          "controls.profilesTitle": "导入保持可回退。",
+          "controls.profilesCopy": "本地文件和订阅 URL 有清晰归属，也有明确更新路径。",
+          "controls.connectionsTitle": "流量可检查。",
+          "controls.connectionsCopy": "查看会话、目标地址、规则命中、上传、下载，并关闭过期连接。",
+          "controls.rulesTitle": "规则路径可见。",
+          "controls.rulesCopy": "先看清流量为什么直连、代理或拒绝，再决定是否打开原始配置。",
+          "controls.logsTitle": "日志属于工作流。",
+          "controls.logsCopy": "Mihomo 日志靠近运行控制，便于排查配置和网络问题。",
+          "controls.menuTitle": "轻量操作就在手边。",
+          "controls.menuCopy": "从 macOS 菜单栏查看状态并执行快速控制。",
+          "sections.versionsTitle": "版本在页面加载时来自 GitHub。",
+          "sections.versionsCopy": "软件 release 和 Mihomo core 卡片从 GitHub API 刷新，API 不可用时保留本地 fallback 值。",
+          "download.releaseLabel": "ClashMax 发布",
+          "download.releaseCopy": "下载链接从最新 GitHub release 的 asset 列表中选择。",
+          "download.published": "发布时间",
+          "download.asset": "主要资产",
+          "download.zip": "下载 ZIP",
+          "download.sourcesLabel": "发布来源",
+          "download.sourcesTitle": "公开链接保持可检查。",
+          "download.sourcesCopy": "页面使用 GitHub release 元数据、Sparkle appcast 和上游 Mihomo release feed。",
+          "download.githubRelease": "GitHub release",
+          "download.appcast": "Sparkle appcast",
+          "download.mihomoRelease": "Mihomo release",
+          "sections.securityTitle": "安全敏感行为不说空话。",
+          "sections.securityCopy": "代理客户端会触碰本机网络设置，所以门户页也写清应用实际执行的边界。",
           "security.localController": "本地控制面",
-          "security.localControllerCopy": `Mihomo controller 默认监听 <code>127.0.0.1</code>，不会把控制面暴露给局域网。`,
+          "security.localControllerCopy": `Mihomo controller 默认绑定 <code>127.0.0.1</code>，并使用 Bearer auth 保护访问。`,
           "security.perRunSecret": "每次启动密钥",
-          "security.perRunSecretCopy": "每次启动生成新的 controller secret，访问 Mihomo REST/WebSocket 控制面时使用 Bearer auth。",
+          "security.perRunSecretCopy": "每次启动生成新的 controller secret，避免依赖共享静态凭据。",
           "security.helperBoundary": "Helper 边界",
-          "security.helperBoundaryCopy": "普通系统代理走用户态 core；TUN 相关能力交给 privileged helper，并校验 app-owned core/config paths。",
+          "security.helperBoundaryCopy": "用户态负责普通系统代理；privileged helper 负责 TUN，并校验 app-owned core/config paths。",
           "closing.title": "开源、早期、欢迎直接挑问题。",
-          "closing.copy": "ClashMax 使用 GPL-3.0 发布。遇到复现稳定的问题，直接发 Issue；如果这个方向对你有用，也欢迎给项目一个 Star。",
+          "closing.copy": "ClashMax 因为分发并控制 Mihomo，保持 GPL-3.0 兼容边界。可复现 bug 请直接发到 GitHub Issues。",
           "closing.star": "在 GitHub Star",
           "closing.report": "反馈问题",
           "footer.tagline": "ClashMax。原生 macOS Mihomo 客户端。",
@@ -1171,9 +1576,6 @@ controller access: Bearer auth</div>
       );
       const ariaDefaults = new Map(
         Array.from(document.querySelectorAll("[data-i18n-aria-label]")).map((element) => [element, element.getAttribute("aria-label") || ""])
-      );
-      const altDefaults = new Map(
-        Array.from(document.querySelectorAll("[data-i18n-alt]")).map((element) => [element, element.getAttribute("alt") || ""])
       );
       const languageToggle = document.querySelector("[data-language-toggle]");
       let currentLanguage = "en";
@@ -1204,7 +1606,7 @@ controller access: Bearer auth</div>
         try {
           window.localStorage.setItem(storageKey, language);
         } catch {
-          // localStorage can be unavailable in strict privacy modes; the page still switches for this visit.
+          // localStorage can be unavailable in strict privacy modes; this visit still switches.
         }
       };
 
@@ -1249,10 +1651,6 @@ controller access: Bearer auth</div>
           element.setAttribute("aria-label", localizedValue(nextLanguage, element.dataset.i18nAriaLabel, fallback));
         });
 
-        altDefaults.forEach((fallback, element) => {
-          element.setAttribute("alt", localizedValue(nextLanguage, element.dataset.i18nAlt, fallback));
-        });
-
         if (languageToggle) {
           languageToggle.dataset.lang = nextLanguage;
           languageToggle.setAttribute("aria-pressed", String(nextLanguage === "zh"));
@@ -1292,84 +1690,151 @@ controller access: Bearer auth</div>
   </script>
   <script>
     (() => {
-      const releasePageURL = "https://github.com/marvinli001/ClashMax/releases/latest";
-      const latestReleaseAPI = "https://api.github.com/repos/marvinli001/ClashMax/releases/latest";
-      const downloadLinks = Array.from(document.querySelectorAll("[data-latest-download]"));
+      const appReleasePage = "https://github.com/marvinli001/ClashMax/releases/latest";
+      const appReleaseAPI = "https://api.github.com/repos/marvinli001/ClashMax/releases/latest";
+      const mihomoReleasePage = "https://github.com/MetaCubeX/mihomo/releases/latest";
+      const mihomoReleaseAPI = "https://api.github.com/repos/MetaCubeX/mihomo/releases/latest";
+      const fallback = {
+        appVersion: "v1.0.18",
+        appBuild: "24",
+        appPublishedAt: "2026-06-23T11:49:30Z",
+        appDownloadURL: appReleasePage,
+        appZipURL: appReleasePage,
+        appReleaseURL: appReleasePage,
+        primaryAsset: "DMG",
+        mihomoVersion: "v1.19.27",
+        mihomoPublishedAt: "2026-06-06T07:56:51Z",
+        mihomoURL: mihomoReleasePage
+      };
+      const state = {
+        app: { ...fallback, source: "fallback" },
+        mihomo: { ...fallback, source: "fallback" }
+      };
 
-      if (!downloadLinks.length) {
-        return;
-      }
+      const getText = (key, fallbackText) => window.clashMaxLanguage?.translate(key, fallbackText) || fallbackText;
+      const currentLocale = () => window.clashMaxLanguage?.current === "zh" ? "zh-CN" : "en";
+      const setText = (selector, text) => {
+        document.querySelectorAll(selector).forEach((element) => {
+          element.textContent = text;
+        });
+      };
+      const setHref = (selector, href) => {
+        document.querySelectorAll(selector).forEach((element) => {
+          element.href = href;
+        });
+      };
 
-      const downloadAriaLabel = () => (
-        window.clashMaxLanguage?.translate("download.aria", "Download latest ClashMax zip") ||
-        "Download latest ClashMax zip"
-      );
+      const formatDate = (isoDate, long = false) => {
+        const date = new Date(isoDate);
+        if (Number.isNaN(date.getTime())) {
+          return "";
+        }
+        return new Intl.DateTimeFormat(currentLocale(), {
+          dateStyle: long ? "medium" : "medium"
+        }).format(date);
+      };
 
-      const chooseZipAsset = (assets = []) => {
-        const zipAssets = assets.filter((asset) =>
+      const chooseAsset = (assets = [], extension) => {
+        const regex = new RegExp(`\\.${extension}$`, "i");
+        return assets.find((asset) =>
           typeof asset.name === "string" &&
           typeof asset.browser_download_url === "string" &&
-          /\.zip$/i.test(asset.name) &&
-          !/\.delta$/i.test(asset.name)
-        );
-
-        return (
-          zipAssets.find((asset) => /^ClashMax[-_].*\.zip$/i.test(asset.name)) ||
-          zipAssets.find((asset) => /^ClashMax\.zip$/i.test(asset.name)) ||
-          zipAssets[0]
+          /^ClashMax[-_].*/i.test(asset.name) &&
+          regex.test(asset.name)
         );
       };
 
-      let latestDownloadURL = releasePageURL;
+      const parseBuildNumber = (assets = []) => {
+        const builds = assets
+          .map((asset) => /^ClashMax(\d+)-\d+\.delta$/i.exec(asset.name || "")?.[1])
+          .filter(Boolean)
+          .map(Number);
+        return builds.length ? String(Math.max(...builds)) : fallback.appBuild;
+      };
 
-      const setDownloadURL = (url) => {
-        latestDownloadURL = url;
-        downloadLinks.forEach((link) => {
-          link.href = url;
-          link.setAttribute("aria-label", downloadAriaLabel());
+      const render = () => {
+        const app = state.app;
+        const mihomo = state.mihomo;
+        const releaseState = document.querySelector("[data-release-state]");
+        const allLive = app.source === "live" && mihomo.source === "live";
+
+        if (releaseState) {
+          releaseState.dataset.state = allLive ? "live" : "fallback";
+          releaseState.textContent = allLive
+            ? getText("versions.live", "GitHub live")
+            : getText("versions.fallback", "Local fallback");
+        }
+
+        setText("[data-app-version]", app.appVersion);
+        setText("[data-app-build]", app.appBuild);
+        setText("[data-app-build-inline]", `${getText("versions.buildInline", "build")} ${app.appBuild}`);
+        setText("[data-app-published]", formatDate(app.appPublishedAt));
+        setText("[data-app-published-long]", formatDate(app.appPublishedAt, true));
+        setText("[data-primary-asset]", app.primaryAsset);
+        setText("[data-mihomo-version]", mihomo.mihomoVersion);
+        setText("[data-mihomo-published]", formatDate(mihomo.mihomoPublishedAt));
+        setHref("[data-primary-download]", app.appDownloadURL);
+        setHref("[data-zip-download]", app.appZipURL);
+        setHref("[data-release-link]", app.appReleaseURL);
+        setHref("[data-mihomo-link]", mihomo.mihomoURL);
+
+        document.querySelectorAll("[data-primary-download]").forEach((link) => {
+          link.setAttribute("aria-label", getText("download.aria", "Download latest ClashMax DMG"));
+        });
+        document.querySelectorAll("[data-zip-download]").forEach((link) => {
+          link.setAttribute("aria-label", getText("download.zipAria", "Download latest ClashMax ZIP"));
         });
       };
 
-      const latestDownloadRequest = fetch(latestReleaseAPI, {
+      const fetchRelease = (url) => fetch(url, {
         headers: { Accept: "application/vnd.github+json" }
-      })
-        .then((response) => {
-          if (!response.ok) {
-            throw new Error(`GitHub release lookup failed: ${response.status}`);
-          }
-          return response.json();
-        })
+      }).then((response) => {
+        if (!response.ok) {
+          throw new Error(`GitHub release lookup failed: ${response.status}`);
+        }
+        return response.json();
+      });
+
+      render();
+
+      fetchRelease(appReleaseAPI)
         .then((release) => {
-          const zipAsset = chooseZipAsset(release.assets);
-          if (!zipAsset) {
-            throw new Error("No zip asset found on the latest release.");
-          }
-          setDownloadURL(zipAsset.browser_download_url);
-          return zipAsset.browser_download_url;
+          const dmgAsset = chooseAsset(release.assets, "dmg");
+          const zipAsset = chooseAsset(release.assets, "zip");
+          const primaryAsset = dmgAsset || zipAsset;
+          state.app = {
+            ...state.app,
+            source: "live",
+            appVersion: release.tag_name || fallback.appVersion,
+            appBuild: parseBuildNumber(release.assets || []),
+            appPublishedAt: release.published_at || fallback.appPublishedAt,
+            appDownloadURL: primaryAsset?.browser_download_url || release.html_url || appReleasePage,
+            appZipURL: zipAsset?.browser_download_url || release.html_url || appReleasePage,
+            appReleaseURL: release.html_url || appReleasePage,
+            primaryAsset: dmgAsset ? "DMG" : zipAsset ? "ZIP" : "Release"
+          };
+          render();
         })
         .catch(() => {
-          setDownloadURL(releasePageURL);
-          return releasePageURL;
+          render();
         });
 
-      downloadLinks.forEach((link) => {
-        link.addEventListener("click", (event) => {
-          if (latestDownloadURL !== releasePageURL) {
-            return;
-          }
-
-          event.preventDefault();
-          latestDownloadRequest.then((url) => {
-            window.location.href = url;
-          });
+      fetchRelease(mihomoReleaseAPI)
+        .then((release) => {
+          state.mihomo = {
+            ...state.mihomo,
+            source: "live",
+            mihomoVersion: release.tag_name || fallback.mihomoVersion,
+            mihomoPublishedAt: release.published_at || fallback.mihomoPublishedAt,
+            mihomoURL: release.html_url || mihomoReleasePage
+          };
+          render();
+        })
+        .catch(() => {
+          render();
         });
-      });
 
-      window.addEventListener("clashmax:languagechange", () => {
-        downloadLinks.forEach((link) => {
-          link.setAttribute("aria-label", downloadAriaLabel());
-        });
-      });
+      window.addEventListener("clashmax:languagechange", render);
     })();
   </script>
 </body>
