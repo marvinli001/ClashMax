@@ -1459,6 +1459,38 @@
         }
       }
     },
+    "Batch delay failed" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Batch delay failed"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "批量测速失败"
+          }
+        }
+      }
+    },
+    "Batch delay partially completed" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Batch delay partially completed"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "批量测速部分完成"
+          }
+        }
+      }
+    },
     "Batch delay test finished with %lld failures." : {
       "localizations" : {
         "base" : {
@@ -1661,6 +1693,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已取消"
+          }
+        }
+      }
+    },
+    "Cancelled before testing." : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Cancelled before testing."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "测速前已取消。"
           }
         }
       }
@@ -3060,6 +3108,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "设备"
+          }
+        }
+      }
+    },
+    "Diagnostics Copied" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnostics Copied"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已复制诊断"
           }
         }
       }

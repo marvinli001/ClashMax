@@ -5428,6 +5428,214 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
   }
 
+  // MARK: - Issue #18: batch delay status semantics, stats, and failure details
+
+  func testBatchProgressReportsCompletedWhenEveryNodeSucceeds() {
+    var progress = ProxyDelayBatchProgress.started(total: 3)
+    progress.recordSuccess()
+    progress.recordSuccess()
+    progress.recordSuccess()
+    progress.finish()
+
+    XCTAssertEqual(progress.status, .completed)
+    XCTAssertEqual(progress.testedCount, 3)
+    XCTAssertEqual(progress.untestedCount, 0)
+    XCTAssertEqual(progress.cancelled, 0)
+    XCTAssertFalse(progress.wasCancelled)
+  }
+
+  func testBatchProgressReportsPartiallyCompletedWithMixedResults() throws {
+    var progress = ProxyDelayBatchProgress.started(total: 3)
+    progress.recordSuccess()
+    progress.recordFailure(
+      Self.makeBatchFailure(node: "Tokyo", kind: .timeout, message: "request timed out")
+    )
+    progress.recordFailure(
+      Self.makeBatchFailure(node: "Broken", kind: .other, message: "provider failed")
+    )
+    progress.finish()
+
+    XCTAssertEqual(progress.status, .partiallyCompleted)
+    XCTAssertEqual(progress.testedCount, 3)
+    XCTAssertEqual(progress.failureCount, 2)
+    XCTAssertEqual(progress.untestedCount, 0)
+    let timeout = try XCTUnwrap(progress.failures.first { $0.kind == .timeout })
+    XCTAssertEqual(timeout.nodeName, "Tokyo")
+    XCTAssertEqual(timeout.message, "request timed out")
+  }
+
+  func testBatchProgressReportsFailedWhenEveryNodeFails() {
+    var progress = ProxyDelayBatchProgress.started(total: 2)
+    progress.recordFailure(
+      Self.makeBatchFailure(node: "A", kind: .timeout, message: "timed out")
+    )
+    progress.recordFailure(
+      Self.makeBatchFailure(node: "B", kind: .controllerUnavailable, message: "controller down")
+    )
+    progress.finish()
+
+    XCTAssertEqual(progress.status, .failed)
+    XCTAssertEqual(progress.succeeded, 0)
+    XCTAssertEqual(progress.testedCount, 2)
+    XCTAssertEqual(progress.untestedCount, 0)
+  }
+
+  func testBatchProgressReportsCancelledWhenNodesRemainUntested() {
+    var progress = ProxyDelayBatchProgress.started(total: 4)
+    progress.recordSuccess()
+    progress.recordFailure(
+      Self.makeBatchFailure(node: "B", kind: .timeout, message: "timed out")
+    )
+    // Two nodes never produced a result because the batch was cancelled mid-run.
+    progress.recordFailure(
+      Self.makeBatchFailure(node: "C", kind: .cancelled, message: "Cancelled before testing.")
+    )
+    progress.recordFailure(
+      Self.makeBatchFailure(node: "D", kind: .cancelled, message: "Cancelled before testing.")
+    )
+    progress.finish()
+
+    XCTAssertEqual(progress.status, .cancelled)
+    XCTAssertEqual(progress.testedCount, 2)
+    XCTAssertEqual(progress.untestedCount, 2)
+    XCTAssertEqual(progress.cancelled, 2)
+    XCTAssertTrue(progress.wasCancelled)
+    let cancelledNodes = Set(progress.failures.filter { $0.kind == .cancelled }.map(\.nodeName))
+    XCTAssertEqual(cancelledNodes, ["C", "D"])
+  }
+
+  func testBatchProgressIsNotCancelledWhenEveryNodeWasTested() {
+    // Issue #18: once every node has a result there are no untested nodes, so even a late
+    // cancellation request must not flip the strip to "cancelled" — it should report the real
+    // completed/partial/failed outcome instead.
+    var progress = ProxyDelayBatchProgress.started(total: 3)
+    progress.recordSuccess()
+    progress.recordSuccess()
+    progress.recordFailure(
+      Self.makeBatchFailure(node: "C", kind: .timeout, message: "timed out")
+    )
+    progress.finish()
+
+    XCTAssertEqual(progress.untestedCount, 0)
+    XCTAssertEqual(progress.cancelled, 0)
+    XCTAssertNotEqual(progress.status, .cancelled)
+    XCTAssertEqual(progress.status, .partiallyCompleted)
+  }
+
+  func testBatchProgressDiagnosticTextIncludesSummaryAndFailureDetails() {
+    var progress = ProxyDelayBatchProgress.started(total: 3)
+    progress.recordSuccess()
+    progress.recordFailure(
+      Self.makeBatchFailure(
+        group: "Proxy A",
+        node: "Tokyo",
+        provider: "remote",
+        kind: .timeout,
+        message: "request timed out"
+      )
+    )
+    progress.recordFailure(
+      Self.makeBatchFailure(node: "Skipped", kind: .cancelled, message: "Cancelled before testing.")
+    )
+    progress.finish()
+
+    let text = progress.diagnosticText
+    XCTAssertTrue(text.contains("Total: 3"), text)
+    XCTAssertTrue(text.contains("Tested: 2"), text)
+    XCTAssertTrue(text.contains("Succeeded: 1"), text)
+    XCTAssertTrue(text.contains("Timeouts: 1"), text)
+    // Failure node name, category, and message must all be present.
+    XCTAssertTrue(text.contains("Tokyo"), text)
+    XCTAssertTrue(text.contains("timeout"), text)
+    XCTAssertTrue(text.contains("request timed out"), text)
+    // Cancelled/untested node is represented too.
+    XCTAssertTrue(text.contains("Skipped"), text)
+    XCTAssertTrue(text.contains("cancelled"), text)
+  }
+
+  func testBatchDelayTestingCancellationRecordsUntestedNodesInFailuresAndDiagnostics() async throws {
+    let nodes = (0..<8).map { index in
+      ProxyNode(name: "Node \(index)", type: "vless", delay: nil, isSelectable: true)
+    }
+    let group = ProxyGroup(name: "Proxy", type: "select", selected: "Node 0", nodes: nodes)
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [group],
+      testDelayResults: [73, 88, 99, 101, 102, 103, 104, 105],
+      testDelayDelaysNanoseconds: [
+        10_000_000,
+        600_000_000,
+        600_000_000,
+        600_000_000,
+        600_000_000,
+        600_000_000,
+        600_000_000,
+        600_000_000
+      ]
+    )
+    let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [group])
+
+    model.testDelayForAllProxyGroups()
+    try await waitForBatchProgress(model) { $0.succeeded == 1 }
+    model.cancelProxyDelayBatch()
+    try await waitForBatchProgress(model) { !$0.isRunning }
+
+    let progress = try XCTUnwrap(model.proxyDelayBatchProgress)
+    XCTAssertEqual(progress.status, .cancelled)
+    XCTAssertEqual(progress.testedCount, 1)
+    XCTAssertEqual(progress.untestedCount, 7)
+    XCTAssertEqual(progress.cancelled, 7)
+    let cancelledFailures = progress.failures.filter { $0.kind == .cancelled }
+    XCTAssertEqual(cancelledFailures.count, 7)
+    XCTAssertTrue(cancelledFailures.allSatisfy { $0.nodeName.hasPrefix("Node ") })
+    let firstCancelled = try XCTUnwrap(cancelledFailures.first)
+    XCTAssertTrue(progress.diagnosticText.contains(firstCancelled.nodeName))
+  }
+
+  func testBatchDelayTestingCancelAfterCompletionDoesNotReportCancelled() async throws {
+    let group = ProxyGroup(
+      name: "Proxy",
+      type: "select",
+      selected: "Japan",
+      nodes: [
+        ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
+        ProxyNode(name: "Singapore", type: "vless", delay: nil, isSelectable: true)
+      ]
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [group],
+      testDelayResults: [73, 88]
+    )
+    let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [group])
+
+    model.testDelayForAllProxyGroups()
+    try await waitForBatchProgress(model) { !$0.isRunning && $0.testedCount == 2 }
+    // Cancelling after the batch has already finished must not retroactively flip it to cancelled.
+    model.cancelProxyDelayBatch()
+
+    let progress = try XCTUnwrap(model.proxyDelayBatchProgress)
+    XCTAssertEqual(progress.status, .completed)
+    XCTAssertEqual(progress.cancelled, 0)
+    XCTAssertEqual(progress.testedCount, 2)
+    XCTAssertFalse(progress.wasCancelled)
+  }
+
+  private static func makeBatchFailure(
+    group: String = "Proxy",
+    node: String,
+    provider: String? = nil,
+    kind: ProxyDelayFailureKind,
+    message: String
+  ) -> ProxyDelayBatchFailure {
+    ProxyDelayBatchFailure(
+      nodeKey: ProxyNodeKey(profileID: nil, groupName: group, nodeName: node, providerName: provider),
+      groupName: group,
+      nodeName: node,
+      providerName: provider,
+      kind: kind,
+      message: message
+    )
+  }
+
   func testDelayCacheTTLStopsPreservingExpiredDelayAcrossReloads() async throws {
     let group = ProxyGroup(
       name: "Proxy",

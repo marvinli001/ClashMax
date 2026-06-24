@@ -4567,23 +4567,50 @@ final class AppModel: ObservableObject {
     flushPending()
 
     guard proxyDelayBatchToken == token else { return }
+
+    // Only nodes that never produced a result are genuinely untested. If everything already
+    // landed before the cancellation arrived, fall through and report the real completed/partial/
+    // failed outcome instead of a misleading "cancelled" (issue #18).
+    let cancelledItems: [ProxyDelayBatchItem]
     if Task.isCancelled {
       restoreCancelledBatchItems(items, completedKeys: completedKeys)
-      let cancelledCount = items.count - completedKeys.count
-      updateProxyDelayBatchProgress(token: token) { progress in
-        progress.recordCancelled(count: cancelledCount)
-        progress.finish()
-      }
+      cancelledItems = items.filter { !completedKeys.contains($0.nodeKey) }
     } else {
-      updateProxyDelayBatchProgress(token: token) { progress in
-        progress.finish()
+      cancelledItems = []
+    }
+
+    // Record each untested node as a cancelled failure so the strip and diagnostics can name them.
+    // Built once and applied in a single coalesced progress update to preserve the issue #11
+    // publish budget.
+    let cancelledMessage = NSLocalizedString(
+      "Cancelled before testing.",
+      comment: "Batch delay failure reason shown for nodes skipped because the batch was cancelled."
+    )
+    let cancelledFailures = cancelledItems.map { item in
+      ProxyDelayBatchFailure(
+        nodeKey: item.nodeKey,
+        groupName: item.groupName,
+        nodeName: item.node.name,
+        providerName: item.node.providerName,
+        kind: .cancelled,
+        message: cancelledMessage
+      )
+    }
+
+    updateProxyDelayBatchProgress(token: token) { progress in
+      for failure in cancelledFailures {
+        progress.recordFailure(failure)
       }
-      if let progress = proxyDelayBatchProgress, progress.failureCount > 0 {
-        lastError = String.localizedStringWithFormat(
-          NSLocalizedString("Batch delay test finished with %lld failures.", comment: ""),
-          Int64(progress.failureCount)
-        )
-      }
+      progress.finish()
+    }
+
+    if cancelledItems.isEmpty,
+       let progress = proxyDelayBatchProgress,
+       progress.failureCount > 0 {
+      lastError = String.localizedStringWithFormat(
+        NSLocalizedString("Batch delay test finished with %lld failures.", comment: ""),
+        Int64(progress.failureCount)
+      )
     }
     reloadRuntimeData()
   }

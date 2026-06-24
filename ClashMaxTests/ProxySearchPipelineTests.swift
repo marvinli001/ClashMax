@@ -47,8 +47,10 @@ final class ProxySearchPipelineTests: XCTestCase {
         updatedAt: nil,
         proxies: proxies
       )
-      // `selected` deliberately points at a non-Korea node: `searchableText` folds the group's
-      // selected name into every node, so a Korea selection would make all nodes match "韩国".
+      // `selected` is a non-Korea node so this scale fixture's "韩国" search count stays equal to the
+      // Korea node count regardless of the issue #9 fix. (Pre-fix, `searchableText` folded the
+      // selected name into every node, so a Korea selection made the whole group match — that
+      // regression is pinned directly by `testSearchDoesNotMatchWholeGroupWhenSelectedNodeMatchesQuery`.)
       let proxyGroup = ProxyGroup(
         name: "Proxy",
         type: "select",
@@ -456,6 +458,200 @@ final class ProxySearchPipelineTests: XCTestCase {
       order(.delay, slow),
       order(.delay, fast),
       "delay ordering must react to delay changes"
+    )
+  }
+
+  // MARK: - Issue #9: search context must not match a whole group via `group.selected`
+
+  /// Builds one provider-backed group whose members come from `regions`. `selected` mirrors the
+  /// user's currently-picked node — the issue #9 regression is that this name used to be folded into
+  /// every node's searchable text, so picking a Korea node made the *entire* group match "韩国".
+  private static func providerBackedGroup(
+    name: String,
+    provider providerName: String,
+    regions: [String],
+    perRegion: Int,
+    selected: String?
+  ) -> (group: ProxyGroup, provider: ProxyProvider) {
+    var proxies: [ProxyNode] = []
+    for region in regions {
+      for index in 1...perRegion {
+        proxies.append(
+          ProxyNode(
+            name: "\(region) \(String(format: "%03d", index))",
+            type: "vless",
+            delay: 100,
+            isSelectable: true
+          )
+        )
+      }
+    }
+    let provider = ProxyProvider(
+      name: providerName,
+      type: "http",
+      vehicleType: nil,
+      updatedAt: nil,
+      proxies: proxies
+    )
+    let group = ProxyGroup(
+      name: name,
+      type: "select",
+      selected: selected,
+      nodes: [ProxyNode(name: "Provider:\(providerName)", type: "provider", delay: nil, isSelectable: false)]
+    )
+    return (group, provider)
+  }
+
+  /// Core issue #9 repro: a group selecting a Korea node, but also holding US/JP nodes. Searching
+  /// "韩国" must return only the genuinely-matching Korea nodes — not the whole 150-node group just
+  /// because `group.selected` happens to contain "韩国".
+  func testSearchDoesNotMatchWholeGroupWhenSelectedNodeMatchesQuery() {
+    let perRegion = 50
+    let built = Self.providerBackedGroup(
+      name: "Proxy",
+      provider: "Subscribe",
+      regions: ["韩国", "美国", "日本"],
+      perRegion: perRegion,
+      selected: "韩国 001"
+    )
+    let snapshot = ProxySearchPipeline.run(
+      ProxySearchPipeline.Input(
+        groups: [built.group],
+        providers: [built.provider],
+        sortOrder: .profile,
+        searchText: "韩国"
+      )
+    )
+
+    XCTAssertEqual(
+      snapshot.resultNodeCount,
+      perRegion,
+      "Only the Korea nodes survive — not the whole group via its selected name"
+    )
+    XCTAssertTrue(
+      snapshot.filteredGroups.flatMap(\.nodes).allSatisfy { $0.name.contains("韩国") },
+      "Every surviving node must genuinely match the query"
+    )
+    XCTAssertFalse(
+      snapshot.filteredGroups.flatMap(\.nodes).contains { $0.name.contains("美国") || $0.name.contains("日本") },
+      "US/JP nodes must not leak in via the group's selected name"
+    )
+  }
+
+  /// Multi-group / "switch group" repro: two independent provider-backed groups, each with its OWN
+  /// Korea nodes and each selecting a Korea node. Reading group B's filtered nodes (as the split view
+  /// does after switching to B) must yield only B's Korea nodes — never A's, never B's non-Korea.
+  func testSearchKeepsPerGroupKoreaMembershipAcrossGroups() {
+    let groupA = Self.providerBackedGroup(
+      name: "Asia-A",
+      provider: "PA",
+      regions: ["韩国-A", "美国-A"],
+      perRegion: 30,
+      selected: "韩国-A 001"
+    )
+    let groupB = Self.providerBackedGroup(
+      name: "Asia-B",
+      provider: "PB",
+      regions: ["韩国-B", "日本-B"],
+      perRegion: 30,
+      selected: "韩国-B 001"
+    )
+    let snapshot = ProxySearchPipeline.run(
+      ProxySearchPipeline.Input(
+        groups: [groupA.group, groupB.group],
+        providers: [groupA.provider, groupB.provider],
+        sortOrder: .profile,
+        searchText: "韩国"
+      )
+    )
+
+    XCTAssertEqual(snapshot.filteredGroups.map(\.name), ["Asia-A", "Asia-B"])
+
+    let a = snapshot.filteredGroups.first { $0.name == "Asia-A" }?.nodes ?? []
+    let b = snapshot.filteredGroups.first { $0.name == "Asia-B" }?.nodes ?? []
+
+    XCTAssertEqual(a.count, 30)
+    XCTAssertTrue(a.allSatisfy { $0.name.contains("韩国-A") }, "Group A shows only its own Korea nodes")
+    XCTAssertFalse(a.contains { $0.name.contains("美国") }, "Group A's US nodes must be filtered out")
+
+    XCTAssertEqual(b.count, 30)
+    XCTAssertTrue(b.allSatisfy { $0.name.contains("韩国-B") }, "Group B shows only its own Korea nodes")
+    XCTAssertFalse(b.contains { $0.name.contains("日本") }, "Group B's JP nodes must be filtered out")
+    XCTAssertFalse(b.contains { $0.name.contains("-A") }, "No cross-group leakage from A into B")
+  }
+
+  /// Guard: the explicit `selected=` token compares `group.selected` to `node.name` directly, so it
+  /// must keep working after the free-text `searchableText` stops folding `group.selected` in.
+  func testExplicitSelectedTokenStillResolvesAgainstSelectedNode() {
+    let group = ProxyGroup(
+      name: "Proxy",
+      type: "select",
+      selected: "韩国 001",
+      nodes: [
+        ProxyNode(name: "韩国 001", type: "vless", delay: 80, isSelectable: true),
+        ProxyNode(name: "美国 001", type: "vless", delay: 80, isSelectable: true),
+        ProxyNode(name: "日本 001", type: "vless", delay: 80, isSelectable: true)
+      ]
+    )
+    func run(_ text: String) -> [String] {
+      ProxySearchPipeline.run(
+        ProxySearchPipeline.Input(groups: [group], providers: [], sortOrder: .profile, searchText: text)
+      )
+      .filteredGroups.flatMap { $0.nodes.map(\.name) }
+    }
+
+    XCTAssertEqual(run("selected=true"), ["韩国 001"], "selected=true resolves to the selected node only")
+    XCTAssertEqual(run("selected=false"), ["美国 001", "日本 001"], "selected=false excludes the selected node")
+  }
+
+  // MARK: - Issue #9: split-view selection must stay valid as the displayed groups change
+
+  private static func emptyGroup(_ name: String, selected: String? = nil) -> ProxyGroup {
+    ProxyGroup(name: name, type: "select", selected: selected, nodes: [])
+  }
+
+  func testSelectionPolicyKeepsValidCurrentSelection() {
+    let groups = [Self.emptyGroup("A"), Self.emptyGroup("B")]
+    XCTAssertEqual(
+      ProxyGroupSelectionPolicy.resolvedSelection(current: "B", groups: groups),
+      "B",
+      "A still-present selection must be preserved across reloads/searches"
+    )
+  }
+
+  func testSelectionPolicyFallsBackWhenCurrentGroupFilteredOut() {
+    // Searching "韩国" filtered group B out of the displayed set, so the stale "B" selection (which
+    // the split view's right pane would otherwise render as empty) must move to a present group.
+    let groups = [Self.emptyGroup("A", selected: "韩国 001"), Self.emptyGroup("C")]
+    XCTAssertEqual(
+      ProxyGroupSelectionPolicy.resolvedSelection(current: "B", groups: groups),
+      "A",
+      "Falls back to the first group that carries a selected node"
+    )
+  }
+
+  func testSelectionPolicyFallsBackToFirstGroupWhenNoneSelected() {
+    let groups = [Self.emptyGroup("A"), Self.emptyGroup("B")]
+    XCTAssertEqual(
+      ProxyGroupSelectionPolicy.resolvedSelection(current: "missing", groups: groups),
+      "A",
+      "With no selected-bearing group, falls back to the first displayed group"
+    )
+  }
+
+  func testSelectionPolicyResolvesNilCurrentToADisplayedGroup() {
+    let groups = [Self.emptyGroup("A"), Self.emptyGroup("B", selected: "节点")]
+    XCTAssertEqual(
+      ProxyGroupSelectionPolicy.resolvedSelection(current: nil, groups: groups),
+      "B",
+      "A nil selection (first appearance) resolves to the first selected-bearing group"
+    )
+  }
+
+  func testSelectionPolicyReturnsNilForEmptyGroups() {
+    XCTAssertNil(
+      ProxyGroupSelectionPolicy.resolvedSelection(current: "A", groups: []),
+      "No displayed groups (e.g. empty search result) clears the selection"
     )
   }
 }

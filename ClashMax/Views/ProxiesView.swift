@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct ProxiesView: View {
@@ -424,14 +425,11 @@ struct ProxiesView: View {
   }
 
   private func selectDefaultGroupIfNeeded(from groups: [ProxyGroup]) {
-    guard !groups.isEmpty else {
-      selectedGroupID = nil
-      return
+    let resolved = ProxyGroupSelectionPolicy.resolvedSelection(current: selectedGroupID, groups: groups)
+    // Only write when it actually changes, so keeping a still-valid selection doesn't churn @State.
+    if resolved != selectedGroupID {
+      selectedGroupID = resolved
     }
-    if let selectedGroupID, groups.contains(where: { $0.id == selectedGroupID }) {
-      return
-    }
-    selectedGroupID = groups.first(where: { $0.selected != nil })?.id ?? groups.first?.id
   }
 
   private func customDelayTestURLBinding(for groupID: ProxyGroup.ID?) -> Binding<String> {
@@ -607,6 +605,22 @@ enum ProxyNodeSorter {
   }
 }
 
+/// Resolves the split view's selected group against the *currently displayed* groups (issue #9).
+///
+/// A search or a runtime reload can drop the previously-selected group from the displayed set (e.g.
+/// searching "韩国" filters out a group with no Korea nodes). When that happens the right pane must
+/// re-point at a group that is actually present instead of rendering a stale/empty list. Pure and
+/// `@State`-free so it can be unit-tested.
+enum ProxyGroupSelectionPolicy {
+  static func resolvedSelection(current: ProxyGroup.ID?, groups: [ProxyGroup]) -> ProxyGroup.ID? {
+    guard !groups.isEmpty else { return nil }
+    if let current, groups.contains(where: { $0.id == current }) {
+      return current
+    }
+    return groups.first(where: { $0.selected != nil })?.id ?? groups.first?.id
+  }
+}
+
 struct ProxyGroupSearchFilter {
   static func filteredGroups(from groups: [ProxyGroup], searchQuery: ProxySearchQuery) -> [ProxyGroup] {
     guard !searchQuery.isEmpty else { return groups }
@@ -696,10 +710,14 @@ struct ProxySearchQuery: Equatable, Sendable {
   }
 
   private func searchableText(group: ProxyGroup, node: ProxyNode) -> String {
+    // Issue #9: `group.selected` is the *currently-picked* node's name and is identical for every
+    // node in the group, so folding it in here made a free-text query match the whole group whenever
+    // the picked node matched (e.g. searching "韩国" with a Korea node selected returned all 1600+
+    // nodes). Selection is queryable only through the explicit `selected=true/false` token, which
+    // compares `group.selected` to each node individually and is handled before we reach this text.
     [
       group.name,
       group.type,
-      group.selected,
       node.name,
       node.type,
       node.providerName,
@@ -1090,6 +1108,7 @@ private struct ProxyDelayBatchProgressStrip: View {
   let progress: ProxyDelayBatchProgress
   @Binding var showsFailureDetails: Bool
   let onCancel: () -> Void
+  @State private var diagnosticsCopiedAt: Date?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -1124,24 +1143,51 @@ private struct ProxyDelayBatchProgressStrip: View {
   }
 
   private var leadingStatus: some View {
-    Label(statusTitle, systemImage: progress.isRunning ? "waveform.path.ecg" : statusIcon)
+    Label(statusTitle, systemImage: statusIcon)
       .font(.caption.weight(.semibold))
-      .foregroundStyle(progress.wasCancelled ? .orange : .secondary)
+      .foregroundStyle(statusColor)
       .lineLimit(1)
   }
 
   private var statusTitle: String {
-    if progress.isRunning {
+    switch progress.status {
+    case .running:
       return String(localized: "Batch delay testing")
-    }
-    if progress.wasCancelled {
+    case .completed:
+      return String(localized: "Batch delay complete")
+    case .partiallyCompleted:
+      return String(localized: "Batch delay partially completed")
+    case .failed:
+      return String(localized: "Batch delay failed")
+    case .cancelled:
       return String(localized: "Batch delay cancelled")
     }
-    return String(localized: "Batch delay complete")
   }
 
   private var statusIcon: String {
-    progress.wasCancelled ? "xmark.circle" : "checkmark.circle"
+    switch progress.status {
+    case .running:
+      return "waveform.path.ecg"
+    case .completed:
+      return "checkmark.circle"
+    case .partiallyCompleted:
+      return "exclamationmark.triangle"
+    case .failed:
+      return "xmark.octagon"
+    case .cancelled:
+      return "xmark.circle"
+    }
+  }
+
+  private var statusColor: Color {
+    switch progress.status {
+    case .running, .completed:
+      return .secondary
+    case .partiallyCompleted, .cancelled:
+      return .orange
+    case .failed:
+      return .red
+    }
   }
 
   private var metrics: some View {
@@ -1149,7 +1195,7 @@ private struct ProxyDelayBatchProgressStrip: View {
       ProxyDelayBatchMetric(
         text: String.localizedStringWithFormat(
           NSLocalizedString("%lld/%lld tested", comment: ""),
-          Int64(progress.completed),
+          Int64(progress.testedCount),
           Int64(progress.total)
         ),
         systemImage: "speedometer",
@@ -1209,26 +1255,45 @@ private struct ProxyDelayBatchProgressStrip: View {
 
   private var failureDetails: some View {
     VStack(alignment: .leading, spacing: 6) {
-      if progress.cancelled > 0 {
-        failureCategoryRow(
-          kind: .cancelled,
-          count: progress.cancelled,
-          failures: []
-        )
-      }
       ForEach(failureGroups) { group in
         failureCategoryRow(kind: group.kind, count: group.failures.count, failures: group.failures)
       }
+      copyDiagnosticsButton
     }
     .padding(.leading, 2)
   }
 
   private var failureGroups: [ProxyDelayFailureGroup] {
     ProxyDelayFailureKind.allCases.compactMap { kind in
-      guard kind != .cancelled else { return nil }
       let failures = progress.failures.filter { $0.kind == kind }
       guard !failures.isEmpty else { return nil }
       return ProxyDelayFailureGroup(kind: kind, failures: failures)
+    }
+  }
+
+  private var copyDiagnosticsButton: some View {
+    Button(action: copyDiagnostics) {
+      Label(
+        diagnosticsCopiedAt == nil ? "Copy Diagnostics" : "Diagnostics Copied",
+        systemImage: diagnosticsCopiedAt == nil ? "doc.on.doc" : "checkmark"
+      )
+    }
+    .buttonStyle(.borderless)
+    .controlSize(.small)
+    .padding(.top, 2)
+  }
+
+  private func copyDiagnostics() {
+    let pasteboard = NSPasteboard.general
+    pasteboard.clearContents()
+    pasteboard.setString(progress.diagnosticText, forType: .string)
+    let stamp = Date()
+    diagnosticsCopiedAt = stamp
+    Task { @MainActor in
+      try? await Task.sleep(nanoseconds: 1_600_000_000)
+      if diagnosticsCopiedAt == stamp {
+        diagnosticsCopiedAt = nil
+      }
     }
   }
 

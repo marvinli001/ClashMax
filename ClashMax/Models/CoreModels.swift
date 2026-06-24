@@ -1881,6 +1881,30 @@ struct ProxyDelayBatchFailure: Identifiable, Equatable, Sendable {
   }
 }
 
+enum ProxyDelayBatchStatus: Equatable, Sendable {
+  case running
+  case completed
+  case partiallyCompleted
+  case failed
+  case cancelled
+
+  /// Stable, non-localized label used in copyable diagnostics and bug reports.
+  var diagnosticLabel: String {
+    switch self {
+    case .running:
+      return "Running"
+    case .completed:
+      return "Completed"
+    case .partiallyCompleted:
+      return "Partially completed"
+    case .failed:
+      return "Failed"
+    case .cancelled:
+      return "Cancelled"
+    }
+  }
+}
+
 struct ProxyDelayBatchProgress: Equatable, Sendable {
   var id: UUID
   var startedAt: Date
@@ -1922,6 +1946,19 @@ struct ProxyDelayBatchProgress: Equatable, Sendable {
     min(total, succeeded + timedOut + failed + cancelled)
   }
 
+  /// Nodes that produced an actual delay result (success, timeout, or error). Cancelled/untested
+  /// nodes are deliberately excluded so the "tested" metric never claims more than was measured
+  /// (issue #18).
+  var testedCount: Int {
+    succeeded + timedOut + failed
+  }
+
+  /// Nodes that never produced a result — typically because the batch was cancelled before
+  /// reaching them.
+  var untestedCount: Int {
+    max(0, total - testedCount)
+  }
+
   var failureCount: Int {
     timedOut + failed
   }
@@ -1931,12 +1968,57 @@ struct ProxyDelayBatchProgress: Equatable, Sendable {
     return min(1, Double(completed) / Double(total))
   }
 
+  /// Derived, conflict-free state for the batch strip. Cancellation only "wins" when nodes were
+  /// genuinely left untested; once every node has a result the real completed/partial/failed
+  /// outcome is reported instead of a "cancelled" label that contradicts a full tested count.
+  var status: ProxyDelayBatchStatus {
+    if isRunning {
+      return .running
+    }
+    if cancelled > 0 && untestedCount > 0 {
+      return .cancelled
+    }
+    if failureCount == 0 {
+      return .completed
+    }
+    if succeeded == 0 {
+      return .failed
+    }
+    return .partiallyCompleted
+  }
+
   var wasCancelled: Bool {
-    cancelled > 0 && !isRunning
+    status == .cancelled
   }
 
   var hasFailures: Bool {
     !failures.isEmpty || cancelled > 0
+  }
+
+  /// Copyable, non-localized summary for bug reports: status, counts, timestamps, and every
+  /// failure's group/provider/node/kind/message.
+  var diagnosticText: String {
+    let formatter = ISO8601DateFormatter()
+    var lines: [String] = []
+    lines.append("ClashMax batch delay diagnostics")
+    lines.append("Status: \(status.diagnosticLabel)")
+    lines.append("Started: \(formatter.string(from: startedAt))")
+    if let finishedAt {
+      lines.append("Finished: \(formatter.string(from: finishedAt))")
+    }
+    lines.append("Total: \(total)")
+    lines.append("Tested: \(testedCount)")
+    lines.append("Succeeded: \(succeeded)")
+    lines.append("Timeouts: \(timedOut)")
+    lines.append("Failed: \(failed)")
+    lines.append("Cancelled/untested: \(cancelled)")
+    if !failures.isEmpty {
+      lines.append("Failures:")
+      for failure in failures {
+        lines.append("  - [\(failure.kind.rawValue)] \(failure.displayName): \(failure.message)")
+      }
+    }
+    return lines.joined(separator: "\n")
   }
 
   static func started(total: Int, at date: Date = Date()) -> ProxyDelayBatchProgress {
@@ -1957,10 +2039,6 @@ struct ProxyDelayBatchProgress: Equatable, Sendable {
       failed += 1
     }
     failures.append(failure)
-  }
-
-  mutating func recordCancelled(count: Int) {
-    cancelled += max(0, count)
   }
 
   mutating func finish(at date: Date = Date()) {
