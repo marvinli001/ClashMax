@@ -1149,6 +1149,124 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(text.contains("Controller Secret: \(RuntimeDiagnosticsReport.redactedSecret)"))
     XCTAssertTrue(text.contains("Bearer \(RuntimeDiagnosticsReport.redactedSecret)"))
     XCTAssertTrue(text.contains("debug \(RuntimeDiagnosticsReport.redactedSecret)"))
+    // Proxy-effect diagnostics are part of the copyable report (issue #13).
+    XCTAssertTrue(text.contains("Proxy Effect:"))
+    XCTAssertTrue(text.contains("Probe Host:"))
+    XCTAssertTrue(text.contains("Public IP:"))
+  }
+
+  func testRuntimeDiagnosticsReportIncludesProxyEffectPublicIPAndProbe() {
+    let info = PublicIPInfo(
+      ipAddress: "203.0.113.10",
+      countryCode: "CN",
+      countryName: "China",
+      sourceName: "test",
+      sourceHost: "api.ip.sb",
+      fetchedAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+    let proxyEffect = ProxyEffectDiagnosticsBuilder.build(
+      ProxyEffectDiagnosticsInput(
+        publicIPInfo: info,
+        isCoreRunning: true,
+        routingMode: .systemProxy,
+        runMode: .rule,
+        systemProxyEnabled: true,
+        currentGroupName: "Proxies",
+        currentNodeName: "JP-01",
+        currentNodeType: "vless",
+        probeHost: "api.ip.sb"
+      )
+    )
+    let report = RuntimeDiagnosticsReport(
+      generatedAt: Date(timeIntervalSince1970: 1_700_000_000),
+      statusSummary: "Running",
+      profileName: "Profile",
+      runtimeOwner: .user,
+      routingMode: .systemProxy,
+      runMode: .rule,
+      controllerHost: "127.0.0.1",
+      controllerPort: 9097,
+      controllerSecret: "secret-token",
+      coreStatus: "Running",
+      systemProxyEnabled: true,
+      tunEnabled: false,
+      networkExtensionEnabled: false,
+      tunSystemDNS: "Off",
+      networkExtensionSystemDNS: "Off",
+      tunDNSMode: "profile",
+      ruleOverlaySummary: "Disabled",
+      helperDetail: .unknown,
+      tunDiagnostics: .empty,
+      networkExtensionDiagnostics: .empty,
+      readinessIssue: nil,
+      lastError: nil,
+      recentLogs: [],
+      helperLogs: [],
+      publicIPInfo: info,
+      probeHost: "api.ip.sb",
+      proxyEffect: proxyEffect
+    )
+
+    let text = report.plainText
+
+    XCTAssertTrue(text.contains("Public IP: 203.xxx.xxx.10"))
+    XCTAssertTrue(text.contains("Public IP Region: China (CN)"))
+    XCTAssertTrue(text.contains("Probe Host: api.ip.sb"))
+    XCTAssertTrue(text.contains("Current Node: Proxies / JP-01"))
+    XCTAssertTrue(text.contains("Rule Policy:"))
+    XCTAssertTrue(text.contains("Proxy Effect: Warn"))
+    // The full egress IP is never written into the shared report.
+    XCTAssertFalse(text.contains("203.0.113.10"))
+    XCTAssertFalse(text.contains("secret-token"))
+    XCTAssertTrue(text.contains("Controller Secret: \(RuntimeDiagnosticsReport.redactedSecret)"))
+  }
+
+  func testRuntimeDiagnosticsReportResolvesProviderBackedProxyEffectSelection() async throws {
+    let korean = "韩国 SK[M][Trojan][倍率:0.6]"
+    let info = Self.makePublicIPInfo(
+      ip: "198.51.100.9",
+      fetchedAt: Date(timeIntervalSince1970: 1_700_000_000),
+      countryCode: "US",
+      countryName: "United States"
+    )
+    let paths = try Self.makeRuntimePaths()
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      publicIPInfoClient: RecordingPublicIPInfoFetcher(infos: [info]),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.tunnelCoreRunning = true
+    model.proxyRoutingMode = ProxyRoutingMode.systemProxy
+    model.systemProxyEnabled = true
+    model.proxyGroups = [
+      ProxyGroup(
+        name: "Proxy",
+        type: "select",
+        selected: korean,
+        nodes: [
+          ProxyNode(name: "Provider: Remote", type: "provider", delay: nil, isSelectable: true),
+          ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: true)
+        ]
+      )
+    ]
+    model.proxyProviders = [
+      ProxyProvider(
+        name: "Remote",
+        type: "http",
+        vehicleType: nil,
+        updatedAt: nil,
+        proxies: [ProxyNode(name: korean, type: "trojan", delay: 142, isSelectable: true)]
+      )
+    ]
+    model.refreshPublicIPInfo(force: true)
+    try await Self.waitForPublicIPInfo(model, expectedIP: "198.51.100.9")
+
+    let text = model.runtimeDiagnosticsReport(now: Date(timeIntervalSince1970: 1_700_000_000)).plainText
+
+    XCTAssertTrue(text.contains("Current Node: Proxy / \(korean)"))
+    XCTAssertTrue(text.contains("Proxy Effect: Pass"))
+    XCTAssertFalse(text.contains("The selected node is unavailable in runtime data"))
   }
 
   func testRuntimeDiagnosticsReportUsesPreciseHelperFingerprintState() {
@@ -10213,11 +10331,17 @@ final class DashboardRuntimeStateTests: XCTestCase {
     ]
   }
 
-  private static func makePublicIPInfo(ip: String, fetchedAt: Date) -> PublicIPInfo {
+  private static func makePublicIPInfo(
+    ip: String,
+    fetchedAt: Date,
+    countryCode: String = "NZ",
+    countryName: String = "New Zealand",
+    sourceHost: String? = "api.ip.sb"
+  ) -> PublicIPInfo {
     PublicIPInfo(
       ipAddress: ip,
-      countryCode: "NZ",
-      countryName: "New Zealand",
+      countryCode: countryCode,
+      countryName: countryName,
       region: "Auckland",
       city: "Auckland",
       asn: "AS23655",
@@ -10227,6 +10351,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       latitude: -36.85,
       longitude: 174.76,
       sourceName: "test",
+      sourceHost: sourceHost,
       fetchedAt: fetchedAt
     )
   }

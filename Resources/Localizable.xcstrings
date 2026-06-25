@@ -13274,6 +13274,366 @@
           }
         }
       }
+    },
+    "Runtime is not running" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "运行时未运行"
+          }
+        }
+      }
+    },
+    "Proxy is not capturing traffic" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "代理未接管流量"
+          }
+        }
+      }
+    },
+    "Proxy capture is not confirmed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "代理接管未确认"
+          }
+        }
+      }
+    },
+    "Checking proxy effect" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在检查代理效果"
+          }
+        }
+      }
+    },
+    "Proxy is handling outbound traffic" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "代理正在接管出站流量"
+          }
+        }
+      }
+    },
+    "Start ClashMax to verify whether the proxy handles outbound traffic." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启动 ClashMax 以验证代理是否接管出站流量。"
+          }
+        }
+      }
+    },
+    "System Proxy is not enabled for this runtime mode." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前运行模式未启用系统代理。"
+          }
+        }
+      }
+    },
+    "TUN mode is selected but the TUN helper is not active." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已选择 TUN 模式，但 TUN 辅助程序未运行。"
+          }
+        }
+      }
+    },
+    "Network Extension proxy is not active." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网络扩展代理未运行。"
+          }
+        }
+      }
+    },
+    "TUN diagnostics reported an issue: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TUN 诊断报告了一个问题：%@"
+          }
+        }
+      }
+    },
+    "Network Extension reported an issue: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网络扩展报告了一个问题：%@"
+          }
+        }
+      }
+    },
+    "Run mode is Direct, so all traffic bypasses proxies." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "运行模式为 Direct，因此所有流量都会绕过代理。"
+          }
+        }
+      }
+    },
+    "The selected node is unavailable in runtime data, so the proxy node cannot be confirmed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所选节点不在运行时数据中，无法确认代理节点。"
+          }
+        }
+      }
+    },
+    "Current node is DIRECT." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前节点为 DIRECT。"
+          }
+        }
+      }
+    },
+    "IP check target matched a DIRECT rule." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "IP 检测目标命中了 DIRECT 规则。"
+          }
+        }
+      }
+    },
+    "Public IP is still China; if you selected a non-China node, proxy capture is not confirmed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "公网 IP 仍为中国；如果你选择的是非中国节点，则代理接管尚未确认。"
+          }
+        }
+      }
+    },
+    "Waiting for public IP information from the GeoIP probe." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在等待 GeoIP 探测返回的公网 IP 信息。"
+          }
+        }
+      }
+    },
+    "Public IP egress matches a proxied path." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "公网 IP 出口符合走代理的路径。"
+          }
+        }
+      }
+    },
+    "Enable System Proxy, or switch to TUN mode." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启用系统代理，或切换到 TUN 模式。"
+          }
+        }
+      }
+    },
+    "Start TUN mode and approve the helper, or switch to System Proxy." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启动 TUN 模式并授权辅助程序，或切换到系统代理。"
+          }
+        }
+      }
+    },
+    "Enable the Network Extension proxy, or switch to System Proxy or TUN." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启用网络扩展代理，或切换到系统代理或 TUN。"
+          }
+        }
+      }
+    },
+    "Open TUN Diagnostics and run repair if needed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开 TUN 诊断，并在需要时执行修复。"
+          }
+        }
+      }
+    },
+    "Open NE Diagnostics to review transparent proxy errors." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开 NE 诊断以查看透明代理错误。"
+          }
+        }
+      }
+    },
+    "Switch run mode to Rule or Global." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将运行模式切换为 Rule 或 Global。"
+          }
+        }
+      }
+    },
+    "Refresh runtime data to reload the selected node." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刷新运行时数据以重新加载所选节点。"
+          }
+        }
+      }
+    },
+    "Select a non-DIRECT node in the active proxy group." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在当前代理组中选择一个非 DIRECT 节点。"
+          }
+        }
+      }
+    },
+    "Review rules that send the IP-check host to DIRECT." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "检查将 IP 检测主机指向 DIRECT 的规则。"
+          }
+        }
+      }
+    },
+    "Confirm the selected node is a non-China server and test its delay." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "确认所选节点是非中国服务器并测试其延迟。"
+          }
+        }
+      }
+    },
+    "Rule Policy" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "规则策略"
+          }
+        }
+      }
+    },
+    "TUN Issue" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TUN 问题"
+          }
+        }
+      }
+    },
+    "NE Issue" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NE 问题"
+          }
+        }
+      }
+    },
+    "Matched Rule" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "命中规则"
+          }
+        }
+      }
+    },
+    "Unavailable (%@)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不可用（%@）"
+          }
+        }
+      }
+    },
+    "SOCKS handshake failures: %lld" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SOCKS 握手失败：%lld"
+          }
+        }
+      }
+    },
+    "Proxy Effect" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "代理效果"
+          }
+        }
+      }
+    },
+    "Refresh public IP and proxy effect" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刷新公网 IP 和代理效果"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"

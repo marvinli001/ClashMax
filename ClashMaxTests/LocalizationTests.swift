@@ -179,6 +179,35 @@ final class LocalizationTests: XCTestCase {
     XCTAssertEqual(String(format: followUpFailureFormat, "proxy refused"), "运行时设置已应用，但代理就绪检查或系统代理设置失败：proxy refused")
   }
 
+  func testSimplifiedChineseStringCatalogProvidesProxyEffectKeys() throws {
+    let bundle = try XCTUnwrap(Bundle(identifier: AppConstants.bundleIdentifier))
+    let zhPath = try XCTUnwrap(bundle.path(forResource: "zh-Hans", ofType: "lproj"))
+    let zhBundle = try XCTUnwrap(Bundle(path: zhPath))
+
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Proxy Effect", value: nil, table: nil), "代理效果")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Rule Policy", value: nil, table: nil), "规则策略")
+    XCTAssertEqual(
+      zhBundle.localizedString(forKey: "Current node is DIRECT.", value: nil, table: nil),
+      "当前节点为 DIRECT。"
+    )
+    XCTAssertEqual(
+      zhBundle.localizedString(forKey: "IP check target matched a DIRECT rule.", value: nil, table: nil),
+      "IP 检测目标命中了 DIRECT 规则。"
+    )
+    XCTAssertEqual(
+      zhBundle.localizedString(forKey: "System Proxy is not enabled for this runtime mode.", value: nil, table: nil),
+      "当前运行模式未启用系统代理。"
+    )
+    XCTAssertEqual(
+      zhBundle.localizedString(
+        forKey: "Public IP is still China; if you selected a non-China node, proxy capture is not confirmed.",
+        value: nil,
+        table: nil
+      ),
+      "公网 IP 仍为中国；如果你选择的是非中国节点，则代理接管尚未确认。"
+    )
+  }
+
   func testSimplifiedChineseStringCatalogProvidesActiveOperationalKeys() throws {
     let bundle = try XCTUnwrap(Bundle(identifier: AppConstants.bundleIdentifier))
     let zhPath = try XCTUnwrap(bundle.path(forResource: "zh-Hans", ofType: "lproj"))

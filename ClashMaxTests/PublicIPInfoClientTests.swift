@@ -43,10 +43,28 @@ final class PublicIPInfoClientTests: XCTestCase {
       XCTAssertEqual(info.city, "Auckland", providerName)
       XCTAssertEqual(info.asn, "AS23655", providerName)
       XCTAssertEqual(info.sourceName, providerName)
+      XCTAssertEqual(info.sourceHost, provider.url.host, providerName)
       XCTAssertEqual(info.timezone, "Pacific/Auckland", providerName)
       XCTAssertEqual(try XCTUnwrap(info.latitude), -36.85, accuracy: 0.01, providerName)
       XCTAssertEqual(try XCTUnwrap(info.longitude), 174.76, accuracy: 0.01, providerName)
     }
+  }
+
+  func testRecordsProviderHostAsSource() async throws {
+    PublicIPInfoURLProtocol.configure([
+      .init(body: #"{"ip":"203.0.113.1","country_code":"NZ"}"#)
+    ])
+    let provider = try XCTUnwrap(PublicIPInfoClient.Provider.defaultProviders.first { $0.name == "api.ip.sb" })
+    let client = PublicIPInfoClient(
+      providers: [provider],
+      session: Self.makeSession(),
+      userAgent: "ClashMax/1.0.0",
+      shuffleProviders: false
+    )
+
+    let info = try await client.fetchPublicIPInfo()
+
+    XCTAssertEqual(info.sourceHost, "api.ip.sb")
   }
 
   func testRequestUsesClashMaxUserAgentAndFiveSecondTimeout() async throws {

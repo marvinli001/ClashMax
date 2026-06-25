@@ -12,7 +12,8 @@ struct RunningDashboardView: View {
   let availableWidth: CGFloat
 
   var body: some View {
-    VStack(spacing: 12) {
+    let selection = resolvedCurrentSelection
+    return VStack(spacing: 12) {
       RunningHeaderCard(
         state: state,
         namespace: namespace,
@@ -29,7 +30,14 @@ struct RunningDashboardView: View {
           selectedGroupName: $selectedProxyGroupName
         )
       } trailing: {
-        PublicIPInfoCard(availableWidth: runtimeInfoCardWidth)
+        // Reuse the same off-main resolved group/node the Current Node card uses so the proxy-effect
+        // check never re-expands providers on the SwiftUI hot path (issue #10 / #13 / #14).
+        PublicIPInfoCard(
+          availableWidth: runtimeInfoCardWidth,
+          currentGroup: selection.group,
+          currentNode: selection.node,
+          hasMissingSelection: selection.hasMissingSelection
+        )
       }
       .staggeredArrival(index: 0, reduceMotion: reduceMotion, trigger: state)
 
@@ -110,6 +118,16 @@ struct RunningDashboardView: View {
     .onChange(of: currentNodeDataSignature) { _, _ in
       currentNodeCoordinator.submit(appModel.proxySearchInput(searchText: ""), reason: .data)
     }
+  }
+
+  /// The provider-resolved current group/node (and whether the selection is missing) shared by the
+  /// Current Node card and the public-IP proxy-effect check, so neither re-expands providers.
+  private var resolvedCurrentSelection: (group: ProxyGroup?, node: ProxyNode?, hasMissingSelection: Bool) {
+    let groups = DashboardProxySelectionState.selectableGroups(from: currentNodeCoordinator.snapshot.unfilteredGroups)
+    let group = DashboardProxySelectionState.resolvedGroup(from: groups, preferredName: selectedProxyGroupName)
+    let node = group.flatMap(DashboardProxySelectionState.currentNode)
+    let missing = group.map(DashboardProxySelectionState.hasMissingSelection) ?? false
+    return (group, node, missing)
   }
 
   /// Watches the same group/provider fingerprint the Proxies page does, so the off-main resolve only

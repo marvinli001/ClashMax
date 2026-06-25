@@ -4,6 +4,11 @@ struct PublicIPInfoCard: View {
   @EnvironmentObject private var appModel: AppModel
   @EnvironmentObject private var publicIP: PublicIPCoordinator
   let availableWidth: CGFloat
+  /// Provider-resolved current group/node supplied by `RunningDashboardView` so the proxy-effect
+  /// check shares the same off-main resolution as the Current Node card (issue #13 / #14).
+  var currentGroup: ProxyGroup?
+  var currentNode: ProxyNode?
+  var hasMissingSelection = false
   @State private var showsFullIP = false
 
   var body: some View {
@@ -36,12 +41,20 @@ struct PublicIPInfoCard: View {
 
         Button {
           appModel.refreshPublicIPInfo(force: true, now: now)
+          // Also refresh the inputs the proxy-effect check reads, so a manual refresh re-evaluates
+          // capture/route status. User-initiated only — never on the periodic tick (no refresh loop).
+          if appModel.canControlRuntimeProxies {
+            appModel.reloadRuntimeData()
+          }
+          if appModel.proxyRoutingMode == .tun {
+            appModel.refreshTunDiagnostics()
+          }
         } label: {
           Image(systemName: "arrow.clockwise")
         }
         .buttonStyle(.borderless)
         .disabled(state.isLoading)
-        .help("Refresh public IP")
+        .help("Refresh public IP and proxy effect")
       }
 
       if let info = state.info {
@@ -62,6 +75,10 @@ struct PublicIPInfoCard: View {
           .foregroundStyle(.orange)
           .lineLimit(isCompact ? 3 : 2)
           .fixedSize(horizontal: false, vertical: true)
+      }
+
+      if appModel.isCoreRunning {
+        proxyEffectSection()
       }
     }
     .padding(14)
@@ -93,6 +110,78 @@ struct PublicIPInfoCard: View {
         PublicIPInfoDetail(title: "Coordinates", value: coordinateSummary(for: info))
         PublicIPInfoDetail(title: "Source", value: info.sourceName)
       }
+    }
+  }
+
+  private func proxyEffectSection() -> some View {
+    let diagnostics = appModel.proxyEffectDiagnostics(
+      currentGroup: currentGroup,
+      currentNode: currentNode,
+      hasMissingSelection: hasMissingSelection
+    )
+    return VStack(alignment: .leading, spacing: isCompact ? 7 : 9) {
+      Divider()
+        .opacity(0.24)
+
+      HStack(spacing: 8) {
+        Image(systemName: proxyEffectSymbol(diagnostics.status))
+          .font(.system(size: 12, weight: .semibold))
+          .foregroundStyle(proxyEffectTint(diagnostics.status))
+          .frame(width: 16)
+        Text("Proxy Effect")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.secondary)
+        Spacer(minLength: 6)
+        Text(diagnostics.statusLabel)
+          .font(.caption2.weight(.semibold))
+          .foregroundStyle(proxyEffectTint(diagnostics.status))
+          .padding(.horizontal, 7)
+          .padding(.vertical, 2)
+          .background(proxyEffectTint(diagnostics.status).opacity(0.14), in: Capsule())
+      }
+
+      Text(diagnostics.reason)
+        .font(.caption)
+        .foregroundStyle(.primary)
+        .fixedSize(horizontal: false, vertical: true)
+
+      if !diagnostics.facts.isEmpty {
+        LazyVGrid(columns: detailColumns, alignment: .leading, spacing: isCompact ? 5 : 7) {
+          ForEach(Array(diagnostics.facts.prefix(4).enumerated()), id: \.offset) { _, fact in
+            PublicIPInfoDetail(title: fact.title, value: fact.value)
+          }
+        }
+      }
+
+      if !diagnostics.recoveryActions.isEmpty {
+        VStack(alignment: .leading, spacing: 3) {
+          ForEach(Array(diagnostics.recoveryActions.enumerated()), id: \.offset) { _, action in
+            Label(action, systemImage: "arrow.turn.down.right")
+              .font(.caption2)
+              .foregroundStyle(.secondary)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+        }
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private func proxyEffectSymbol(_ status: ProxyEffectDiagnosticsSnapshot.Status) -> String {
+    switch status {
+    case .pass: return "checkmark.seal.fill"
+    case .warn: return "exclamationmark.triangle.fill"
+    case .fail: return "xmark.octagon.fill"
+    case .waiting: return "clock"
+    }
+  }
+
+  private func proxyEffectTint(_ status: ProxyEffectDiagnosticsSnapshot.Status) -> Color {
+    switch status {
+    case .pass: return .green
+    case .warn: return .orange
+    case .fail: return .red
+    case .waiting: return .secondary
     }
   }
 
@@ -146,7 +235,7 @@ struct PublicIPInfoCard: View {
 
   private func ipAddressPill(for info: PublicIPInfo) -> some View {
     HStack(spacing: 6) {
-      Text(showsFullIP ? info.ipAddress : maskedIP(info.ipAddress))
+      Text(showsFullIP ? info.ipAddress : info.maskedAddress)
         .font(.system(.callout, design: .monospaced).weight(.semibold))
         .lineLimit(1)
         .minimumScaleFactor(0.64)
@@ -240,15 +329,6 @@ struct PublicIPInfoCard: View {
     return String(format: "%.2f, %.2f", latitude, longitude)
   }
 
-  private func maskedIP(_ ip: String) -> String {
-    let parts = ip.split(separator: ".")
-    if parts.count == 4, let first = parts.first, let last = parts.last {
-      return "\(first).xxx.xxx.\(last)"
-    }
-
-    guard ip.count > 10 else { return "xxxx" }
-    return "\(ip.prefix(6))...\(ip.suffix(4))"
-  }
 }
 
 private struct PublicIPInfoDetail: View {

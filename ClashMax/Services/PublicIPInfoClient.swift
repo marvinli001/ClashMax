@@ -108,8 +108,11 @@ extension PublicIPInfoClient.Provider {
   ]
 
   private static func provider(_ name: String, _ urlString: String) -> PublicIPInfoClient.Provider {
-    PublicIPInfoClient.Provider(name: name, url: URL(string: urlString)!) { object, fetchedAt in
-      try PublicIPInfoMapper.map(object, sourceName: name, fetchedAt: fetchedAt)
+    let url = URL(string: urlString)!
+    return PublicIPInfoClient.Provider(name: name, url: url) { object, fetchedAt in
+      var info = try PublicIPInfoMapper.map(object, sourceName: name, fetchedAt: fetchedAt)
+      info.sourceHost = url.host
+      return info
     }
   }
 }

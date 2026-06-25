@@ -274,6 +274,9 @@ struct RuntimeDiagnosticsReport: Equatable, Sendable {
   var lastError: String?
   var recentLogs: [String]
   var helperLogs: [String]
+  var publicIPInfo: PublicIPInfo? = nil
+  var probeHost: String = ""
+  var proxyEffect: ProxyEffectDiagnosticsSnapshot? = nil
 
   var plainText: String {
     let lines = rawLines().map(redacted)
@@ -308,6 +311,7 @@ struct RuntimeDiagnosticsReport: Equatable, Sendable {
       "TUN Diagnostics: \(tunDiagnostics.summaryLabel)",
       "NE Diagnostics: TCP \(networkExtensionDiagnostics.activeTCPBridgeCount), UDP \(networkExtensionDiagnostics.activeUDPBridgeCount), DNS \(networkExtensionDiagnostics.dnsCaptureCount)",
     ]
+    lines.append(contentsOf: proxyEffectReportLines())
     if let readinessIssue {
       lines.append("Readiness: \(readinessIssue)")
     }
@@ -327,6 +331,34 @@ struct RuntimeDiagnosticsReport: Equatable, Sendable {
       lines.append(contentsOf: recentLogs.suffix(12).map { "- \($0)" })
     }
     return lines
+  }
+
+  private func proxyEffectReportLines() -> [String] {
+    var lines = [
+      "Public IP: \(publicIPSummary)",
+      "Public IP Region: \(publicIPRegionSummary)",
+      "Probe Host: \(probeHost.isEmpty ? "—" : probeHost)",
+    ]
+    if let proxyEffect {
+      lines.append("Current Node: \(proxyEffect.currentNodeSummary)")
+      lines.append("Rule Policy: \(proxyEffect.probePolicy ?? "—")")
+      lines.append("Rule Probe: \(proxyEffect.ruleProbeSummary)")
+      lines.append("Proxy Effect: \(proxyEffect.statusLabel) - \(proxyEffect.reason)")
+      if !proxyEffect.recoveryActions.isEmpty {
+        lines.append("Recovery Actions:")
+        lines.append(contentsOf: proxyEffect.recoveryActions.map { "- \($0)" })
+      }
+    }
+    return lines
+  }
+
+  private var publicIPSummary: String {
+    // The full egress IP is sensitive-by-default; the shared report only carries a masked form.
+    publicIPInfo?.maskedAddress ?? "Unavailable"
+  }
+
+  private var publicIPRegionSummary: String {
+    proxyEffect?.publicIPRegion ?? "Unknown"
   }
 
   private var helperFingerprintSummary: String {
@@ -1235,8 +1267,60 @@ final class AppModel: ObservableObject {
     LogVisibility.visibleEntries(in: logs, developerMode: developerMode)
   }
 
+  /// The GeoIP host whose routing is simulated to detect an IP-check target that is sent to DIRECT.
+  /// Uses the host of the most recent public-IP result, falling back to the default provider host.
+  var proxyEffectProbeHost: String {
+    if let host = publicIPInfoState.info?.sourceHost?.trimmingCharacters(in: .whitespacesAndNewlines),
+       !host.isEmpty {
+      return host
+    }
+    return ProxyEffectDiagnosticsInput.defaultProbeHost
+  }
+
+  /// Classifies whether the proxy is actually taking over outbound traffic (issue #13). The caller
+  /// supplies the already-resolved current group/node so the dashboard reuses its shared off-main
+  /// proxy-resolution pipeline instead of re-expanding providers here.
+  func proxyEffectDiagnostics(
+    currentGroup: ProxyGroup?,
+    currentNode: ProxyNode?,
+    hasMissingSelection: Bool
+  ) -> ProxyEffectDiagnosticsSnapshot {
+    ProxyEffectDiagnosticsBuilder.build(
+      ProxyEffectDiagnosticsInput(
+        publicIPInfo: publicIPInfoState.info,
+        isCoreRunning: isCoreRunning,
+        routingMode: proxyRoutingMode,
+        runMode: currentRuntimeOverrides.mode,
+        systemProxyEnabled: systemProxyEnabled,
+        tunEnabled: tunEnabled,
+        networkExtensionEnabled: networkExtensionEnabled,
+        tunDiagnostics: tunDiagnostics,
+        networkExtensionDiagnostics: networkExtensionController.diagnostics,
+        currentGroupName: currentGroup?.name,
+        currentNodeName: currentNode?.name ?? currentGroup?.selected,
+        currentNodeType: currentNode?.type,
+        hasMissingSelection: hasMissingSelection,
+        runtimeRules: runtimeData.rules,
+        probeHost: proxyEffectProbeHost
+      )
+    )
+  }
+
   func runtimeDiagnosticsReport(now: Date = Date()) -> RuntimeDiagnosticsReport {
     let diagnosticOverrides = previewRuntimeActive ? (previewRuntimeOverrides ?? overrides) : overrides
+    // Resolve the dashboard's current group/node through the same provider-expansion pipeline the
+    // Current Node card uses. Copy Diagnostics is user-initiated, so a synchronous value-pipeline run
+    // is acceptable here and keeps provider-backed selections from being reported as unavailable.
+    let resolvedGroups = ProxySearchPipeline.run(proxySearchInput(searchText: "")).unfilteredGroups
+    let selectableGroups = DashboardProxySelectionState.selectableGroups(from: resolvedGroups)
+    let currentGroup = DashboardProxySelectionState.resolvedGroup(from: selectableGroups, preferredName: nil)
+    let currentNode = currentGroup.flatMap(DashboardProxySelectionState.currentNode)
+    let hasMissingSelection = currentGroup.map(DashboardProxySelectionState.hasMissingSelection) ?? false
+    let proxyEffect = proxyEffectDiagnostics(
+      currentGroup: currentGroup,
+      currentNode: currentNode,
+      hasMissingSelection: hasMissingSelection
+    )
     return RuntimeDiagnosticsReport(
       generatedAt: now,
       statusSummary: statusSummary,
@@ -1263,7 +1347,10 @@ final class AppModel: ObservableObject {
       recentLogs: userVisibleLogs.map { entry in
         "\(entry.date.formatted(date: .omitted, time: .standard)) [\(entry.level)] \(entry.message)"
       },
-      helperLogs: helperLogs
+      helperLogs: helperLogs,
+      publicIPInfo: publicIPInfoState.info,
+      probeHost: proxyEffectProbeHost,
+      proxyEffect: proxyEffect
     )
   }
 
