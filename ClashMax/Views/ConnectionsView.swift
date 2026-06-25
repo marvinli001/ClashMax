@@ -18,7 +18,7 @@ enum ConnectionsLayout {
 
 struct ConnectionsView: View {
   @EnvironmentObject private var appModel: AppModel
-  @EnvironmentObject private var runtimeData: RuntimeDataStore
+  @Environment(RuntimeDataStore.self) private var runtimeData
   @State private var searchText = ""
   @State private var mode = ConnectionViewMode.active
   @State private var groupsByApp = false

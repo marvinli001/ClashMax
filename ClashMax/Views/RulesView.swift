@@ -2,7 +2,7 @@ import SwiftUI
 
 struct RulesView: View {
   @EnvironmentObject private var appModel: AppModel
-  @EnvironmentObject private var runtimeData: RuntimeDataStore
+  @Environment(RuntimeDataStore.self) private var runtimeData
   @State private var searchText = ""
 
   var body: some View {
@@ -184,7 +184,7 @@ private struct RulePolicyBadge: View {
 
 private struct RuleProviderList: View {
   @EnvironmentObject private var appModel: AppModel
-  @EnvironmentObject private var runtimeData: RuntimeDataStore
+  @Environment(RuntimeDataStore.self) private var runtimeData
   let providers: [RuleProvider]
 
   var body: some View {

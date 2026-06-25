@@ -1,45 +1,102 @@
-import Combine
+import Observation
 import XCTest
 @testable import ClashMax
 
 @MainActor
 final class RuntimeDataStoreTests: XCTestCase {
+  /// A Sendable box the one-shot `withObservationTracking` `onChange` can flip.
+  /// `onChange` is `@Sendable`, so under Swift 6 it cannot capture a mutable
+  /// local `var`; it always fires synchronously on this MainActor during the
+  /// mutation, so `@unchecked Sendable` is safe here.
+  private final class ChangeFlag: @unchecked Sendable {
+    var didChange = false
+  }
+
+  /// Arms a one-shot Observation tracker over the properties read in `access`,
+  /// runs `mutation`, and reports whether a tracked property was mutated.
+  /// `withObservationTracking`'s `onChange` fires once, synchronously, on the
+  /// first `willSet` of any property read in `access` — so this proves observer
+  /// fan-out at the property granularity without Combine/`objectWillChange`.
+  private func observedChange(
+    observing access: () -> Void,
+    during mutation: () -> Void
+  ) -> Bool {
+    let flag = ChangeFlag()
+    withObservationTracking(access) { flag.didChange = true }
+    mutation()
+    return flag.didChange
+  }
+
+  // MARK: - Per-property observation fan-out
+
+  func testTrafficSampleDoesNotTriggerRulesObserver() {
+    let store = RuntimeDataStore()
+    store.rules = [RuntimeRule(index: 0, type: "DOMAIN", payload: "seed.example", policy: "DIRECT")]
+
+    let rulesObserverFired = observedChange {
+      _ = store.rules
+    } during: {
+      store.appendTrafficSample(TrafficSample(upload: 100, download: 200))
+    }
+
+    XCTAssertFalse(
+      rulesObserverFired,
+      "appending a traffic sample must not invalidate a rules-only observer"
+    )
+  }
+
+  func testRulesMutationTriggersRulesObserver() {
+    let store = RuntimeDataStore()
+
+    let rulesObserverFired = observedChange {
+      _ = store.rules
+    } during: {
+      store.rules = [RuntimeRule(index: 0, type: "DOMAIN", payload: "example.com", policy: "PROXY")]
+    }
+
+    XCTAssertTrue(rulesObserverFired, "mutating rules must invalidate a rules observer")
+    XCTAssertEqual(store.rules.count, 1)
+  }
+
+  // MARK: - Log buffering
+
   func testLogBurstDoesNotPublishUntilFlush() async throws {
     let store = RuntimeDataStore()
-    var changeCount = 0
-    let cancellable = store.objectWillChange.sink { changeCount += 1 }
-    defer { cancellable.cancel() }
+    let flag = ChangeFlag()
+    withObservationTracking { _ = store.logs } onChange: { flag.didChange = true }
 
     for index in 0..<100 {
       store.appendLog(LogEntry(level: "debug", message: "line \(index)"))
     }
 
     XCTAssertEqual(store.logs.count, 0)
-    XCTAssertEqual(changeCount, 0)
+    XCTAssertFalse(flag.didChange, "buffered appends must not publish logs before flush")
 
     store.flushPendingLogs()
 
     XCTAssertEqual(store.logs.count, 100)
-    XCTAssertEqual(changeCount, 1)
+    XCTAssertTrue(flag.didChange, "flush must publish the buffered logs")
   }
 
   func testScheduledLogPublishCoalescesBurst() async throws {
     let store = RuntimeDataStore()
-    var changeCount = 0
-    let cancellable = store.objectWillChange.sink { changeCount += 1 }
-    defer { cancellable.cancel() }
+    let flag = ChangeFlag()
+    withObservationTracking { _ = store.logs } onChange: { flag.didChange = true }
 
     for index in 0..<20 {
       store.appendLog(LogEntry(level: "info", message: "line \(index)"))
     }
 
     XCTAssertEqual(store.logs.count, 0)
+    XCTAssertFalse(flag.didChange, "buffered appends must not publish before the scheduled flush")
 
     try await Task.sleep(nanoseconds: 350_000_000)
 
     XCTAssertEqual(store.logs.count, 20)
-    XCTAssertEqual(changeCount, 1)
+    XCTAssertTrue(flag.didChange, "the scheduled flush must publish the buffered burst")
   }
+
+  // MARK: - Connection history semantics
 
   func testConnectionHistoryTracksEndedRecords() async throws {
     let store = RuntimeDataStore()
@@ -79,13 +136,14 @@ final class RuntimeDataStoreTests: XCTestCase {
 
     store.replaceConnections([connection])
 
-    var changeCount = 0
-    let cancellable = store.objectWillChange.sink { changeCount += 1 }
-    defer { cancellable.cancel() }
+    let changed = observedChange {
+      _ = store.connections
+      _ = store.connectionRecords
+    } during: {
+      store.replaceConnections([connection])
+    }
 
-    store.replaceConnections([connection])
-
-    XCTAssertEqual(changeCount, 0)
+    XCTAssertFalse(changed, "an identical connection tick must not invalidate observers")
     XCTAssertEqual(store.connections, [connection])
     XCTAssertEqual(store.connectionRecords.count, 1)
   }
@@ -105,15 +163,16 @@ final class RuntimeDataStoreTests: XCTestCase {
 
     store.replaceConnections([connection])
 
-    var changeCount = 0
-    let cancellable = store.objectWillChange.sink { changeCount += 1 }
-    defer { cancellable.cancel() }
-
     var updated = connection
     updated.download = 999
-    store.replaceConnections([updated])
+    let changed = observedChange {
+      _ = store.connections
+      _ = store.connectionRecords
+    } during: {
+      store.replaceConnections([updated])
+    }
 
-    XCTAssertGreaterThan(changeCount, 0)
+    XCTAssertTrue(changed, "a changed connection must invalidate observers")
     XCTAssertEqual(store.connections, [updated])
     XCTAssertEqual(store.connectionRecords.first?.snapshot.download, 999)
   }
@@ -138,13 +197,15 @@ final class RuntimeDataStoreTests: XCTestCase {
     XCTAssertTrue(store.connectionRecords[0].isActive)
 
     // A second identical tick through the async path must not republish.
-    var changeCount = 0
-    let cancellable = store.objectWillChange.sink { changeCount += 1 }
-    defer { cancellable.cancel() }
+    let flag = ChangeFlag()
+    withObservationTracking {
+      _ = store.connections
+      _ = store.connectionRecords
+    } onChange: { flag.didChange = true }
 
     await store.updateConnections([connection])
 
-    XCTAssertEqual(changeCount, 0)
+    XCTAssertFalse(flag.didChange, "an identical async tick must not invalidate observers")
   }
 
   func testStaleConnectionUpdateDoesNotOverwriteClear() async {

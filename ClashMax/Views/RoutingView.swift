@@ -83,7 +83,7 @@ struct RoutingView: View {
   @EnvironmentObject private var appModel: AppModel
   @EnvironmentObject private var profileStore: ProfileStore
   @EnvironmentObject private var snippetLibrary: RuntimeSnippetLibraryStore
-  @EnvironmentObject private var runtimeData: RuntimeDataStore
+  @Environment(RuntimeDataStore.self) private var runtimeData
   @State private var selectedSnippetID: RuntimeSnippet.ID?
   @State private var draftSnippet = RuntimeSnippet.defaultRuleSnippet
   @State private var loadedSnippetSnapshot: RuntimeSnippet?

@@ -3,7 +3,7 @@ import SwiftUI
 
 struct ProxiesView: View {
   @EnvironmentObject private var appModel: AppModel
-  @EnvironmentObject private var runtimeData: RuntimeDataStore
+  @Environment(RuntimeDataStore.self) private var runtimeData
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @StateObject private var searchCoordinator = ProxySearchCoordinator()
   @State private var searchText = ""
@@ -1338,7 +1338,7 @@ private struct ProxyDelayBatchMetric: View {
 
 private struct ProxyProviderList: View {
   @EnvironmentObject private var appModel: AppModel
-  @EnvironmentObject private var runtimeData: RuntimeDataStore
+  @Environment(RuntimeDataStore.self) private var runtimeData
   let providers: [ProxyProvider]
 
   var body: some View {

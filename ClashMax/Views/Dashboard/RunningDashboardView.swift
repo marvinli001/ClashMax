@@ -3,7 +3,7 @@ import SwiftUI
 
 struct RunningDashboardView: View {
   @EnvironmentObject private var appModel: AppModel
-  @EnvironmentObject private var runtimeData: RuntimeDataStore
+  @Environment(RuntimeDataStore.self) private var runtimeData
   @StateObject private var currentNodeCoordinator = ProxySearchCoordinator()
   @State private var selectedProxyGroupName: String?
   let state: DashboardRuntimeState
@@ -190,7 +190,7 @@ struct RunningDashboardView: View {
 
 private struct RunningHeaderCard: View {
   @EnvironmentObject private var appModel: AppModel
-  @EnvironmentObject private var runtimeData: RuntimeDataStore
+  @Environment(RuntimeDataStore.self) private var runtimeData
   let state: DashboardRuntimeState
   let namespace: Namespace.ID
   let reduceMotion: Bool
@@ -671,7 +671,7 @@ private struct DashboardLabeledControl<Content: View>: View {
 
 private struct RunningStatusCard: View {
   @EnvironmentObject private var appModel: AppModel
-  @EnvironmentObject private var runtimeData: RuntimeDataStore
+  @Environment(RuntimeDataStore.self) private var runtimeData
 
   var body: some View {
     VStack(alignment: .leading, spacing: 14) {
@@ -1853,7 +1853,7 @@ private struct TrafficRuntimeCard: View {
 
 private struct ProxyGroupsRuntimeCard: View {
   @EnvironmentObject private var appModel: AppModel
-  @EnvironmentObject private var runtimeData: RuntimeDataStore
+  @Environment(RuntimeDataStore.self) private var runtimeData
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
@@ -1905,7 +1905,7 @@ private struct ProxyGroupsRuntimeCard: View {
 
 private struct ConnectionsRulesRuntimeCard: View {
   @EnvironmentObject private var appModel: AppModel
-  @EnvironmentObject private var runtimeData: RuntimeDataStore
+  @Environment(RuntimeDataStore.self) private var runtimeData
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
@@ -1945,7 +1945,7 @@ private struct ConnectionsRulesRuntimeCard: View {
 
 private struct RecentLogsRuntimeCard: View {
   @EnvironmentObject private var appModel: AppModel
-  @EnvironmentObject private var runtimeData: RuntimeDataStore
+  @Environment(RuntimeDataStore.self) private var runtimeData
 
   var body: some View {
     let visibleLogs = runtimeData.visibleLogs(developerMode: appModel.developerMode)

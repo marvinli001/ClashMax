@@ -15,7 +15,7 @@ enum MenuBarPanelLayout {
 
 struct MenuBarView: View {
   @EnvironmentObject private var appModel: AppModel
-  @EnvironmentObject private var runtimeData: RuntimeDataStore
+  @Environment(RuntimeDataStore.self) private var runtimeData
   @EnvironmentObject private var appUpdateController: AppUpdateController
 
   var body: some View {

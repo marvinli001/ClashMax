@@ -1,30 +1,40 @@
 import Foundation
+import Observation
 
 @MainActor
-final class RuntimeDataStore: ObservableObject {
+@Observable
+final class RuntimeDataStore {
   private static let logPublishIntervalNanoseconds: UInt64 = 250_000_000
 
-  @Published var proxyGroups: [ProxyGroup] = []
-  @Published var proxyProviders: [ProxyProvider] = []
-  @Published var ruleProviders: [RuleProvider] = []
-  @Published var rules: [RuntimeRule] = []
-  @Published var connections: [ConnectionSnapshot] = []
-  @Published var connectionRecords: [ConnectionRecord] = []
-  @Published private(set) var logs: [LogEntry] = []
-  @Published var trafficSample: TrafficSample = .zero
-  @Published var trafficHistory: [TrafficSample] = []
-  @Published private(set) var providerHealthChecksInFlight: Set<ProxyProvider.ID> = []
-  @Published private(set) var proxyProviderUpdatesInFlight: Set<ProxyProvider.ID> = []
-  @Published private(set) var ruleProviderUpdatesInFlight: Set<RuleProvider.ID> = []
-  @Published private(set) var closingConnectionIDs: Set<ConnectionSnapshot.ID> = []
-  @Published var closingAllConnections = false
+  var proxyGroups: [ProxyGroup] = []
+  var proxyProviders: [ProxyProvider] = []
+  var ruleProviders: [RuleProvider] = []
+  var rules: [RuntimeRule] = []
+  var connections: [ConnectionSnapshot] = []
+  var connectionRecords: [ConnectionRecord] = []
+  private(set) var logs: [LogEntry] = []
+  var trafficSample: TrafficSample = .zero
+  var trafficHistory: [TrafficSample] = []
+  private(set) var providerHealthChecksInFlight: Set<ProxyProvider.ID> = []
+  private(set) var proxyProviderUpdatesInFlight: Set<ProxyProvider.ID> = []
+  private(set) var ruleProviderUpdatesInFlight: Set<RuleProvider.ID> = []
+  private(set) var closingConnectionIDs: Set<ConnectionSnapshot.ID> = []
+  var closingAllConnections = false
 
+  // Internal implementation state, deliberately excluded from Observation
+  // tracking. These mutate on hot paths (per-log buffer appends, the debounce
+  // task handle, the connection-merge generation counter) but never represent
+  // observable UI state, so tracking them would only create useless invalidation.
+  @ObservationIgnored
   private var logBuffer = BoundedBuffer<LogEntry>(limit: AppConstants.retainedLogLimit)
+  @ObservationIgnored
   private var connectionRecordBuffer = BoundedBuffer<ConnectionRecord>(limit: AppConstants.retainedConnectionLimit)
+  @ObservationIgnored
   private var logPublishTask: Task<Void, Never>?
   // Bumped on every connection-state mutation. A background merge captures this
   // before hopping off the MainActor and bails on resume if it changed, so a
   // stale tick can't overwrite a newer synchronous update or a clear.
+  @ObservationIgnored
   private var connectionStateGeneration: UInt64 = 0
 
   var userVisibleLogs: [LogEntry] {

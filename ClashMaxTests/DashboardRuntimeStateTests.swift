@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import Observation
 import ServiceManagement
 import SwiftUI
 import XCTest
@@ -5562,12 +5563,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
     }
     await Task.yield()
 
-    var proxyGroupPublishes = 0
     var progressPublishes = 0
     var cancellables = Set<AnyCancellable>()
-    model.runtimeData.$proxyGroups
-      .sink { _ in proxyGroupPublishes += 1 }
-      .store(in: &cancellables)
+    // RuntimeDataStore is @Observable now, so count proxyGroups mutations through
+    // Observation instead of a Combine publisher. The counter re-arms synchronously,
+    // so every coalesced publish is tallied (a per-node regression would still spike).
+    let proxyGroupCounter = ObservationChangeCounter { _ = model.runtimeData.proxyGroups }
     model.$proxyDelayBatchProgress
       .sink { _ in progressPublishes += 1 }
       .store(in: &cancellables)
@@ -5592,9 +5593,9 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     // The coalesced pipeline must batch publishes well below the per-node baseline (~192).
     XCTAssertLessThan(
-      proxyGroupPublishes,
+      proxyGroupCounter.count,
       30,
-      "proxyGroups must not publish per-node during a large batch (got \(proxyGroupPublishes))"
+      "proxyGroups must not publish per-node during a large batch (got \(proxyGroupCounter.count))"
     )
     XCTAssertLessThan(
       progressPublishes,
@@ -11572,5 +11573,35 @@ private final class MutableCurrentNetworkProvider: CurrentNetworkProviding, @unc
 
   func currentSSID() -> String? {
     ssid
+  }
+}
+
+/// Counts Observation mutations to whatever `access` reads, replacing a Combine
+/// `Published.Publisher` subscriber now that `RuntimeDataStore` is `@Observable`.
+///
+/// `withObservationTracking`'s `onChange` is one-shot, so we re-arm *synchronously*
+/// from inside it. The firing `willSet` snapshots its observer list before invoking
+/// the callback, so the fresh registration only triggers on the *next* mutation —
+/// every change is tallied with no misses. All mutations and reads happen on the
+/// MainActor (the store and its mutators are `@MainActor`), so the actor hop-free
+/// re-arm via `assumeIsolated` is sound. The counter starts at 0: unlike a Combine
+/// publisher it does not emit the current value on subscription.
+@MainActor
+private final class ObservationChangeCounter {
+  private(set) var count = 0
+  private let access: () -> Void
+
+  init(_ access: @escaping () -> Void) {
+    self.access = access
+    arm()
+  }
+
+  private func arm() {
+    withObservationTracking(access) { [self] in
+      MainActor.assumeIsolated {
+        count += 1
+        arm()
+      }
+    }
   }
 }

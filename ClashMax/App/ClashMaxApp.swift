@@ -19,7 +19,7 @@ struct ClashMaxApp: App {
         .environmentObject(appModel.runtimeSnippetLibrary)
         .environmentObject(appModel.profileCoordinator)
         .environmentObject(appModel.systemProxy)
-        .environmentObject(appModel.runtimeData)
+        .environment(appModel.runtimeData)
         .environmentObject(appModel.publicIP)
         .environmentObject(appUpdateController)
         .appThemeAppearance(appModel.settings.appTheme)
@@ -114,7 +114,7 @@ struct ClashMaxApp: App {
         .environmentObject(appModel.runtimeSnippetLibrary)
         .environmentObject(appModel.profileCoordinator)
         .environmentObject(appModel.systemProxy)
-        .environmentObject(appModel.runtimeData)
+        .environment(appModel.runtimeData)
         .environmentObject(appModel.publicIP)
         .environmentObject(appUpdateController)
         .appThemeAppearance(appModel.settings.appTheme)
@@ -139,7 +139,7 @@ struct ClashMaxApp: App {
         .environmentObject(appModel.runtimeSnippetLibrary)
         .environmentObject(appModel.profileCoordinator)
         .environmentObject(appModel.systemProxy)
-        .environmentObject(appModel.runtimeData)
+        .environment(appModel.runtimeData)
         .environmentObject(appModel.publicIP)
         .environmentObject(appUpdateController)
         .appThemeAppearance(appModel.settings.appTheme)
@@ -156,7 +156,11 @@ struct ClashMaxApp: App {
 
 private struct MenuBarStatusLabel: View {
   @ObservedObject var appModel: AppModel
-  @ObservedObject var runtimeData: RuntimeDataStore
+  // RuntimeDataStore is @Observable, so SwiftUI tracks the `trafficSample` /
+  // `trafficHistory` reads in `body` directly off this plain reference — no
+  // property wrapper needed. appModel stays @ObservedObject for now (its broad
+  // ObservableObject migration is out of scope for this change).
+  let runtimeData: RuntimeDataStore
 
   init(appModel: AppModel) {
     self.appModel = appModel
