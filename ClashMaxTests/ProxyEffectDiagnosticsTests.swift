@@ -150,6 +150,46 @@ final class ProxyEffectDiagnosticsTests: XCTestCase {
     XCTAssertTrue(snapshot.reason.localizedCaseInsensitiveContains("Direct"))
   }
 
+  func testDirectRunModeProxyEffectPresentationDefaultsCollapsedUntilExpanded() {
+    let snapshot = ProxyEffectDiagnosticsBuilder.build(
+      ProxyEffectDiagnosticsInput(
+        publicIPInfo: makeInfo(countryCode: "US"),
+        routingMode: .systemProxy,
+        runMode: .direct,
+        systemProxyEnabled: true,
+        currentNodeName: "JP-01",
+        currentNodeType: "vless"
+      )
+    )
+
+    let collapsed = PublicIPProxyEffectPresentation(diagnostics: snapshot, isExpanded: false)
+    let expanded = PublicIPProxyEffectPresentation(diagnostics: snapshot, isExpanded: true)
+
+    XCTAssertTrue(collapsed.isCollapsible)
+    XCTAssertFalse(collapsed.showsDetails)
+    XCTAssertTrue(expanded.showsDetails)
+  }
+
+  func testNonDirectWarningProxyEffectPresentationStaysExpandedByDefault() {
+    let snapshot = ProxyEffectDiagnosticsBuilder.build(
+      ProxyEffectDiagnosticsInput(
+        publicIPInfo: makeInfo(countryCode: "CN", countryName: "China"),
+        routingMode: .systemProxy,
+        runMode: .rule,
+        systemProxyEnabled: true,
+        currentGroupName: "Proxies",
+        currentNodeName: "JP-01",
+        currentNodeType: "vless"
+      )
+    )
+
+    let presentation = PublicIPProxyEffectPresentation(diagnostics: snapshot, isExpanded: false)
+
+    XCTAssertEqual(snapshot.cause, .publicIPChina)
+    XCTAssertFalse(presentation.isCollapsible)
+    XCTAssertTrue(presentation.showsDetails)
+  }
+
   func testCurrentNodeNamedDirectIsReported() {
     let snapshot = ProxyEffectDiagnosticsBuilder.build(
       ProxyEffectDiagnosticsInput(

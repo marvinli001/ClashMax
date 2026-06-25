@@ -1099,12 +1099,12 @@ private struct NetworkPolicySettingsPopover: View {
           .toggleStyle(.checkbox)
 
         HStack {
-          if let error = draftRule.validationError {
-            Label(error, systemImage: "exclamationmark.triangle.fill")
-              .font(.caption)
-              .foregroundStyle(.red)
-              .lineLimit(2)
-          }
+            if let error = draftRule.validationError {
+              Label(error, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .lineLimit(2)
+            }
           Spacer()
           Button {
             addRule()
@@ -1446,12 +1446,12 @@ struct RuleOverlaySettingsEditor: View {
         }
 
         HStack {
-          if let error = draftRule.validationError {
-            Label(error, systemImage: "exclamationmark.triangle.fill")
-              .font(.caption)
-              .foregroundStyle(.red)
-              .lineLimit(2)
-          }
+            if let error = draftRule.validationError {
+              Label(error, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .lineLimit(2)
+            }
           Spacer()
           Button {
             addRule()
@@ -1478,12 +1478,12 @@ struct RuleOverlaySettingsEditor: View {
           .textFieldStyle(.roundedBorder)
 
         HStack {
-          if let error = draftDisabledRuleMatcher.validationError {
-            Label(error, systemImage: "exclamationmark.triangle.fill")
-              .font(.caption)
-              .foregroundStyle(.red)
-              .lineLimit(2)
-          }
+            if let error = draftDisabledRuleMatcher.validationError {
+              Label(error, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .lineLimit(2)
+            }
           Spacer()
           Button {
             addDisabledRuleMatcher()
@@ -1898,10 +1898,10 @@ private struct RuleOverlayEditableRuleRow: View {
         )
       }
 
-      Text(rule.runtimeRule)
-        .font(.system(.caption2, design: .monospaced))
-        .foregroundStyle(rule.validationError == nil ? Color.secondary : Color.red)
-        .lineLimit(1)
+        Text(rule.runtimeRule)
+          .font(.system(.caption2, design: .monospaced))
+          .foregroundStyle(rule.validationError == nil ? Color.secondary : Color.orange)
+          .lineLimit(1)
         .truncationMode(.middle)
     }
     .padding(.horizontal, 8)

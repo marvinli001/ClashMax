@@ -412,12 +412,12 @@ struct RoutingView: View {
         RuntimeDNSPatchEditor(settings: dnsPayloadBinding)
       }
 
-      if let validationError = draftSnippet.validationError {
-        Label(validationError, systemImage: "exclamationmark.triangle.fill")
-          .font(.caption)
-          .foregroundStyle(.red)
-          .lineLimit(3)
-      }
+        if let validationError = draftSnippet.validationError {
+          Label(validationError, systemImage: "exclamationmark.triangle.fill")
+            .font(.caption)
+            .foregroundStyle(.orange)
+            .lineLimit(3)
+        }
     }
   }
 
@@ -1294,7 +1294,7 @@ private struct RuntimeDNSPatchEditor: View {
       if let validationError = settings.validationError {
         Label(validationError, systemImage: "exclamationmark.triangle.fill")
           .font(.caption)
-          .foregroundStyle(.red)
+          .foregroundStyle(.orange)
           .lineLimit(3)
       }
     }

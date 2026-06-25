@@ -158,6 +158,48 @@ final class MenuBarPanelLayoutTests: XCTestCase {
     XCTAssertLessThanOrEqual(size.height, 52)
   }
 
+  func testProxyModeSelectorRowFitsPanelWidthInEnglishAndChinese() {
+    // Mirrors `MenuBarProxyModeSelector`'s layout (title + three icon/short-label
+    // options) without needing an `AppModel`. Both locales must stay inside the
+    // 312pt panel and on one compact line.
+    let localizedTitles: [(locale: String, title: String)] = [
+      ("en", "Proxy Mode"),
+      ("zh-Hans", "代理模式")
+    ]
+
+    for testCase in localizedTitles {
+      let view = MenuBarControlRow(
+        title: testCase.title,
+        systemImage: "network.badge.shield.half.filled"
+      ) {
+        HStack(spacing: 8) {
+          ForEach(ProxyRoutingMode.allCases) { mode in
+            Button {} label: {
+              MenuBarProxyModeOptionLabel(mode: mode)
+            }
+            .buttonStyle(.borderless)
+          }
+        }
+      }
+      .padding(MenuBarPanelLayout.padding)
+      .frame(width: MenuBarPanelLayout.width)
+      .environment(\.locale, Locale(identifier: testCase.locale))
+
+      let size = fittingSize(for: view, height: 80)
+
+      XCTAssertLessThanOrEqual(
+        size.width,
+        MenuBarPanelLayout.width + 1,
+        "Proxy Mode row overflowed the panel in \(testCase.locale)"
+      )
+      XCTAssertLessThanOrEqual(
+        size.height,
+        52,
+        "Proxy Mode row was not compact in \(testCase.locale)"
+      )
+    }
+  }
+
   func testFooterButtonLabelsKeepLongEnglishAndChineseTitlesInsidePanelWidth() {
     let view = HStack(spacing: 5) {
       MenuBarFooterButtonLabel(

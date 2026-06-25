@@ -57,6 +57,8 @@ struct MenuBarView: View {
       }
 
       VStack(spacing: 7) {
+        MenuBarProxyModeSelector()
+
         MenuBarControlRow(title: String(localized: "Run Mode"), systemImage: "slider.horizontal.3") {
           Picker("Run Mode", selection: Binding(
             get: { appModel.overrides.mode },
@@ -94,21 +96,6 @@ struct MenuBarView: View {
         ForEach(nodeSelectorGroups) { group in
           MenuBarGroupSelectionRow(group: group, systemImage: MenuBarNodeSelection.groupSymbolName)
         }
-
-        MenuBarControlRow(title: String(localized: "Proxy Routing"), systemImage: appModel.proxyRoutingMode.symbolName) {
-          Picker("Proxy Routing", selection: Binding(
-            get: { appModel.proxyRoutingMode },
-            set: { appModel.requestProxyRoutingMode($0) }
-          )) {
-            ForEach(ProxyRoutingMode.allCases) { mode in
-              Label(mode.displayName, systemImage: mode.symbolName)
-                .tag(mode)
-            }
-          }
-          .menuBarPopupPickerStyle()
-        }
-
-        MenuBarRoutingQuickButtons()
 
         MenuBarControlRow(title: systemProxyToggleTitle, systemImage: "network.badge.shield.half.filled") {
           Toggle("", isOn: Binding(
@@ -223,8 +210,8 @@ struct MenuBarView: View {
 
   private var systemProxyToggleTitle: String {
     appModel.systemProxyEnabled
-      ? String(localized: "Disable System Proxy")
-      : String(localized: "Enable System Proxy")
+      ? String(localized: "Stop Proxy Gateway")
+      : String(localized: "Start Proxy Gateway")
   }
 
   private func runRuntime() {
@@ -362,28 +349,59 @@ enum MenuBarTrafficStatusLabel {
   }
 }
 
-private struct MenuBarRoutingQuickButtons: View {
+/// Single row that merges the former "Proxy Routing" picker and the "Quick" icon
+/// strip into one control. Each option is an icon plus a short label (System / TUN
+/// / NE) and selecting one calls the same `appModel.requestProxyRoutingMode(_:)`
+/// the quick buttons used, so the proxy state machine, TUN/NE/System Proxy
+/// behavior, and runtime config are unchanged. Internal (not private) so layout
+/// tests can render it directly.
+struct MenuBarProxyModeSelector: View {
   @EnvironmentObject private var appModel: AppModel
 
   var body: some View {
-    HStack(spacing: 6) {
-      Label("Quick", systemImage: "bolt")
-        .font(.callout)
-        .lineLimit(1)
-      Spacer(minLength: 6)
-      HStack(spacing: 4) {
+    MenuBarControlRow(
+      title: String(localized: "Proxy Mode"),
+      systemImage: appModel.proxyRoutingMode.symbolName
+    ) {
+      HStack(spacing: 8) {
         ForEach(ProxyRoutingMode.allCases) { mode in
           Button {
             appModel.requestProxyRoutingMode(mode)
           } label: {
-            Image(systemName: mode.symbolName)
-              .frame(width: 24, height: 22)
+            MenuBarProxyModeOptionLabel(mode: mode)
           }
           .buttonStyle(.borderless)
           .foregroundStyle(appModel.proxyRoutingMode == mode ? Color.accentColor : Color.secondary)
           .help(mode.displayName)
         }
       }
+    }
+  }
+}
+
+/// Trailing label for one proxy-mode option: the routing mode's icon and a short,
+/// fixed abbreviation. The enclosing button tints it (accent when selected,
+/// secondary otherwise), matching the old quick-button highlight. The labels stay
+/// English so they read the same in both locales. Internal so layout tests can
+/// size the row without an `AppModel`.
+struct MenuBarProxyModeOptionLabel: View {
+  let mode: ProxyRoutingMode
+
+  var body: some View {
+    HStack(spacing: 3) {
+      Image(systemName: mode.symbolName)
+      Text(verbatim: MenuBarProxyModeOptionLabel.shortLabel(for: mode))
+    }
+    .font(.caption)
+    .lineLimit(1)
+    .fixedSize()
+  }
+
+  static func shortLabel(for mode: ProxyRoutingMode) -> String {
+    switch mode {
+    case .systemProxy: "System"
+    case .tun: "TUN"
+    case .neProxy: "NE"
     }
   }
 }

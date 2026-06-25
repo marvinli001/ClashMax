@@ -258,11 +258,13 @@ enum StatusStripSupplemental {
       switch tone {
       case .info:
         return .blue
-      case .success:
-        return .green
+        case .success:
+          return .green
+        case .warning:
+          return .orange
+        }
       }
     }
-  }
 }
 
 struct StatusStripContent: View {

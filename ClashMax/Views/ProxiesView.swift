@@ -1183,12 +1183,12 @@ private struct ProxyDelayBatchProgressStrip: View {
     switch progress.status {
     case .running, .completed:
       return .secondary
-    case .partiallyCompleted, .cancelled:
-      return .orange
-    case .failed:
-      return .red
+      case .partiallyCompleted, .cancelled:
+        return .orange
+      case .failed:
+        return .orange
+      }
     }
-  }
 
   private var metrics: some View {
     HStack(spacing: 8) {
@@ -1211,11 +1211,11 @@ private struct ProxyDelayBatchProgressStrip: View {
         systemImage: ProxyDelayFailureKind.timeout.systemImage,
         color: .orange
       )
-      ProxyDelayBatchMetric(
-        text: "\(progress.failed)",
-        systemImage: ProxyDelayFailureKind.other.systemImage,
-        color: .red
-      )
+        ProxyDelayBatchMetric(
+          text: "\(progress.failed)",
+          systemImage: ProxyDelayFailureKind.other.systemImage,
+          color: .orange
+        )
       if progress.cancelled > 0 {
         ProxyDelayBatchMetric(
           text: "\(progress.cancelled)",
@@ -1303,9 +1303,9 @@ private struct ProxyDelayBatchProgressStrip: View {
     failures: [ProxyDelayBatchFailure]
   ) -> some View {
     VStack(alignment: .leading, spacing: 3) {
-      Label("\(kind.displayName) \(count)", systemImage: kind.systemImage)
-        .font(.caption)
-        .foregroundStyle(kind == .timeout || kind == .cancelled ? .orange : .red)
+        Label("\(kind.displayName) \(count)", systemImage: kind.systemImage)
+          .font(.caption)
+          .foregroundStyle(.orange)
       ForEach(failures.prefix(3)) { failure in
         Text("\(failure.displayName): \(failure.message)")
           .font(.caption2)
@@ -1871,14 +1871,14 @@ struct ProxyDelayDisplay: Equatable {
     case let .measured(delay):
       label = "\(delay) ms"
       tone = ProxyDelayTone(delay: delay)
-    case .timeout:
-      label = "Timeout"
-      tone = .timeout
-    case .error:
-      label = "Error"
-      tone = .error
+      case .timeout:
+        label = "Timeout"
+        tone = .timeout
+      case .error:
+        label = "No result"
+        tone = .error
+      }
     }
-  }
 }
 
 enum ProxyDelayTone: Equatable {
@@ -1914,17 +1914,17 @@ enum ProxyDelayTone: Equatable {
       return .green
     case .good:
       return .mint
-    case .moderate:
-      return .yellow
-    case .slow:
-      return .red
-    case .timeout:
-      return .orange
-    case .error:
-      return .red
+      case .moderate:
+        return .yellow
+      case .slow:
+        return .orange
+      case .timeout:
+        return .orange
+      case .error:
+        return .orange
+      }
     }
   }
-}
 
 private struct DelayChip: View {
   let display: ProxyDelayDisplay

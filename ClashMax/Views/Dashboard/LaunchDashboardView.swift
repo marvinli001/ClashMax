@@ -367,6 +367,8 @@ private struct LaunchStatusMessage: View {
       return .blue
     case .success:
       return .green
+    case .warning:
+      return .orange
     }
   }
 }

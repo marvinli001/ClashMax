@@ -209,24 +209,27 @@ private extension SystemDNSOverrideState {
   }
 }
 
-struct AppNotice: Equatable {
-  enum Tone: Equatable {
-    case info
-    case success
-  }
+  struct AppNotice: Equatable {
+    enum Tone: Equatable {
+      case info
+      case success
+      case warning
+    }
 
   var message: String
   var tone: Tone
 
   var symbolName: String {
-    switch tone {
-    case .info:
-      return "info.circle.fill"
-    case .success:
-      return "checkmark.circle.fill"
+      switch tone {
+      case .info:
+        return "info.circle.fill"
+      case .success:
+        return "checkmark.circle.fill"
+      case .warning:
+        return "exclamationmark.triangle.fill"
+      }
     }
   }
-}
 
 struct InitialTunHelperPrompt: Equatable {
   enum PrimaryAction: Equatable {
@@ -711,6 +714,12 @@ final class AppModel: ObservableObject {
     lastError = summary
     isPublishingLastErrorWithDetails = false
     lastErrorDetails = details
+  }
+
+  private func publishWarningNotice(_ message: String, logMessage: String? = nil) {
+    lastError = nil
+    appNotice = AppNotice(message: message, tone: .warning)
+    appendAppLog(level: "warn", message: logMessage ?? message)
   }
   @Published private(set) var currentNetworkSSID: String?
   @Published private(set) var networkPolicyStatusMessage: String?
@@ -3487,12 +3496,12 @@ final class AppModel: ObservableObject {
     }
   }
 
-  private func applyNetworkPolicyRule(_ rule: NetworkPolicyRule, trigger: String, matchedSSID: String?) async {
-    if let validationError = rule.validationError {
-      networkPolicyStatusMessage = validationError
-      lastError = validationError
-      return
-    }
+    private func applyNetworkPolicyRule(_ rule: NetworkPolicyRule, trigger: String, matchedSSID: String?) async {
+      if let validationError = rule.validationError {
+        networkPolicyStatusMessage = validationError
+        publishWarningNotice(validationError)
+        return
+      }
 
     let automatic = trigger != "manual"
     let policyStartedRuntime = rule.autoStartRuntime && !isRunning && !startInFlight
@@ -4001,9 +4010,13 @@ final class AppModel: ObservableObject {
 
   private func applyTunHelperPreparationState(_ state: TunHelperPreparationState) {
     tunHelperPreparationState = state
-    if state.isFailure {
+    switch state {
+    case .requiresApproval, .notBootstrapped:
+      publishWarningNotice(state.message)
+      lastError = nil
+    case .failed:
       lastError = state.message
-    } else {
+    case .idle, .checking, .registered, .ready:
       lastError = nil
     }
   }
@@ -4252,23 +4265,25 @@ final class AppModel: ObservableObject {
         }
         self.applyTunHelperPreparationState(state)
         await self.updateTunHelperStatusDetail()
-      } catch is OperationTimedOutError {
-        let message = TunnelHelperClient.notBootstrappedMessage
-        self.helperClient.statusMessage = message
-        self.tunHelperPreparationState = .notBootstrapped(message)
-        self.lastError = message
-        await self.updateTunHelperStatusDetail()
-        if self.developerMode {
-          self.helperLogs = await self.helperLaunchdDiagnostics()
-        }
-      } catch {
-        let message = UserFacingError.message(for: error)
-        self.helperClient.statusMessage = message
-        self.tunHelperPreparationState = .notBootstrapped(message)
-        self.lastError = message
-        await self.updateTunHelperStatusDetail()
-        if self.developerMode {
-          self.helperLogs = await self.helperLaunchdDiagnostics()
+        } catch is OperationTimedOutError {
+          let message = TunnelHelperClient.notBootstrappedMessage
+          self.helperClient.statusMessage = message
+          self.tunHelperPreparationState = .notBootstrapped(message)
+          self.publishWarningNotice(message)
+          self.lastError = nil
+          await self.updateTunHelperStatusDetail()
+          if self.developerMode {
+            self.helperLogs = await self.helperLaunchdDiagnostics()
+          }
+        } catch {
+          let message = UserFacingError.message(for: error)
+          self.helperClient.statusMessage = message
+          self.tunHelperPreparationState = .notBootstrapped(message)
+          self.publishWarningNotice(message)
+          self.lastError = nil
+          await self.updateTunHelperStatusDetail()
+          if self.developerMode {
+            self.helperLogs = await self.helperLaunchdDiagnostics()
         }
       }
     }
@@ -4283,22 +4298,24 @@ final class AppModel: ObservableObject {
         }
         self.helperLogs = lines
         await self.updateTunHelperStatusDetail()
-      } catch is OperationTimedOutError {
-        let message = TunnelHelperClient.notBootstrappedMessage
-        self.helperClient.statusMessage = message
-        self.helperLogs = await self.helperLaunchdDiagnostics()
-        self.lastError = message
-        await self.updateTunHelperStatusDetail()
-      } catch {
-        let message = UserFacingError.message(for: error)
-        self.helperClient.statusMessage = message
-        if self.developerMode {
+        } catch is OperationTimedOutError {
+          let message = TunnelHelperClient.notBootstrappedMessage
+          self.helperClient.statusMessage = message
           self.helperLogs = await self.helperLaunchdDiagnostics()
+          self.publishWarningNotice(message)
+          self.lastError = nil
+          await self.updateTunHelperStatusDetail()
+        } catch {
+          let message = UserFacingError.message(for: error)
+          self.helperClient.statusMessage = message
+          if self.developerMode {
+            self.helperLogs = await self.helperLaunchdDiagnostics()
+          }
+          self.publishWarningNotice(message)
+          self.lastError = nil
+          await self.updateTunHelperStatusDetail()
         }
-        self.lastError = message
-        await self.updateTunHelperStatusDetail()
       }
-    }
   }
 
   private func helperLaunchdDiagnostics() async -> [String] {
@@ -4400,12 +4417,12 @@ final class AppModel: ObservableObject {
     testDelay(in: fallbackGroup, for: node)
   }
 
-  func testDelay(in group: ProxyGroup, testURL: URL? = nil) {
-    let selectableNodes = group.nodes.filter(\.isSelectable)
-    guard !selectableNodes.isEmpty else {
-      lastError = "\(group.name) has no selectable nodes to test."
-      return
-    }
+    func testDelay(in group: ProxyGroup, testURL: URL? = nil) {
+      let selectableNodes = group.nodes.filter(\.isSelectable)
+      guard !selectableNodes.isEmpty else {
+        publishWarningNotice("\(group.name) has no selectable nodes to test.")
+        return
+      }
     for node in selectableNodes {
       testDelay(in: group, for: node, testURL: testURL, reloadAfterCompletion: false)
     }
@@ -4440,10 +4457,10 @@ final class AppModel: ObservableObject {
     testURL: URL?,
     reloadAfterCompletion: Bool
   ) {
-    guard node.isSelectable else {
-      lastError = "\(node.name) cannot be tested from the runtime."
-      return
-    }
+      guard node.isSelectable else {
+        publishWarningNotice("\(node.name) cannot be tested from the runtime.")
+        return
+      }
     guard let apiClient = runtimeAPIClientForProxyAction() else { return }
     let settings = delayTestSettings
     let effectiveTestURL = testURL ?? customDelayTestURL(forGroupName: group.name) ?? AppConstants.defaultDelayTestURL
@@ -4470,12 +4487,13 @@ final class AppModel: ObservableObject {
         }
       } catch is CancellationError {
         return
-      } catch {
-        guard delayTestTokens[taskKey] == token else { return }
-        applyDelayState(delayState(for: error), to: nodeKey)
-        lastError = UserFacingError.message(for: error)
+        } catch {
+          guard delayTestTokens[taskKey] == token else { return }
+          let message = UserFacingError.message(for: error)
+          applyDelayState(delayState(message: message), to: nodeKey)
+          publishDelayWarning(for: node, in: group, message: message)
+        }
       }
-    }
   }
 
   private func startProxyDelayBatch(overrideTestURL: URL?) {
@@ -4691,15 +4709,16 @@ final class AppModel: ObservableObject {
       progress.finish()
     }
 
-    if cancelledItems.isEmpty,
-       let progress = proxyDelayBatchProgress,
-       progress.failureCount > 0 {
-      lastError = String.localizedStringWithFormat(
-        NSLocalizedString("Batch delay test finished with %lld failures.", comment: ""),
-        Int64(progress.failureCount)
-      )
-    }
-    reloadRuntimeData()
+      if cancelledItems.isEmpty,
+         let progress = proxyDelayBatchProgress,
+         progress.failureCount > 0 {
+        let message = String.localizedStringWithFormat(
+          NSLocalizedString("Batch delay test finished with %lld failures.", comment: ""),
+          Int64(progress.failureCount)
+        )
+        publishWarningNotice(message, logMessage: "\(message)\n\(progress.diagnosticText)")
+      }
+      reloadRuntimeData()
   }
 
   func healthCheckProvider(_ provider: ProxyProvider) {
@@ -6280,13 +6299,13 @@ final class AppModel: ObservableObject {
     await profileCoordinator.waitForPreviewRefresh()
   }
 
-  private func runtimeAPIClientForProxyAction() -> (any MihomoAPIControlling)? {
-    guard canControlRuntimeProxies, let apiClient else {
-      lastError = proxyRuntimeActionMessage
-      return nil
+    private func runtimeAPIClientForProxyAction() -> (any MihomoAPIControlling)? {
+      guard canControlRuntimeProxies, let apiClient else {
+        publishWarningNotice(proxyRuntimeActionMessage)
+        return nil
+      }
+      return apiClient
     }
-    return apiClient
-  }
 
   private func applySelectedProxy(groupName: String, nodeName: String?) {
     updateProxyGroupCollections { groups in
@@ -6492,13 +6511,23 @@ final class AppModel: ObservableObject {
     }
   }
 
-  private func delayState(for error: Error) -> ProxyDelayState {
-    let message = UserFacingError.message(for: error)
+  private func delayState(message: String) -> ProxyDelayState {
     let normalized = message.lowercased()
     if normalized.contains("timeout") || normalized.contains("timed out") {
       return .timeout
     }
     return .error(message)
+  }
+
+  private func publishDelayWarning(for node: ProxyNode, in group: ProxyGroup, message: String) {
+    let notice = String.localizedStringWithFormat(
+      NSLocalizedString("Delay test failed for %@. See Logs for details.", comment: ""),
+      node.name
+    )
+    let targetName = group.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      ? node.name
+      : "\(group.name) / \(node.name)"
+    publishWarningNotice(notice, logMessage: "Delay test failed for \(targetName): \(message)")
   }
 
   private func delayState(kind: ProxyDelayFailureKind, message: String) -> ProxyDelayState {

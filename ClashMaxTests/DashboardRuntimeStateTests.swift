@@ -581,7 +581,9 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.testDelay(for: node)
 
-    XCTAssertEqual(model.lastError, "Start the core before selecting proxies or testing delay.")
+    XCTAssertNil(model.lastError)
+    XCTAssertEqual(model.appNotice?.tone, .warning)
+    XCTAssertEqual(model.appNotice?.message, "Start the core before selecting proxies or testing delay.")
   }
 
   func testEarlyRuntimeAPIClientDoesNotEnableDelayBeforeCoreIsRunning() async throws {
@@ -617,7 +619,9 @@ final class DashboardRuntimeStateTests: XCTestCase {
     model.testDelay(for: group.nodes[0])
 
     let delayRequestCount = await client.delayRequestCount()
-    XCTAssertEqual(model.lastError, "Start the core before selecting proxies or testing delay.")
+    XCTAssertEqual(model.lastError, nil)
+    XCTAssertEqual(model.appNotice?.tone, .warning)
+    XCTAssertEqual(model.appNotice?.message, "Start the core before selecting proxies or testing delay.")
     XCTAssertEqual(delayRequestCount, 0)
   }
 
@@ -3361,7 +3365,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(ProxyDelayDisplay(state: .testing).tone, .testing)
     XCTAssertEqual(ProxyDelayDisplay(state: .timeout).label, "Timeout")
     XCTAssertEqual(ProxyDelayDisplay(state: .timeout).tone, .timeout)
-    XCTAssertEqual(ProxyDelayDisplay(state: .error("failed")).label, "Error")
+    XCTAssertEqual(ProxyDelayDisplay(state: .error("failed")).label, "No result")
     XCTAssertEqual(ProxyDelayDisplay(state: .error("failed")).tone, .error)
 
     XCTAssertEqual(ProxyDelayDisplay(delay: 101).tone, .good)
@@ -4220,11 +4224,18 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.testDelay(for: group.nodes[0])
 
-    for _ in 0..<30 where model.lastError == nil {
+    for _ in 0..<30 where model.appNotice == nil {
       await Task.yield()
     }
 
-    XCTAssertTrue(model.lastError?.contains("Native ping needs a server host") == true)
+    model.runtimeData.flushPendingLogs()
+
+    XCTAssertNil(model.lastError)
+    XCTAssertEqual(model.appNotice?.tone, .warning)
+    XCTAssertTrue(model.appNotice?.message.contains("Japan") == true)
+    XCTAssertTrue(model.logs.contains { entry in
+      entry.level == "warn" && entry.message.contains("Native ping needs a server host")
+    })
     let pingRequestCount = await pingTester.requestCount()
     let delayRequestCount = await client.delayRequestCount()
     XCTAssertEqual(pingRequestCount, 0)
@@ -5416,7 +5427,51 @@ final class DashboardRuntimeStateTests: XCTestCase {
       if case .error = state { return true }
       return false
     })
-    XCTAssertTrue(model.lastError?.contains("3") == true)
+    model.runtimeData.flushPendingLogs()
+    XCTAssertNil(model.lastError)
+    XCTAssertEqual(model.appNotice?.tone, .warning)
+    XCTAssertTrue(model.appNotice?.message.contains("3") == true)
+    XCTAssertTrue(model.logs.contains { entry in
+      entry.level == "warn"
+        && entry.message.contains("ClashMax batch delay diagnostics")
+        && entry.message.contains("Failures:")
+    })
+  }
+
+  func testSingleDelayFailurePublishesWarningNoticeAndLogInsteadOfGlobalError() async throws {
+    let group = ProxyGroup(
+      name: "Proxy",
+      type: "select",
+      selected: "Japan",
+      nodes: [ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true)]
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponses: [[group]],
+      testDelayResults: [0],
+      testDelayFailureMessages: ["Mihomo controller returned HTTP 503."]
+    )
+    let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [group])
+
+    model.testDelay(in: group, for: group.nodes[0])
+
+    for _ in 0..<80 where model.appNotice == nil {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 2_000_000)
+    }
+    model.runtimeData.flushPendingLogs()
+
+    let state = try XCTUnwrap(model.proxyGroups.first?.nodes.first?.resolvedDelayState)
+    if case let .error(message) = state {
+      XCTAssertEqual(message, "Mihomo controller returned HTTP 503.")
+    } else {
+      XCTFail("Expected an error delay state, got \(state)")
+    }
+    XCTAssertNil(model.lastError)
+    XCTAssertEqual(model.appNotice?.tone, .warning)
+    XCTAssertTrue(model.appNotice?.message.contains("Japan") == true)
+    XCTAssertTrue(model.logs.contains { entry in
+      entry.level == "warn" && entry.message.contains("Mihomo controller returned HTTP 503.")
+    })
   }
 
   func testBatchDelayTestingReportsMissingEndpointForNativePing() async throws {
@@ -5434,6 +5489,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
     try await waitForBatchProgress(model) { !$0.isRunning && $0.completed == 1 }
 
     XCTAssertEqual(model.proxyDelayBatchProgress?.failures.first?.kind, .missingEndpoint)
+    XCTAssertNil(model.lastError)
+    XCTAssertEqual(model.appNotice?.tone, .warning)
   }
 
   func testBatchDelayTestingCanBeCancelledWithoutLosingCompletedResults() async throws {
@@ -8982,6 +9039,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(service.registerCount, 0)
     XCTAssertEqual(service.openSettingsCount, 1)
     XCTAssertNil(model.lastError)
+    XCTAssertEqual(model.appNotice?.tone, .warning)
+    XCTAssertEqual(model.appNotice?.message, TunnelHelperClient.statusMessage(for: .requiresApproval))
     XCTAssertNotNil(model.readinessIssue)
 
     model.start()
@@ -9357,7 +9416,9 @@ final class DashboardRuntimeStateTests: XCTestCase {
       model.tunHelperPreparationState,
       .notBootstrapped(TunnelHelperClient.notBootstrappedMessage)
     )
-    XCTAssertEqual(model.lastError, TunnelHelperClient.notBootstrappedMessage)
+    XCTAssertNil(model.lastError)
+    XCTAssertEqual(model.appNotice?.tone, .warning)
+    XCTAssertEqual(model.appNotice?.message, TunnelHelperClient.notBootstrappedMessage)
   }
 
   func testSelectingTunStopsCheckingWhenHelperBootstrapFails() async throws {
@@ -9392,7 +9453,9 @@ final class DashboardRuntimeStateTests: XCTestCase {
       .notBootstrapped(TunnelHelperClient.notBootstrappedMessage)
     )
     XCTAssertEqual(model.readinessIssue, TunnelHelperClient.notBootstrappedMessage)
-    XCTAssertEqual(model.lastError, TunnelHelperClient.notBootstrappedMessage)
+    XCTAssertNil(model.lastError)
+    XCTAssertEqual(model.appNotice?.tone, .warning)
+    XCTAssertEqual(model.appNotice?.message, TunnelHelperClient.notBootstrappedMessage)
     XCTAssertEqual(service.unregisterCount, 1)
     XCTAssertEqual(service.registerCount, 1)
   }

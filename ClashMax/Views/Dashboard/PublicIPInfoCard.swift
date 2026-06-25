@@ -10,6 +10,7 @@ struct PublicIPInfoCard: View {
   var currentNode: ProxyNode?
   var hasMissingSelection = false
   @State private var showsFullIP = false
+  @State private var isDirectModeProxyEffectExpanded = false
 
   var body: some View {
     TimelineView(.periodic(from: Date(), by: 5)) { context in
@@ -119,49 +120,95 @@ struct PublicIPInfoCard: View {
       currentNode: currentNode,
       hasMissingSelection: hasMissingSelection
     )
+    let presentation = PublicIPProxyEffectPresentation(
+      diagnostics: diagnostics,
+      isExpanded: isDirectModeProxyEffectExpanded
+    )
+
     return VStack(alignment: .leading, spacing: isCompact ? 7 : 9) {
       Divider()
         .opacity(0.24)
 
-      HStack(spacing: 8) {
-        Image(systemName: proxyEffectSymbol(diagnostics.status))
-          .font(.system(size: 12, weight: .semibold))
-          .foregroundStyle(proxyEffectTint(diagnostics.status))
-          .frame(width: 16)
-        Text("Proxy Effect")
-          .font(.caption.weight(.semibold))
-          .foregroundStyle(.secondary)
-        Spacer(minLength: 6)
-        Text(diagnostics.statusLabel)
+      proxyEffectHeader(diagnostics, presentation: presentation)
+
+      if presentation.showsDetails {
+        Text(diagnostics.reason)
+          .font(.caption)
+          .foregroundStyle(.primary)
+          .fixedSize(horizontal: false, vertical: true)
+
+        if !diagnostics.facts.isEmpty {
+          LazyVGrid(columns: detailColumns, alignment: .leading, spacing: isCompact ? 5 : 7) {
+            ForEach(Array(diagnostics.facts.prefix(4).enumerated()), id: \.offset) { _, fact in
+              PublicIPInfoDetail(title: fact.title, value: fact.value)
+            }
+          }
+        }
+
+        if !diagnostics.recoveryActions.isEmpty {
+          VStack(alignment: .leading, spacing: 3) {
+            ForEach(Array(diagnostics.recoveryActions.enumerated()), id: \.offset) { _, action in
+              Label(action, systemImage: "arrow.turn.down.right")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+          }
+        }
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .animation(.easeInOut(duration: 0.16), value: presentation.showsDetails)
+    .onChange(of: diagnostics.cause) { _, cause in
+      if cause != .directRunMode {
+        isDirectModeProxyEffectExpanded = false
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func proxyEffectHeader(
+    _ diagnostics: ProxyEffectDiagnosticsSnapshot,
+    presentation: PublicIPProxyEffectPresentation
+  ) -> some View {
+    if presentation.isCollapsible {
+      Button {
+        isDirectModeProxyEffectExpanded.toggle()
+      } label: {
+        proxyEffectHeaderContent(diagnostics, presentation: presentation)
+      }
+      .buttonStyle(.plain)
+      .contentShape(Rectangle())
+      .help(isDirectModeProxyEffectExpanded ? "Collapse proxy effect details" : "Show proxy effect details")
+    } else {
+      proxyEffectHeaderContent(diagnostics, presentation: presentation)
+    }
+  }
+
+  private func proxyEffectHeaderContent(
+    _ diagnostics: ProxyEffectDiagnosticsSnapshot,
+    presentation: PublicIPProxyEffectPresentation
+  ) -> some View {
+    HStack(spacing: 8) {
+      Image(systemName: proxyEffectSymbol(diagnostics.status))
+        .font(.system(size: 12, weight: .semibold))
+        .foregroundStyle(proxyEffectTint(diagnostics.status))
+        .frame(width: 16)
+      Text("Proxy Effect")
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+      Spacer(minLength: 6)
+      Text(diagnostics.statusLabel)
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(proxyEffectTint(diagnostics.status))
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2)
+        .background(proxyEffectTint(diagnostics.status).opacity(0.14), in: Capsule())
+      if presentation.isCollapsible {
+        Image(systemName: presentation.showsDetails ? "chevron.down" : "chevron.right")
           .font(.caption2.weight(.semibold))
-          .foregroundStyle(proxyEffectTint(diagnostics.status))
-          .padding(.horizontal, 7)
-          .padding(.vertical, 2)
-          .background(proxyEffectTint(diagnostics.status).opacity(0.14), in: Capsule())
-      }
-
-      Text(diagnostics.reason)
-        .font(.caption)
-        .foregroundStyle(.primary)
-        .fixedSize(horizontal: false, vertical: true)
-
-      if !diagnostics.facts.isEmpty {
-        LazyVGrid(columns: detailColumns, alignment: .leading, spacing: isCompact ? 5 : 7) {
-          ForEach(Array(diagnostics.facts.prefix(4).enumerated()), id: \.offset) { _, fact in
-            PublicIPInfoDetail(title: fact.title, value: fact.value)
-          }
-        }
-      }
-
-      if !diagnostics.recoveryActions.isEmpty {
-        VStack(alignment: .leading, spacing: 3) {
-          ForEach(Array(diagnostics.recoveryActions.enumerated()), id: \.offset) { _, action in
-            Label(action, systemImage: "arrow.turn.down.right")
-              .font(.caption2)
-              .foregroundStyle(.secondary)
-              .fixedSize(horizontal: false, vertical: true)
-          }
-        }
+          .foregroundStyle(.secondary)
+          .frame(width: 10)
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -329,6 +376,19 @@ struct PublicIPInfoCard: View {
     return String(format: "%.2f, %.2f", latitude, longitude)
   }
 
+}
+
+struct PublicIPProxyEffectPresentation: Equatable {
+  var diagnostics: ProxyEffectDiagnosticsSnapshot
+  var isExpanded: Bool
+
+  var isCollapsible: Bool {
+    diagnostics.status == .warn && diagnostics.cause == .directRunMode
+  }
+
+  var showsDetails: Bool {
+    !isCollapsible || isExpanded
+  }
 }
 
 private struct PublicIPInfoDetail: View {

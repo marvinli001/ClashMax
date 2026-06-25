@@ -348,7 +348,7 @@ final class MenuBarNodeSelectionTests: XCTestCase {
       selected: "X",
       nodes: [node("X", delayState: .error("boom"))]
     )
-    XCTAssertEqual(MenuBarNodeSelection.currentDelayDisplay(for: errored).label, "Error")
+    XCTAssertEqual(MenuBarNodeSelection.currentDelayDisplay(for: errored).label, "No result")
   }
 
   func testNodeMenuTitleAppendsDelayExceptWhenUnknown() {
@@ -366,7 +366,7 @@ final class MenuBarNodeSelectionTests: XCTestCase {
     )
     XCTAssertEqual(
       MenuBarNodeSelection.nodeMenuTitle(for: node("JP", delayState: .error("x"))),
-      "JP · Error"
+      "JP · No result"
     )
     // Unknown is omitted so large node menus stay readable.
     XCTAssertEqual(
