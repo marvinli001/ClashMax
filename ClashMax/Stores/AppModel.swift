@@ -822,6 +822,7 @@ final class AppModel: ObservableObject {
   private var tunSettingsApplyTask: Task<Void, Never>?
   private var tunSettingsApplyToken: UUID?
   private var streamTasks: [Task<Void, Never>] = []
+  private var runtimeStreamToken: UUID?
   private var networkExtensionDiagnosticsTask: Task<Void, Never>?
   private var tunDiagnosticsTask: Task<Void, Never>?
   private var publishedNetworkExtensionDiagnosticEventIDs: Set<String> = []
@@ -840,6 +841,7 @@ final class AppModel: ObservableObject {
   private static let previewRuntimeMixedPort = 17_890
   private static let previewRuntimeControllerPort = 19_097
   private static let proxyDelayBatchConcurrencyLimit = 6
+  private static let runtimeStreamReconnectDelayNanoseconds: UInt64 = 1_000_000_000
   // Issue #11: batch delay results are coalesced before touching `@Published` state. A flush
   // happens once `proxyDelayBatchFlushCount` results have accumulated or once
   // `proxyDelayBatchFlushIntervalMs` has elapsed since the last flush, whichever comes first
@@ -5984,8 +5986,7 @@ final class AppModel: ObservableObject {
     }
     result.networkExtensionDNSRestoreError = networkExtensionStopResult.dnsRestoreError
     apiClient = nil
-    streamTasks.forEach { $0.cancel() }
-    streamTasks.removeAll()
+    cancelRuntimeStreams()
     let coreStopResult = await coreController.stop()
     if let error = coreStopResult.error {
       result.coreStopError = error
@@ -6232,8 +6233,7 @@ final class AppModel: ObservableObject {
     result.didRunLocalCleanup = true
     apiClient = nil
     cancelPublicIPInfoRefresh(clearState: true)
-    streamTasks.forEach { $0.cancel() }
-    streamTasks.removeAll()
+    cancelRuntimeStreams()
     stopNetworkExtensionDiagnosticsPolling()
     let coreStopResult = await coreController.stop()
     if let error = coreStopResult.error {
@@ -6927,34 +6927,103 @@ final class AppModel: ObservableObject {
   }
 
   private func startStreams(client: any MihomoAPIControlling, logLevel: String? = nil) {
-    streamTasks.forEach { $0.cancel() }
+    cancelRuntimeStreams()
+    let token = UUID()
+    runtimeStreamToken = token
     let logLevel = logLevel ?? settings.appliedRuntimeSettingsSnapshot?.overrides.logLevel ?? overrides.logLevel
     streamTasks = [
       Task { [weak self] in
-        do {
-          for try await sample in client.trafficStream() {
-            // This Task inherits the enclosing @MainActor method's isolation, so
-            // the loop body already runs on the main actor — no MainActor.run hop.
-            self?.appendTrafficSample(sample)
-          }
-        } catch {}
+        await self?.runTrafficStream(client: client, token: token)
       },
       Task { [weak self] in
-        do {
-          for try await entry in client.logStream(level: logLevel) {
-            self?.runtimeData.appendLog(entry)
-          }
-        } catch {}
+        await self?.runLogStream(client: client, logLevel: logLevel, token: token)
       },
       Task { [weak self] in
-        do {
-          for try await snapshot in client.connectionStream(interval: 1000) {
-            await self?.runtimeData.updateConnections(snapshot)
-          }
-        } catch {}
+        await self?.runConnectionStream(client: client, token: token)
       }
     ]
     reloadRuntimeData()
+  }
+
+  private func cancelRuntimeStreams() {
+    runtimeStreamToken = nil
+    streamTasks.forEach { $0.cancel() }
+    streamTasks.removeAll()
+  }
+
+  private func shouldKeepRuntimeStreamsRunning(token: UUID) -> Bool {
+    runtimeStreamToken == token && isCoreRunning && apiClient != nil
+  }
+
+  private func runTrafficStream(client: any MihomoAPIControlling, token: UUID) async {
+    while shouldRetryRuntimeStream(token: token) {
+      do {
+        for try await sample in client.trafficStream() {
+          guard !Task.isCancelled else { return }
+          appendTrafficSample(sample)
+        }
+      } catch is CancellationError {
+        return
+      } catch {
+        guard shouldRetryRuntimeStream(token: token) else { return }
+      }
+
+      guard shouldRetryRuntimeStream(token: token) else { return }
+      clearStaleTrafficSampleDuringReconnect()
+      guard await waitBeforeRuntimeStreamReconnect(token: token) else { return }
+    }
+  }
+
+  private func runLogStream(client: any MihomoAPIControlling, logLevel: String, token: UUID) async {
+    while shouldRetryRuntimeStream(token: token) {
+      do {
+        for try await entry in client.logStream(level: logLevel) {
+          guard !Task.isCancelled else { return }
+          runtimeData.appendLog(entry)
+        }
+      } catch is CancellationError {
+        return
+      } catch {
+        guard shouldRetryRuntimeStream(token: token) else { return }
+      }
+
+      guard await waitBeforeRuntimeStreamReconnect(token: token) else { return }
+    }
+  }
+
+  private func runConnectionStream(client: any MihomoAPIControlling, token: UUID) async {
+    while shouldRetryRuntimeStream(token: token) {
+      do {
+        for try await snapshot in client.connectionStream(interval: 1000) {
+          guard !Task.isCancelled else { return }
+          await runtimeData.updateConnections(snapshot)
+        }
+      } catch is CancellationError {
+        return
+      } catch {
+        guard shouldRetryRuntimeStream(token: token) else { return }
+      }
+
+      guard await waitBeforeRuntimeStreamReconnect(token: token) else { return }
+    }
+  }
+
+  private func shouldRetryRuntimeStream(token: UUID) -> Bool {
+    !Task.isCancelled && shouldKeepRuntimeStreamsRunning(token: token)
+  }
+
+  private func waitBeforeRuntimeStreamReconnect(token: UUID) async -> Bool {
+    do {
+      try await Task.sleep(nanoseconds: Self.runtimeStreamReconnectDelayNanoseconds)
+      return shouldRetryRuntimeStream(token: token)
+    } catch {
+      return false
+    }
+  }
+
+  private func clearStaleTrafficSampleDuringReconnect() {
+    guard runtimeData.trafficSample != .zero else { return }
+    runtimeData.appendTrafficSample(.zero)
   }
 
   private func appendTrafficSample(_ sample: TrafficSample) {

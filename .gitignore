@@ -29,3 +29,4 @@ Resources/Core/*.gz
 !Resources/Core/mihomo-manifest.json
 docs/APP_UPDATES.md
 docs/UI_LIQUID_GLASS_SWIFT6_AUDIT.md
+ISSUE_22_PENDING_VERIFICATION.md
