@@ -43,10 +43,13 @@ struct LogsView: View {
               .frame(width: 80, alignment: .leading)
             Text(entry.level.uppercased())
               .fontWeight(.semibold)
+              .foregroundStyle(LogLevelStyle.color(for: entry.level))
               .frame(width: 70, alignment: .leading)
             Text(entry.message)
               .font(.system(.body, design: .monospaced))
               .lineLimit(2)
+              .truncationMode(.middle)
+              .help(entry.message)
           }
         }
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -69,9 +72,26 @@ struct LogsView: View {
     case .warning:
       return entries.filter { ["warn", "warning"].contains($0.level.lowercased()) }
     case .error:
-      return entries.filter { ["error", "fatal"].contains($0.level.lowercased()) }
+      return entries.filter { ["error", "fatal", "panic"].contains($0.level.lowercased()) }
     case .debug:
       return entries.filter { ["debug", "trace"].contains($0.level.lowercased()) }
+    }
+  }
+}
+
+enum LogLevelStyle {
+  static func color(for level: String) -> Color {
+    switch level.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "error", "fatal", "panic":
+      return .red
+    case "warn", "warning":
+      return .orange
+    case "debug", "trace":
+      return .purple
+    case "info", "information":
+      return .secondary
+    default:
+      return .secondary
     }
   }
 }

@@ -1963,12 +1963,15 @@ private struct RecentLogsRuntimeCard: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
               Text(entry.level.uppercased())
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(levelColor(entry.level))
+                .foregroundStyle(LogLevelStyle.color(for: entry.level))
                 .frame(width: 56, alignment: .leading)
               Text(entry.message)
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(.secondary)
-                .lineLimit(1)
+                .lineLimit(2)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .help(entry.message)
             }
           }
         }
@@ -1977,19 +1980,6 @@ private struct RecentLogsRuntimeCard: View {
     .padding(14)
     .frame(maxWidth: .infinity, minHeight: 230, alignment: .topLeading)
     .dashboardCard()
-  }
-
-  private func levelColor(_ level: String) -> Color {
-    switch level.lowercased() {
-    case "error":
-      return .red
-    case "warning", "warn":
-      return .orange
-    case "debug":
-      return .purple
-    default:
-      return .secondary
-    }
   }
 }
 

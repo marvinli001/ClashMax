@@ -120,14 +120,14 @@ final class MenuBarRuntimePresentationTests: XCTestCase {
 }
 
 final class MenuBarTrafficStatusLabelTests: XCTestCase {
-  func testShowsCompactUpDownLabelWhileRunningWithData() {
+  func testShowsCompactUploadThenDownloadLinesWhileRunningWithData() {
     let label = MenuBarTrafficStatusLabel.text(
       showsTraffic: true,
       hasTrafficData: true,
       sample: TrafficSample(upload: 348, download: 2048)
     )
 
-    XCTAssertEqual(label, "↓2KB/s ↑348B/s")
+    XCTAssertEqual(label, "↑348B/s\n↓2KB/s")
   }
 
   func testLabelStripsInternalUnitSpacingToStayNarrow() {
@@ -139,8 +139,8 @@ final class MenuBarTrafficStatusLabelTests: XCTestCase {
 
     // Reuses TrafficSample.format units (KB/s, B/s) so the menu bar stays
     // consistent with the rest of the app, but drops the internal number/unit
-    // spacing so the status item is narrower and stays on one line (Discussion #20).
-    XCTAssertEqual(label, "↓22KB/s ↑48B/s")
+    // spacing so each status item row stays narrow (Discussion #20).
+    XCTAssertEqual(label, "↑48B/s\n↓22KB/s")
     guard let label else { return XCTFail("Expected a traffic label") }
     XCTAssertFalse(label.contains(" KB/s"))
     XCTAssertFalse(label.contains(" B/s"))
@@ -194,7 +194,7 @@ final class MenuBarTrafficStatusLabelTests: XCTestCase {
       sample: .zero
     )
 
-    XCTAssertEqual(label, "↓0B/s ↑0B/s")
+    XCTAssertEqual(label, "↑0B/s\n↓0B/s")
   }
 }
 

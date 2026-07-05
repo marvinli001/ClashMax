@@ -7051,14 +7051,45 @@ final class AppModel: ObservableObject {
     }
   }
 
-  private func publishStartupDiagnostics(level: String = "info") {
+  private func publishStartupDiagnostics(level fallbackLevel: String = "info") {
     for diagnostic in coreController.startupDiagnostics {
-      appendAppLog(level: level, message: diagnostic)
+      appendAppLog(level: startupDiagnosticLogLevel(for: diagnostic, fallbackLevel: fallbackLevel), message: diagnostic)
     }
     if !coreController.recentCoreLog.isEmpty {
       appendAppLog(level: "error", message: "Core tail: \(coreController.recentCoreLog)")
     }
   }
+
+  private func startupDiagnosticLogLevel(for message: String, fallbackLevel: String) -> String {
+    let normalized = message.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    if Self.informationalStartupDiagnosticPrefixes.contains(where: { normalized.hasPrefix($0) }) {
+      return "info"
+    }
+    if normalized.hasPrefix("mihomo pid ") && normalized.contains("did not exit after sigterm") {
+      return "warn"
+    }
+    if Self.failureStartupDiagnosticPrefixes.contains(where: { normalized.hasPrefix($0) }) {
+      return "error"
+    }
+    return fallbackLevel
+  }
+
+  private static let informationalStartupDiagnosticPrefixes = [
+    "validating runtime config:",
+    "using mihomo core:",
+    "reaping stale clashmax-managed mihomo processes",
+    "checking runtime ports:",
+    "launching mihomo with config:",
+    "mihomo launch pid:",
+    "mihomo controller ready:"
+  ]
+
+  private static let failureStartupDiagnosticPrefixes = [
+    "port ",
+    "readiness failed:",
+    "mihomo exited before controller readiness:",
+    "core tail:"
+  ]
 
   private func startupDiagnosticsSummary() -> String {
     var lines = coreController.startupDiagnostics
