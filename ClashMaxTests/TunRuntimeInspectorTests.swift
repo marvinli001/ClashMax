@@ -9,7 +9,7 @@ final class TunRuntimeInspectorTests: XCTestCase {
       "/sbin/route -n get default": "route to: default\ninterface: utun1024\n",
       "/usr/sbin/netstat -rn": "Destination Gateway Flags Netif\n10/8 link#1 UCS en0\n",
       "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n",
-      "/usr/bin/curl -fsS -o /dev/null -w %{http_code} --max-time 5 https://www.gstatic.com/generate_204": "204",
+      "/usr/bin/curl -sS -o /dev/null -w %{http_code} --max-time 5 https://www.gstatic.com/generate_204": "204",
       "/usr/bin/dig @1.1.1.1 +time=2 +tries=1 +short example.com A": "93.184.216.34\n"
     ])
     let inspector = TunRuntimeInspector(commandRunner: runner)
@@ -34,7 +34,7 @@ final class TunRuntimeInspectorTests: XCTestCase {
       "/sbin/route -n get default": "route to: default\ninterface: en0\n",
       "/usr/sbin/netstat -rn": "Destination Gateway Flags Netif\n",
       "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "142.250.191.68\n",
-      "/usr/bin/curl -fsS -o /dev/null -w %{http_code} --max-time 5 https://www.gstatic.com/generate_204": "000",
+      "/usr/bin/curl -sS -o /dev/null -w %{http_code} --max-time 5 https://www.gstatic.com/generate_204": "000",
       "/usr/bin/dig @1.1.1.1 +time=2 +tries=1 +short example.com A": ""
     ])
     let inspector = TunRuntimeInspector(commandRunner: runner)
@@ -69,6 +69,24 @@ final class TunRuntimeInspectorTests: XCTestCase {
     XCTAssertEqual(snapshot.check(id: "external-udp")?.status, .skipped)
     XCTAssertFalse(runner.commands.contains { $0.contains("https://www.gstatic.com/generate_204") })
     XCTAssertFalse(runner.commands.contains { $0.contains("@1.1.1.1") })
+  }
+
+  func testExternalTCPReportsHTTPStatusInsteadOfCommandFailure() async {
+    let runner = RecordingCommandRunner(outputs: [
+      "/usr/bin/curl -fsS --max-time 2 -H Authorization: Bearer secret http://127.0.0.1:9097/version": #"{"version":"v1.19.24"}"#,
+      "/sbin/ifconfig": "utun1024: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500\n",
+      "/sbin/route -n get default": "route to: default\ninterface: utun1024\n",
+      "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n",
+      "/usr/bin/curl -sS -o /dev/null -w %{http_code} --max-time 5 https://www.gstatic.com/generate_204": "503",
+      "/usr/bin/dig @1.1.1.1 +time=2 +tries=1 +short example.com A": "93.184.216.34\n"
+    ])
+    let inspector = TunRuntimeInspector(commandRunner: runner)
+
+    let snapshot = await inspector.inspect(configuration(routeExcludes: []))
+
+    XCTAssertEqual(snapshot.check(id: "external-tcp")?.status, .fail)
+    XCTAssertEqual(snapshot.check(id: "external-tcp")?.message, "External TCP probe returned HTTP 503.")
+    XCTAssertTrue(runner.commands.contains("/usr/bin/curl -sS -o /dev/null -w %{http_code} --max-time 5 https://www.gstatic.com/generate_204"))
   }
 
   func testControllerProbeUsesBearerAuthAndFailsWhenControllerResponseIsMissing() async {

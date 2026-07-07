@@ -452,7 +452,7 @@ struct TunRuntimeInspector: TunRuntimeInspecting {
       let output = try await commandRunner.run(
         Command.curl,
         [
-          "-fsS",
+          "-sS",
           "-o",
           "/dev/null",
           "-w",
