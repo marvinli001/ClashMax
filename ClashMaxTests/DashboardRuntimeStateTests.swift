@@ -7839,6 +7839,119 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(model.lastError?.contains("controller refused connection") == true)
   }
 
+  func testStoppingWhileTunHelperStartIsPendingStopsHelperAfterItsReply() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let helperTransport = ControllableStartTunnelHelperTransport()
+    let helper = TunnelHelperClient(
+      transport: helperTransport,
+      service: StaticHelperService(status: .enabled),
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      helperClient: helper,
+      tunnelReadinessProbe: RecordingCoreReadinessProbe(),
+      tunRuntimeInspector: RecordingTunRuntimeInspector(snapshots: [.empty]),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.requestProxyRoutingMode(.tun)
+    for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
+      await Task.yield()
+    }
+
+    model.start()
+    for _ in 0..<160 {
+      let startCount = await helperTransport.startCount()
+      if startCount == 1 { break }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    model.stop()
+    await helperTransport.releaseNextStart()
+    for _ in 0..<1_000 {
+      let stopCount = await helperTransport.stopCount()
+      if stopCount == 1, !model.needsTerminationCleanup { break }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let startCount = await helperTransport.startCount()
+    let stopCount = await helperTransport.stopCount()
+    XCTAssertEqual(startCount, 1)
+    XCTAssertEqual(stopCount, 1)
+    XCTAssertFalse(model.startInFlight)
+    XCTAssertFalse(model.isRunning)
+    XCTAssertFalse(model.tunEnabled)
+    XCTAssertNil(model.tunHelperPID)
+  }
+
+  func testStartRequestedDuringStopWaitsForPendingTunStartCleanup() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let helperTransport = ControllableStartTunnelHelperTransport()
+    let helper = TunnelHelperClient(
+      transport: helperTransport,
+      service: StaticHelperService(status: .enabled),
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      helperClient: helper,
+      tunnelReadinessProbe: RecordingCoreReadinessProbe(),
+      tunRuntimeInspector: RecordingTunRuntimeInspector(snapshots: [.empty]),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.requestProxyRoutingMode(.tun)
+    for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
+      await Task.yield()
+    }
+
+    model.start()
+    for _ in 0..<160 {
+      let startCount = await helperTransport.startCount()
+      if startCount == 1 { break }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    model.stop()
+    model.start()
+    await helperTransport.releaseNextStart()
+    for _ in 0..<1_000 {
+      let startCount = await helperTransport.startCount()
+      if startCount == 2 { break }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    await helperTransport.releaseNextStart()
+    for _ in 0..<240 where !model.isRunning && model.lastError == nil {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let startCount = await helperTransport.startCount()
+    let stopCount = await helperTransport.stopCount()
+    XCTAssertEqual(startCount, 2)
+    XCTAssertEqual(stopCount, 1)
+    XCTAssertTrue(model.isRunning)
+    XCTAssertTrue(model.tunEnabled)
+    XCTAssertNil(model.lastError)
+  }
+
   func testTunStartAppliesSystemDNSAndStopRestoresIt() async throws {
     let paths = try Self.makeRuntimePaths()
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
@@ -8358,6 +8471,38 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertNil(model.lastError)
   }
 
+  func testRunningTunSettingsSaveStopsTunnelWhenFallbackRestartFails() async throws {
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [],
+      testDelayResult: 0,
+      reloadFailureMessage: "reload refused"
+    )
+    let helperTransport = FailingRestartTunnelHelperTransport()
+    let model = try await makeRunningTunnelModel(client: client, helperTransport: helperTransport)
+    var settings = TunSettings.default
+    settings.mtu = 1400
+
+    XCTAssertTrue(model.updateTunSettings(settings))
+    for _ in 0..<240 {
+      if !model.tunnelCoreRunning,
+         !model.tunEnabled,
+         model.lastError?.contains("stopped TUN safely") == true {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let restartCount = await helperTransport.restartCount()
+    let stopCount = await helperTransport.stopCount()
+    XCTAssertEqual(restartCount, 1)
+    XCTAssertEqual(stopCount, 1)
+    XCTAssertFalse(model.tunnelCoreRunning)
+    XCTAssertFalse(model.tunEnabled)
+    XCTAssertTrue(model.lastError?.contains("stopped TUN safely") == true)
+    XCTAssertTrue(model.lastError?.contains("restart refused") == true)
+  }
+
   func testRunningTunSettingsSaveRestartsHelperWhenReloadLeavesRouteIssue() async throws {
     let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
     let helperTransport = ReadyTunnelHelperTransport()
@@ -8401,7 +8546,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertNil(model.lastError)
   }
 
-  func testRunningTunSettingsSaveSurfacesErrorWhenHelperRestartLeavesRouteIssue() async throws {
+  func testRunningTunSettingsSaveStopsTunnelWhenHelperRestartLeavesRouteIssue() async throws {
     let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
     let helperTransport = ReadyTunnelHelperTransport()
     let routeIssue = Self.tunDiagnosticsSnapshot(
@@ -8427,17 +8572,25 @@ final class DashboardRuntimeStateTests: XCTestCase {
     settings.mtu = 1400
 
     XCTAssertTrue(model.updateTunSettings(settings))
-    for _ in 0..<160 where model.lastError == nil {
+    for _ in 0..<240 {
+      if !model.tunnelCoreRunning,
+         !model.tunEnabled,
+         model.lastError?.contains("stopped TUN safely") == true {
+        break
+      }
       await Task.yield()
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
 
     let reloadForces = await client.reloadRequestForces()
     let restartCount = await helperTransport.restartCount()
+    let stopCount = await helperTransport.stopCount()
     XCTAssertEqual(reloadForces, [true])
     XCTAssertEqual(restartCount, 1)
-    XCTAssertTrue(model.tunEnabled)
-    XCTAssertTrue(model.lastError?.contains("Could not apply TUN settings without restart") == true)
+    XCTAssertEqual(stopCount, 2)
+    XCTAssertFalse(model.tunnelCoreRunning)
+    XCTAssertFalse(model.tunEnabled)
+    XCTAssertTrue(model.lastError?.contains("stopped TUN safely") == true)
     XCTAssertTrue(model.lastError?.contains("Default Route: still stale") == true)
   }
 
@@ -10940,6 +11093,51 @@ private final class RecordingProxyPortReadinessProbe: ProxyPortReadinessProbing 
     onProbe?()
     try result.get()
   }
+}
+
+private actor ControllableStartTunnelHelperTransport: HelperXPCTransport {
+  private var requestedStarts = 0
+  private var completedStarts = 0
+  private var stops = 0
+  private var pendingStarts: [CheckedContinuation<Void, Never>] = []
+
+  func status() async throws -> HelperClientResponse {
+    let running = completedStarts > stops
+    return HelperClientResponse(
+      payload: HelperXPCPayload.response(ok: true, running: running, pid: running ? 99 : 0)
+    )
+  }
+
+  func startTunnel(coreURL: URL, configURL: URL, workDirectory: URL, secret: String) async throws -> HelperClientResponse {
+    requestedStarts += 1
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      pendingStarts.append(continuation)
+    }
+    completedStarts += 1
+    return HelperClientResponse(payload: HelperXPCPayload.response(ok: true, running: true, pid: 99))
+  }
+
+  func stopTunnel() async throws -> HelperClientResponse {
+    stops += 1
+    return HelperClientResponse(payload: HelperXPCPayload.response(ok: true, running: false))
+  }
+
+  func restartTunnel(coreURL: URL, configURL: URL, workDirectory: URL, secret: String) async throws -> HelperClientResponse {
+    _ = try await stopTunnel()
+    return try await startTunnel(coreURL: coreURL, configURL: configURL, workDirectory: workDirectory, secret: secret)
+  }
+
+  func recentLogs() async throws -> [String] {
+    []
+  }
+
+  func releaseNextStart() {
+    guard !pendingStarts.isEmpty else { return }
+    pendingStarts.removeFirst().resume()
+  }
+
+  func startCount() -> Int { requestedStarts }
+  func stopCount() -> Int { stops }
 }
 
 private actor ReadyTunnelHelperTransport: HelperXPCTransport {

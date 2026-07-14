@@ -22,13 +22,15 @@ struct KeychainStore: SecretStoring {
       kSecAttrAccount as String: account
     ]
     let attributes: [String: Any] = [
-      kSecValueData as String: data
+      kSecValueData as String: data,
+      kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
     ]
 
     let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
     if status == errSecItemNotFound {
       var add = query
       add[kSecValueData as String] = data
+      add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
       let addStatus = SecItemAdd(add as CFDictionary, nil)
       guard addStatus == errSecSuccess else { throw keychainError(addStatus) }
     } else if status != errSecSuccess {

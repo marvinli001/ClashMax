@@ -2754,6 +2754,7 @@ private struct ExternalControlSettingsSheet: View {
   @Binding var addressDraft: String
   @Binding var secretDraft: String
   @Binding var error: String?
+  @State private var revealsSecret = false
 
   let onCancel: () -> Void
   let onSave: () -> Void
@@ -2770,6 +2771,11 @@ private struct ExternalControlSettingsSheet: View {
           Toggle("Enable External Controller", isOn: $draft.enabled)
             .labelsHidden()
             .toggleStyle(.switch)
+            .onChange(of: draft.enabled) { _, enabled in
+              if !enabled {
+                revealsSecret = false
+              }
+            }
         }
 
         labeledField("Controller Listen Address") {
@@ -2784,9 +2790,24 @@ private struct ExternalControlSettingsSheet: View {
 
         labeledField("API Access Secret") {
           HStack(spacing: 8) {
-            TextField("set-your-secret", text: $secretDraft)
-              .textFieldStyle(.roundedBorder)
-              .disabled(!draft.enabled)
+            Group {
+              if revealsSecret {
+                TextField("set-your-secret", text: $secretDraft)
+              } else {
+                SecureField("set-your-secret", text: $secretDraft)
+              }
+            }
+            .textFieldStyle(.roundedBorder)
+            .disabled(!draft.enabled)
+            Button {
+              revealsSecret.toggle()
+            } label: {
+              Image(systemName: revealsSecret ? "eye.slash" : "eye")
+                .frame(width: 22, height: 22)
+            }
+            .buttonStyle(.borderless)
+            .disabled(!draft.enabled)
+            .help(revealsSecret ? "Hide API secret" : "Reveal API secret")
             copyButton(value: secretDraft, isEnabled: draft.enabled, help: "Copy API secret")
           }
         }

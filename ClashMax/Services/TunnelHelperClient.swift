@@ -751,6 +751,13 @@ final class TunnelHelperClient: ObservableObject {
 }
 
 struct PrivilegedHelperXPCTransport: HelperXPCTransport {
+  private static let mutationCancellationGraceSeconds: TimeInterval = 5
+
+  private enum ResponseCancellationBehavior: Sendable {
+    case immediate
+    case awaitReply
+  }
+
   func status() async throws -> HelperClientResponse {
     try await callResponse { proxy, reply in
       proxy.status(withReply: reply)
@@ -758,7 +765,7 @@ struct PrivilegedHelperXPCTransport: HelperXPCTransport {
   }
 
   func startTunnel(coreURL: URL, configURL: URL, workDirectory: URL, secret: String) async throws -> HelperClientResponse {
-    try await callResponse { proxy, reply in
+    try await callResponse(cancellationBehavior: .awaitReply) { proxy, reply in
       proxy.startTunnel(
         corePath: coreURL.path as NSString,
         configPath: configURL.path as NSString,
@@ -770,13 +777,13 @@ struct PrivilegedHelperXPCTransport: HelperXPCTransport {
   }
 
   func stopTunnel() async throws -> HelperClientResponse {
-    try await callResponse { proxy, reply in
+    try await callResponse(cancellationBehavior: .awaitReply) { proxy, reply in
       proxy.stopTunnel(withReply: reply)
     }
   }
 
   func restartTunnel(coreURL: URL, configURL: URL, workDirectory: URL, secret: String) async throws -> HelperClientResponse {
-    try await callResponse { proxy, reply in
+    try await callResponse(cancellationBehavior: .awaitReply) { proxy, reply in
       proxy.restartTunnel(
         corePath: coreURL.path as NSString,
         configPath: configURL.path as NSString,
@@ -794,6 +801,7 @@ struct PrivilegedHelperXPCTransport: HelperXPCTransport {
   }
 
   private func callResponse(
+    cancellationBehavior: ResponseCancellationBehavior = .immediate,
     _ body: @escaping (ClashMaxHelperXPCProtocol, @escaping (NSString) -> Void) -> Void
   ) async throws -> HelperClientResponse {
     let connection = NSXPCConnection(machServiceName: clashMaxHelperMachServiceName, options: .privileged)
@@ -826,7 +834,21 @@ struct PrivilegedHelperXPCTransport: HelperXPCTransport {
         }
       }
     } onCancel: {
-      box.fail(CancellationError())
+      switch cancellationBehavior {
+      case .immediate:
+        box.fail(CancellationError())
+      case .awaitReply:
+        // start/restart/stop mutate privileged process state. Once delivered,
+        // cancelling only the local continuation can orphan a helper-owned
+        // Mihomo process. Give the helper a bounded window to return the
+        // authoritative result so callers can perform ordered cleanup without
+        // making task cancellation wait forever on a broken XPC connection.
+        DispatchQueue.global(qos: .utility).asyncAfter(
+          deadline: .now() + Self.mutationCancellationGraceSeconds
+        ) {
+          box.fail(CancellationError())
+        }
+      }
     }
   }
 

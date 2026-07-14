@@ -34,6 +34,7 @@ struct MihomoAPIClient: Sendable {
     case invalidURL(String)
     case invalidResponse
     case httpStatus(Int)
+    case delayTestHTTPStatus(Int)
 
     var errorDescription: String? {
       switch self {
@@ -43,6 +44,8 @@ struct MihomoAPIClient: Sendable {
         return "Mihomo controller returned an invalid response."
       case let .httpStatus(status):
         return "Mihomo controller returned HTTP \(status)."
+      case let .delayTestHTTPStatus(status):
+        return "Mihomo delay probe returned HTTP \(status). The controller responded, but the selected node or test URL could not complete the probe."
       }
     }
   }
@@ -250,13 +253,22 @@ struct MihomoAPIClient: Sendable {
   }
 
   func testDelay(proxy: String, testURL: URL, timeout: Int) async throws -> Int {
-    let data = try await data(for: request(
-      path: apiPath("proxies", proxy, "delay"),
-      queryItems: [
-        URLQueryItem(name: "url", value: testURL.absoluteString),
-        URLQueryItem(name: "timeout", value: String(timeout))
-      ]
-    ))
+    let data: Data
+    do {
+      data = try await data(for: request(
+        path: apiPath("proxies", proxy, "delay"),
+        queryItems: [
+          URLQueryItem(name: "url", value: testURL.absoluteString),
+          URLQueryItem(name: "timeout", value: String(timeout))
+        ]
+      ))
+    } catch ClientError.httpStatus(let status) where status == 503 || status == 504 {
+      // Mihomo uses 503/504 when the controller itself is reachable but the
+      // selected node or probe target cannot complete the delay check. Keep
+      // those distinct from controller-unavailable failures without masking
+      // authentication, request, or API compatibility errors.
+      throw ClientError.delayTestHTTPStatus(status)
+    }
     let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
     return object?["delay"] as? Int ?? -1
   }

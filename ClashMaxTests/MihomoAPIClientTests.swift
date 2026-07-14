@@ -89,6 +89,58 @@ final class MihomoAPIClientTests: XCTestCase {
     XCTAssertTrue(request.url?.query?.contains("url=https://www.gstatic.com/generate_204") == true)
   }
 
+  func testDelayHTTPStatusIsReportedAsProbeFailureNotControllerFailure() async throws {
+    let recorder = URLProtocolRecorder(statusCode: 503)
+    let session = URLSession(configuration: recorder.configuration)
+    let client = MihomoAPIClient(baseURL: URL(string: "http://127.0.0.1:9097")!, secret: "abc", session: session)
+
+    do {
+      _ = try await client.testDelay(
+        proxy: "Japan",
+        testURL: URL(string: "https://www.gstatic.com/generate_204")!,
+        timeout: 5000
+      )
+      XCTFail("Expected the delay probe to fail")
+    } catch {
+      guard let clientError = error as? MihomoAPIClient.ClientError,
+            case let .delayTestHTTPStatus(status) = clientError else {
+        return XCTFail("Expected delayTestHTTPStatus, got \(error)")
+      }
+      XCTAssertEqual(status, 503)
+      XCTAssertEqual(
+        clientError.errorDescription,
+        "Mihomo delay probe returned HTTP 503. The controller responded, but the selected node or test URL could not complete the probe."
+      )
+    }
+
+    let request = try XCTUnwrap(recorder.lastRequest)
+    XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer abc")
+  }
+
+  func testDelayAuthenticationHTTPStatusRemainsAControllerError() async throws {
+    let recorder = URLProtocolRecorder(statusCode: 401)
+    let session = URLSession(configuration: recorder.configuration)
+    let client = MihomoAPIClient(baseURL: URL(string: "http://127.0.0.1:9097")!, secret: "abc", session: session)
+
+    do {
+      _ = try await client.testDelay(
+        proxy: "Japan",
+        testURL: URL(string: "https://www.gstatic.com/generate_204")!,
+        timeout: 5000
+      )
+      XCTFail("Expected the delay probe to fail")
+    } catch {
+      guard let clientError = error as? MihomoAPIClient.ClientError,
+            case let .httpStatus(status) = clientError else {
+        return XCTFail("Expected httpStatus, got \(error)")
+      }
+      XCTAssertEqual(status, 401)
+    }
+
+    let request = try XCTUnwrap(recorder.lastRequest)
+    XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer abc")
+  }
+
   func testProxyGroupNamesArePercentEncodedInRequests() async throws {
     let recorder = URLProtocolRecorder()
     let session = URLSession(configuration: recorder.configuration)

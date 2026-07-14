@@ -270,35 +270,51 @@ struct TunRuntimeInspector: TunRuntimeInspecting {
     guard configuration.tunSettings.autoRoute else {
       return TunDiagnosticCheck(
         id: "default-route",
-        title: "Default Route",
+        title: "TUN Route",
         status: .skipped,
         message: "auto-route is disabled."
       )
     }
 
     do {
-      let output = try await commandRunner.run(Command.route, ["-n", "get", "default"])
+      // Mihomo's macOS auto-route uses split routes, so the system-wide default
+      // route can legitimately remain on en0. Inspect a representative public
+      // destination instead; this reflects the route the TUN data plane will
+      // actually use and avoids unnecessary helper restarts on a healthy TUN.
+      let probeCandidates = ["1.1.1.1", "8.8.8.8", "9.9.9.9"]
+      let excludes = configuration.tunSettings.normalizedRouteExcludeAddresses
+      guard let probeAddress = probeCandidates.first(where: { candidate in
+        !excludes.contains(where: { ipv4(candidate, isInCIDR: $0) })
+      }) else {
+        return TunDiagnosticCheck(
+          id: "default-route",
+          title: "TUN Route",
+          status: .skipped,
+          message: "Representative public route probes are covered by configured route excludes."
+        )
+      }
+      let output = try await commandRunner.run(Command.route, ["-n", "get", probeAddress])
       let routeInterface = routeInterface(from: output)
       let detail = routeInterface.map { "interface: \($0)" } ?? outputSnippet(output)
       let device = configuration.tunSettings.normalizedDevice
-      if routeInterface == device || routeInterface?.hasPrefix("utun") == true {
+      if routeInterface == device {
         return TunDiagnosticCheck(
           id: "default-route",
-          title: "Default Route",
+          title: "TUN Route",
           status: .pass,
-          message: "Default route points at \(routeInterface ?? device).",
+          message: "Route to \(probeAddress) points at \(device).",
           detail: detail
         )
       }
       return TunDiagnosticCheck(
         id: "default-route",
-        title: "Default Route",
+        title: "TUN Route",
         status: .warn,
-        message: "Default route is not using the configured TUN device.",
+        message: "Route to \(probeAddress) is not using the configured TUN device.",
         detail: detail
       )
     } catch {
-      return commandFailureCheck(id: "default-route", title: "Default Route", error: error)
+      return commandFailureCheck(id: "default-route", title: "TUN Route", error: error)
     }
   }
 

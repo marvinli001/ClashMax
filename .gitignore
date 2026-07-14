@@ -29,5 +29,5 @@ Resources/Core/*.gz
 !Resources/Core/mihomo-manifest.json
 docs/APP_UPDATES.md
 docs/UI_LIQUID_GLASS_SWIFT6_AUDIT.md
+# Consolidated workstation-only verification checklist.
 MANUAL_TEST_PLAN.md
-ISSUE_22_PENDING_VERIFICATION.md

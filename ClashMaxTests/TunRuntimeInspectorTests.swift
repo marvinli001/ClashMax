@@ -6,7 +6,7 @@ final class TunRuntimeInspectorTests: XCTestCase {
     let runner = RecordingCommandRunner(outputs: [
       "/usr/bin/curl -fsS --max-time 2 -H Authorization: Bearer secret http://127.0.0.1:9097/version": #"{"version":"v1.19.24"}"#,
       "/sbin/ifconfig": "utun1024: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500\n",
-      "/sbin/route -n get default": "route to: default\ninterface: utun1024\n",
+      "/sbin/route -n get 1.1.1.1": "route to: 1.1.1.1\ninterface: utun1024\n",
       "/usr/sbin/netstat -rn": "Destination Gateway Flags Netif\n10/8 link#1 UCS en0\n",
       "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n",
       "/usr/bin/curl -sS -o /dev/null -w %{http_code} --max-time 5 https://www.gstatic.com/generate_204": "204",
@@ -31,7 +31,7 @@ final class TunRuntimeInspectorTests: XCTestCase {
     let runner = RecordingCommandRunner(outputs: [
       "/usr/bin/curl -fsS --max-time 2 -H Authorization: Bearer secret http://127.0.0.1:9097/version": #"{"version":"v1.19.24"}"#,
       "/sbin/ifconfig": "en0: flags=8863<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> mtu 1500\n",
-      "/sbin/route -n get default": "route to: default\ninterface: en0\n",
+      "/sbin/route -n get 1.1.1.1": "route to: 1.1.1.1\ninterface: en0\n",
       "/usr/sbin/netstat -rn": "Destination Gateway Flags Netif\n",
       "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "142.250.191.68\n",
       "/usr/bin/curl -sS -o /dev/null -w %{http_code} --max-time 5 https://www.gstatic.com/generate_204": "000",
@@ -59,7 +59,7 @@ final class TunRuntimeInspectorTests: XCTestCase {
     let runner = RecordingCommandRunner(outputs: [
       "/usr/bin/curl -fsS --max-time 2 -H Authorization: Bearer secret http://127.0.0.1:9097/version": #"{"version":"v1.19.24"}"#,
       "/sbin/ifconfig": "utun1024: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500\n",
-      "/sbin/route -n get default": "route to: default\ninterface: utun1024\n",
+      "/sbin/route -n get 1.1.1.1": "route to: 1.1.1.1\ninterface: utun1024\n",
       "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n"
     ])
     let inspector = TunRuntimeInspector(commandRunner: runner)
@@ -75,7 +75,7 @@ final class TunRuntimeInspectorTests: XCTestCase {
     let runner = RecordingCommandRunner(outputs: [
       "/usr/bin/curl -fsS --max-time 2 -H Authorization: Bearer secret http://127.0.0.1:9097/version": #"{"version":"v1.19.24"}"#,
       "/sbin/ifconfig": "utun1024: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500\n",
-      "/sbin/route -n get default": "route to: default\ninterface: utun1024\n",
+      "/sbin/route -n get 1.1.1.1": "route to: 1.1.1.1\ninterface: utun1024\n",
       "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n",
       "/usr/bin/curl -sS -o /dev/null -w %{http_code} --max-time 5 https://www.gstatic.com/generate_204": "503",
       "/usr/bin/dig @1.1.1.1 +time=2 +tries=1 +short example.com A": "93.184.216.34\n"
@@ -92,7 +92,7 @@ final class TunRuntimeInspectorTests: XCTestCase {
   func testControllerProbeUsesBearerAuthAndFailsWhenControllerResponseIsMissing() async {
     let runner = RecordingCommandRunner(outputs: [
       "/sbin/ifconfig": "utun1024: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500\n",
-      "/sbin/route -n get default": "route to: default\ninterface: utun1024\n",
+      "/sbin/route -n get 1.1.1.1": "route to: 1.1.1.1\ninterface: utun1024\n",
       "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n"
     ])
     let inspector = TunRuntimeInspector(commandRunner: runner)
@@ -107,7 +107,7 @@ final class TunRuntimeInspectorTests: XCTestCase {
     let runner = RecordingCommandRunner(outputs: [
       "/usr/bin/curl -fsS --max-time 2 -H Authorization: Bearer secret http://127.0.0.1:9097/version": #"{"version":"v1.19.24"}"#,
       "/sbin/ifconfig": "utun1024: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500\n",
-      "/sbin/route -n get default": "route to: default\ninterface: utun1024\n",
+      "/sbin/route -n get 1.1.1.1": "route to: 1.1.1.1\ninterface: utun1024\n",
       "/usr/sbin/netstat -rn": """
       Destination        Gateway            Flags        Netif
       default            10.0.0.1           UGScg        utun1024
@@ -120,6 +120,43 @@ final class TunRuntimeInspectorTests: XCTestCase {
     let snapshot = await inspector.inspect(configuration(routeExcludes: ["10.0.0.0/8"], includeExternal: false))
 
     XCTAssertEqual(snapshot.check(id: "route-exclude")?.status, .warn)
+  }
+
+  func testRouteProbeWarnsWhenTrafficUsesADifferentUtunDevice() async {
+    let runner = RecordingCommandRunner(outputs: [
+      "/usr/bin/curl -fsS --max-time 2 -H Authorization: Bearer secret http://127.0.0.1:9097/version": #"{"version":"v1.19.24"}"#,
+      "/sbin/ifconfig": "utun1024: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500\n",
+      "/sbin/route -n get 1.1.1.1": "route to: 1.1.1.1\ninterface: utun999\n",
+      "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n"
+    ])
+    let inspector = TunRuntimeInspector(commandRunner: runner)
+
+    let snapshot = await inspector.inspect(configuration(includeExternal: false))
+
+    XCTAssertEqual(snapshot.check(id: "default-route")?.status, .warn)
+    XCTAssertEqual(snapshot.check(id: "default-route")?.title, "TUN Route")
+    XCTAssertEqual(
+      snapshot.check(id: "default-route")?.message,
+      "Route to 1.1.1.1 is not using the configured TUN device."
+    )
+  }
+
+  func testRouteProbeSkipsAddressesCoveredByRouteExcludes() async {
+    let runner = RecordingCommandRunner(outputs: [
+      "/usr/bin/curl -fsS --max-time 2 -H Authorization: Bearer secret http://127.0.0.1:9097/version": #"{"version":"v1.19.24"}"#,
+      "/sbin/ifconfig": "utun1024: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500\n",
+      "/usr/sbin/netstat -rn": "Destination Gateway Flags Netif\n0/0 link#1 UCS en0\n",
+      "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n"
+    ])
+    let inspector = TunRuntimeInspector(commandRunner: runner)
+
+    let snapshot = await inspector.inspect(configuration(
+      routeExcludes: ["0.0.0.0/0"],
+      includeExternal: false
+    ))
+
+    XCTAssertEqual(snapshot.check(id: "default-route")?.status, .skipped)
+    XCTAssertFalse(runner.commands.contains { $0.hasPrefix("/sbin/route -n get ") })
   }
 
   private func configuration(
