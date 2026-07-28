@@ -67,6 +67,74 @@ final class TunnelHelperValidationTests: XCTestCase {
     )
   }
 
+  func testHelperRejectsNonAllowlistedBundledCoreFilename() throws {
+    let fixture = try makePathFixture()
+    let unapprovedCore = fixture.bundledCoreRoot.appendingPathComponent("mihomo-wrapper")
+    try "#!/bin/sh\n".write(to: unapprovedCore, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: unapprovedCore.path)
+    let validator = HelperPathValidator(
+      runtimeRoot: fixture.runtimeRoot,
+      bundledCoreRoot: fixture.bundledCoreRoot
+    )
+
+    XCTAssertThrowsError(
+      try validator.validate(
+        coreURL: unapprovedCore,
+        configURL: fixture.configURL,
+        workDirectory: fixture.runtimeRoot
+      )
+    ) { error in
+      guard case let HelperPathValidator.ValidationError.untrustedCoreExecutableName(name) = error else {
+        return XCTFail("Expected untrusted core filename, got \(error)")
+      }
+      XCTAssertEqual(name, "mihomo-wrapper")
+    }
+  }
+
+  func testHelperRejectsConfigOutsideRuntimeRoot() throws {
+    let fixture = try makePathFixture()
+    let outsideConfig = fixture.tempRoot.appendingPathComponent("outside.yaml")
+    try "port: 7890\n".write(to: outsideConfig, atomically: true, encoding: .utf8)
+    let validator = HelperPathValidator(
+      runtimeRoot: fixture.runtimeRoot,
+      bundledCoreRoot: fixture.bundledCoreRoot
+    )
+
+    XCTAssertThrowsError(
+      try validator.validate(
+        coreURL: fixture.coreURL,
+        configURL: outsideConfig,
+        workDirectory: fixture.runtimeRoot
+      )
+    ) { error in
+      guard case HelperPathValidator.ValidationError.pathEscapesAllowedRoots = error else {
+        return XCTFail("Expected config root rejection, got \(error)")
+      }
+    }
+  }
+
+  func testHelperRejectsNonFixedWorkDirectory() throws {
+    let fixture = try makePathFixture()
+    let nestedWorkDirectory = fixture.runtimeRoot.appendingPathComponent("nested", isDirectory: true)
+    try FileManager.default.createDirectory(at: nestedWorkDirectory, withIntermediateDirectories: true)
+    let validator = HelperPathValidator(
+      runtimeRoot: fixture.runtimeRoot,
+      bundledCoreRoot: fixture.bundledCoreRoot
+    )
+
+    XCTAssertThrowsError(
+      try validator.validate(
+        coreURL: fixture.coreURL,
+        configURL: fixture.configURL,
+        workDirectory: nestedWorkDirectory
+      )
+    ) { error in
+      guard case HelperPathValidator.ValidationError.unexpectedWorkDirectory = error else {
+        return XCTFail("Expected fixed work-directory rejection, got \(error)")
+      }
+    }
+  }
+
   func testHelperRejectsConfigSymlinkThatEscapesRuntimeRoot() throws {
     let fixture = try makePathFixture()
     let outside = fixture.tempRoot.appendingPathComponent("outside.yaml")
@@ -85,6 +153,24 @@ final class TunnelHelperValidationTests: XCTestCase {
         configURL: symlink,
         workDirectory: fixture.runtimeRoot
       )
+    )
+  }
+
+  func testHelperLaunchesPathsWithSpacesQuotesBackticksAndDollarSubstitutionLiterally() throws {
+    let fixture = try makeRuntimeFixture(
+      rootComponent: "ClashMax Helper 'single' \"double\" `backtick` $()-\(UUID().uuidString)"
+    )
+    let service = makeHelperService(fixture: fixture)
+    addTeardownBlock { stop(service) }
+
+    let response = try start(service, fixture: fixture, secret: "not-exported")
+
+    XCTAssertTrue(response.ok)
+    XCTAssertTrue(response.running)
+    XCTAssertGreaterThan(response.pid, 0)
+    XCTAssertEqual(
+      try waitForLaunchState(fixture: fixture, expected: "\(response.pid):1:unset"),
+      "\(response.pid):1:unset"
     )
   }
 
@@ -341,6 +427,7 @@ final class TunnelHelperValidationTests: XCTestCase {
   }
 
   private func makeRuntimeFixture(
+    rootComponent: String = "ClashMaxHelperRuntime-\(UUID().uuidString)",
     coreScript: String = """
     #!/bin/sh
     trap 'sleep 1; exit 0' TERM
@@ -349,7 +436,7 @@ final class TunnelHelperValidationTests: XCTestCase {
     """
   ) throws -> PathFixture {
     let tempRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("ClashMaxHelperRuntime-\(UUID().uuidString)", isDirectory: true)
+      .appendingPathComponent(rootComponent, isDirectory: true)
     let appSupportRoot = tempRoot.appendingPathComponent("Application Support/ClashMax", isDirectory: true)
     let runtimeRoot = appSupportRoot.appendingPathComponent("Runtime", isDirectory: true)
     let bundledCoreRoot = tempRoot.appendingPathComponent("ClashMax.app/Contents/Resources/Core", isDirectory: true)

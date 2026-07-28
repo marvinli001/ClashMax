@@ -39,11 +39,11 @@ final class BundledCoreInfoTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: directory) }
 
     let manifestURL = directory.appendingPathComponent("mihomo-manifest.json")
-    try #"{"version":"v1.19.27"}"#.write(to: manifestURL, atomically: true, encoding: .utf8)
+    try #"{"version":"v1.19.29"}"#.write(to: manifestURL, atomically: true, encoding: .utf8)
 
     let info = BundledCoreInfo(manifestURL: manifestURL)
 
-    XCTAssertEqual(info.subscriptionCompatibilityUserAgent, "mihomo/1.19.27")
+    XCTAssertEqual(info.subscriptionCompatibilityUserAgent, "mihomo/1.19.29")
   }
 
   func testMissingManifestHasNoSubscriptionCompatibilityUserAgent() {

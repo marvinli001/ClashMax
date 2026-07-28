@@ -375,7 +375,7 @@ final class SubscriptionFetcherTests: XCTestCase {
       options: SubscriptionFetchOptions(
         userAgent: "clash.meta",
         retryOrder: [.direct],
-        compatibilityUserAgent: "mihomo/1.19.27"
+        compatibilityUserAgent: "mihomo/1.19.29"
       )
     ) { _, userAgent in
       await recorder.record(userAgent)
@@ -384,9 +384,9 @@ final class SubscriptionFetcherTests: XCTestCase {
     }
 
     let userAgents = await recorder.userAgents()
-    XCTAssertEqual(userAgents, ["clash.meta", "mihomo/1.19.27"])
+    XCTAssertEqual(userAgents, ["clash.meta", "mihomo/1.19.29"])
     XCTAssertEqual(result.source, validProfile)
-    XCTAssertEqual(result.diagnostics.userAgent, "mihomo/1.19.27")
+    XCTAssertEqual(result.diagnostics.userAgent, "mihomo/1.19.29")
   }
 
   func testPanelErrorResponseRetriesOnceWithBundledCompatibilityUserAgent() async throws {
@@ -411,7 +411,7 @@ final class SubscriptionFetcherTests: XCTestCase {
       options: SubscriptionFetchOptions(
         userAgent: "clash.meta",
         retryOrder: [.direct],
-        compatibilityUserAgent: "mihomo/1.19.27"
+        compatibilityUserAgent: "mihomo/1.19.29"
       )
     ) { _, userAgent in
       await recorder.record(userAgent)
@@ -422,9 +422,9 @@ final class SubscriptionFetcherTests: XCTestCase {
     }
 
     let userAgents = await recorder.userAgents()
-    XCTAssertEqual(userAgents, ["clash.meta", "mihomo/1.19.27"])
+    XCTAssertEqual(userAgents, ["clash.meta", "mihomo/1.19.29"])
     XCTAssertEqual(result.source, validProfile)
-    XCTAssertEqual(result.diagnostics.userAgent, "mihomo/1.19.27")
+    XCTAssertEqual(result.diagnostics.userAgent, "mihomo/1.19.29")
   }
 
   func testHTTPStatusErrorDoesNotTriggerCompatibilityUserAgentFallback() async throws {
@@ -443,7 +443,7 @@ final class SubscriptionFetcherTests: XCTestCase {
         options: SubscriptionFetchOptions(
           userAgent: "clash.meta",
           retryOrder: [.direct, .localClashProxy],
-          compatibilityUserAgent: "mihomo/1.19.27"
+          compatibilityUserAgent: "mihomo/1.19.29"
         )
       ) { _, userAgent in
         await recorder.record(userAgent)
@@ -468,7 +468,7 @@ final class SubscriptionFetcherTests: XCTestCase {
         options: SubscriptionFetchOptions(
           userAgent: "clash.meta",
           retryOrder: [.direct],
-          compatibilityUserAgent: "mihomo/1.19.27"
+          compatibilityUserAgent: "mihomo/1.19.29"
         )
       ) { _, userAgent in
         await recorder.record(userAgent)
@@ -518,9 +518,9 @@ final class SubscriptionFetcherTests: XCTestCase {
   func testFetchSettingsInjectBundledCompatibilityUserAgentIntoOptions() throws {
     let settings = SubscriptionFetchSettings(userAgent: "clash.meta")
 
-    let injected = settings.fetchOptions(currentMixedPort: 7890, compatibilityUserAgent: "mihomo/1.19.27")
+    let injected = settings.fetchOptions(currentMixedPort: 7890, compatibilityUserAgent: "mihomo/1.19.29")
     XCTAssertEqual(injected.userAgent, "clash.meta")
-    XCTAssertEqual(injected.compatibilityUserAgent, "mihomo/1.19.27")
+    XCTAssertEqual(injected.compatibilityUserAgent, "mihomo/1.19.29")
 
     let pure = settings.fetchOptions(currentMixedPort: 7890)
     XCTAssertNil(pure.compatibilityUserAgent)

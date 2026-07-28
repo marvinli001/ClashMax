@@ -72,21 +72,27 @@ final class TunRuntimeInspectorTests: XCTestCase {
   }
 
   func testExternalTCPReportsHTTPStatusInsteadOfCommandFailure() async {
-    let runner = RecordingCommandRunner(outputs: [
-      "/usr/bin/curl -fsS --max-time 2 -H Authorization: Bearer secret http://127.0.0.1:9097/version": #"{"version":"v1.19.24"}"#,
-      "/sbin/ifconfig": "utun1024: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500\n",
-      "/sbin/route -n get 1.1.1.1": "route to: 1.1.1.1\ninterface: utun1024\n",
-      "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n",
-      "/usr/bin/curl -sS -o /dev/null -w %{http_code} --max-time 5 https://www.gstatic.com/generate_204": "503",
-      "/usr/bin/dig @1.1.1.1 +time=2 +tries=1 +short example.com A": "93.184.216.34\n"
-    ])
-    let inspector = TunRuntimeInspector(commandRunner: runner)
+    for status in [503, 504] {
+      let runner = RecordingCommandRunner(outputs: [
+        "/usr/bin/curl -fsS --max-time 2 -H Authorization: Bearer secret http://127.0.0.1:9097/version": #"{"version":"v1.19.24"}"#,
+        "/sbin/ifconfig": "utun1024: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500\n",
+        "/sbin/route -n get 1.1.1.1": "route to: 1.1.1.1\ninterface: utun1024\n",
+        "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n",
+        "/usr/bin/curl -sS -o /dev/null -w %{http_code} --max-time 5 https://www.gstatic.com/generate_204": "\(status)",
+        "/usr/bin/dig @1.1.1.1 +time=2 +tries=1 +short example.com A": "93.184.216.34\n"
+      ])
+      let inspector = TunRuntimeInspector(commandRunner: runner)
 
-    let snapshot = await inspector.inspect(configuration(routeExcludes: []))
+      let snapshot = await inspector.inspect(configuration(routeExcludes: []))
 
-    XCTAssertEqual(snapshot.check(id: "external-tcp")?.status, .fail)
-    XCTAssertEqual(snapshot.check(id: "external-tcp")?.message, "External TCP probe returned HTTP 503.")
-    XCTAssertTrue(runner.commands.contains("/usr/bin/curl -sS -o /dev/null -w %{http_code} --max-time 5 https://www.gstatic.com/generate_204"))
+      XCTAssertEqual(snapshot.check(id: "external-tcp")?.status, .fail)
+      XCTAssertEqual(snapshot.check(id: "external-tcp")?.message, "External TCP probe returned HTTP \(status).")
+      XCTAssertEqual(snapshot.check(id: "external-udp")?.status, .pass)
+      XCTAssertEqual(snapshot.check(id: "controller")?.status, .pass)
+      XCTAssertEqual(snapshot.check(id: "default-route")?.status, .pass)
+      XCTAssertEqual(snapshot.check(id: "dns-hijack")?.status, .pass)
+      XCTAssertTrue(runner.commands.contains("/usr/bin/curl -sS -o /dev/null -w %{http_code} --max-time 5 https://www.gstatic.com/generate_204"))
+    }
   }
 
   func testControllerProbeUsesBearerAuthAndFailsWhenControllerResponseIsMissing() async {

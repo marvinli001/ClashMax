@@ -4590,6 +4590,188 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(dns["ipv6"] as? Bool, true)
   }
 
+  func testRuntimeStreamsReconnectAndClearStaleTrafficSample() async throws {
+    let client = ScriptedRuntimeStreamController()
+    let model = try await makeRunningRuntimeModel(
+      client: client,
+      proxyPortReadinessProbe: RecordingProxyPortReadinessProbe()
+    )
+
+    model.setLogLevel("debug")
+    for _ in 0..<500 {
+      if client.subscriptionCounts() == [1, 1, 1],
+         client.connectionRequestCount() >= 1,
+         !model.runtimeDataLoading,
+         model.runtimeSettingsApplyState == .idle {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 2_000_000)
+    }
+
+    XCTAssertEqual(client.subscriptionCounts(), [1, 1, 1])
+    XCTAssertGreaterThanOrEqual(client.connectionRequestCount(), 1)
+    XCTAssertFalse(model.runtimeDataLoading)
+    XCTAssertTrue(client.yieldTraffic(TrafficSample(upload: 11, download: 22), subscription: 0))
+    XCTAssertTrue(client.yieldLog(LogEntry(level: "info", message: "first stream"), subscription: 0))
+
+    for _ in 0..<300 {
+      model.runtimeData.flushPendingLogs()
+      if model.trafficSample == TrafficSample(upload: 11, download: 22),
+         model.logs.contains(where: { $0.message == "first stream" }) {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 2_000_000)
+    }
+
+    XCTAssertEqual(model.trafficSample, TrafficSample(upload: 11, download: 22))
+    XCTAssertTrue(model.logs.contains { $0.message == "first stream" })
+
+    client.finishTraffic(subscription: 0)
+    client.failLog(subscription: 0)
+    client.finishConnections(subscription: 0)
+
+    for _ in 0..<300 where model.trafficSample != .zero {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 2_000_000)
+    }
+    XCTAssertEqual(model.trafficSample, .zero)
+
+    for _ in 0..<1_500 where client.subscriptionCounts() != [2, 2, 2] {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 2_000_000)
+    }
+    XCTAssertEqual(client.subscriptionCounts(), [2, 2, 2])
+    XCTAssertEqual(client.requestedLogLevels(), ["debug", "debug"])
+    XCTAssertEqual(client.requestedConnectionIntervals(), [1_000, 1_000])
+
+    XCTAssertTrue(client.yieldTraffic(TrafficSample(upload: 33, download: 44), subscription: 1))
+    XCTAssertTrue(client.yieldLog(LogEntry(level: "warn", message: "reconnected stream"), subscription: 1))
+    XCTAssertTrue(client.yieldConnections([Self.streamConnection(id: "second")], subscription: 1))
+
+    for _ in 0..<300 {
+      model.runtimeData.flushPendingLogs()
+      if model.trafficSample == TrafficSample(upload: 33, download: 44),
+         model.logs.contains(where: { $0.message == "reconnected stream" }),
+         model.connections.map(\.id) == ["second"] {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 2_000_000)
+    }
+
+    XCTAssertEqual(model.trafficSample, TrafficSample(upload: 33, download: 44))
+    XCTAssertTrue(model.logs.contains { $0.message == "reconnected stream" })
+    XCTAssertEqual(model.connections.map(\.id), ["second"])
+
+    _ = await model.prepareForTermination()
+  }
+
+  func testRuntimeStreamReplacementRejectsOldGenerationAndStopPreventsReconnect() async throws {
+    let client = ScriptedRuntimeStreamController()
+    let model = try await makeRunningRuntimeModel(
+      client: client,
+      proxyPortReadinessProbe: RecordingProxyPortReadinessProbe()
+    )
+
+    model.setLogLevel("debug")
+    for _ in 0..<500 {
+      if client.subscriptionCounts() == [1, 1, 1],
+         client.connectionRequestCount() >= 1,
+         !model.runtimeDataLoading,
+         model.runtimeSettingsApplyState == .idle {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 2_000_000)
+    }
+    XCTAssertEqual(client.subscriptionCounts(), [1, 1, 1])
+    XCTAssertGreaterThanOrEqual(client.connectionRequestCount(), 1)
+    XCTAssertFalse(model.runtimeDataLoading)
+
+    model.setLogLevel("warn")
+    for _ in 0..<500 {
+      if client.subscriptionCounts() == [2, 2, 2],
+         client.firstGenerationWasTerminated(),
+         client.connectionRequestCount() >= 2,
+         !model.runtimeDataLoading,
+         model.runtimeSettingsApplyState == .idle {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 2_000_000)
+    }
+
+    XCTAssertEqual(client.subscriptionCounts(), [2, 2, 2])
+    XCTAssertTrue(client.firstGenerationWasTerminated())
+    XCTAssertGreaterThanOrEqual(client.connectionRequestCount(), 2)
+    XCTAssertFalse(model.runtimeDataLoading)
+    XCTAssertFalse(client.yieldTraffic(TrafficSample(upload: 999, download: 999), subscription: 0))
+    XCTAssertFalse(client.yieldLog(LogEntry(level: "error", message: "old generation"), subscription: 0))
+    XCTAssertFalse(client.yieldConnections([Self.streamConnection(id: "old")], subscription: 0))
+
+    XCTAssertTrue(client.yieldTraffic(TrafficSample(upload: 55, download: 66), subscription: 1))
+    XCTAssertTrue(client.yieldLog(LogEntry(level: "info", message: "current generation"), subscription: 1))
+    XCTAssertTrue(client.yieldConnections([Self.streamConnection(id: "current")], subscription: 1))
+
+    for _ in 0..<300 {
+      model.runtimeData.flushPendingLogs()
+      if model.trafficSample == TrafficSample(upload: 55, download: 66),
+         model.logs.contains(where: { $0.message == "current generation" }),
+         model.connections.map(\.id) == ["current"] {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 2_000_000)
+    }
+
+    XCTAssertEqual(model.trafficSample, TrafficSample(upload: 55, download: 66))
+    XCTAssertFalse(model.logs.contains { $0.message == "old generation" })
+    XCTAssertTrue(model.logs.contains { $0.message == "current generation" })
+    XCTAssertEqual(model.connections.map(\.id), ["current"])
+
+    client.finishTraffic(subscription: 1)
+    for _ in 0..<300 where model.trafficSample != .zero {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 2_000_000)
+    }
+    XCTAssertEqual(model.trafficSample, .zero)
+    XCTAssertFalse(client.logAndConnectionWereTerminated(subscription: 1))
+
+    model.stop()
+    for _ in 0..<1_000 {
+      if !model.isCoreRunning,
+         !model.systemProxyEnabled,
+         !model.needsTerminationCleanup,
+         client.logAndConnectionWereTerminated(subscription: 1) {
+        break
+      }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 2_000_000)
+    }
+    try? await Task.sleep(nanoseconds: 1_600_000_000)
+
+    XCTAssertEqual(client.subscriptionCounts(), [2, 2, 2])
+    XCTAssertFalse(model.needsTerminationCleanup)
+    XCTAssertTrue(client.logAndConnectionWereTerminated(subscription: 1))
+    XCTAssertFalse(client.yieldLog(
+      LogEntry(level: "error", message: "late stopped generation"),
+      subscription: 1
+    ))
+    XCTAssertFalse(client.yieldConnections(
+      [Self.streamConnection(id: "late-stopped")],
+      subscription: 1
+    ))
+    model.runtimeData.flushPendingLogs()
+    XCTAssertEqual(model.trafficSample, .zero)
+    XCTAssertTrue(model.trafficHistory.isEmpty)
+    XCTAssertFalse(model.logs.contains { $0.message == "late stopped generation" })
+    XCTAssertTrue(model.connections.isEmpty)
+
+    _ = await model.prepareForTermination()
+  }
+
   func testRunningRuntimeSettingsApplyReloadsRuntimeAndMovesSystemProxyUsingAppliedSnapshot() async throws {
     let paths = try Self.makeRuntimePaths()
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
@@ -8329,6 +8511,23 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertFalse(model.tunEnabled)
   }
 
+  func testTunStopRejectsHelperReplyThatStillReportsRunning() async throws {
+    let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
+    let helperTransport = StopStillRunningTunnelHelperTransport()
+    let model = try await makeRunningTunnelModel(client: client, helperTransport: helperTransport)
+
+    model.stop()
+    for _ in 0..<300 where model.lastError == nil || !model.needsTerminationCleanup {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let stopCount = await helperTransport.stopCount()
+    XCTAssertTrue(model.lastError?.contains("Helper reported stop success but TUN is still running.") == true)
+    XCTAssertTrue(model.needsTerminationCleanup)
+    XCTAssertEqual(stopCount, 1)
+  }
+
   func testRunningTunSettingsSaveReloadsRuntimeConfig() async throws {
     let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
     let helperTransport = ReadyTunnelHelperTransport()
@@ -8456,19 +8655,49 @@ final class DashboardRuntimeStateTests: XCTestCase {
     settings.mtu = 1400
 
     XCTAssertTrue(model.updateTunSettings(settings))
-    for _ in 0..<160 {
+    for _ in 0..<300 {
+      model.runtimeData.flushPendingLogs()
       let currentRestartCount = await helperTransport.restartCount()
-      if currentRestartCount > 0 || model.lastError != nil { break }
+      let loggedFallback = model.logs.contains { entry in
+        entry.level == "warn"
+          && entry.message.contains("reload refused")
+          && entry.message.contains("restarting helper instead")
+      }
+      let loggedSuccess = model.logs.contains { entry in
+        entry.level == "info"
+          && entry.message.contains("TUN helper restarted, controller ready")
+          && entry.message.contains("v-test")
+      }
+      if currentRestartCount == 1,
+         loggedFallback,
+         loggedSuccess,
+         model.runtimeSettingsApplyState == .idle {
+        break
+      }
       await Task.yield()
-      try? await Task.sleep(nanoseconds: 1_000_000)
+      try? await Task.sleep(nanoseconds: 2_000_000)
     }
 
     let reloadForces = await client.reloadRequestForces()
     let restartCount = await helperTransport.restartCount()
+    model.runtimeData.flushPendingLogs()
     XCTAssertEqual(reloadForces, [true])
     XCTAssertEqual(restartCount, 1)
     XCTAssertTrue(model.tunEnabled)
     XCTAssertNil(model.lastError)
+    XCTAssertTrue(model.logs.contains { entry in
+      entry.level == "warn"
+        && entry.message.contains("reload refused")
+        && entry.message.contains("restarting helper instead")
+    })
+    XCTAssertTrue(model.logs.contains { entry in
+      entry.level == "info"
+        && entry.message.contains("TUN helper restarted, controller ready")
+        && entry.message.contains("v-test")
+    })
+    XCTAssertEqual(model.runtimeSettingsApplyState, .idle)
+
+    _ = await model.prepareForTermination()
   }
 
   func testRunningTunSettingsSaveStopsTunnelWhenFallbackRestartFails() async throws {
@@ -10360,11 +10589,24 @@ final class DashboardRuntimeStateTests: XCTestCase {
     try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: coreURL.path)
   }
 
+  private static func streamConnection(id: String) -> ConnectionSnapshot {
+    ConnectionSnapshot(
+      id: id,
+      network: "tcp",
+      host: "\(id).example",
+      upload: 1,
+      download: 2,
+      chain: ["DIRECT"],
+      rule: "MATCH"
+    )
+  }
+
   private func makeRunningRuntimeModel(
     client: any MihomoAPIControlling,
     initialProxyGroups: [ProxyGroup] = [],
     delayStateCacheTTL: TimeInterval = 600,
     systemProxyController: SystemProxyController? = nil,
+    proxyPortReadinessProbe: any ProxyPortReadinessProbing = SocksProxyReadinessProbe(),
     defaults: UserDefaults? = nil
   ) async throws -> AppModel {
     let paths = try Self.makeRuntimePaths()
@@ -10392,6 +10634,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       systemProxyController: systemProxyController ?? SystemProxyController(
         commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
       ),
+      proxyPortReadinessProbe: proxyPortReadinessProbe,
       apiClient: client,
       defaults: resolvedDefaults,
       delayStateCacheTTL: delayStateCacheTTL
@@ -10613,6 +10856,270 @@ private actor RecordingPublicIPInfoFetcher: PublicIPInfoFetching {
 
   func requestCount() -> Int {
     requests
+  }
+}
+
+private final class ScriptedRuntimeStreamController: MihomoAPIControlling, @unchecked Sendable {
+  private typealias TrafficContinuation = AsyncThrowingStream<TrafficSample, Error>.Continuation
+  private typealias LogContinuation = AsyncThrowingStream<LogEntry, Error>.Continuation
+  private typealias ConnectionContinuation = AsyncThrowingStream<[ConnectionSnapshot], Error>.Continuation
+
+  private let base = RecordingMihomoController(
+    proxyGroupsResponse: [],
+    connectionsResponse: [],
+    testDelayResult: 0
+  )
+  private let lock = NSLock()
+  private var trafficContinuations: [TrafficContinuation] = []
+  private var logContinuations: [LogContinuation] = []
+  private var connectionContinuations: [ConnectionContinuation] = []
+  private var terminatedTrafficSubscriptions: Set<Int> = []
+  private var terminatedLogSubscriptions: Set<Int> = []
+  private var terminatedConnectionSubscriptions: Set<Int> = []
+  private var logLevels: [String] = []
+  private var connectionIntervals: [Int] = []
+  private var completedConnectionRequests = 0
+
+  func updateMode(_ mode: RunMode) async throws {
+    try await base.updateMode(mode)
+  }
+
+  func updateIPv6(_ enabled: Bool) async throws {
+    try await base.updateIPv6(enabled)
+  }
+
+  func proxyGroups() async throws -> [ProxyGroup] {
+    try await base.proxyGroups()
+  }
+
+  func structuredProxyProviders() async throws -> [ProxyProvider] {
+    try await base.structuredProxyProviders()
+  }
+
+  func ruleProviders() async throws -> [RuleProvider] {
+    try await base.ruleProviders()
+  }
+
+  func rules() async throws -> [RuntimeRule] {
+    try await base.rules()
+  }
+
+  func connections() async throws -> [ConnectionSnapshot] {
+    let snapshots = try await base.connections()
+    recordCompletedConnectionRequest()
+    return snapshots
+  }
+
+  func selectProxy(group: String, proxy: String) async throws {
+    try await base.selectProxy(group: group, proxy: proxy)
+  }
+
+  func testDelay(proxy: String, testURL: URL, timeout: Int) async throws -> Int {
+    try await base.testDelay(proxy: proxy, testURL: testURL, timeout: timeout)
+  }
+
+  func healthCheckProvider(named provider: String) async throws {
+    try await base.healthCheckProvider(named: provider)
+  }
+
+  func updateProxyProvider(named provider: String) async throws {
+    try await base.updateProxyProvider(named: provider)
+  }
+
+  func updateRuleProvider(named provider: String) async throws {
+    try await base.updateRuleProvider(named: provider)
+  }
+
+  func closeConnection(id: String) async throws {
+    try await base.closeConnection(id: id)
+  }
+
+  func closeAllConnections() async throws {
+    try await base.closeAllConnections()
+  }
+
+  func setTunEnabled(_ enabled: Bool) async throws {
+    try await base.setTunEnabled(enabled)
+  }
+
+  func reloadConfig(path: String, force: Bool) async throws {
+    try await base.reloadConfig(path: path, force: force)
+  }
+
+  func restart(configPath: String?) async throws {
+    try await base.restart(configPath: configPath)
+  }
+
+  func trafficStream() -> AsyncThrowingStream<TrafficSample, Error> {
+    AsyncThrowingStream { [weak self] continuation in
+      self?.installTrafficContinuation(continuation)
+    }
+  }
+
+  func logStream(level: String) -> AsyncThrowingStream<LogEntry, Error> {
+    AsyncThrowingStream { [weak self] continuation in
+      self?.installLogContinuation(continuation, level: level)
+    }
+  }
+
+  func connectionStream(interval: Int) -> AsyncThrowingStream<[ConnectionSnapshot], Error> {
+    AsyncThrowingStream { [weak self] continuation in
+      self?.installConnectionContinuation(continuation, interval: interval)
+    }
+  }
+
+  func subscriptionCounts() -> [Int] {
+    lock.lock()
+    defer { lock.unlock() }
+    return [trafficContinuations.count, logContinuations.count, connectionContinuations.count]
+  }
+
+  func requestedLogLevels() -> [String] {
+    lock.lock()
+    defer { lock.unlock() }
+    return logLevels
+  }
+
+  func requestedConnectionIntervals() -> [Int] {
+    lock.lock()
+    defer { lock.unlock() }
+    return connectionIntervals
+  }
+
+  func connectionRequestCount() -> Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return completedConnectionRequests
+  }
+
+  func firstGenerationWasTerminated() -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return terminatedTrafficSubscriptions.contains(0)
+      && terminatedLogSubscriptions.contains(0)
+      && terminatedConnectionSubscriptions.contains(0)
+  }
+
+  func logAndConnectionWereTerminated(subscription: Int) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return terminatedLogSubscriptions.contains(subscription)
+      && terminatedConnectionSubscriptions.contains(subscription)
+  }
+
+  @discardableResult
+  func yieldTraffic(_ sample: TrafficSample, subscription: Int) -> Bool {
+    guard let continuation = trafficContinuation(at: subscription) else { return false }
+    return Self.wasEnqueued(continuation.yield(sample))
+  }
+
+  @discardableResult
+  func yieldLog(_ entry: LogEntry, subscription: Int) -> Bool {
+    guard let continuation = logContinuation(at: subscription) else { return false }
+    return Self.wasEnqueued(continuation.yield(entry))
+  }
+
+  @discardableResult
+  func yieldConnections(_ snapshot: [ConnectionSnapshot], subscription: Int) -> Bool {
+    guard let continuation = connectionContinuation(at: subscription) else { return false }
+    return Self.wasEnqueued(continuation.yield(snapshot))
+  }
+
+  func finishTraffic(subscription: Int) {
+    trafficContinuation(at: subscription)?.finish()
+  }
+
+  func failLog(subscription: Int) {
+    logContinuation(at: subscription)?.finish(
+      throwing: AppError.helperResponse("scripted log stream disconnect")
+    )
+  }
+
+  func finishConnections(subscription: Int) {
+    connectionContinuation(at: subscription)?.finish()
+  }
+
+  private func installTrafficContinuation(_ continuation: TrafficContinuation) {
+    lock.lock()
+    let index = trafficContinuations.count
+    trafficContinuations.append(continuation)
+    lock.unlock()
+    continuation.onTermination = { [weak self] _ in
+      self?.recordTrafficTermination(index)
+    }
+  }
+
+  private func installLogContinuation(_ continuation: LogContinuation, level: String) {
+    lock.lock()
+    let index = logContinuations.count
+    logContinuations.append(continuation)
+    logLevels.append(level)
+    lock.unlock()
+    continuation.onTermination = { [weak self] _ in
+      self?.recordLogTermination(index)
+    }
+  }
+
+  private func installConnectionContinuation(_ continuation: ConnectionContinuation, interval: Int) {
+    lock.lock()
+    let index = connectionContinuations.count
+    connectionContinuations.append(continuation)
+    connectionIntervals.append(interval)
+    lock.unlock()
+    continuation.onTermination = { [weak self] _ in
+      self?.recordConnectionTermination(index)
+    }
+  }
+
+  private func trafficContinuation(at index: Int) -> TrafficContinuation? {
+    lock.lock()
+    defer { lock.unlock() }
+    return trafficContinuations.indices.contains(index) ? trafficContinuations[index] : nil
+  }
+
+  private func logContinuation(at index: Int) -> LogContinuation? {
+    lock.lock()
+    defer { lock.unlock() }
+    return logContinuations.indices.contains(index) ? logContinuations[index] : nil
+  }
+
+  private func connectionContinuation(at index: Int) -> ConnectionContinuation? {
+    lock.lock()
+    defer { lock.unlock() }
+    return connectionContinuations.indices.contains(index) ? connectionContinuations[index] : nil
+  }
+
+  private func recordTrafficTermination(_ index: Int) {
+    lock.lock()
+    terminatedTrafficSubscriptions.insert(index)
+    lock.unlock()
+  }
+
+  private func recordLogTermination(_ index: Int) {
+    lock.lock()
+    terminatedLogSubscriptions.insert(index)
+    lock.unlock()
+  }
+
+  private func recordConnectionTermination(_ index: Int) {
+    lock.lock()
+    terminatedConnectionSubscriptions.insert(index)
+    lock.unlock()
+  }
+
+  private func recordCompletedConnectionRequest() {
+    lock.lock()
+    completedConnectionRequests += 1
+    lock.unlock()
+  }
+
+  private static func wasEnqueued<Element>(
+    _ result: AsyncThrowingStream<Element, Error>.Continuation.YieldResult
+  ) -> Bool {
+    if case .enqueued = result {
+      return true
+    }
+    return false
   }
 }
 
@@ -11172,6 +11679,33 @@ private actor ReadyTunnelHelperTransport: HelperXPCTransport {
   func startCount() -> Int { starts }
   func stopCount() -> Int { stops }
   func restartCount() -> Int { restarts }
+}
+
+private actor StopStillRunningTunnelHelperTransport: HelperXPCTransport {
+  private var stops = 0
+
+  func status() async throws -> HelperClientResponse {
+    HelperClientResponse(payload: HelperXPCPayload.response(ok: true, running: true, pid: 99))
+  }
+
+  func startTunnel(coreURL: URL, configURL: URL, workDirectory: URL, secret: String) async throws -> HelperClientResponse {
+    HelperClientResponse(payload: HelperXPCPayload.response(ok: true, running: true, pid: 99))
+  }
+
+  func stopTunnel() async throws -> HelperClientResponse {
+    stops += 1
+    return HelperClientResponse(payload: HelperXPCPayload.response(ok: true, running: true, pid: 99))
+  }
+
+  func restartTunnel(coreURL: URL, configURL: URL, workDirectory: URL, secret: String) async throws -> HelperClientResponse {
+    try await startTunnel(coreURL: coreURL, configURL: configURL, workDirectory: workDirectory, secret: secret)
+  }
+
+  func recentLogs() async throws -> [String] {
+    []
+  }
+
+  func stopCount() -> Int { stops }
 }
 
 private actor FailingRestartTunnelHelperTransport: HelperXPCTransport {

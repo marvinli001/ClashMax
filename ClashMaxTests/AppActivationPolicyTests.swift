@@ -3,6 +3,36 @@ import XCTest
 @testable import ClashMax
 
 final class AppActivationPolicyTests: XCTestCase {
+  func testLaunchWarmupsAreSuppressedForXCTestEnvironment() {
+    XCTAssertFalse(
+      AppLaunchWarmupPolicy.shouldRun(
+        environment: ["XCTestConfigurationFilePath": "/tmp/ClashMaxTests.xctestconfiguration"],
+        isXCTestCaseAvailable: false,
+        bundlePaths: []
+      )
+    )
+  }
+
+  func testLaunchWarmupsAreSuppressedWhenXCTestIsLoaded() {
+    XCTAssertFalse(
+      AppLaunchWarmupPolicy.shouldRun(
+        environment: [:],
+        isXCTestCaseAvailable: true,
+        bundlePaths: []
+      )
+    )
+  }
+
+  func testLaunchWarmupsRunOutsideXCTest() {
+    XCTAssertTrue(
+      AppLaunchWarmupPolicy.shouldRun(
+        environment: [:],
+        isXCTestCaseAvailable: false,
+        bundlePaths: ["/Applications/ClashMax.app"]
+      )
+    )
+  }
+
   func testNoRegularWindowsUsesAccessoryPolicy() {
     XCTAssertEqual(AppActivationPolicyResolver.policy(for: []), .accessory)
   }

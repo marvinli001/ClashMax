@@ -4,7 +4,7 @@ struct BundledCoreInfo: Equatable {
   let versionSummary: String
   let statusMessage: String
   /// Machine-readable User-Agent the bundled Mihomo core would send for subscription
-  /// requests (e.g. `mihomo/1.19.27`), or nil when the manifest is missing/unparseable.
+  /// requests (e.g. `mihomo/1.2.3`), or nil when the manifest is missing/unparseable.
   /// Used as a compatibility fallback when a panel rejects the user-configured UA.
   let subscriptionCompatibilityUserAgent: String?
 
@@ -29,7 +29,7 @@ struct BundledCoreInfo: Equatable {
     subscriptionCompatibilityUserAgent = Self.compatibilityUserAgent(fromVersion: manifest.version)
   }
 
-  /// Normalizes a manifest version string (e.g. `v1.19.27`) into a `mihomo/<version>`
+  /// Normalizes a manifest version string (e.g. `v1.2.3`) into a `mihomo/<version>`
   /// User-Agent, stripping a leading `v`. Returns nil when no version is present.
   static func compatibilityUserAgent(fromVersion version: String) -> String? {
     let trimmed = version.trimmingCharacters(in: .whitespacesAndNewlines)

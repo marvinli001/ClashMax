@@ -5914,7 +5914,7 @@ struct SubscriptionFetchOptions: Equatable, Sendable {
   var allowsInsecureTLS: Bool
   var retryOrder: [SubscriptionFetchStrategy]
   var customHeaders: [String: String]
-  /// Optional fallback User-Agent (e.g. `mihomo/1.19.27`) retried once per strategy when the
+  /// Optional fallback User-Agent (e.g. `mihomo/1.2.3`) retried once per strategy when the
   /// primary `userAgent` yields a panel/invalid-profile response. Not part of user settings;
   /// injected from the bundled core. Ignored when nil, blank, or equal to `userAgent`.
   var compatibilityUserAgent: String?

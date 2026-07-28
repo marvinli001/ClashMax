@@ -121,13 +121,14 @@ final class MenuBarRuntimePresentationTests: XCTestCase {
 
 final class MenuBarTrafficStatusLabelTests: XCTestCase {
   func testShowsCompactUploadThenDownloadLinesWhileRunningWithData() {
-    let label = MenuBarTrafficStatusLabel.text(
+    let lines = MenuBarTrafficStatusLabel.lines(
       showsTraffic: true,
       hasTrafficData: true,
       sample: TrafficSample(upload: 348, download: 2048)
     )
 
-    XCTAssertEqual(label, "↑348B/s\n↓2KB/s")
+    XCTAssertEqual(lines?.upload, "↑348B/s")
+    XCTAssertEqual(lines?.download, "↓2KB/s")
   }
 
   func testLabelStripsInternalUnitSpacingToStayNarrow() {
@@ -195,6 +196,23 @@ final class MenuBarTrafficStatusLabelTests: XCTestCase {
     )
 
     XCTAssertEqual(label, "↑0B/s\n↓0B/s")
+  }
+}
+
+final class LogLevelStyleTests: XCTestCase {
+  func testLogLevelAliasesUseConsistentSeverityColors() {
+    for level in ["error", "fatal", "panic"] {
+      XCTAssertEqual(LogLevelStyle.color(for: level), .red)
+    }
+    for level in ["warn", "warning"] {
+      XCTAssertEqual(LogLevelStyle.color(for: level), .orange)
+    }
+    for level in ["debug", "trace"] {
+      XCTAssertEqual(LogLevelStyle.color(for: level), .purple)
+    }
+    for level in ["info", "information", "unknown"] {
+      XCTAssertEqual(LogLevelStyle.color(for: level), .secondary)
+    }
   }
 }
 

@@ -3,7 +3,7 @@ import XCTest
 @testable import ClashMax
 
 final class SubscriptionPreflightDiagnosticFormatterTests: XCTestCase {
-  // Real bundled Mihomo v1.19.27 `-t` output: info/warn lines, then the real
+  // Captured Mihomo `-t` output: info/warn lines, then the real
   // cause as a logfmt `level=error` line, then a generic trailer last.
   private let realMihomoFailureOutput = """
   time="2026-06-19T18:47:40.751333000+12:00" level=info msg="Start initial configuration in progress"

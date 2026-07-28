@@ -894,7 +894,7 @@ final class ProfileStoreTests: XCTestCase {
       session: URLSession(configuration: URLProtocolRecorder.configurationReturning(providerContent))
     )
 
-    // Mirrors real bundled Mihomo v1.19.27 `-t` output: a benign info line
+    // Mirrors captured Mihomo `-t` output: a benign info line
     // (the part previously surfaced by issue #7), the real cause as a logfmt
     // `level=error` line, then a generic trailer last.
     let multilineMihomoOutput = """

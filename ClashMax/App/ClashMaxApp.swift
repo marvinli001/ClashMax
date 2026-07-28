@@ -27,9 +27,11 @@ struct ClashMaxApp: App {
         .onAppear {
           appDelegate.appModel = appModel
           appDelegate.setMainWindowOpener { openWindow(id: "main") }
-          appModel.startNetworkEnvironmentMonitoring()
-          appModel.warmTunHelperRegistrationOnLaunch()
-          appModel.warmPreviewRuntimeOnLaunch()
+          if AppLaunchWarmupPolicy.shouldRunForCurrentProcess {
+            appModel.startNetworkEnvironmentMonitoring()
+            appModel.warmTunHelperRegistrationOnLaunch()
+            appModel.warmPreviewRuntimeOnLaunch()
+          }
         }
         .onOpenURL { url in
           AppDelegate.showMainWindow()
@@ -121,9 +123,11 @@ struct ClashMaxApp: App {
         .onAppear {
           appDelegate.appModel = appModel
           appDelegate.setMainWindowOpener { openWindow(id: "main") }
-          appModel.startNetworkEnvironmentMonitoring()
-          appModel.warmTunHelperRegistrationOnLaunch()
-          appModel.warmPreviewRuntimeOnLaunch()
+          if AppLaunchWarmupPolicy.shouldRunForCurrentProcess {
+            appModel.startNetworkEnvironmentMonitoring()
+            appModel.warmTunHelperRegistrationOnLaunch()
+            appModel.warmPreviewRuntimeOnLaunch()
+          }
         }
     } label: {
       MenuBarStatusLabel(appModel: appModel)
@@ -146,9 +150,11 @@ struct ClashMaxApp: App {
         .onAppear {
           appDelegate.appModel = appModel
           appDelegate.setMainWindowOpener { openWindow(id: "main") }
-          appModel.startNetworkEnvironmentMonitoring()
-          appModel.warmTunHelperRegistrationOnLaunch()
-          appModel.warmPreviewRuntimeOnLaunch()
+          if AppLaunchWarmupPolicy.shouldRunForCurrentProcess {
+            appModel.startNetworkEnvironmentMonitoring()
+            appModel.warmTunHelperRegistrationOnLaunch()
+            appModel.warmPreviewRuntimeOnLaunch()
+          }
         }
     }
   }
@@ -317,6 +323,27 @@ enum AppActivationPolicyResolver {
     for windows: [AppActivationPolicyWindowSnapshot]
   ) -> Bool {
     !windows.contains(where: \.isRegularAppWindow)
+  }
+}
+
+enum AppLaunchWarmupPolicy {
+  static var shouldRunForCurrentProcess: Bool {
+    shouldRun(
+      environment: ProcessInfo.processInfo.environment,
+      isXCTestCaseAvailable: NSClassFromString("XCTest.XCTestCase") != nil,
+      bundlePaths: Bundle.allBundles.map(\.bundlePath)
+    )
+  }
+
+  static func shouldRun(
+    environment: [String: String],
+    isXCTestCaseAvailable: Bool,
+    bundlePaths: [String]
+  ) -> Bool {
+    environment["XCTestConfigurationFilePath"] == nil
+      && environment["XCTestBundlePath"] == nil
+      && !isXCTestCaseAvailable
+      && !bundlePaths.contains { $0.hasSuffix(".xctest") }
   }
 }
 

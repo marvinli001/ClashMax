@@ -255,7 +255,7 @@ struct MihomoAPIClient: Sendable {
   func testDelay(proxy: String, testURL: URL, timeout: Int) async throws -> Int {
     let data: Data
     do {
-      data = try await data(for: request(
+      data = try await self.data(for: request(
         path: apiPath("proxies", proxy, "delay"),
         queryItems: [
           URLQueryItem(name: "url", value: testURL.absoluteString),

@@ -872,6 +872,36 @@ final class TunnelHelperClientTests: XCTestCase {
 
     await fulfillment(of: [expectation], timeout: 0.5)
   }
+
+  func testContinuationBoxCancellationIgnoresLateReplyAndRunsCleanupOnce() async {
+    let box = ContinuationBox<String>()
+    let attached = expectation(description: "continuation attached")
+    let completed = expectation(description: "cancellation completed")
+    var cleanupCount = 0
+
+    Task {
+      do {
+        _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
+          XCTAssertTrue(box.attach(continuation) {
+            cleanupCount += 1
+          })
+          attached.fulfill()
+        }
+        XCTFail("Expected cancellation")
+      } catch is CancellationError {
+        // Expected: a later XPC-style success must not resume the continuation again.
+      } catch {
+        XCTFail("Expected CancellationError, got \(error)")
+      }
+      completed.fulfill()
+    }
+
+    await fulfillment(of: [attached], timeout: 0.5)
+    box.fail(CancellationError())
+    box.succeed("late reply")
+    await fulfillment(of: [completed], timeout: 0.5)
+    XCTAssertEqual(cleanupCount, 1)
+  }
 }
 
 private final class FakeHelperTransport: HelperXPCTransport, @unchecked Sendable {
