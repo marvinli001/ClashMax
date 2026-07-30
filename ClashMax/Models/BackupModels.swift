@@ -1,11 +1,12 @@
 import Foundation
 
 struct ClashMaxBackupFile: Codable, Equatable, Sendable {
-  static let currentSchemaVersion = 1
+  static let currentSchemaVersion = 2
 
   var schemaVersion: Int
   var appMetadata: BackupAppMetadata
   var profilesManifest: ProfileManifest
+  var outboundProxyManifest: OutboundProxyEndpointManifest
   var profileSources: [BackupProfileSource]
   var settings: BackupSettingsSnapshot
   var proxySelections: [String: [String: String]]
@@ -19,6 +20,7 @@ struct ClashMaxBackupFile: Codable, Equatable, Sendable {
     case schemaVersion
     case appMetadata
     case profilesManifest
+    case outboundProxyManifest
     case profileSources
     case settings
     case proxySelections
@@ -33,6 +35,7 @@ struct ClashMaxBackupFile: Codable, Equatable, Sendable {
     schemaVersion: Int = Self.currentSchemaVersion,
     appMetadata: BackupAppMetadata,
     profilesManifest: ProfileManifest,
+    outboundProxyManifest: OutboundProxyEndpointManifest = OutboundProxyEndpointManifest(),
     profileSources: [BackupProfileSource],
     settings: BackupSettingsSnapshot,
     proxySelections: [String: [String: String]],
@@ -45,6 +48,7 @@ struct ClashMaxBackupFile: Codable, Equatable, Sendable {
     self.schemaVersion = schemaVersion
     self.appMetadata = appMetadata
     self.profilesManifest = profilesManifest
+    self.outboundProxyManifest = outboundProxyManifest
     self.profileSources = profileSources
     self.settings = settings
     self.proxySelections = proxySelections
@@ -57,10 +61,29 @@ struct ClashMaxBackupFile: Codable, Equatable, Sendable {
 
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
+    let schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+    let outboundProxyManifest: OutboundProxyEndpointManifest
+    if schemaVersion == 1 {
+      outboundProxyManifest = try container.decodeIfPresent(
+        OutboundProxyEndpointManifest.self,
+        forKey: .outboundProxyManifest
+      ) ?? OutboundProxyEndpointManifest()
+    } else if schemaVersion == Self.currentSchemaVersion {
+      outboundProxyManifest = try container.decode(
+        OutboundProxyEndpointManifest.self,
+        forKey: .outboundProxyManifest
+      )
+    } else {
+      outboundProxyManifest = try container.decodeIfPresent(
+        OutboundProxyEndpointManifest.self,
+        forKey: .outboundProxyManifest
+      ) ?? OutboundProxyEndpointManifest()
+    }
     self.init(
-      schemaVersion: try container.decode(Int.self, forKey: .schemaVersion),
+      schemaVersion: schemaVersion,
       appMetadata: try container.decode(BackupAppMetadata.self, forKey: .appMetadata),
       profilesManifest: try container.decode(ProfileManifest.self, forKey: .profilesManifest),
+      outboundProxyManifest: outboundProxyManifest,
       profileSources: try container.decode([BackupProfileSource].self, forKey: .profileSources),
       settings: try container.decode(BackupSettingsSnapshot.self, forKey: .settings),
       proxySelections: try container.decode([String: [String: String]].self, forKey: .proxySelections),
@@ -112,6 +135,7 @@ struct BackupSecretSummary: Codable, Equatable, Sendable {
   var runtimeMergeYAMLCount: Int
   var profileSourceCredentialCount: Int
   var runtimeSnippetCount: Int
+  var outboundProxyPasswordCount: Int
 
   private enum CodingKeys: String, CodingKey {
     case subscriptionURLCount
@@ -119,6 +143,7 @@ struct BackupSecretSummary: Codable, Equatable, Sendable {
     case runtimeMergeYAMLCount
     case profileSourceCredentialCount
     case runtimeSnippetCount
+    case outboundProxyPasswordCount
   }
 
   init(
@@ -126,13 +151,15 @@ struct BackupSecretSummary: Codable, Equatable, Sendable {
     requestHeaderValueCount: Int = 0,
     runtimeMergeYAMLCount: Int = 0,
     profileSourceCredentialCount: Int = 0,
-    runtimeSnippetCount: Int = 0
+    runtimeSnippetCount: Int = 0,
+    outboundProxyPasswordCount: Int = 0
   ) {
     self.subscriptionURLCount = subscriptionURLCount
     self.requestHeaderValueCount = requestHeaderValueCount
     self.runtimeMergeYAMLCount = runtimeMergeYAMLCount
     self.profileSourceCredentialCount = profileSourceCredentialCount
     self.runtimeSnippetCount = runtimeSnippetCount
+    self.outboundProxyPasswordCount = outboundProxyPasswordCount
   }
 
   init(from decoder: Decoder) throws {
@@ -142,7 +169,11 @@ struct BackupSecretSummary: Codable, Equatable, Sendable {
       requestHeaderValueCount: try container.decodeIfPresent(Int.self, forKey: .requestHeaderValueCount) ?? 0,
       runtimeMergeYAMLCount: try container.decodeIfPresent(Int.self, forKey: .runtimeMergeYAMLCount) ?? 0,
       profileSourceCredentialCount: try container.decodeIfPresent(Int.self, forKey: .profileSourceCredentialCount) ?? 0,
-      runtimeSnippetCount: try container.decodeIfPresent(Int.self, forKey: .runtimeSnippetCount) ?? 0
+      runtimeSnippetCount: try container.decodeIfPresent(Int.self, forKey: .runtimeSnippetCount) ?? 0,
+      outboundProxyPasswordCount: try container.decodeIfPresent(
+        Int.self,
+        forKey: .outboundProxyPasswordCount
+      ) ?? 0
     )
   }
 
@@ -152,13 +183,39 @@ struct BackupSecretSummary: Codable, Equatable, Sendable {
       + runtimeMergeYAMLCount
       + profileSourceCredentialCount
       + runtimeSnippetCount
+      + outboundProxyPasswordCount
   }
 }
 
 struct BackupSecretsBundle: Codable, Equatable, Sendable {
   var subscriptions: [BackupSubscriptionSecrets]
+  var outboundProxyPasswords: [BackupOutboundProxyEndpointPassword]
 
-  static let empty = BackupSecretsBundle(subscriptions: [])
+  private enum CodingKeys: String, CodingKey {
+    case subscriptions
+    case outboundProxyPasswords
+  }
+
+  init(
+    subscriptions: [BackupSubscriptionSecrets],
+    outboundProxyPasswords: [BackupOutboundProxyEndpointPassword] = []
+  ) {
+    self.subscriptions = subscriptions
+    self.outboundProxyPasswords = outboundProxyPasswords
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    self.init(
+      subscriptions: try container.decode([BackupSubscriptionSecrets].self, forKey: .subscriptions),
+      outboundProxyPasswords: try container.decodeIfPresent(
+        [BackupOutboundProxyEndpointPassword].self,
+        forKey: .outboundProxyPasswords
+      ) ?? []
+    )
+  }
+
+  static let empty = BackupSecretsBundle(subscriptions: [], outboundProxyPasswords: [])
 }
 
 struct BackupSubscriptionSecrets: Codable, Equatable, Sendable {
@@ -364,6 +421,34 @@ struct BackupProfileExport: Sendable {
   var omittedSecretSummary: BackupSecretSummary
 }
 
+struct BackupOutboundProxyEndpointPassword: Codable, Equatable, Sendable {
+  var endpointID: UUID
+  var password: String
+}
+
+struct BackupOutboundProxyEndpointExport: Equatable, Sendable {
+  var manifest: OutboundProxyEndpointManifest
+  var passwords: [BackupOutboundProxyEndpointPassword]
+  var omittedPasswordCount: Int
+}
+
+struct OutboundProxyEndpointPasswordSnapshot: Equatable, Sendable {
+  var endpointID: UUID
+  var password: String?
+}
+
+struct OutboundProxyEndpointStoreRollbackSnapshot: Equatable, Sendable {
+  var manifest: OutboundProxyEndpointManifest
+  var passwords: [OutboundProxyEndpointPasswordSnapshot]
+}
+
+struct BackupOutboundProxyEndpointRestoreResult: Equatable, Sendable {
+  var importedEndpointCount: Int
+  var idMap: [UUID: UUID]
+  var restoredSecretCount: Int
+  var rollbackSnapshot: OutboundProxyEndpointStoreRollbackSnapshot
+}
+
 struct ProfileStoreRollbackSnapshot: Sendable {
   var manifest: ProfileManifest
   var profileSources: [Profile.ID: String]
@@ -388,16 +473,52 @@ struct BackupRestorePreview: Identifiable, Equatable, Sendable {
   var url: URL
   var fileName: String
   var profileCount: Int
+  var endpointCount: Int
   var hasSettings: Bool
   var proxySelectionProfileCount: Int
   var hasEncryptedSecrets: Bool
   var omittedSecretSummary: BackupSecretSummary
+
+  init(
+    id: UUID = UUID(),
+    url: URL,
+    fileName: String,
+    profileCount: Int,
+    endpointCount: Int = 0,
+    hasSettings: Bool,
+    proxySelectionProfileCount: Int,
+    hasEncryptedSecrets: Bool,
+    omittedSecretSummary: BackupSecretSummary
+  ) {
+    self.id = id
+    self.url = url
+    self.fileName = fileName
+    self.profileCount = profileCount
+    self.endpointCount = endpointCount
+    self.hasSettings = hasSettings
+    self.proxySelectionProfileCount = proxySelectionProfileCount
+    self.hasEncryptedSecrets = hasEncryptedSecrets
+    self.omittedSecretSummary = omittedSecretSummary
+  }
 }
 
 struct BackupRestoreSummary: Equatable, Sendable {
   var importedProfileCount: Int
+  var importedEndpointCount: Int
   var restoredSecretCount: Int
   var skippedSecretCount: Int
+
+  init(
+    importedProfileCount: Int,
+    importedEndpointCount: Int = 0,
+    restoredSecretCount: Int,
+    skippedSecretCount: Int
+  ) {
+    self.importedProfileCount = importedProfileCount
+    self.importedEndpointCount = importedEndpointCount
+    self.restoredSecretCount = restoredSecretCount
+    self.skippedSecretCount = skippedSecretCount
+  }
 }
 
 enum BackupRestoreError: LocalizedError, Equatable {
@@ -408,6 +529,7 @@ enum BackupRestoreError: LocalizedError, Equatable {
   case passwordConfirmationMismatch
   case invalidPassword
   case cannotRestoreWhileRunning
+  case rollbackFailed
 
   var errorDescription: String? {
     switch self {
@@ -425,6 +547,8 @@ enum BackupRestoreError: LocalizedError, Equatable {
       return "The backup password is incorrect or the encrypted secret payload is damaged."
     case .cannotRestoreWhileRunning:
       return "Stop the core before restoring a ClashMax backup."
+    case .rollbackFailed:
+      return "Backup restore failed and the previous outbound proxy endpoint state could not be fully restored."
     }
   }
 }

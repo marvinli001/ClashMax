@@ -5,6 +5,64 @@ import XCTest
 
 @MainActor
 final class ProfileStoreTests: XCTestCase {
+  func testAddSubscriptionRejectsUpstreamIDWithoutMatchingResolvedEndpoint() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let store = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
+    let recorder = URLProtocolRecorder(
+      responseBody: "proxies:\n  - name: DIRECT\n    type: direct\n",
+      responseHeaders: ["Content-Type": "text/yaml"]
+    )
+
+    await XCTAssertThrowsErrorAsync {
+      _ = try await store.addSubscription(
+        url: URL(string: "https://example.com/sub")!,
+        upstreamEndpointID: UUID(),
+        session: URLSession(configuration: recorder.configuration)
+      )
+    }
+
+    XCTAssertNil(recorder.lastRequest)
+    XCTAssertTrue(store.profiles.isEmpty)
+  }
+
+  func testProfileUpstreamCannotBeBypassedWithCustomURLSession() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let store = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
+    let recorder = URLProtocolRecorder(
+      responseBody: "proxies:\n  - name: DIRECT\n    type: direct\n",
+      responseHeaders: ["Content-Type": "text/yaml"]
+    )
+    let customSession = URLSession(configuration: recorder.configuration)
+    let unresolvedSecret = ResolvedOutboundProxyEndpoint(
+      endpoint: OutboundProxyEndpoint(
+        name: "Authenticated profile upstream",
+        kind: .socks5,
+        host: "proxy.example.com",
+        port: 1080,
+        authentication: OutboundProxyAuthentication(username: "sensitive-user")
+      ),
+      password: nil
+    )
+
+    do {
+      _ = try await store.addSubscription(
+        url: URL(string: "https://example.com/sub")!,
+        session: customSession,
+        fetchOptions: SubscriptionFetchOptions(
+          timeout: 1,
+          profileUpstreamEndpoint: unresolvedSecret
+        )
+      )
+      XCTFail("Expected unresolved profile upstream secret to fail closed")
+    } catch {
+      let text = "\(error) \(error.localizedDescription)"
+      XCTAssertFalse(text.contains("sensitive-user"))
+    }
+
+    XCTAssertNil(recorder.lastRequest)
+    XCTAssertTrue(store.profiles.isEmpty)
+  }
+
   func testImportRenameDeleteAndPersistActiveProfile() async throws {
     let fixture = try TemporaryProfileFixture()
     let store = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
@@ -121,6 +179,256 @@ final class ProfileStoreTests: XCTestCase {
     XCTAssertEqual(profile.subscriptionUpdatePolicy, .default)
     XCTAssertEqual(profile.subscriptionUpdateStatus, .empty)
     XCTAssertEqual(profile.subscriptionDiagnostics, .empty)
+    XCTAssertNil(profile.upstreamEndpointID)
+  }
+
+  func testManualProxySourceUsesStableKindAndEndpointIDRoundTrip() throws {
+    let endpointID = UUID(uuidString: "12345678-1234-5678-9ABC-DEF012345678")!
+    let source = ProfileSource.manualProxy(endpointID: endpointID)
+
+    let data = try JSONEncoder().encode(source)
+    let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: String])
+
+    XCTAssertEqual(object, [
+      "kind": "manualProxy",
+      "endpointID": endpointID.uuidString
+    ])
+    XCTAssertEqual(try JSONDecoder().decode(ProfileSource.self, from: data), source)
+    XCTAssertEqual(source.displayName, String(localized: "Manual Proxy"))
+    XCTAssertFalse(source.isSubscription)
+  }
+
+  func testManualProxyProfileWritesPrivateFailClosedMarkerWithoutEndpointData() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let store = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
+    let endpointID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+
+    let profile = try await store.addManualProxyProfile(
+      name: "Office Proxy",
+      endpointID: endpointID
+    )
+
+    XCTAssertEqual(profile.source, .manualProxy(endpointID: endpointID))
+    XCTAssertNil(profile.upstreamEndpointID)
+    let marker = try String(contentsOfFile: profile.originalConfigPath, encoding: .utf8)
+    XCTAssertTrue(marker.contains("MATCH,REJECT"))
+    XCTAssertFalse(marker.localizedCaseInsensitiveContains("endpoint"))
+    XCTAssertFalse(marker.contains(endpointID.uuidString))
+    XCTAssertFalse(marker.localizedCaseInsensitiveContains("username"))
+    XCTAssertFalse(marker.localizedCaseInsensitiveContains("password"))
+    XCTAssertNoThrow(try ProfileConfigValidator.validate(marker))
+    XCTAssertEqual(
+      try posixPermissions(at: URL(fileURLWithPath: profile.originalConfigPath)),
+      SecureFileIO.privateFilePermissions
+    )
+
+    let reloaded = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
+    await reloaded.waitForManifestLoad()
+    XCTAssertEqual(reloaded.profiles.map(\.id), [profile.id])
+    XCTAssertEqual(reloaded.profiles.first?.name, profile.name)
+    XCTAssertEqual(reloaded.profiles.first?.source, profile.source)
+    XCTAssertEqual(reloaded.profiles.first?.originalConfigPath, profile.originalConfigPath)
+    XCTAssertNil(reloaded.profiles.first?.upstreamEndpointID)
+  }
+
+  func testOnlyOneManualProfileMayReferenceAnEndpoint() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let store = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
+    let endpointID = UUID()
+    let first = try await store.addManualProxyProfile(name: "First", endpointID: endpointID)
+
+    await XCTAssertThrowsErrorAsync {
+      try await store.addManualProxyProfile(name: "Second", endpointID: endpointID)
+    } handler: { error in
+      XCTAssertEqual(
+        error as? ProfileStoreError,
+        .manualProfileAlreadyExists(endpointID)
+      )
+    }
+
+    XCTAssertEqual(store.profiles, [first])
+    let files = try FileManager.default.contentsOfDirectory(
+      at: fixture.paths.profiles,
+      includingPropertiesForKeys: nil
+    )
+    XCTAssertEqual(files.map(\.lastPathComponent), [URL(fileURLWithPath: first.originalConfigPath).lastPathComponent])
+  }
+
+  func testManualProfileRejectsSelfUpstreamAndPersistsDifferentEndpoint() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let store = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
+    let manualEndpointID = UUID()
+    let otherEndpointID = UUID()
+    let profile = try await store.addManualProxyProfile(
+      name: "Manual",
+      endpointID: manualEndpointID
+    )
+
+    await XCTAssertThrowsErrorAsync {
+      try await store.updateUpstreamEndpoint(for: profile, endpointID: manualEndpointID)
+    } handler: { error in
+      XCTAssertEqual(
+        error as? ProfileStoreError,
+        .manualProfileCannotUseOwnEndpoint(manualEndpointID)
+      )
+    }
+    XCTAssertNil(store.profiles.first?.upstreamEndpointID)
+
+    try await store.updateUpstreamEndpoint(for: profile, endpointID: otherEndpointID)
+    XCTAssertEqual(store.profiles.first?.upstreamEndpointID, otherEndpointID)
+
+    let reloaded = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
+    await reloaded.waitForManifestLoad()
+    XCTAssertEqual(reloaded.profiles.first?.upstreamEndpointID, otherEndpointID)
+  }
+
+  func testEndpointReferencesListManualAndUpstreamProfilesByName() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let store = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
+    let endpointID = UUID()
+    let manual = try await store.addManualProxyProfile(name: "Manual", endpointID: endpointID)
+    let local = try await store.importLocalConfig(from: fixture.configURL)
+    try await store.rename(local, to: "Local via Office")
+    try await store.updateUpstreamEndpoint(for: local, endpointID: endpointID)
+
+    let references = try await store.references(to: endpointID)
+    XCTAssertEqual(
+      references,
+      [
+        OutboundProxyEndpointReference(
+          profileID: manual.id,
+          profileName: "Manual",
+          kind: .manualProfile
+        ),
+        OutboundProxyEndpointReference(
+          profileID: local.id,
+          profileName: "Local via Office",
+          kind: .upstream
+        )
+      ]
+    )
+  }
+
+  func testEndpointReferencesWaitForManifestLoadBeforeReturningSnapshot() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let endpointID = UUID()
+    let manual = Profile(
+      name: "Persisted Manual",
+      source: .manualProxy(endpointID: endpointID),
+      originalConfigPath: fixture.paths.profiles.appendingPathComponent("manual.yaml").path
+    )
+    let upstream = Profile(
+      name: "Persisted Upstream",
+      source: .localFile(originalPath: nil),
+      originalConfigPath: fixture.paths.profiles.appendingPathComponent("upstream.yaml").path,
+      upstreamEndpointID: endpointID
+    )
+    let diskIO = BlockingProfileManifestLoadDiskIO(
+      manifest: ProfileManifest(
+        profiles: [manual, upstream],
+        activeProfileID: manual.id
+      )
+    )
+    let store = ProfileStore(
+      paths: fixture.paths,
+      keychain: InMemorySecretStore(),
+      diskIO: diskIO
+    )
+    await diskIO.waitUntilLoadStarts()
+
+    let queryStarted = OutboundProxyEndpointTestSignal()
+    let queryFinished = OutboundProxyEndpointTestSignal()
+    let queryTask = Task { @MainActor in
+      await queryStarted.signal()
+      let references = try await store.references(to: endpointID)
+      await queryFinished.signal()
+      return references
+    }
+    await queryStarted.wait()
+    await Task.yield()
+
+    let didFinishBeforeLoad = await queryFinished.value()
+    XCTAssertFalse(didFinishBeforeLoad)
+
+    await diskIO.releaseLoad()
+    let references = try await queryTask.value
+    XCTAssertEqual(
+      references,
+      [
+        OutboundProxyEndpointReference(
+          profileID: manual.id,
+          profileName: manual.name,
+          kind: .manualProfile
+        ),
+        OutboundProxyEndpointReference(
+          profileID: upstream.id,
+          profileName: upstream.name,
+          kind: .upstream
+        )
+      ]
+    )
+  }
+
+  func testManualProfileManifestFailureRemovesMarkerAndDoesNotPublishProfile() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let diskIO = ControllableProfileDiskIO()
+    await diskIO.failNextManifestSave()
+    let store = ProfileStore(
+      paths: fixture.paths,
+      keychain: InMemorySecretStore(),
+      diskIO: diskIO
+    )
+    await store.waitForManifestLoad()
+
+    await XCTAssertThrowsErrorAsync {
+      try await store.addManualProxyProfile(name: "Manual", endpointID: UUID())
+    }
+
+    XCTAssertTrue(store.profiles.isEmpty)
+    XCTAssertNil(store.activeProfileID)
+    XCTAssertEqual(
+      try FileManager.default.contentsOfDirectory(
+        at: fixture.paths.profiles,
+        includingPropertiesForKeys: nil
+      ),
+      []
+    )
+  }
+
+  func testUpstreamManifestFailureDoesNotPublishInMemoryChange() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let diskIO = ControllableProfileDiskIO()
+    let store = ProfileStore(
+      paths: fixture.paths,
+      keychain: InMemorySecretStore(),
+      diskIO: diskIO
+    )
+    let profile = try await store.importLocalConfig(from: fixture.configURL)
+    await diskIO.failNextManifestSave()
+
+    await XCTAssertThrowsErrorAsync {
+      try await store.updateUpstreamEndpoint(for: profile, endpointID: UUID())
+    }
+
+    XCTAssertNil(store.profiles.first?.upstreamEndpointID)
+    let manifest = try await diskIO.loadManifest(from: fixture.paths.manifestURL)
+    XCTAssertNil(manifest?.profiles.first?.upstreamEndpointID)
+  }
+
+  func testDeletingManualProfileDoesNotTouchSharedEndpointManifest() async throws {
+    let fixture = try TemporaryProfileFixture()
+    let store = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
+    let endpointManifest = #"{"sentinel":"shared endpoint metadata"}"#
+    try SecureFileIO.writePrivateString(endpointManifest, to: fixture.paths.outboundProxyEndpointManifestURL)
+    let profile = try await store.addManualProxyProfile(name: "Manual", endpointID: UUID())
+
+    try await store.delete(profile)
+
+    XCTAssertFalse(FileManager.default.fileExists(atPath: profile.originalConfigPath))
+    XCTAssertEqual(
+      try String(contentsOf: fixture.paths.outboundProxyEndpointManifestURL, encoding: .utf8),
+      endpointManifest
+    )
   }
 
   func testSubscriptionURLIsStoredOutsideManifestAndUpdateRefreshesConfig() async throws {
@@ -1217,6 +1525,1402 @@ final class ProfileStoreTests: XCTestCase {
   }
 }
 
+final class OutboundProxyEndpointStoreTests: XCTestCase {
+  func testSOCKS5DefaultsToTCPOnlyAndHTTPOptionsRoundTrip() throws {
+    let socks5 = OutboundProxyEndpoint(
+      name: "Office SOCKS",
+      kind: .socks5,
+      host: "127.0.0.1",
+      port: 1080
+    )
+    XCTAssertFalse(socks5.socks5Options.udpEnabled)
+
+    let endpoint = OutboundProxyEndpoint(
+      id: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
+      name: "Office HTTP",
+      kind: .http,
+      host: "proxy.example.com",
+      port: 8443,
+      authentication: OutboundProxyAuthentication(username: "alice"),
+      httpOptions: OutboundProxyHTTPOptions(
+        tlsEnabled: true,
+        serverName: "edge.example.com",
+        skipCertificateVerification: true
+      )
+    )
+
+    let data = try JSONEncoder().encode(endpoint)
+    let decoded = try JSONDecoder().decode(OutboundProxyEndpoint.self, from: data)
+
+    XCTAssertEqual(decoded, endpoint)
+    XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("secret-password"))
+  }
+
+  func testDiskRoundTripOmitsPasswordAndResolveLoadsExactKeychainAccount() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("OutboundProxyStoreTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let manifestURL = root.appendingPathComponent("outbound-proxies.json")
+    let secrets = InMemorySecretStore()
+    let endpoint = OutboundProxyEndpoint(
+      id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!,
+      name: "Authenticated",
+      kind: .socks5,
+      host: "socks.example.com",
+      port: 1080,
+      authentication: OutboundProxyAuthentication(username: "alice"),
+      socks5Options: OutboundProxySOCKS5Options(udpEnabled: true)
+    )
+    let store = OutboundProxyEndpointStore(manifestURL: manifestURL, secretStore: secrets)
+
+    let saved = try await store.add(endpoint, password: "top-secret")
+
+    XCTAssertEqual(saved, endpoint)
+    XCTAssertEqual(
+      try secrets.load(account: "outbound-proxy.AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE.password"),
+      "top-secret"
+    )
+    let rawManifest = try String(contentsOf: manifestURL, encoding: .utf8)
+    XCTAssertFalse(rawManifest.contains("top-secret"))
+    XCTAssertEqual(try permissions(at: manifestURL), SecureFileIO.privateFilePermissions)
+
+    let reloaded = OutboundProxyEndpointStore(manifestURL: manifestURL, secretStore: secrets)
+    let reloadedEndpoints = try await reloaded.endpoints()
+    XCTAssertEqual(reloadedEndpoints, [endpoint])
+    let resolved = try await reloaded.resolve(id: endpoint.id)
+    XCTAssertEqual(resolved.endpoint, endpoint)
+    XCTAssertEqual(resolved.password, "top-secret")
+    XCTAssertEqual(resolved.secretState, .ready)
+  }
+
+  func testNamesAreUniqueIgnoringCaseAndSurroundingWhitespace() async throws {
+    let disk = InMemoryOutboundProxyEndpointManifestStore()
+    let secrets = InMemorySecretStore()
+    let store = OutboundProxyEndpointStore(
+      manifestURL: URL(fileURLWithPath: "/unused/outbound-proxies.json"),
+      secretStore: secrets,
+      diskIO: disk
+    )
+    _ = try await store.add(
+      OutboundProxyEndpoint(name: "Office", kind: .http, host: "one.example", port: 8080),
+      password: nil
+    )
+
+    do {
+      _ = try await store.add(
+        OutboundProxyEndpoint(name: " office ", kind: .socks5, host: "two.example", port: 1080),
+        password: nil
+      )
+      XCTFail("Expected a duplicate-name error")
+    } catch {
+      XCTAssertEqual(error as? OutboundProxyEndpointStoreError, .duplicateName("office"))
+    }
+
+    let endpointNames = try await store.endpoints().map(\.name)
+    XCTAssertEqual(endpointNames, ["Office"])
+  }
+
+  func testNamesAreUniqueUsingLocaleStableUnicodeCaseFolding() async throws {
+    let store = OutboundProxyEndpointStore(
+      manifestURL: URL(fileURLWithPath: "/unused/outbound-proxies.json"),
+      secretStore: InMemorySecretStore(),
+      diskIO: InMemoryOutboundProxyEndpointManifestStore()
+    )
+    _ = try await store.add(
+      OutboundProxyEndpoint(name: "straße", kind: .http, host: "one.example", port: 8080),
+      password: nil
+    )
+
+    do {
+      _ = try await store.add(
+        OutboundProxyEndpoint(name: "STRASSE", kind: .socks5, host: "two.example", port: 1080),
+        password: nil
+      )
+      XCTFail("Expected Unicode case-folded names to be treated as duplicates")
+    } catch {
+      XCTAssertEqual(error as? OutboundProxyEndpointStoreError, .duplicateName("strasse"))
+    }
+  }
+
+  func testValidationRejectsInvalidEndpointAndRequiresPasswordForAuthentication() async throws {
+    let store = OutboundProxyEndpointStore(
+      manifestURL: URL(fileURLWithPath: "/unused/outbound-proxies.json"),
+      secretStore: InMemorySecretStore(),
+      diskIO: InMemoryOutboundProxyEndpointManifestStore()
+    )
+
+    do {
+      _ = try await store.add(
+        OutboundProxyEndpoint(name: " ", kind: .http, host: "proxy.example", port: 8080),
+        password: nil
+      )
+      XCTFail("Expected name validation to fail")
+    } catch {
+      XCTAssertEqual(error as? OutboundProxyEndpointStoreError, .nameRequired)
+    }
+
+    do {
+      _ = try await store.add(
+        OutboundProxyEndpoint(name: "Office", kind: .http, host: " ", port: 8080),
+        password: nil
+      )
+      XCTFail("Expected host validation to fail")
+    } catch {
+      XCTAssertEqual(error as? OutboundProxyEndpointStoreError, .hostRequired)
+    }
+
+    do {
+      _ = try await store.add(
+        OutboundProxyEndpoint(name: "Office", kind: .http, host: "proxy.example", port: 65_536),
+        password: nil
+      )
+      XCTFail("Expected port validation to fail")
+    } catch {
+      XCTAssertEqual(error as? OutboundProxyEndpointStoreError, .invalidPort(65_536))
+    }
+
+    do {
+      _ = try await store.add(
+        OutboundProxyEndpoint(
+          name: "Office",
+          kind: .http,
+          host: "proxy.example",
+          port: 8080,
+          authentication: OutboundProxyAuthentication(username: " ")
+        ),
+        password: "secret"
+      )
+      XCTFail("Expected username validation to fail")
+    } catch {
+      XCTAssertEqual(error as? OutboundProxyEndpointStoreError, .usernameRequired)
+    }
+
+    do {
+      _ = try await store.add(
+        OutboundProxyEndpoint(
+          name: "Office",
+          kind: .http,
+          host: "proxy.example",
+          port: 8080,
+          authentication: OutboundProxyAuthentication(username: "alice")
+        ),
+        password: " "
+      )
+      XCTFail("Expected password validation to fail")
+    } catch {
+      XCTAssertEqual(error as? OutboundProxyEndpointStoreError, .passwordRequired)
+    }
+  }
+
+  func testResolveMakesMissingAuthenticationSecretExplicit() async throws {
+    let endpoint = OutboundProxyEndpoint(
+      name: "Restored Endpoint",
+      kind: .http,
+      host: "proxy.example",
+      port: 8080,
+      authentication: OutboundProxyAuthentication(username: "alice")
+    )
+    let disk = InMemoryOutboundProxyEndpointManifestStore(
+      manifest: OutboundProxyEndpointManifest(endpoints: [endpoint])
+    )
+    let store = OutboundProxyEndpointStore(
+      manifestURL: URL(fileURLWithPath: "/unused/outbound-proxies.json"),
+      secretStore: InMemorySecretStore(),
+      diskIO: disk
+    )
+
+    let resolved = try await store.resolve(id: endpoint.id)
+
+    XCTAssertNil(resolved.password)
+    XCTAssertEqual(resolved.secretState, .missingSecret)
+    XCTAssertFalse(resolved.isReady)
+  }
+
+  func testFailedManifestSaveRollsBackNewSecret() async throws {
+    let disk = InMemoryOutboundProxyEndpointManifestStore()
+    await disk.failNextSave()
+    let secrets = InMemorySecretStore()
+    let endpoint = OutboundProxyEndpoint(
+      name: "Authenticated",
+      kind: .socks5,
+      host: "proxy.example",
+      port: 1080,
+      authentication: OutboundProxyAuthentication(username: "alice")
+    )
+    let store = OutboundProxyEndpointStore(
+      manifestURL: URL(fileURLWithPath: "/unused/outbound-proxies.json"),
+      secretStore: secrets,
+      diskIO: disk
+    )
+
+    await XCTAssertThrowsErrorAsync {
+      try await store.add(endpoint, password: "top-secret")
+    }
+
+    XCTAssertNil(try secrets.load(account: OutboundProxyEndpointStore.passwordAccount(for: endpoint.id)))
+    let endpoints = try await store.endpoints()
+    XCTAssertEqual(endpoints, [])
+  }
+
+  func testFailedAddRestoresOrphanedSecretAfterAuthenticationOverwrite() async throws {
+    let disk = InMemoryOutboundProxyEndpointManifestStore()
+    await disk.failNextSave()
+    let secrets = InMemorySecretStore()
+    let endpoint = OutboundProxyEndpoint(
+      name: "Authenticated",
+      kind: .socks5,
+      host: "proxy.example",
+      port: 1080,
+      authentication: OutboundProxyAuthentication(username: "alice")
+    )
+    let account = OutboundProxyEndpointStore.passwordAccount(for: endpoint.id)
+    try secrets.save("orphaned-secret", account: account)
+    let store = OutboundProxyEndpointStore(
+      manifestURL: URL(fileURLWithPath: "/unused/outbound-proxies.json"),
+      secretStore: secrets,
+      diskIO: disk
+    )
+
+    await XCTAssertThrowsErrorAsync {
+      try await store.add(endpoint, password: "new-secret")
+    }
+
+    XCTAssertEqual(try secrets.load(account: account), "orphaned-secret")
+    let endpoints = try await store.endpoints()
+    XCTAssertEqual(endpoints, [])
+  }
+
+  func testFailedUnauthenticatedAddRestoresOrphanedSecretAfterCleanup() async throws {
+    let disk = InMemoryOutboundProxyEndpointManifestStore()
+    await disk.failNextSave()
+    let secrets = InMemorySecretStore()
+    let endpoint = OutboundProxyEndpoint(
+      name: "Unauthenticated",
+      kind: .http,
+      host: "proxy.example",
+      port: 8080
+    )
+    let account = OutboundProxyEndpointStore.passwordAccount(for: endpoint.id)
+    try secrets.save("orphaned-secret", account: account)
+    let store = OutboundProxyEndpointStore(
+      manifestURL: URL(fileURLWithPath: "/unused/outbound-proxies.json"),
+      secretStore: secrets,
+      diskIO: disk
+    )
+
+    await XCTAssertThrowsErrorAsync {
+      try await store.add(endpoint, password: nil)
+    }
+
+    XCTAssertEqual(try secrets.load(account: account), "orphaned-secret")
+    let endpoints = try await store.endpoints()
+    XCTAssertEqual(endpoints, [])
+  }
+
+  func testFailedAddAfterManifestWasStoredRestoresExactManifestAndSecret() async throws {
+    let existing = OutboundProxyEndpoint(
+      name: "Existing",
+      kind: .http,
+      host: "existing.example",
+      port: 8080
+    )
+    let added = OutboundProxyEndpoint(
+      name: "Added",
+      kind: .socks5,
+      host: "added.example",
+      port: 1080,
+      authentication: OutboundProxyAuthentication(username: "alice")
+    )
+    let originalManifest = OutboundProxyEndpointManifest(endpoints: [existing])
+    let disk = InMemoryOutboundProxyEndpointManifestStore(manifest: originalManifest)
+    await disk.failNextSave(afterStoring: true)
+    let secrets = InMemorySecretStore()
+    let addedAccount = OutboundProxyEndpointStore.passwordAccount(for: added.id)
+    try secrets.save("preexisting-orphan", account: addedAccount)
+    let store = OutboundProxyEndpointStore(
+      manifestURL: URL(fileURLWithPath: "/unused/outbound-proxies.json"),
+      secretStore: secrets,
+      diskIO: disk
+    )
+
+    await XCTAssertThrowsErrorAsync {
+      try await store.add(added, password: "new-secret")
+    }
+
+    let storedManifest = await disk.currentManifest()
+    let endpoints = try await store.endpoints()
+    XCTAssertEqual(storedManifest, originalManifest)
+    XCTAssertEqual(endpoints, originalManifest.endpoints)
+    XCTAssertEqual(try secrets.load(account: addedAccount), "preexisting-orphan")
+  }
+
+  func testFailedUpdateManifestSaveRestoresOldSecretAndMetadata() async throws {
+    let endpoint = OutboundProxyEndpoint(
+      name: "Authenticated",
+      kind: .http,
+      host: "old.example",
+      port: 8080,
+      authentication: OutboundProxyAuthentication(username: "alice")
+    )
+    let disk = InMemoryOutboundProxyEndpointManifestStore()
+    let secrets = InMemorySecretStore()
+    let store = OutboundProxyEndpointStore(
+      manifestURL: URL(fileURLWithPath: "/unused/outbound-proxies.json"),
+      secretStore: secrets,
+      diskIO: disk
+    )
+    _ = try await store.add(endpoint, password: "old-secret")
+    var updatedDraft = endpoint
+    updatedDraft.name = "Updated"
+    updatedDraft.host = "new.example"
+    let updated = updatedDraft
+    await disk.failNextSave()
+
+    await XCTAssertThrowsErrorAsync {
+      try await store.update(updated, password: "new-secret")
+    }
+
+    let endpoints = try await store.endpoints()
+    XCTAssertEqual(endpoints, [endpoint])
+    XCTAssertEqual(
+      try secrets.load(account: OutboundProxyEndpointStore.passwordAccount(for: endpoint.id)),
+      "old-secret"
+    )
+  }
+
+  func testFailedUpdateAfterManifestWasStoredRestoresExactManifestAndSecret() async throws {
+    let endpoint = OutboundProxyEndpoint(
+      name: "Original",
+      kind: .http,
+      host: "old.example",
+      port: 8080,
+      authentication: OutboundProxyAuthentication(username: "alice")
+    )
+    var updated = endpoint
+    updated.name = "Updated"
+    updated.host = "new.example"
+    let originalManifest = OutboundProxyEndpointManifest(endpoints: [endpoint])
+    let disk = InMemoryOutboundProxyEndpointManifestStore(manifest: originalManifest)
+    await disk.failNextSave(afterStoring: true)
+    let secrets = InMemorySecretStore()
+    let account = OutboundProxyEndpointStore.passwordAccount(for: endpoint.id)
+    try secrets.save("old-secret", account: account)
+    let store = OutboundProxyEndpointStore(
+      manifestURL: URL(fileURLWithPath: "/unused/outbound-proxies.json"),
+      secretStore: secrets,
+      diskIO: disk
+    )
+
+    await XCTAssertThrowsErrorAsync {
+      try await store.update(updated, password: "new-secret")
+    }
+
+    let storedManifest = await disk.currentManifest()
+    let endpoints = try await store.endpoints()
+    XCTAssertEqual(storedManifest, originalManifest)
+    XCTAssertEqual(endpoints, originalManifest.endpoints)
+    XCTAssertEqual(try secrets.load(account: account), "old-secret")
+  }
+
+  func testFailedDeleteManifestSaveRestoresSecretAndMetadata() async throws {
+    let endpoint = OutboundProxyEndpoint(
+      name: "Authenticated",
+      kind: .http,
+      host: "proxy.example",
+      port: 8080,
+      authentication: OutboundProxyAuthentication(username: "alice")
+    )
+    let disk = InMemoryOutboundProxyEndpointManifestStore()
+    let secrets = InMemorySecretStore()
+    let store = OutboundProxyEndpointStore(
+      manifestURL: URL(fileURLWithPath: "/unused/outbound-proxies.json"),
+      secretStore: secrets,
+      diskIO: disk
+    )
+    _ = try await store.add(endpoint, password: "top-secret")
+    await disk.failNextSave()
+
+    await XCTAssertThrowsErrorAsync {
+      try await store.delete(id: endpoint.id)
+    }
+
+    let endpoints = try await store.endpoints()
+    XCTAssertEqual(endpoints, [endpoint])
+    XCTAssertEqual(
+      try secrets.load(account: OutboundProxyEndpointStore.passwordAccount(for: endpoint.id)),
+      "top-secret"
+    )
+  }
+
+  func testFailedDeleteAfterManifestWasStoredRestoresExactManifestAndSecret() async throws {
+    let endpoint = OutboundProxyEndpoint(
+      name: "Authenticated",
+      kind: .http,
+      host: "proxy.example",
+      port: 8080,
+      authentication: OutboundProxyAuthentication(username: "alice")
+    )
+    let originalManifest = OutboundProxyEndpointManifest(endpoints: [endpoint])
+    let disk = InMemoryOutboundProxyEndpointManifestStore(manifest: originalManifest)
+    await disk.failNextSave(afterStoring: true)
+    let secrets = InMemorySecretStore()
+    let account = OutboundProxyEndpointStore.passwordAccount(for: endpoint.id)
+    try secrets.save("old-secret", account: account)
+    let store = OutboundProxyEndpointStore(
+      manifestURL: URL(fileURLWithPath: "/unused/outbound-proxies.json"),
+      secretStore: secrets,
+      diskIO: disk
+    )
+
+    await XCTAssertThrowsErrorAsync {
+      try await store.delete(id: endpoint.id)
+    }
+
+    let storedManifest = await disk.currentManifest()
+    let endpoints = try await store.endpoints()
+    XCTAssertEqual(storedManifest, originalManifest)
+    XCTAssertEqual(endpoints, originalManifest.endpoints)
+    XCTAssertEqual(try secrets.load(account: account), "old-secret")
+  }
+
+  func testConcurrentMutationsDoNotEnterDiskWhileEarlierSaveIsSuspended() async throws {
+    let disk = BlockingOutboundProxyEndpointManifestStore()
+    let store = OutboundProxyEndpointStore(
+      manifestURL: URL(fileURLWithPath: "/unused/outbound-proxies.json"),
+      secretStore: InMemorySecretStore(),
+      diskIO: disk
+    )
+    let first = OutboundProxyEndpoint(
+      name: "First",
+      kind: .http,
+      host: "first.example",
+      port: 8080
+    )
+    let second = OutboundProxyEndpoint(
+      name: "Second",
+      kind: .socks5,
+      host: "second.example",
+      port: 1080
+    )
+
+    let firstTask = Task {
+      try await store.add(first, password: nil)
+    }
+    await disk.waitUntilFirstSaveStarts()
+
+    let secondStarted = OutboundProxyEndpointTestSignal()
+    let secondTask = Task {
+      await secondStarted.signal()
+      return try await store.add(second, password: nil)
+    }
+    await secondStarted.wait()
+    try await Task.sleep(nanoseconds: 50_000_000)
+
+    let suspendedSnapshot = await disk.snapshot()
+    XCTAssertEqual(suspendedSnapshot.loadCount, 1)
+    XCTAssertEqual(suspendedSnapshot.saveCount, 1)
+
+    await disk.releaseFirstSave()
+    _ = try await firstTask.value
+    _ = try await secondTask.value
+
+    let endpoints = try await store.endpoints()
+    XCTAssertEqual(endpoints, [first, second])
+  }
+
+  func testCancellingQueuedMutationDoesNotEnterDiskOrBlockLaterMutation() async throws {
+    let disk = BlockingOutboundProxyEndpointManifestStore()
+    let store = OutboundProxyEndpointStore(
+      manifestURL: URL(fileURLWithPath: "/unused/outbound-proxies.json"),
+      secretStore: InMemorySecretStore(),
+      diskIO: disk
+    )
+    let first = OutboundProxyEndpoint(
+      name: "First",
+      kind: .http,
+      host: "first.example",
+      port: 8080
+    )
+    let cancelled = OutboundProxyEndpoint(
+      name: "Cancelled",
+      kind: .http,
+      host: "cancelled.example",
+      port: 8081
+    )
+    let third = OutboundProxyEndpoint(
+      name: "Third",
+      kind: .socks5,
+      host: "third.example",
+      port: 1080
+    )
+
+    let firstTask = Task {
+      try await store.add(first, password: nil)
+    }
+    await disk.waitUntilFirstSaveStarts()
+
+    let cancelledStarted = OutboundProxyEndpointTestSignal()
+    let cancelledTask = Task {
+      await cancelledStarted.signal()
+      return try await store.add(cancelled, password: nil)
+    }
+    await cancelledStarted.wait()
+    try await Task.sleep(nanoseconds: 50_000_000)
+    cancelledTask.cancel()
+
+    await disk.releaseFirstSave()
+    _ = try await firstTask.value
+    await XCTAssertThrowsCancellationErrorAsync {
+      try await cancelledTask.value
+    }
+    _ = try await store.add(third, password: nil)
+
+    let endpoints = try await store.endpoints()
+    XCTAssertEqual(endpoints, [first, third])
+  }
+
+  func testReadsWaitForPasswordAndManifestUpdateTransaction() async throws {
+    let endpoint = OutboundProxyEndpoint(
+      name: "Old",
+      kind: .http,
+      host: "old.example",
+      port: 8080,
+      authentication: OutboundProxyAuthentication(username: "alice")
+    )
+    var updatedDraft = endpoint
+    updatedDraft.name = "Updated"
+    updatedDraft.host = "new.example"
+    let updated = updatedDraft
+    let disk = BlockingOutboundProxyEndpointManifestStore(
+      manifest: OutboundProxyEndpointManifest(endpoints: [endpoint])
+    )
+    let secrets = InMemorySecretStore()
+    try secrets.save(
+      "old-secret",
+      account: OutboundProxyEndpointStore.passwordAccount(for: endpoint.id)
+    )
+    let store = OutboundProxyEndpointStore(
+      manifestURL: URL(fileURLWithPath: "/unused/outbound-proxies.json"),
+      secretStore: secrets,
+      diskIO: disk
+    )
+
+    let updateTask = Task {
+      try await store.update(updated, password: "new-secret")
+    }
+    await disk.waitUntilFirstSaveStarts()
+
+    let resolveStarted = OutboundProxyEndpointTestSignal()
+    let resolveTask = Task {
+      await resolveStarted.signal()
+      return try await store.resolve(id: endpoint.id)
+    }
+    let endpointsStarted = OutboundProxyEndpointTestSignal()
+    let endpointsTask = Task {
+      await endpointsStarted.signal()
+      return try await store.endpoints()
+    }
+    await resolveStarted.wait()
+    await endpointsStarted.wait()
+    try await Task.sleep(nanoseconds: 50_000_000)
+
+    let suspendedSnapshot = await disk.snapshot()
+    XCTAssertEqual(suspendedSnapshot.loadCount, 1)
+    XCTAssertEqual(suspendedSnapshot.saveCount, 1)
+
+    await disk.releaseFirstSave()
+    _ = try await updateTask.value
+    let resolved = try await resolveTask.value
+    let endpoints = try await endpointsTask.value
+
+    XCTAssertEqual(resolved.endpoint, updated)
+    XCTAssertEqual(resolved.password, "new-secret")
+    XCTAssertEqual(endpoints, [updated])
+  }
+
+  func testBackupExportDefaultsToMetadataOnlyAndCountsOnlyStoredAuthenticatedPasswords() async throws {
+    let stored = OutboundProxyEndpoint(
+      name: "Stored Password",
+      kind: .http,
+      host: "stored.example",
+      port: 8080,
+      authentication: OutboundProxyAuthentication(username: "alice")
+    )
+    let missing = OutboundProxyEndpoint(
+      name: "Missing Password",
+      kind: .socks5,
+      host: "missing.example",
+      port: 1080,
+      authentication: OutboundProxyAuthentication(username: "bob")
+    )
+    let unauthenticated = OutboundProxyEndpoint(
+      name: "No Authentication",
+      kind: .http,
+      host: "public.example",
+      port: 8081
+    )
+    let manifest = OutboundProxyEndpointManifest(
+      endpoints: [stored, missing, unauthenticated]
+    )
+    let secrets = InMemorySecretStore()
+    try secrets.save(
+      "stored-secret",
+      account: OutboundProxyEndpointStore.passwordAccount(for: stored.id)
+    )
+    try secrets.save(
+      "orphaned-secret",
+      account: OutboundProxyEndpointStore.passwordAccount(for: unauthenticated.id)
+    )
+    let store = OutboundProxyEndpointStore(
+      manifestURL: URL(fileURLWithPath: "/unused/outbound-proxies.json"),
+      secretStore: secrets,
+      diskIO: InMemoryOutboundProxyEndpointManifestStore(manifest: manifest)
+    )
+
+    let export = try await store.backupExport()
+
+    XCTAssertEqual(export.manifest, manifest)
+    XCTAssertEqual(export.passwords, [])
+    XCTAssertEqual(export.omittedPasswordCount, 1)
+  }
+
+  func testBackupExportWithSecretsIncludesOnlyExistingNonblankAuthenticatedPasswords() async throws {
+    let stored = OutboundProxyEndpoint(
+      name: "Stored Password",
+      kind: .http,
+      host: "stored.example",
+      port: 8080,
+      authentication: OutboundProxyAuthentication(username: "alice")
+    )
+    let missing = OutboundProxyEndpoint(
+      name: "Missing Password",
+      kind: .socks5,
+      host: "missing.example",
+      port: 1080,
+      authentication: OutboundProxyAuthentication(username: "bob")
+    )
+    let blank = OutboundProxyEndpoint(
+      name: "Blank Password",
+      kind: .http,
+      host: "blank.example",
+      port: 8082,
+      authentication: OutboundProxyAuthentication(username: "carol")
+    )
+    let secrets = InMemorySecretStore()
+    try secrets.save(
+      "stored-secret",
+      account: OutboundProxyEndpointStore.passwordAccount(for: stored.id)
+    )
+    try secrets.save(
+      "   ",
+      account: OutboundProxyEndpointStore.passwordAccount(for: blank.id)
+    )
+    let store = OutboundProxyEndpointStore(
+      manifestURL: URL(fileURLWithPath: "/unused/outbound-proxies.json"),
+      secretStore: secrets,
+      diskIO: InMemoryOutboundProxyEndpointManifestStore(
+        manifest: OutboundProxyEndpointManifest(endpoints: [stored, missing, blank])
+      )
+    )
+
+    let export = try await store.backupExport(includeSecrets: true)
+    let blankResolution = try await store.resolve(id: blank.id)
+
+    XCTAssertEqual(
+      export.passwords,
+      [BackupOutboundProxyEndpointPassword(endpointID: stored.id, password: "stored-secret")]
+    )
+    XCTAssertEqual(export.omittedPasswordCount, 0)
+    XCTAssertEqual(blankResolution.secretState, .missingSecret)
+    XCTAssertFalse(blankResolution.isReady)
+  }
+
+  func testBackupExportManifestPlaintextNeverContainsPasswords() async throws {
+    let endpoint = OutboundProxyEndpoint(
+      name: "Authenticated",
+      kind: .http,
+      host: "proxy.example",
+      port: 8080,
+      authentication: OutboundProxyAuthentication(username: "alice")
+    )
+    let secrets = InMemorySecretStore()
+    try secrets.save(
+      "plaintext-must-not-contain-this",
+      account: OutboundProxyEndpointStore.passwordAccount(for: endpoint.id)
+    )
+    let store = OutboundProxyEndpointStore(
+      manifestURL: URL(fileURLWithPath: "/unused/outbound-proxies.json"),
+      secretStore: secrets,
+      diskIO: InMemoryOutboundProxyEndpointManifestStore(
+        manifest: OutboundProxyEndpointManifest(endpoints: [endpoint])
+      )
+    )
+
+    let export = try await store.backupExport(includeSecrets: true)
+    let plaintextMetadata = try JSONEncoder().encode(export.manifest)
+
+    XCTAssertEqual(export.passwords.count, 1)
+    XCTAssertFalse(
+      String(decoding: plaintextMetadata, as: UTF8.self)
+        .contains("plaintext-must-not-contain-this")
+    )
+  }
+
+  func testMergeRestoreRemapsIdentifierAndUsesDeterministicUnicodeSafeRestoredName() async throws {
+    let collidingID = UUID(uuidString: "10000000-0000-0000-0000-000000000001")!
+    let existing = OutboundProxyEndpoint(
+      id: collidingID,
+      name: "straße",
+      kind: .http,
+      host: "existing.example",
+      port: 8080,
+      authentication: OutboundProxyAuthentication(username: "existing")
+    )
+    let existingSuffix = OutboundProxyEndpoint(
+      id: UUID(uuidString: "10000000-0000-0000-0000-000000000002")!,
+      name: "STRASSE (restored)",
+      kind: .socks5,
+      host: "suffix.example",
+      port: 1080
+    )
+    let imported = OutboundProxyEndpoint(
+      id: collidingID,
+      name: "STRASSE",
+      kind: .socks5,
+      host: "imported.example",
+      port: 1081,
+      authentication: OutboundProxyAuthentication(username: "restored")
+    )
+    let secrets = InMemorySecretStore()
+    try secrets.save(
+      "existing-secret",
+      account: OutboundProxyEndpointStore.passwordAccount(for: existing.id)
+    )
+    let store = OutboundProxyEndpointStore(
+      manifestURL: URL(fileURLWithPath: "/unused/outbound-proxies.json"),
+      secretStore: secrets,
+      diskIO: InMemoryOutboundProxyEndpointManifestStore(
+        manifest: OutboundProxyEndpointManifest(endpoints: [existing, existingSuffix])
+      )
+    )
+
+    let result = try await store.mergeRestoreBackup(
+      manifest: OutboundProxyEndpointManifest(endpoints: [imported]),
+      passwords: [
+        BackupOutboundProxyEndpointPassword(
+          endpointID: imported.id,
+          password: "restored-secret"
+        )
+      ]
+    )
+
+    let restoredID = try XCTUnwrap(result.idMap[imported.id])
+    let endpointNames = try await store.endpoints().map(\.name)
+    let restoredResolution = try await store.resolve(id: restoredID)
+    let existingResolution = try await store.resolve(id: existing.id)
+    XCTAssertNotEqual(restoredID, imported.id)
+    XCTAssertEqual(result.importedEndpointCount, 1)
+    XCTAssertEqual(result.restoredSecretCount, 1)
+    XCTAssertEqual(endpointNames, ["straße", "STRASSE (restored)", "STRASSE (Restored 2)"])
+    XCTAssertEqual(restoredResolution.password, "restored-secret")
+    XCTAssertEqual(existingResolution.password, "existing-secret")
+  }
+
+  func testMergeRestoreAllowsAuthenticatedEndpointWithoutPasswordAsMissingSecret() async throws {
+    let endpoint = OutboundProxyEndpoint(
+      id: UUID(uuidString: "20000000-0000-0000-0000-000000000001")!,
+      name: "Missing Secret",
+      kind: .http,
+      host: "missing.example",
+      port: 8080,
+      authentication: OutboundProxyAuthentication(username: "alice")
+    )
+    let secrets = InMemorySecretStore()
+    let account = OutboundProxyEndpointStore.passwordAccount(for: endpoint.id)
+    try secrets.save("orphaned-before-restore", account: account)
+    let store = OutboundProxyEndpointStore(
+      manifestURL: URL(fileURLWithPath: "/unused/outbound-proxies.json"),
+      secretStore: secrets,
+      diskIO: InMemoryOutboundProxyEndpointManifestStore()
+    )
+
+    let result = try await store.mergeRestoreBackup(
+      manifest: OutboundProxyEndpointManifest(endpoints: [endpoint]),
+      passwords: []
+    )
+    let resolved = try await store.resolve(id: endpoint.id)
+
+    XCTAssertEqual(result.idMap, [endpoint.id: endpoint.id])
+    XCTAssertEqual(result.restoredSecretCount, 0)
+    XCTAssertNil(try secrets.load(account: account))
+    XCTAssertNil(resolved.password)
+    XCTAssertEqual(resolved.secretState, .missingSecret)
+  }
+
+  func testMergeRestoreRejectsDuplicateEndpointIdentifiersAndUnicodeFoldedNames() async throws {
+    let duplicateID = UUID(uuidString: "30000000-0000-0000-0000-000000000001")!
+    let duplicateIdentifiers = [
+      OutboundProxyEndpoint(
+        id: duplicateID,
+        name: "First",
+        kind: .http,
+        host: "first.example",
+        port: 8080
+      ),
+      OutboundProxyEndpoint(
+        id: duplicateID,
+        name: "Second",
+        kind: .socks5,
+        host: "second.example",
+        port: 1080
+      )
+    ]
+    let duplicateNames = [
+      OutboundProxyEndpoint(
+        id: UUID(uuidString: "30000000-0000-0000-0000-000000000002")!,
+        name: "straße",
+        kind: .http,
+        host: "one.example",
+        port: 8080
+      ),
+      OutboundProxyEndpoint(
+        id: UUID(uuidString: "30000000-0000-0000-0000-000000000003")!,
+        name: "STRASSE",
+        kind: .socks5,
+        host: "two.example",
+        port: 1080
+      )
+    ]
+    let store = OutboundProxyEndpointStore(
+      manifestURL: URL(fileURLWithPath: "/unused/outbound-proxies.json"),
+      secretStore: InMemorySecretStore(),
+      diskIO: InMemoryOutboundProxyEndpointManifestStore()
+    )
+
+    do {
+      _ = try await store.mergeRestoreBackup(
+        manifest: OutboundProxyEndpointManifest(endpoints: duplicateIdentifiers),
+        passwords: []
+      )
+      XCTFail("Expected duplicate endpoint identifiers to be rejected")
+    } catch {
+      XCTAssertEqual(
+        error as? OutboundProxyEndpointStoreError,
+        .invalidBackup("Endpoint manifest contains duplicate endpoint IDs.")
+      )
+    }
+
+    do {
+      _ = try await store.mergeRestoreBackup(
+        manifest: OutboundProxyEndpointManifest(endpoints: duplicateNames),
+        passwords: []
+      )
+      XCTFail("Expected Unicode-folded duplicate endpoint names to be rejected")
+    } catch {
+      XCTAssertEqual(
+        error as? OutboundProxyEndpointStoreError,
+        .invalidBackup("Endpoint manifest contains duplicate endpoint names.")
+      )
+    }
+  }
+
+  func testMergeRestoreRejectsDuplicatePasswordRecords() async throws {
+    let endpoint = OutboundProxyEndpoint(
+      name: "Authenticated",
+      kind: .http,
+      host: "proxy.example",
+      port: 8080,
+      authentication: OutboundProxyAuthentication(username: "alice")
+    )
+    let store = OutboundProxyEndpointStore(
+      manifestURL: URL(fileURLWithPath: "/unused/outbound-proxies.json"),
+      secretStore: InMemorySecretStore(),
+      diskIO: InMemoryOutboundProxyEndpointManifestStore()
+    )
+
+    do {
+      _ = try await store.mergeRestoreBackup(
+        manifest: OutboundProxyEndpointManifest(endpoints: [endpoint]),
+        passwords: [
+          BackupOutboundProxyEndpointPassword(endpointID: endpoint.id, password: "first"),
+          BackupOutboundProxyEndpointPassword(endpointID: endpoint.id, password: "second")
+        ]
+      )
+      XCTFail("Expected duplicate endpoint password records to be rejected")
+    } catch {
+      XCTAssertEqual(
+        error as? OutboundProxyEndpointStoreError,
+        .invalidBackup("Endpoint passwords contain duplicate endpoint IDs.")
+      )
+    }
+  }
+
+  func testMergeRestoreRejectsPasswordRecordsForMissingOrUnauthenticatedEndpoints() async throws {
+    let unauthenticated = OutboundProxyEndpoint(
+      name: "Unauthenticated",
+      kind: .http,
+      host: "proxy.example",
+      port: 8080
+    )
+    let missingID = UUID(uuidString: "40000000-0000-0000-0000-000000000001")!
+    let store = OutboundProxyEndpointStore(
+      manifestURL: URL(fileURLWithPath: "/unused/outbound-proxies.json"),
+      secretStore: InMemorySecretStore(),
+      diskIO: InMemoryOutboundProxyEndpointManifestStore()
+    )
+
+    for invalidPassword in [
+      BackupOutboundProxyEndpointPassword(
+        endpointID: unauthenticated.id,
+        password: "not-allowed"
+      ),
+      BackupOutboundProxyEndpointPassword(
+        endpointID: missingID,
+        password: "not-allowed"
+      )
+    ] {
+      do {
+        _ = try await store.mergeRestoreBackup(
+          manifest: OutboundProxyEndpointManifest(endpoints: [unauthenticated]),
+          passwords: [invalidPassword]
+        )
+        XCTFail("Expected the invalid endpoint password reference to be rejected")
+      } catch {
+        XCTAssertEqual(
+          error as? OutboundProxyEndpointStoreError,
+          .invalidBackup("Endpoint password does not reference an authenticated endpoint.")
+        )
+      }
+    }
+  }
+
+  func testManifestDecodingRejectsMissingRequiredFields() {
+    for malformedJSON in [
+      "{}",
+      #"{"schemaVersion":1}"#
+    ] {
+      XCTAssertThrowsError(
+        try JSONDecoder().decode(
+          OutboundProxyEndpointManifest.self,
+          from: Data(malformedJSON.utf8)
+        )
+      )
+    }
+  }
+
+  func testStoreLoadRejectsManifestMissingRequiredFields() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("OutboundProxyManifestDecodeTests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    for (index, malformedJSON) in [
+      "{}",
+      #"{"schemaVersion":1}"#
+    ].enumerated() {
+      let manifestURL = root.appendingPathComponent("malformed-\(index).json")
+      try malformedJSON.write(to: manifestURL, atomically: true, encoding: .utf8)
+      let store = OutboundProxyEndpointStore(
+        manifestURL: manifestURL,
+        secretStore: InMemorySecretStore()
+      )
+
+      await XCTAssertThrowsErrorAsync {
+        try await store.endpoints()
+      }
+    }
+  }
+
+  func testUnsupportedEndpointManifestSchemaIsRejectedWithoutMutation() async throws {
+    let existing = OutboundProxyEndpoint(
+      name: "Existing",
+      kind: .http,
+      host: "existing.example",
+      port: 8080
+    )
+    let disk = InMemoryOutboundProxyEndpointManifestStore(
+      manifest: OutboundProxyEndpointManifest(endpoints: [existing])
+    )
+    let store = OutboundProxyEndpointStore(
+      manifestURL: URL(fileURLWithPath: "/unused/outbound-proxies.json"),
+      secretStore: InMemorySecretStore(),
+      diskIO: disk
+    )
+
+    do {
+      _ = try await store.mergeRestoreBackup(
+        manifest: OutboundProxyEndpointManifest(schemaVersion: 2, endpoints: []),
+        passwords: []
+      )
+      XCTFail("Expected an unsupported endpoint manifest schema error")
+    } catch {
+      XCTAssertEqual(
+        error as? OutboundProxyEndpointStoreError,
+        .unsupportedSchema(2)
+      )
+    }
+
+    let endpoints = try await store.endpoints()
+    let storedManifest = await disk.currentManifest()
+    XCTAssertEqual(endpoints, [existing])
+    XCTAssertEqual(storedManifest, OutboundProxyEndpointManifest(endpoints: [existing]))
+  }
+
+  func testMergeRestoreManifestFailureRestoresExactMetadataAndOrphanedSecrets() async throws {
+    let existing = OutboundProxyEndpoint(
+      id: UUID(uuidString: "50000000-0000-0000-0000-000000000001")!,
+      name: "Existing",
+      kind: .http,
+      host: "existing.example",
+      port: 8080
+    )
+    let imported = OutboundProxyEndpoint(
+      id: UUID(uuidString: "50000000-0000-0000-0000-000000000002")!,
+      name: "Imported",
+      kind: .socks5,
+      host: "imported.example",
+      port: 1080,
+      authentication: OutboundProxyAuthentication(username: "alice")
+    )
+    let originalManifest = OutboundProxyEndpointManifest(endpoints: [existing])
+    let disk = InMemoryOutboundProxyEndpointManifestStore(manifest: originalManifest)
+    await disk.failNextSave(afterStoring: true)
+    let secrets = InMemorySecretStore()
+    let existingAccount = OutboundProxyEndpointStore.passwordAccount(for: existing.id)
+    let importedAccount = OutboundProxyEndpointStore.passwordAccount(for: imported.id)
+    try secrets.save("existing-orphan", account: existingAccount)
+    try secrets.save("import-target-orphan", account: importedAccount)
+    let originalSecrets = secrets.storedValues
+    let store = OutboundProxyEndpointStore(
+      manifestURL: URL(fileURLWithPath: "/unused/outbound-proxies.json"),
+      secretStore: secrets,
+      diskIO: disk
+    )
+
+    await XCTAssertThrowsErrorAsync {
+      try await store.mergeRestoreBackup(
+        manifest: OutboundProxyEndpointManifest(endpoints: [imported]),
+        passwords: [
+          BackupOutboundProxyEndpointPassword(
+            endpointID: imported.id,
+            password: "new-secret"
+          )
+        ]
+      )
+    }
+
+    let storedManifest = await disk.currentManifest()
+    XCTAssertEqual(storedManifest, originalManifest)
+    let endpoints = try await store.endpoints()
+    XCTAssertEqual(endpoints, originalManifest.endpoints)
+    XCTAssertEqual(secrets.storedValues, originalSecrets)
+  }
+
+  func testMergeRestoreResultCarriesExactRollbackSnapshotForActualRestoredIDs() async throws {
+    let collidingID = UUID(uuidString: "65000000-0000-0000-0000-000000000001")!
+    let existing = OutboundProxyEndpoint(
+      id: collidingID,
+      name: "Existing",
+      kind: .http,
+      host: "existing.example",
+      port: 8080
+    )
+    let imported = OutboundProxyEndpoint(
+      id: collidingID,
+      name: "Imported",
+      kind: .socks5,
+      host: "imported.example",
+      port: 1080,
+      authentication: OutboundProxyAuthentication(username: "alice")
+    )
+    let originalManifest = OutboundProxyEndpointManifest(endpoints: [existing])
+    let disk = InMemoryOutboundProxyEndpointManifestStore(manifest: originalManifest)
+    let existingAccount = OutboundProxyEndpointStore.passwordAccount(for: existing.id)
+    let secrets = RecordingRemappedEndpointSecretStore(
+      originalAccount: existingAccount,
+      originalValue: "original-id-orphan",
+      remappedOrphanValue: "remapped-target-orphan"
+    )
+    let store = OutboundProxyEndpointStore(
+      manifestURL: URL(fileURLWithPath: "/unused/outbound-proxies.json"),
+      secretStore: secrets,
+      diskIO: disk
+    )
+
+    let result = try await store.mergeRestoreBackup(
+      manifest: OutboundProxyEndpointManifest(endpoints: [imported]),
+      passwords: [
+        BackupOutboundProxyEndpointPassword(
+          endpointID: imported.id,
+          password: "restored-secret"
+        )
+      ]
+    )
+
+    let restoredID = try XCTUnwrap(result.idMap[imported.id])
+    let restoredAccount = OutboundProxyEndpointStore.passwordAccount(for: restoredID)
+    let existingSnapshot = try XCTUnwrap(
+      result.rollbackSnapshot.passwords.first { $0.endpointID == existing.id }
+    )
+    let restoredSnapshot = try XCTUnwrap(
+      result.rollbackSnapshot.passwords.first { $0.endpointID == restoredID }
+    )
+    XCTAssertNotEqual(restoredID, imported.id)
+    XCTAssertEqual(secrets.recordedRemappedAccount, restoredAccount)
+    XCTAssertEqual(result.rollbackSnapshot.manifest, originalManifest)
+    XCTAssertEqual(existingSnapshot.password, "original-id-orphan")
+    XCTAssertEqual(restoredSnapshot.password, "remapped-target-orphan")
+
+    try await store.restoreRollbackSnapshot(result.rollbackSnapshot)
+
+    let endpoints = try await store.endpoints()
+    XCTAssertEqual(endpoints, originalManifest.endpoints)
+    XCTAssertEqual(try secrets.load(account: existingAccount), "original-id-orphan")
+    XCTAssertEqual(try secrets.load(account: restoredAccount), "remapped-target-orphan")
+  }
+
+  func testMergeRestoreSecretFailureRestoresEarlierOrphanedSecretsAndMetadata() async throws {
+    let existing = OutboundProxyEndpoint(
+      id: UUID(uuidString: "60000000-0000-0000-0000-000000000001")!,
+      name: "Existing",
+      kind: .http,
+      host: "existing.example",
+      port: 8080
+    )
+    let first = OutboundProxyEndpoint(
+      id: UUID(uuidString: "60000000-0000-0000-0000-000000000002")!,
+      name: "First Import",
+      kind: .http,
+      host: "first.example",
+      port: 8081,
+      authentication: OutboundProxyAuthentication(username: "first")
+    )
+    let second = OutboundProxyEndpoint(
+      id: UUID(uuidString: "60000000-0000-0000-0000-000000000003")!,
+      name: "Second Import",
+      kind: .socks5,
+      host: "second.example",
+      port: 1080,
+      authentication: OutboundProxyAuthentication(username: "second")
+    )
+    let originalManifest = OutboundProxyEndpointManifest(endpoints: [existing])
+    let disk = InMemoryOutboundProxyEndpointManifestStore(manifest: originalManifest)
+    let secrets = InMemorySecretStore()
+    try secrets.save(
+      "first-orphan",
+      account: OutboundProxyEndpointStore.passwordAccount(for: first.id)
+    )
+    try secrets.save(
+      "second-orphan",
+      account: OutboundProxyEndpointStore.passwordAccount(for: second.id)
+    )
+    secrets.rejectSaving("rejected-secret")
+    let originalSecrets = secrets.storedValues
+    let store = OutboundProxyEndpointStore(
+      manifestURL: URL(fileURLWithPath: "/unused/outbound-proxies.json"),
+      secretStore: secrets,
+      diskIO: disk
+    )
+
+    await XCTAssertThrowsErrorAsync {
+      try await store.mergeRestoreBackup(
+        manifest: OutboundProxyEndpointManifest(endpoints: [first, second]),
+        passwords: [
+          BackupOutboundProxyEndpointPassword(endpointID: first.id, password: "accepted-secret"),
+          BackupOutboundProxyEndpointPassword(endpointID: second.id, password: "rejected-secret")
+        ]
+      )
+    }
+
+    let storedManifest = await disk.currentManifest()
+    XCTAssertEqual(storedManifest, originalManifest)
+    XCTAssertEqual(secrets.storedValues, originalSecrets)
+  }
+
+  func testRollbackSnapshotRemovesAddedEndpointAndRestoresOldMetadataAndSecrets() async throws {
+    let authenticated = OutboundProxyEndpoint(
+      id: UUID(uuidString: "70000000-0000-0000-0000-000000000001")!,
+      name: "Authenticated",
+      kind: .http,
+      host: "old.example",
+      port: 8080,
+      authentication: OutboundProxyAuthentication(username: "alice")
+    )
+    let unauthenticated = OutboundProxyEndpoint(
+      id: UUID(uuidString: "70000000-0000-0000-0000-000000000002")!,
+      name: "Orphan Holder",
+      kind: .socks5,
+      host: "orphan.example",
+      port: 1080
+    )
+    let added = OutboundProxyEndpoint(
+      id: UUID(uuidString: "70000000-0000-0000-0000-000000000003")!,
+      name: "Added Later",
+      kind: .http,
+      host: "added.example",
+      port: 8081,
+      authentication: OutboundProxyAuthentication(username: "later")
+    )
+    let initialManifest = OutboundProxyEndpointManifest(
+      endpoints: [authenticated, unauthenticated]
+    )
+    let disk = InMemoryOutboundProxyEndpointManifestStore(manifest: initialManifest)
+    let secrets = InMemorySecretStore()
+    let authenticatedAccount = OutboundProxyEndpointStore.passwordAccount(for: authenticated.id)
+    let orphanAccount = OutboundProxyEndpointStore.passwordAccount(for: unauthenticated.id)
+    let addedAccount = OutboundProxyEndpointStore.passwordAccount(for: added.id)
+    try secrets.save("old-secret", account: authenticatedAccount)
+    try secrets.save("old-orphan", account: orphanAccount)
+    try secrets.save("added-orphan", account: addedAccount)
+    let store = OutboundProxyEndpointStore(
+      manifestURL: URL(fileURLWithPath: "/unused/outbound-proxies.json"),
+      secretStore: secrets,
+      diskIO: disk
+    )
+    let snapshot = try await store.rollbackSnapshot(
+      additionalAffectedEndpointIDs: [added.id]
+    )
+    var changedAuthenticated = authenticated
+    changedAuthenticated.name = "Changed"
+    changedAuthenticated.host = "changed.example"
+
+    _ = try await store.update(changedAuthenticated, password: "new-secret")
+    try await store.delete(id: unauthenticated.id)
+    _ = try await store.add(added, password: "added-secret")
+    try await store.restoreRollbackSnapshot(snapshot)
+
+    let endpoints = try await store.endpoints()
+    let storedManifest = await disk.currentManifest()
+    XCTAssertEqual(endpoints, initialManifest.endpoints)
+    XCTAssertEqual(storedManifest, initialManifest)
+    XCTAssertEqual(try secrets.load(account: authenticatedAccount), "old-secret")
+    XCTAssertEqual(try secrets.load(account: orphanAccount), "old-orphan")
+    XCTAssertEqual(try secrets.load(account: addedAccount), "added-orphan")
+  }
+
+  private func permissions(at url: URL) throws -> Int {
+    let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+    let value = try XCTUnwrap(attributes[.posixPermissions] as? NSNumber)
+    return value.intValue & 0o777
+  }
+}
+
+private struct OutboundProxyEndpointDiskSnapshot: Equatable, Sendable {
+  var loadCount: Int
+  var saveCount: Int
+}
+
+private actor OutboundProxyEndpointTestSignal {
+  private var isSignaled = false
+  private var waiters: [CheckedContinuation<Void, Never>] = []
+
+  func wait() async {
+    guard !isSignaled else { return }
+    await withCheckedContinuation { continuation in
+      waiters.append(continuation)
+    }
+  }
+
+  func signal() {
+    isSignaled = true
+    let pending = waiters
+    waiters.removeAll()
+    pending.forEach { $0.resume() }
+  }
+
+  func value() -> Bool {
+    isSignaled
+  }
+}
+
+private actor BlockingOutboundProxyEndpointManifestStore: OutboundProxyEndpointManifestStoring {
+  private var manifest: OutboundProxyEndpointManifest?
+  private var loadCount = 0
+  private var saveCount = 0
+  private var firstSaveWaiters: [CheckedContinuation<Void, Never>] = []
+  private var firstSaveContinuation: CheckedContinuation<Void, Never>?
+  private var shouldReleaseFirstSave = false
+
+  init(manifest: OutboundProxyEndpointManifest? = nil) {
+    self.manifest = manifest
+  }
+
+  func loadManifest(from url: URL) async throws -> OutboundProxyEndpointManifest? {
+    loadCount += 1
+    return manifest
+  }
+
+  func saveManifest(_ manifest: OutboundProxyEndpointManifest, to url: URL) async throws {
+    saveCount += 1
+    if saveCount == 1 {
+      let waiters = firstSaveWaiters
+      firstSaveWaiters.removeAll()
+      waiters.forEach { $0.resume() }
+      await withCheckedContinuation { continuation in
+        if shouldReleaseFirstSave {
+          continuation.resume()
+        } else {
+          firstSaveContinuation = continuation
+        }
+      }
+    }
+    self.manifest = manifest
+  }
+
+  func waitUntilFirstSaveStarts() async {
+    guard saveCount == 0 else { return }
+    await withCheckedContinuation { continuation in
+      firstSaveWaiters.append(continuation)
+    }
+  }
+
+  func releaseFirstSave() {
+    shouldReleaseFirstSave = true
+    let continuation = firstSaveContinuation
+    firstSaveContinuation = nil
+    continuation?.resume()
+  }
+
+  func snapshot() -> OutboundProxyEndpointDiskSnapshot {
+    OutboundProxyEndpointDiskSnapshot(loadCount: loadCount, saveCount: saveCount)
+  }
+}
+
+private actor InMemoryOutboundProxyEndpointManifestStore: OutboundProxyEndpointManifestStoring {
+  private var manifest: OutboundProxyEndpointManifest?
+  private var shouldFailNextSave = false
+  private var shouldStoreBeforeFailure = false
+
+  init(manifest: OutboundProxyEndpointManifest? = nil) {
+    self.manifest = manifest
+  }
+
+  func loadManifest(from url: URL) throws -> OutboundProxyEndpointManifest? {
+    manifest
+  }
+
+  func saveManifest(_ manifest: OutboundProxyEndpointManifest, to url: URL) throws {
+    if shouldFailNextSave {
+      shouldFailNextSave = false
+      if shouldStoreBeforeFailure {
+        shouldStoreBeforeFailure = false
+        self.manifest = manifest
+      }
+      throw NSError(domain: "OutboundProxyEndpointManifestStoreTests", code: 1)
+    }
+    self.manifest = manifest
+  }
+
+  func failNextSave(afterStoring: Bool = false) {
+    shouldFailNextSave = true
+    shouldStoreBeforeFailure = afterStoring
+  }
+
+  func currentManifest() -> OutboundProxyEndpointManifest? {
+    manifest
+  }
+}
+
 private struct TemporaryProfileFixture {
   let root: URL
   let paths: RuntimePaths
@@ -1236,6 +2940,114 @@ private struct TemporaryProfileFixture {
     try paths.prepareDirectories()
     configURL = root.appendingPathComponent("sample.yaml")
     try config.write(to: configURL, atomically: true, encoding: .utf8)
+  }
+}
+
+private actor ControllableProfileDiskIO: ProfileDiskStoring {
+  private let fileManager = FileManager.default
+  private var shouldFailNextManifestSave = false
+
+  func failNextManifestSave() {
+    shouldFailNextManifestSave = true
+  }
+
+  func loadManifest(from url: URL) throws -> ProfileManifest? {
+    guard fileManager.fileExists(atPath: url.path) else { return nil }
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    return try decoder.decode(ProfileManifest.self, from: Data(contentsOf: url))
+  }
+
+  func saveManifest(_ manifest: ProfileManifest, to url: URL) throws {
+    if shouldFailNextManifestSave {
+      shouldFailNextManifestSave = false
+      throw NSError(domain: "ControllableProfileDiskIO", code: 1)
+    }
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    encoder.dateEncodingStrategy = .iso8601
+    try SecureFileIO.writePrivateData(try encoder.encode(manifest), to: url, fileManager: fileManager)
+  }
+
+  func importLocalConfig(from sourceURL: URL, to destinationURL: URL) throws -> String {
+    let source = try String(contentsOf: sourceURL, encoding: .utf8)
+    try ProfileConfigValidator.validate(source)
+    try SecureFileIO.writePrivateString(source, to: destinationURL, fileManager: fileManager)
+    return source
+  }
+
+  func readProfileSource(atPath path: String) throws -> String {
+    try String(contentsOfFile: path, encoding: .utf8)
+  }
+
+  func writeProfileSource(_ source: String, to url: URL) throws {
+    try SecureFileIO.writePrivateString(source, to: url, fileManager: fileManager)
+  }
+
+  func removeProfileConfig(atPath path: String) throws {
+    guard fileManager.fileExists(atPath: path) else { return }
+    try fileManager.removeItem(atPath: path)
+  }
+}
+
+private actor BlockingProfileManifestLoadDiskIO: ProfileDiskStoring {
+  private let manifest: ProfileManifest
+  private var loadStartedWaiters: [CheckedContinuation<Void, Never>] = []
+  private var loadContinuation: CheckedContinuation<Void, Never>?
+  private var didStartLoad = false
+  private var shouldReleaseLoad = false
+
+  init(manifest: ProfileManifest) {
+    self.manifest = manifest
+  }
+
+  func waitUntilLoadStarts() async {
+    guard !didStartLoad else { return }
+    await withCheckedContinuation { continuation in
+      loadStartedWaiters.append(continuation)
+    }
+  }
+
+  func releaseLoad() {
+    shouldReleaseLoad = true
+    let continuation = loadContinuation
+    loadContinuation = nil
+    continuation?.resume()
+  }
+
+  func loadManifest(from url: URL) async throws -> ProfileManifest? {
+    didStartLoad = true
+    let waiters = loadStartedWaiters
+    loadStartedWaiters.removeAll()
+    waiters.forEach { $0.resume() }
+    await withCheckedContinuation { continuation in
+      if shouldReleaseLoad {
+        continuation.resume()
+      } else {
+        loadContinuation = continuation
+      }
+    }
+    return manifest
+  }
+
+  func saveManifest(_ manifest: ProfileManifest, to url: URL) async throws {
+    throw POSIXError(.ENOTSUP)
+  }
+
+  func importLocalConfig(from sourceURL: URL, to destinationURL: URL) async throws -> String {
+    throw POSIXError(.ENOTSUP)
+  }
+
+  func readProfileSource(atPath path: String) async throws -> String {
+    throw POSIXError(.ENOTSUP)
+  }
+
+  func writeProfileSource(_ source: String, to url: URL) async throws {
+    throw POSIXError(.ENOTSUP)
+  }
+
+  func removeProfileConfig(atPath path: String) async throws {
+    throw POSIXError(.ENOTSUP)
   }
 }
 
@@ -1260,6 +3072,50 @@ final class InMemorySecretStore: SecretStoring, @unchecked Sendable {
 
   func load(account: String) throws -> String? {
     values[account]
+  }
+
+  func delete(account: String) throws {
+    values.removeValue(forKey: account)
+  }
+}
+
+private final class RecordingRemappedEndpointSecretStore: SecretStoring, @unchecked Sendable {
+  private let originalAccount: String
+  private let remappedOrphanValue: String
+  private var values: [String: String]
+  private(set) var recordedRemappedAccount: String?
+
+  init(
+    originalAccount: String,
+    originalValue: String,
+    remappedOrphanValue: String
+  ) {
+    self.originalAccount = originalAccount
+    self.remappedOrphanValue = remappedOrphanValue
+    values = [originalAccount: originalValue]
+  }
+
+  func save(_ value: String, account: String) throws {
+    values[account] = value
+  }
+
+  func load(account: String) throws -> String? {
+    if let value = values[account] {
+      return value
+    }
+    guard
+      account != originalAccount,
+      account.hasPrefix("outbound-proxy."),
+      account.hasSuffix(".password")
+    else {
+      return nil
+    }
+    if let recordedRemappedAccount {
+      return recordedRemappedAccount == account ? values[account] : nil
+    }
+    recordedRemappedAccount = account
+    values[account] = remappedOrphanValue
+    return remappedOrphanValue
   }
 
   func delete(account: String) throws {

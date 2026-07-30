@@ -1,6 +1,25 @@
 import Foundation
 import Yams
 
+enum ProfileStoreError: Error, Equatable {
+  case manualProfileAlreadyExists(UUID)
+  case manualProfileCannotUseOwnEndpoint(UUID)
+  case unresolvedUpstreamEndpoint(UUID)
+}
+
+extension ProfileStoreError: LocalizedError {
+  var errorDescription: String? {
+    switch self {
+    case let .manualProfileAlreadyExists(endpointID):
+      return "A manual profile already uses proxy endpoint \(endpointID.uuidString)."
+    case let .manualProfileCannotUseOwnEndpoint(endpointID):
+      return "Manual profile cannot use its own proxy endpoint \(endpointID.uuidString) as an upstream."
+    case let .unresolvedUpstreamEndpoint(endpointID):
+      return "Proxy endpoint \(endpointID.uuidString) must be resolved before downloading this subscription."
+    }
+  }
+}
+
 private actor ProfileMutationGate {
   private struct Waiter {
     let id: UUID
@@ -120,6 +139,7 @@ struct MihomoSubscriptionProfilePreflightValidator: SubscriptionProfilePreflight
   var runtimeConfigValidator: any RuntimeConfigValidating
   var materializer: RuntimeConfigMaterializer
   var runtimeSnippetsProvider: @MainActor (Profile.ID?) async -> [RuntimeSnippet]
+  var runtimeEndpointOptionsProvider: @MainActor (Profile.ID?) async throws -> RuntimeConfigOptions
 
   init(
     paths: RuntimePaths,
@@ -127,7 +147,10 @@ struct MihomoSubscriptionProfilePreflightValidator: SubscriptionProfilePreflight
     coreURLProvider: @escaping @MainActor () throws -> URL,
     runtimeConfigValidator: any RuntimeConfigValidating = MihomoRuntimeConfigValidator(),
     materializer: RuntimeConfigMaterializer = RuntimeConfigMaterializer(),
-    runtimeSnippetsProvider: @escaping @MainActor (Profile.ID?) async -> [RuntimeSnippet] = { _ in [] }
+    runtimeSnippetsProvider: @escaping @MainActor (Profile.ID?) async -> [RuntimeSnippet] = { _ in [] },
+    runtimeEndpointOptionsProvider: @escaping @MainActor (Profile.ID?) async throws -> RuntimeConfigOptions = {
+      _ in .default
+    }
   ) {
     self.paths = paths
     self.overrides = overrides
@@ -135,6 +158,7 @@ struct MihomoSubscriptionProfilePreflightValidator: SubscriptionProfilePreflight
     self.runtimeConfigValidator = runtimeConfigValidator
     self.materializer = materializer
     self.runtimeSnippetsProvider = runtimeSnippetsProvider
+    self.runtimeEndpointOptionsProvider = runtimeEndpointOptionsProvider
   }
 
   func validate(
@@ -173,7 +197,7 @@ struct MihomoSubscriptionProfilePreflightValidator: SubscriptionProfilePreflight
     try SecureFileIO.writePrivateString(subscriptionSource, to: sourceURL)
 
     let preflightOverrides = overrides
-    var preflightOptions = RuntimeConfigOptions.default
+    var preflightOptions = try await runtimeEndpointOptionsProvider(profileID)
     preflightOptions.subscriptionProviderOptions = providerOptions
     preflightOptions.runtimeSnippets = await runtimeSnippetsProvider(profileID)
     let runtimeConfigURL = try await materializer.materialize(
@@ -214,7 +238,7 @@ final class ProfileStore: ObservableObject {
   @Published private(set) var subscriptionURLCache: [Profile.ID: String] = [:]
 
   private let paths: RuntimePaths
-  private let diskIO: ProfileDiskIO
+  private let diskIO: any ProfileDiskStoring
   private let secretIO: ProfileSecretIO
   private let subscriptionFetcher = SubscriptionFetcher()
   private let mutationGate = ProfileMutationGate()
@@ -223,7 +247,7 @@ final class ProfileStore: ObservableObject {
   init(
     paths: RuntimePaths,
     keychain: any SecretStoring = KeychainStore(),
-    diskIO: ProfileDiskIO = ProfileDiskIO()
+    diskIO: any ProfileDiskStoring = ProfileDiskIO()
   ) {
     self.paths = paths
     self.diskIO = diskIO
@@ -243,6 +267,97 @@ final class ProfileStore: ObservableObject {
 
   func waitForManifestLoad() async {
     await manifestLoadTask?.value
+  }
+
+  @discardableResult
+  func addManualProxyProfile(
+    name: String = "",
+    endpointID: UUID
+  ) async throws -> Profile {
+    await waitForManifestLoad()
+    return try await withMutationLock {
+      guard !profiles.contains(where: {
+        if case let .manualProxy(existingEndpointID) = $0.source {
+          return existingEndpointID == endpointID
+        }
+        return false
+      }) else {
+        throw ProfileStoreError.manualProfileAlreadyExists(endpointID)
+      }
+
+      let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+      let id = UUID()
+      let destination = paths.profiles.appendingPathComponent("\(id.uuidString).yaml")
+      try await diskIO.writeProfileSource(Self.manualProxyMarker, to: destination)
+      let profile = Profile(
+        id: id,
+        name: trimmedName.isEmpty ? String(localized: "Manual Proxy") : trimmedName,
+        nameIsUserCustomized: !trimmedName.isEmpty,
+        source: .manualProxy(endpointID: endpointID),
+        originalConfigPath: destination.path
+      )
+      let nextProfiles = profiles + [profile]
+      do {
+        try await saveManifest(profiles: nextProfiles, activeProfileID: profile.id)
+      } catch {
+        try? await diskIO.removeProfileConfig(atPath: destination.path)
+        throw error
+      }
+      profiles = nextProfiles
+      activeProfileID = profile.id
+      return profile
+    }
+  }
+
+  func updateUpstreamEndpoint(
+    for profile: Profile,
+    endpointID: UUID?
+  ) async throws {
+    await waitForManifestLoad()
+    try await withMutationLock {
+      guard let index = profiles.firstIndex(where: { $0.id == profile.id }) else { return }
+      let current = profiles[index]
+      if case let .manualProxy(manualEndpointID) = current.source,
+         endpointID == manualEndpointID {
+        throw ProfileStoreError.manualProfileCannotUseOwnEndpoint(manualEndpointID)
+      }
+      guard current.upstreamEndpointID != endpointID else { return }
+
+      var nextProfiles = profiles
+      nextProfiles[index].upstreamEndpointID = endpointID
+      nextProfiles[index].updatedAt = Date()
+      try await saveManifest(profiles: nextProfiles, activeProfileID: activeProfileID)
+      profiles = nextProfiles
+    }
+  }
+
+  func references(to endpointID: UUID) async throws -> [OutboundProxyEndpointReference] {
+    await waitForManifestLoad()
+    return try await withMutationLock {
+      profiles.flatMap { profile in
+        var references: [OutboundProxyEndpointReference] = []
+        if case let .manualProxy(manualEndpointID) = profile.source,
+           manualEndpointID == endpointID {
+          references.append(
+            OutboundProxyEndpointReference(
+              profileID: profile.id,
+              profileName: profile.name,
+              kind: .manualProfile
+            )
+          )
+        }
+        if profile.upstreamEndpointID == endpointID {
+          references.append(
+            OutboundProxyEndpointReference(
+              profileID: profile.id,
+              profileName: profile.name,
+              kind: .upstream
+            )
+          )
+        }
+        return references
+      }
+    }
   }
 
   @discardableResult
@@ -280,12 +395,17 @@ final class ProfileStore: ObservableObject {
     displayNameHint: String? = nil,
     providerOptions: SubscriptionProviderOptions = .default,
     updatePolicy: SubscriptionUpdatePolicy = .default,
+    upstreamEndpointID: UUID? = nil,
     session: URLSession = .shared,
     fetchOptions: SubscriptionFetchOptions = SubscriptionFetchOptions(),
     preflightValidator: any SubscriptionProfilePreflightValidating = NoopSubscriptionProfilePreflightValidator()
   ) async throws -> Profile {
     await waitForManifestLoad()
     return try await withMutationLock {
+      if let upstreamEndpointID,
+         fetchOptions.profileUpstreamEndpoint?.endpoint.id != upstreamEndpointID {
+        throw ProfileStoreError.unresolvedUpstreamEndpoint(upstreamEndpointID)
+      }
       let resolution = try Self.resolvedSubscriptionURL(from: url, displayNameHint: displayNameHint)
       let result = Self.fetchResult(
         try await fetchSubscription(url: resolution.url, session: session, options: fetchOptions),
@@ -334,6 +454,7 @@ final class ProfileStore: ObservableObject {
         nameIsUserCustomized: !trimmedName.isEmpty,
         source: .subscription(id: id),
         originalConfigPath: destination.path,
+        upstreamEndpointID: upstreamEndpointID,
         subscriptionMetadata: result.metadata,
         subscriptionProviderOptions: providerOptions,
         subscriptionUpdatePolicy: updatePolicy,
@@ -873,8 +994,13 @@ final class ProfileStore: ObservableObject {
     var omittedSummary = BackupSecretSummary()
 
     for profile in profiles {
-      let source = try await diskIO.readProfileSource(atPath: profile.originalConfigPath)
-      try ProfileConfigValidator.validateProfileSource(source, allowProviderContent: profile.isSubscription)
+      let source: String
+      if case .manualProxy = profile.source {
+        source = Self.manualProxyMarker
+      } else {
+        source = try await diskIO.readProfileSource(atPath: profile.originalConfigPath)
+        try ProfileConfigValidator.validateProfileSource(source, allowProviderContent: profile.isSubscription)
+      }
       profileSources.append(
         BackupProfileSource(
           profileID: profile.id,
@@ -909,7 +1035,13 @@ final class ProfileStore: ObservableObject {
       var secretsByProfileID: [Profile.ID: BackupSubscriptionSecrets] = [:]
 
       for profile in profiles {
-        sourceByProfileID[profile.id] = try await diskIO.readProfileSource(atPath: profile.originalConfigPath)
+        if case .manualProxy = profile.source {
+          sourceByProfileID[profile.id] = Self.manualProxyMarker
+        } else {
+          sourceByProfileID[profile.id] = try await diskIO.readProfileSource(
+            atPath: profile.originalConfigPath
+          )
+        }
         guard profile.isSubscription else { continue }
         secretsByProfileID[profile.id] = try await backupSecrets(for: profile)
       }
@@ -933,7 +1065,13 @@ final class ProfileStore: ObservableObject {
       }
 
       for profile in snapshot.manifest.profiles {
-        guard let source = snapshot.profileSources[profile.id] else { continue }
+        let source: String
+        if case .manualProxy = profile.source {
+          source = Self.manualProxyMarker
+        } else {
+          guard let snapshotSource = snapshot.profileSources[profile.id] else { continue }
+          source = snapshotSource
+        }
         try await diskIO.writeProfileSource(source, to: URL(fileURLWithPath: profile.originalConfigPath))
       }
 
@@ -971,18 +1109,24 @@ final class ProfileStore: ObservableObject {
 
       do {
         for backupProfile in manifest.profiles {
-          guard let sourceEntry = sourceByProfileID[backupProfile.id] else {
-            throw BackupRestoreError.missingProfileSource(backupProfile.id)
+          let restoredSource: String
+          if case .manualProxy = backupProfile.source {
+            restoredSource = Self.manualProxyMarker
+          } else {
+            guard let sourceEntry = sourceByProfileID[backupProfile.id] else {
+              throw BackupRestoreError.missingProfileSource(backupProfile.id)
+            }
+            try ProfileConfigValidator.validateProfileSource(
+              sourceEntry.source,
+              allowProviderContent: backupProfile.isSubscription
+            )
+            restoredSource = sourceEntry.source
           }
-          try ProfileConfigValidator.validateProfileSource(
-            sourceEntry.source,
-            allowProviderContent: backupProfile.isSubscription
-          )
 
           let restoredID = Self.restoredID(for: backupProfile.id, usedIDs: &usedIDs)
           idMap[backupProfile.id] = restoredID
           let destination = paths.profiles.appendingPathComponent("\(restoredID.uuidString).yaml")
-          try await diskIO.writeProfileSource(sourceEntry.source, to: destination)
+          try await diskIO.writeProfileSource(restoredSource, to: destination)
           writtenProfileURLs.append(destination)
 
           var restoredProfile = Self.restoredBackupProfile(
@@ -1145,6 +1289,8 @@ final class ProfileStore: ObservableObject {
       restored.source = .localFile(originalPath: nil)
     case .subscription:
       restored.source = .subscription(id: restoredID)
+    case .manualProxy:
+      break
     }
     restored.subscriptionProviderOptions = sanitizedProviderOptions(restored.subscriptionProviderOptions)
     return restored
@@ -1281,6 +1427,11 @@ final class ProfileStore: ObservableObject {
     session: URLSession,
     options: SubscriptionFetchOptions
   ) async throws -> SubscriptionFetchResult {
+    if options.profileUpstreamEndpoint != nil
+      || options.retryOrder.contains(.profileUpstream)
+    {
+      return try await subscriptionFetcher.fetch(url: url, options: options)
+    }
     guard session !== URLSession.shared else {
       return try await subscriptionFetcher.fetch(url: url, options: options)
     }
@@ -1460,6 +1611,21 @@ final class ProfileStore: ObservableObject {
     subscriptionURLCache[id] = loaded
     return loaded
   }
+
+  private static let manualProxyMarker = """
+  # ClashMax managed manual proxy profile
+  mode: rule
+  proxies:
+    - name: ClashMax Managed Block
+      type: reject
+  proxy-groups:
+    - name: Proxy
+      type: select
+      proxies:
+        - ClashMax Managed Block
+  rules:
+    - MATCH,REJECT
+  """
 
   private func profilesByHydratingHeaderSecrets(_ loadedProfiles: [Profile]) async -> (
     profiles: [Profile],

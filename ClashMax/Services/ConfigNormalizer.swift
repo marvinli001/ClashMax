@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Yams
 
@@ -5,12 +6,29 @@ struct RuntimeConfigOptions: Equatable, Sendable {
   var networkExtensionRoutingSettings: NetworkExtensionRoutingSettings?
   var subscriptionProviderOptions: SubscriptionProviderOptions = .default
   var runtimeSnippets: [RuntimeSnippet] = []
+  var manualProxyEndpoint: ResolvedOutboundProxyEndpoint?
+  var upstreamProxyEndpoint: ResolvedOutboundProxyEndpoint?
 
   static let `default` = RuntimeConfigOptions()
 }
 
 struct ConfigNormalizer {
   private static let appManagedProviderName = "clashmax-subscription-provider"
+  private static let outboundProxyNamePrefix = "__clashmax_outbound_"
+  private static let udpRejectRule = "NETWORK,UDP,REJECT"
+  private static let manualProxyRules = [
+    "DOMAIN,localhost,DIRECT",
+    "DOMAIN-SUFFIX,local,DIRECT",
+    "IP-CIDR,127.0.0.0/8,DIRECT,no-resolve",
+    "IP-CIDR,10.0.0.0/8,DIRECT,no-resolve",
+    "IP-CIDR,172.16.0.0/12,DIRECT,no-resolve",
+    "IP-CIDR,192.168.0.0/16,DIRECT,no-resolve",
+    "IP-CIDR,169.254.0.0/16,DIRECT,no-resolve",
+    "IP-CIDR6,::1/128,DIRECT,no-resolve",
+    "IP-CIDR6,fc00::/7,DIRECT,no-resolve",
+    "IP-CIDR6,fe80::/10,DIRECT,no-resolve",
+    "MATCH,Proxy"
+  ]
 
   enum NormalizerError: Error, CustomStringConvertible, Sendable {
     case yaml(String)
@@ -37,10 +55,15 @@ struct ConfigNormalizer {
     options: RuntimeConfigOptions = .default,
     selectionOverrides: [String: String] = [:]
   ) throws -> String {
+    try validateOutboundProxyOptions(options, mixedPort: overrides.mixedPort)
+
     var root: [String: Any]
     let providerContentProxyNames: Set<String>?
 
-    if ProfileConfigInspector.isProxyProviderContent(source) {
+    if let manualProxyEndpoint = options.manualProxyEndpoint {
+      root = try manualProxyRoot(for: manualProxyEndpoint)
+      providerContentProxyNames = nil
+    } else if ProfileConfigInspector.isProxyProviderContent(source) {
       guard let providerContentPath else {
         throw NormalizerError.invalidProfile("Provider subscription content requires a runtime provider file path.")
       }
@@ -187,7 +210,360 @@ struct ConfigNormalizer {
       root["proxy-groups"] = groups
     }
 
+    if options.manualProxyEndpoint != nil || options.upstreamProxyEndpoint != nil {
+      try validateReservedOutboundProxyNames(
+        in: root,
+        manualProxyEndpoint: options.manualProxyEndpoint
+      )
+    }
+    if let upstreamProxyEndpoint = options.upstreamProxyEndpoint {
+      root = try applyingUpstreamProxy(upstreamProxyEndpoint, to: root)
+    }
+    applyOutboundProxyDNSBootstrap(
+      for: [options.manualProxyEndpoint, options.upstreamProxyEndpoint].compactMap { $0 },
+      to: &root
+    )
+    try applyTCPOnlyOutboundPolicy(
+      for: [options.manualProxyEndpoint, options.upstreamProxyEndpoint].compactMap { $0 },
+      overrides: overrides,
+      options: options,
+      to: &root
+    )
+
     return try Yams.dump(object: root, sortKeys: false)
+  }
+
+  private func validateOutboundProxyOptions(
+    _ options: RuntimeConfigOptions,
+    mixedPort: Int
+  ) throws {
+    if let manualProxyEndpoint = options.manualProxyEndpoint,
+       let upstreamProxyEndpoint = options.upstreamProxyEndpoint,
+       manualProxyEndpoint.endpoint.id == upstreamProxyEndpoint.endpoint.id {
+      throw NormalizerError.invalidProfile(
+        "The manual proxy and upstream proxy cannot use the same endpoint."
+      )
+    }
+
+    for resolvedEndpoint in [options.manualProxyEndpoint, options.upstreamProxyEndpoint].compactMap({ $0 }) {
+      let endpoint = resolvedEndpoint.endpoint
+      guard resolvedEndpoint.isReady else {
+        throw NormalizerError.invalidProfile(
+          "Outbound proxy endpoint authentication secret is missing."
+        )
+      }
+      guard !endpoint.host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            (1...65_535).contains(endpoint.port)
+      else {
+        throw NormalizerError.invalidProfile(
+          "Outbound proxy endpoint host or port is invalid."
+        )
+      }
+      if endpoint.port == mixedPort, Self.isLoopbackHost(endpoint.host) {
+        throw NormalizerError.invalidProfile(
+          "Outbound proxy endpoint cannot target the runtime mixed port through a loopback host."
+        )
+      }
+    }
+  }
+
+  private func validateReservedOutboundProxyNames(
+    in root: [String: Any],
+    manualProxyEndpoint: ResolvedOutboundProxyEndpoint?
+  ) throws {
+    let expectedManualName = manualProxyEndpoint.map {
+      Self.outboundProxyName(for: $0.endpoint.id)
+    }
+    var foundExpectedManualProxy = false
+
+    for proxy in (root["proxies"] as? [Any] ?? []).compactMap({ $0 as? [String: Any] }) {
+      guard let name = Self.trimmedString(proxy["name"]),
+            Self.isReservedOutboundProxyName(name)
+      else { continue }
+      if name == expectedManualName, !foundExpectedManualProxy {
+        foundExpectedManualProxy = true
+      } else {
+        throw NormalizerError.invalidProfile(
+          "Runtime config contains a name reserved for ClashMax outbound proxies."
+        )
+      }
+    }
+
+    for group in (root["proxy-groups"] as? [Any] ?? []).compactMap({ $0 as? [String: Any] }) {
+      if let name = Self.trimmedString(group["name"]),
+         Self.isReservedOutboundProxyName(name) {
+        throw NormalizerError.invalidProfile(
+          "Runtime config contains a name reserved for ClashMax outbound proxies."
+        )
+      }
+    }
+
+    for key in ["proxy-providers", "rule-providers"] {
+      guard let providers = root[key] as? [String: Any] else { continue }
+      if providers.keys.contains(where: Self.isReservedOutboundProxyName) {
+        throw NormalizerError.invalidProfile(
+          "Runtime config contains a name reserved for ClashMax outbound proxies."
+        )
+      }
+    }
+
+    if expectedManualName != nil, !foundExpectedManualProxy {
+      throw NormalizerError.invalidProfile(
+        "The ClashMax managed manual proxy node is missing from the runtime config."
+      )
+    }
+  }
+
+  private func manualProxyRoot(
+    for endpoint: ResolvedOutboundProxyEndpoint
+  ) throws -> [String: Any] {
+    let proxy = try outboundProxyNode(for: endpoint)
+    let name = Self.outboundProxyName(for: endpoint.endpoint.id)
+    return [
+      "proxies": [proxy],
+      "proxy-groups": [
+        [
+          "name": "Proxy",
+          "type": "select",
+          "proxies": [name]
+        ]
+      ],
+      "rules": Self.manualProxyRules
+    ]
+  }
+
+  private func applyingUpstreamProxy(
+    _ endpoint: ResolvedOutboundProxyEndpoint,
+    to root: [String: Any]
+  ) throws -> [String: Any] {
+    guard !Self.containsDialerProxy(in: root) else {
+      throw NormalizerError.invalidProfile(
+        "Existing dialer-proxy settings cannot be combined with a ClashMax upstream endpoint."
+      )
+    }
+
+    var root = root
+    let upstreamName = Self.outboundProxyName(for: endpoint.endpoint.id)
+    let upstreamProxy = try outboundProxyNode(for: endpoint)
+    let excludedProxyTypes = [
+      "direct",
+      "reject",
+      "reject-drop",
+      "dns",
+      "pass",
+      "compatible"
+    ]
+
+    var proxies = root["proxies"] as? [Any] ?? []
+    for index in proxies.indices {
+      guard var proxy = proxies[index] as? [String: Any] else { continue }
+      let type = (proxy["type"] as? String)?
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased() ?? ""
+      guard !excludedProxyTypes.contains(type) else { continue }
+      proxy["dialer-proxy"] = upstreamName
+      proxies[index] = proxy
+    }
+    proxies.append(upstreamProxy)
+    root["proxies"] = proxies
+
+    if var providers = root["proxy-providers"] as? [String: Any] {
+      for name in providers.keys {
+        guard var provider = providers[name] as? [String: Any] else { continue }
+        var override = provider["override"] as? [String: Any] ?? [:]
+        override["dialer-proxy"] = upstreamName
+        provider["override"] = override
+        if Self.normalizedType(provider["type"]) == "http" {
+          provider["proxy"] = upstreamName
+        }
+        providers[name] = provider
+      }
+      root["proxy-providers"] = providers
+    }
+
+    if var providers = root["rule-providers"] as? [String: Any] {
+      for name in providers.keys {
+        guard var provider = providers[name] as? [String: Any],
+              Self.normalizedType(provider["type"]) == "http"
+        else { continue }
+        provider["proxy"] = upstreamName
+        providers[name] = provider
+      }
+      root["rule-providers"] = providers
+    }
+
+    return root
+  }
+
+  private func applyOutboundProxyDNSBootstrap(
+    for endpoints: [ResolvedOutboundProxyEndpoint],
+    to root: inout [String: Any]
+  ) {
+    guard var dns = root["dns"] as? [String: Any],
+          dns["enable"] as? Bool == true
+    else { return }
+
+    var domainPolicies: [String: String] = [:]
+    for resolvedEndpoint in endpoints {
+      let host = resolvedEndpoint.endpoint.host.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !host.isEmpty, !Self.isIPAddress(host) else { continue }
+      domainPolicies[host] = "system"
+    }
+    guard !domainPolicies.isEmpty else { return }
+
+    dns["proxy-server-nameserver-policy"] = mergedResolverPolicyMap(
+      existing: dns["proxy-server-nameserver-policy"],
+      overlay: domainPolicies
+    )
+    if normalizedStringList(from: dns["proxy-server-nameserver"]).isEmpty {
+      dns["proxy-server-nameserver"] = ["system"]
+    }
+    root["dns"] = dns
+  }
+
+  private func applyTCPOnlyOutboundPolicy(
+    for endpoints: [ResolvedOutboundProxyEndpoint],
+    overrides: RuntimeOverrides,
+    options: RuntimeConfigOptions,
+    to root: inout [String: Any]
+  ) throws {
+    let hasTCPOnlyEndpoint = endpoints.contains { resolvedEndpoint in
+      switch resolvedEndpoint.endpoint.kind {
+      case .http:
+        return true
+      case .socks5:
+        return !resolvedEndpoint.endpoint.socks5Options.udpEnabled
+      }
+    }
+    let capturesPackets = overrides.tunEnabled || options.networkExtensionRoutingSettings != nil
+    guard hasTCPOnlyEndpoint, capturesPackets else { return }
+
+    guard overrides.mode == .rule else {
+      throw NormalizerError.invalidProfile(
+        "TCP-only outbound proxies cannot reject UDP safely in \(overrides.mode.rawValue) mode while packet capture is enabled."
+      )
+    }
+
+    let rules = normalizedRuleList(from: root["rules"]).filter {
+      $0.caseInsensitiveCompare(Self.udpRejectRule) != .orderedSame
+    }
+    root["rules"] = [Self.udpRejectRule] + rules
+  }
+
+  private func outboundProxyNode(
+    for resolvedEndpoint: ResolvedOutboundProxyEndpoint
+  ) throws -> [String: Any] {
+    let endpoint = resolvedEndpoint.endpoint
+    guard resolvedEndpoint.isReady else {
+      throw NormalizerError.invalidProfile(
+        "Outbound proxy endpoint authentication secret is missing."
+      )
+    }
+
+    var proxy: [String: Any] = [
+      "name": Self.outboundProxyName(for: endpoint.id),
+      "type": endpoint.kind.rawValue,
+      "server": endpoint.host,
+      "port": endpoint.port
+    ]
+    switch endpoint.kind {
+    case .socks5:
+      proxy["udp"] = endpoint.socks5Options.udpEnabled
+    case .http:
+      proxy["tls"] = endpoint.httpOptions.tlsEnabled
+      proxy["skip-cert-verify"] = endpoint.httpOptions.skipCertificateVerification
+      if let serverName = endpoint.httpOptions.serverName {
+        proxy["sni"] = serverName
+      }
+    }
+    if let authentication = endpoint.authentication {
+      proxy["username"] = authentication.username
+      proxy["password"] = resolvedEndpoint.password
+    }
+    return proxy
+  }
+
+  private static func outboundProxyName(for endpointID: UUID) -> String {
+    outboundProxyNamePrefix
+      + endpointID.uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+  }
+
+  private static func normalizedType(_ value: Any?) -> String {
+    (value as? String)?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .lowercased() ?? ""
+  }
+
+  private static func trimmedString(_ value: Any?) -> String? {
+    guard let value = value as? String else { return nil }
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+  }
+
+  private static func isReservedOutboundProxyName(_ name: String) -> Bool {
+    name.lowercased().hasPrefix(outboundProxyNamePrefix)
+  }
+
+  private static func containsDialerProxy(in value: Any) -> Bool {
+    if let mapping = value as? [String: Any] {
+      if mapping.keys.contains(where: {
+        $0.caseInsensitiveCompare("dialer-proxy") == .orderedSame
+      }) {
+        return true
+      }
+      return mapping.values.contains(where: containsDialerProxy)
+    }
+    if let values = value as? [Any] {
+      return values.contains(where: containsDialerProxy)
+    }
+    return false
+  }
+
+  private static func isLoopbackHost(_ host: String) -> Bool {
+    let normalized = normalizedIPAddressHost(host)
+    if normalized == "localhost" || normalized.hasSuffix(".localhost") {
+      return true
+    }
+
+    var ipv4 = in_addr()
+    if normalized.withCString({ inet_pton(AF_INET, $0, &ipv4) }) == 1 {
+      return UInt32(bigEndian: ipv4.s_addr) & 0xFF00_0000 == 0x7F00_0000
+    }
+
+    var ipv6 = in6_addr()
+    if normalized.withCString({ inet_pton(AF_INET6, $0, &ipv6) }) == 1 {
+      return withUnsafeBytes(of: &ipv6) { bytes in
+        bytes.dropLast().allSatisfy { $0 == 0 } && bytes.last == 1
+      }
+    }
+    return false
+  }
+
+  private static func isIPAddress(_ host: String) -> Bool {
+    let normalized = normalizedIPAddressHost(host)
+    var ipv4 = in_addr()
+    if normalized.withCString({ inet_pton(AF_INET, $0, &ipv4) }) == 1 {
+      return true
+    }
+    var ipv6 = in6_addr()
+    return normalized.withCString({ inet_pton(AF_INET6, $0, &ipv6) }) == 1
+  }
+
+  private static func normalizedIPAddressHost(_ host: String) -> String {
+    var normalized = host
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .lowercased()
+    if normalized.hasPrefix("["), normalized.hasSuffix("]") {
+      normalized.removeFirst()
+      normalized.removeLast()
+    }
+    if let zoneStart = normalized.firstIndex(of: "%") {
+      normalized = String(normalized[..<zoneStart])
+    }
+    while normalized.hasSuffix(".") {
+      normalized.removeLast()
+    }
+    return normalized
   }
 
   private func mergedRules(existing: Any?, overlay: RuleOverlaySettings) -> [String] {

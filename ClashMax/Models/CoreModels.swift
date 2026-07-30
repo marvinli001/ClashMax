@@ -18,14 +18,170 @@ private extension String {
   }
 }
 
+enum OutboundProxyEndpointKind: String, Codable, CaseIterable, Identifiable, Sendable {
+  case socks5
+  case http
+
+  var id: String { rawValue }
+}
+
+struct OutboundProxyAuthentication: Codable, Equatable, Sendable {
+  var username: String
+
+  init(username: String) {
+    self.username = username
+  }
+}
+
+struct OutboundProxyHTTPOptions: Codable, Equatable, Sendable {
+  var tlsEnabled: Bool
+  var serverName: String?
+  var skipCertificateVerification: Bool
+
+  init(
+    tlsEnabled: Bool = false,
+    serverName: String? = nil,
+    skipCertificateVerification: Bool = false
+  ) {
+    self.tlsEnabled = tlsEnabled
+    self.serverName = serverName
+    self.skipCertificateVerification = skipCertificateVerification
+  }
+}
+
+struct OutboundProxySOCKS5Options: Codable, Equatable, Sendable {
+  var udpEnabled: Bool
+
+  init(udpEnabled: Bool = false) {
+    self.udpEnabled = udpEnabled
+  }
+}
+
+struct OutboundProxyEndpoint: Identifiable, Codable, Equatable, Sendable {
+  var id: UUID
+  var name: String
+  var kind: OutboundProxyEndpointKind
+  var host: String
+  var port: Int
+  var authentication: OutboundProxyAuthentication?
+  var httpOptions: OutboundProxyHTTPOptions
+  var socks5Options: OutboundProxySOCKS5Options
+
+  private enum CodingKeys: String, CodingKey {
+    case id
+    case name
+    case kind
+    case host
+    case port
+    case authentication
+    case httpOptions
+    case socks5Options
+  }
+
+  init(
+    id: UUID = UUID(),
+    name: String,
+    kind: OutboundProxyEndpointKind,
+    host: String,
+    port: Int,
+    authentication: OutboundProxyAuthentication? = nil,
+    httpOptions: OutboundProxyHTTPOptions = OutboundProxyHTTPOptions(),
+    socks5Options: OutboundProxySOCKS5Options = OutboundProxySOCKS5Options()
+  ) {
+    self.id = id
+    self.name = name
+    self.kind = kind
+    self.host = host
+    self.port = port
+    self.authentication = authentication
+    self.httpOptions = httpOptions
+    self.socks5Options = socks5Options
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(UUID.self, forKey: .id)
+    name = try container.decode(String.self, forKey: .name)
+    kind = try container.decode(OutboundProxyEndpointKind.self, forKey: .kind)
+    host = try container.decode(String.self, forKey: .host)
+    port = try container.decode(Int.self, forKey: .port)
+    authentication = try container.decodeIfPresent(
+      OutboundProxyAuthentication.self,
+      forKey: .authentication
+    )
+    httpOptions = try container.decodeIfPresent(
+      OutboundProxyHTTPOptions.self,
+      forKey: .httpOptions
+    ) ?? OutboundProxyHTTPOptions()
+    socks5Options = try container.decodeIfPresent(
+      OutboundProxySOCKS5Options.self,
+      forKey: .socks5Options
+    ) ?? OutboundProxySOCKS5Options()
+  }
+}
+
+enum OutboundProxyEndpointSecretState: String, Equatable, Sendable {
+  case notRequired
+  case ready
+  case missingSecret
+}
+
+struct ResolvedOutboundProxyEndpoint: Equatable, Sendable {
+  var endpoint: OutboundProxyEndpoint
+  var password: String?
+
+  var secretState: OutboundProxyEndpointSecretState {
+    guard endpoint.authentication != nil else { return .notRequired }
+    guard
+      let password,
+      !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else {
+      return .missingSecret
+    }
+    return .ready
+  }
+
+  var isReady: Bool {
+    secretState != .missingSecret
+  }
+}
+
+enum OutboundProxyEndpointTestState: Equatable, Sendable {
+  case untested
+  case testing
+  case ready
+  case unreachable(String)
+
+  var displayName: String {
+    switch self {
+    case .untested:
+      return String(localized: "Untested")
+    case .testing:
+      return String(localized: "Testing")
+    case .ready:
+      return String(localized: "Ready")
+    case .unreachable:
+      return String(localized: "Unreachable")
+    }
+  }
+}
+
+extension OutboundProxyEndpoint {
+  var isTCPOnly: Bool {
+    kind == .http || !socks5Options.udpEnabled
+  }
+}
+
 enum ProfileSource: Codable, Equatable, Sendable {
   case localFile(originalPath: String?)
   case subscription(id: UUID)
+  case manualProxy(endpointID: UUID)
 
   private enum CodingKeys: String, CodingKey {
     case kind
     case originalPath
     case subscriptionID
+    case endpointID
   }
 
   init(from decoder: Decoder) throws {
@@ -36,6 +192,8 @@ enum ProfileSource: Codable, Equatable, Sendable {
       self = .localFile(originalPath: try container.decodeIfPresent(String.self, forKey: .originalPath))
     case "subscription":
       self = .subscription(id: try container.decode(UUID.self, forKey: .subscriptionID))
+    case "manualProxy":
+      self = .manualProxy(endpointID: try container.decode(UUID.self, forKey: .endpointID))
     default:
       throw DecodingError.dataCorruptedError(forKey: .kind, in: container, debugDescription: "Unknown profile source")
     }
@@ -50,6 +208,9 @@ enum ProfileSource: Codable, Equatable, Sendable {
     case let .subscription(id):
       try container.encode("subscription", forKey: .kind)
       try container.encode(id, forKey: .subscriptionID)
+    case let .manualProxy(endpointID):
+      try container.encode("manualProxy", forKey: .kind)
+      try container.encode(endpointID, forKey: .endpointID)
     }
   }
 }
@@ -59,6 +220,7 @@ extension ProfileSource {
     switch self {
     case .localFile: String(localized: "Local YAML")
     case .subscription: String(localized: "Subscription")
+    case .manualProxy: String(localized: "Manual Proxy")
     }
   }
 }
@@ -1003,6 +1165,8 @@ struct SubscriptionFetchDiagnostics: Codable, Equatable, Sendable {
   var userAgent: String
   var attemptedStrategies: [SubscriptionFetchStrategy]
   var successfulStrategy: SubscriptionFetchStrategy?
+  var endpointName: String?
+  var failureStage: String?
   var requestHeaders: [SubscriptionHeaderDiagnostic]
   var responseHeaderNames: [String]
   var httpStatusCode: Int?
@@ -1019,6 +1183,8 @@ struct SubscriptionFetchDiagnostics: Codable, Equatable, Sendable {
     userAgent: String,
     attemptedStrategies: [SubscriptionFetchStrategy] = [],
     successfulStrategy: SubscriptionFetchStrategy? = nil,
+    endpointName: String? = nil,
+    failureStage: String? = nil,
     requestHeaders: [SubscriptionHeaderDiagnostic] = [],
     responseHeaderNames: [String] = [],
     httpStatusCode: Int? = nil,
@@ -1034,6 +1200,8 @@ struct SubscriptionFetchDiagnostics: Codable, Equatable, Sendable {
     self.userAgent = userAgent
     self.attemptedStrategies = attemptedStrategies
     self.successfulStrategy = successfulStrategy
+    self.endpointName = endpointName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    self.failureStage = failureStage?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     self.requestHeaders = requestHeaders
     self.responseHeaderNames = responseHeaderNames
     self.httpStatusCode = httpStatusCode
@@ -1395,6 +1563,7 @@ struct Profile: Identifiable, Codable, Equatable, Sendable {
   var nameIsUserCustomized: Bool
   var source: ProfileSource
   var originalConfigPath: String
+  var upstreamEndpointID: UUID?
   var subscriptionMetadata: SubscriptionMetadata?
   var subscriptionProviderOptions: SubscriptionProviderOptions
   var subscriptionUpdatePolicy: SubscriptionUpdatePolicy
@@ -1409,6 +1578,7 @@ struct Profile: Identifiable, Codable, Equatable, Sendable {
     case nameIsUserCustomized
     case source
     case originalConfigPath
+    case upstreamEndpointID
     case subscriptionMetadata
     case subscriptionProviderOptions
     case subscriptionUpdatePolicy
@@ -1424,6 +1594,7 @@ struct Profile: Identifiable, Codable, Equatable, Sendable {
     nameIsUserCustomized: Bool = true,
     source: ProfileSource,
     originalConfigPath: String,
+    upstreamEndpointID: UUID? = nil,
     subscriptionMetadata: SubscriptionMetadata? = nil,
     subscriptionProviderOptions: SubscriptionProviderOptions = .default,
     subscriptionUpdatePolicy: SubscriptionUpdatePolicy = .default,
@@ -1437,6 +1608,7 @@ struct Profile: Identifiable, Codable, Equatable, Sendable {
     self.nameIsUserCustomized = nameIsUserCustomized
     self.source = source
     self.originalConfigPath = originalConfigPath
+    self.upstreamEndpointID = upstreamEndpointID
     self.subscriptionMetadata = subscriptionMetadata
     self.subscriptionProviderOptions = subscriptionProviderOptions
     self.subscriptionUpdatePolicy = subscriptionUpdatePolicy
@@ -1452,6 +1624,7 @@ struct Profile: Identifiable, Codable, Equatable, Sendable {
     name = try container.decode(String.self, forKey: .name)
     source = try container.decode(ProfileSource.self, forKey: .source)
     originalConfigPath = try container.decode(String.self, forKey: .originalConfigPath)
+    upstreamEndpointID = try container.decodeIfPresent(UUID.self, forKey: .upstreamEndpointID)
     subscriptionMetadata = try container.decodeIfPresent(SubscriptionMetadata.self, forKey: .subscriptionMetadata)
     subscriptionProviderOptions = container.decodeDefault(
       SubscriptionProviderOptions.self,
@@ -1490,6 +1663,26 @@ extension ProfileSource {
     if case .subscription = self { return true }
     return false
   }
+}
+
+enum OutboundProxyEndpointReferenceKind: String, Codable, Equatable, Sendable {
+  case manualProfile
+  case upstream
+
+  var displayName: String {
+    switch self {
+    case .manualProfile:
+      return String(localized: "Manual Profile")
+    case .upstream:
+      return String(localized: "Upstream")
+    }
+  }
+}
+
+struct OutboundProxyEndpointReference: Equatable, Sendable {
+  var profileID: Profile.ID
+  var profileName: String
+  var kind: OutboundProxyEndpointReferenceKind
 }
 
 enum RunMode: String, Codable, CaseIterable, Identifiable, Sendable {
@@ -5894,6 +6087,7 @@ enum SubscriptionFetchStrategy: String, Codable, CaseIterable, Equatable, Sendab
   case direct
   case localClashProxy
   case systemProxy
+  case profileUpstream
 
   static let defaultRetryOrder: [SubscriptionFetchStrategy] = [.direct, .localClashProxy, .systemProxy]
 
@@ -5902,6 +6096,7 @@ enum SubscriptionFetchStrategy: String, Codable, CaseIterable, Equatable, Sendab
     case .direct: String(localized: "Direct")
     case .localClashProxy: String(localized: "Local Clash Proxy")
     case .systemProxy: String(localized: "System Proxy")
+    case .profileUpstream: String(localized: "Profile Upstream")
     }
   }
 }
@@ -5918,6 +6113,11 @@ struct SubscriptionFetchOptions: Equatable, Sendable {
   /// primary `userAgent` yields a panel/invalid-profile response. Not part of user settings;
   /// injected from the bundled core. Ignored when nil, blank, or equal to `userAgent`.
   var compatibilityUserAgent: String?
+  var profileUpstreamEndpoint: ResolvedOutboundProxyEndpoint?
+
+  var effectiveRetryOrder: [SubscriptionFetchStrategy] {
+    profileUpstreamEndpoint == nil ? retryOrder : [.profileUpstream]
+  }
 
   init(
     userAgent: String = "clash.meta",
@@ -5927,16 +6127,18 @@ struct SubscriptionFetchOptions: Equatable, Sendable {
     allowsInsecureTLS: Bool = false,
     retryOrder: [SubscriptionFetchStrategy] = SubscriptionFetchStrategy.defaultRetryOrder,
     customHeaders: [String: String] = [:],
-    compatibilityUserAgent: String? = nil
+    compatibilityUserAgent: String? = nil,
+    profileUpstreamEndpoint: ResolvedOutboundProxyEndpoint? = nil
   ) {
     self.userAgent = userAgent
     self.timeout = timeout
     self.localProxyHost = localProxyHost
     self.localProxyPort = localProxyPort
     self.allowsInsecureTLS = allowsInsecureTLS
-    self.retryOrder = retryOrder
+    self.retryOrder = profileUpstreamEndpoint == nil ? retryOrder : [.profileUpstream]
     self.customHeaders = customHeaders
     self.compatibilityUserAgent = compatibilityUserAgent
+    self.profileUpstreamEndpoint = profileUpstreamEndpoint
   }
 }
 
@@ -6107,6 +6309,9 @@ extension SubscriptionProviderOptions {
       options.retryOrder = [.localClashProxy]
     case .systemProxy:
       options.retryOrder = [.systemProxy]
+    }
+    if base.profileUpstreamEndpoint != nil || base.retryOrder.contains(.profileUpstream) {
+      options.retryOrder = [.profileUpstream]
     }
     options.customHeaders = normalizedHeaders
     return options

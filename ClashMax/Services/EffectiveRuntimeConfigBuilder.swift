@@ -25,6 +25,7 @@ struct EffectiveRuntimeConfigBuilder {
     overrides: RuntimeOverrides,
     selectionOverrides: [String: String],
     runtimeSnippets: [RuntimeSnippet],
+    options baseOptions: RuntimeConfigOptions = .default,
     preflight: EffectiveRuntimeConfigPreflightMode
   ) async throws -> EffectiveRuntimeConfigSnapshot {
     let preflightDirectory = paths.runtime.appendingPathComponent(
@@ -38,7 +39,7 @@ struct EffectiveRuntimeConfigBuilder {
 
     let originalSource = try String(contentsOfFile: profile.originalConfigPath, encoding: .utf8)
     let sourceFormat = try? ProfileConfigInspector.format(of: originalSource)
-    var options = RuntimeConfigOptions.default
+    var options = baseOptions
     options.subscriptionProviderOptions = profile.subscriptionProviderOptions
     options.runtimeSnippets = runtimeSnippets
 
@@ -74,6 +75,8 @@ struct EffectiveRuntimeConfigBuilder {
       providerContent: providerContent,
       providerContentPaths: providerContentPaths,
       runtimeSnippets: runtimeSnippets,
+      manualProxyEndpoint: options.manualProxyEndpoint,
+      upstreamProxyEndpoint: options.upstreamProxyEndpoint,
       redactedOriginal: redactedOriginal,
       redactedFinal: redactedFinal
     )
@@ -119,6 +122,8 @@ struct EffectiveRuntimeConfigBuilder {
     providerContent: String?,
     providerContentPaths: [String],
     runtimeSnippets: [RuntimeSnippet],
+    manualProxyEndpoint: ResolvedOutboundProxyEndpoint?,
+    upstreamProxyEndpoint: ResolvedOutboundProxyEndpoint?,
     redactedOriginal: String,
     redactedFinal: String
   ) -> [EffectiveRuntimeConfigLayer] {
@@ -171,6 +176,18 @@ struct EffectiveRuntimeConfigBuilder {
         redactedContent: renderSnippets(runtimeSnippets),
         isActive: !runtimeSnippets.isEmpty
       ),
+      outboundProxyLayer(
+        id: "manual-proxy",
+        title: "Manual Proxy",
+        endpoint: manualProxyEndpoint,
+        summary: String(localized: "The profile is generated from this shared proxy endpoint.")
+      ),
+      outboundProxyLayer(
+        id: "upstream-proxy",
+        title: "Upstream Proxy",
+        endpoint: upstreamProxyEndpoint,
+        summary: String(localized: "All network proxy nodes and remote providers use this upstream.")
+      ),
       EffectiveRuntimeConfigLayer(
         id: "final-runtime-yaml",
         title: "Final runtime YAML",
@@ -178,6 +195,39 @@ struct EffectiveRuntimeConfigBuilder {
         redactedContent: redactedFinal
       )
     ]
+  }
+
+  private func outboundProxyLayer(
+    id: String,
+    title: String,
+    endpoint resolvedEndpoint: ResolvedOutboundProxyEndpoint?,
+    summary: String
+  ) -> EffectiveRuntimeConfigLayer {
+    guard let resolvedEndpoint else {
+      return EffectiveRuntimeConfigLayer(
+        id: id,
+        title: title,
+        summary: String(localized: "Not configured."),
+        isActive: false
+      )
+    }
+    let endpoint = resolvedEndpoint.endpoint
+    let transport = endpoint.kind == .socks5 ? "SOCKS5" : "HTTP"
+    let tcpOnly = endpoint.kind == .http || !endpoint.socks5Options.udpEnabled
+    let content = [
+      "name: \(endpoint.name)",
+      "type: \(transport)",
+      "server: \(endpoint.host)",
+      "port: \(endpoint.port)",
+      "status: \(resolvedEndpoint.secretState.rawValue)",
+      "transport: \(tcpOnly ? "TCP only" : "TCP and UDP")"
+    ].joined(separator: "\n")
+    return EffectiveRuntimeConfigLayer(
+      id: id,
+      title: title,
+      summary: summary,
+      redactedContent: content
+    )
   }
 
   private func providerMaterializationContent(

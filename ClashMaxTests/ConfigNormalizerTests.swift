@@ -3,6 +3,602 @@ import Yams
 @testable import ClashMax
 
 final class ConfigNormalizerTests: XCTestCase {
+  func testManualSocksEndpointBuildsRuntimeConfigWithoutReadingSource() throws {
+    let endpointID = UUID(uuidString: "91000000-0000-0000-0000-000000000001")!
+    var options = RuntimeConfigOptions.default
+    options.manualProxyEndpoint = ResolvedOutboundProxyEndpoint(
+      endpoint: OutboundProxyEndpoint(
+        id: endpointID,
+        name: "Manual SOCKS",
+        kind: .socks5,
+        host: "manual.example",
+        port: 1080,
+        authentication: OutboundProxyAuthentication(username: "alice"),
+        socks5Options: OutboundProxySOCKS5Options(udpEnabled: true)
+      ),
+      password: "manual-secret"
+    )
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: "this is deliberately invalid YAML: [",
+      overrides: .defaultForLaunch(secret: "controller-secret"),
+      options: options
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let proxies = try XCTUnwrap(yaml["proxies"] as? [[String: Any]])
+    let proxy = try XCTUnwrap(proxies.first)
+    let groups = try XCTUnwrap(yaml["proxy-groups"] as? [[String: Any]])
+    let expectedName = "__clashmax_outbound_91000000000000000000000000000001"
+
+    XCTAssertEqual(proxies.count, 1)
+    XCTAssertEqual(proxy["name"] as? String, expectedName)
+    XCTAssertEqual(proxy["type"] as? String, "socks5")
+    XCTAssertEqual(proxy["server"] as? String, "manual.example")
+    XCTAssertEqual(proxy["port"] as? Int, 1080)
+    XCTAssertEqual(proxy["username"] as? String, "alice")
+    XCTAssertEqual(proxy["password"] as? String, "manual-secret")
+    XCTAssertEqual(proxy["udp"] as? Bool, true)
+    XCTAssertEqual(groups.count, 1)
+    XCTAssertEqual(groups[0]["name"] as? String, "Proxy")
+    XCTAssertEqual(groups[0]["type"] as? String, "select")
+    XCTAssertEqual(groups[0]["proxies"] as? [String], [expectedName])
+    XCTAssertEqual(
+      yaml["rules"] as? [String],
+      [
+        "DOMAIN,localhost,DIRECT",
+        "DOMAIN-SUFFIX,local,DIRECT",
+        "IP-CIDR,127.0.0.0/8,DIRECT,no-resolve",
+        "IP-CIDR,10.0.0.0/8,DIRECT,no-resolve",
+        "IP-CIDR,172.16.0.0/12,DIRECT,no-resolve",
+        "IP-CIDR,192.168.0.0/16,DIRECT,no-resolve",
+        "IP-CIDR,169.254.0.0/16,DIRECT,no-resolve",
+        "IP-CIDR6,::1/128,DIRECT,no-resolve",
+        "IP-CIDR6,fc00::/7,DIRECT,no-resolve",
+        "IP-CIDR6,fe80::/10,DIRECT,no-resolve",
+        "MATCH,Proxy"
+      ]
+    )
+  }
+
+  func testUpstreamEndpointInjectsExplicitNodeAndProviderRouting() throws {
+    let endpointID = UUID(uuidString: "92000000-0000-0000-0000-000000000001")!
+    var options = RuntimeConfigOptions.default
+    options.upstreamProxyEndpoint = ResolvedOutboundProxyEndpoint(
+      endpoint: OutboundProxyEndpoint(
+        id: endpointID,
+        name: "Upstream HTTP",
+        kind: .http,
+        host: "upstream.example",
+        port: 8080
+      ),
+      password: nil
+    )
+    let source = """
+    proxies:
+      - name: Chained
+        type: ss
+        server: node.example
+        port: 443
+        cipher: aes-128-gcm
+        password: node-secret
+      - name: DIRECT
+        type: direct
+    proxy-providers:
+      remote-nodes:
+        type: http
+        url: https://provider.example/nodes.yaml
+        path: ./providers/nodes.yaml
+    rule-providers:
+      remote-rules:
+        type: http
+        behavior: classical
+        url: https://provider.example/rules.yaml
+        path: ./providers/rules.yaml
+    proxy-groups:
+      - name: Proxy
+        type: select
+        proxies: [Chained, DIRECT]
+    rules:
+      - MATCH,Proxy
+    """
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: source,
+      overrides: .defaultForLaunch(secret: "controller-secret"),
+      options: options
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let proxies = try XCTUnwrap(yaml["proxies"] as? [[String: Any]])
+    let injectedName = "__clashmax_outbound_92000000000000000000000000000001"
+    let chained = try XCTUnwrap(proxies.first { $0["name"] as? String == "Chained" })
+    let direct = try XCTUnwrap(proxies.first { $0["name"] as? String == "DIRECT" })
+    let injected = try XCTUnwrap(proxies.first { $0["name"] as? String == injectedName })
+    let proxyProviders = try XCTUnwrap(yaml["proxy-providers"] as? [String: Any])
+    let remoteNodes = try XCTUnwrap(proxyProviders["remote-nodes"] as? [String: Any])
+    let nodeOverride = try XCTUnwrap(remoteNodes["override"] as? [String: Any])
+    let ruleProviders = try XCTUnwrap(yaml["rule-providers"] as? [String: Any])
+    let remoteRules = try XCTUnwrap(ruleProviders["remote-rules"] as? [String: Any])
+
+    XCTAssertEqual(chained["dialer-proxy"] as? String, injectedName)
+    XCTAssertNil(direct["dialer-proxy"])
+    XCTAssertEqual(injected["type"] as? String, "http")
+    XCTAssertEqual(injected["server"] as? String, "upstream.example")
+    XCTAssertEqual(injected["port"] as? Int, 8080)
+    XCTAssertEqual(nodeOverride["dialer-proxy"] as? String, injectedName)
+    XCTAssertEqual(remoteNodes["proxy"] as? String, injectedName)
+    XCTAssertEqual(remoteRules["proxy"] as? String, injectedName)
+  }
+
+  func testManualAndUpstreamEndpointsChainOnlyManualNode() throws {
+    let manual = outboundEndpoint(
+      id: "93000000-0000-0000-0000-000000000001",
+      kind: .socks5,
+      host: "manual.example",
+      port: 1080,
+      udpEnabled: true
+    )
+    let upstream = outboundEndpoint(
+      id: "93000000-0000-0000-0000-000000000002",
+      kind: .http,
+      host: "upstream.example",
+      port: 8080
+    )
+    var options = RuntimeConfigOptions.default
+    options.manualProxyEndpoint = manual
+    options.upstreamProxyEndpoint = upstream
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: "invalid source must stay unread: [",
+      overrides: .defaultForLaunch(secret: "controller-secret"),
+      options: options
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let proxies = try XCTUnwrap(yaml["proxies"] as? [[String: Any]])
+    let groups = try XCTUnwrap(yaml["proxy-groups"] as? [[String: Any]])
+    let manualName = "__clashmax_outbound_93000000000000000000000000000001"
+    let upstreamName = "__clashmax_outbound_93000000000000000000000000000002"
+    let manualProxy = try XCTUnwrap(proxies.first { $0["name"] as? String == manualName })
+    let upstreamProxy = try XCTUnwrap(proxies.first { $0["name"] as? String == upstreamName })
+
+    XCTAssertEqual(proxies.count, 2)
+    XCTAssertEqual(manualProxy["dialer-proxy"] as? String, upstreamName)
+    XCTAssertNil(upstreamProxy["dialer-proxy"])
+    XCTAssertEqual(groups.first?["proxies"] as? [String], [manualName])
+  }
+
+  func testUpstreamTransformRejectsExistingDialerIntroducedByRuntimeMerge() {
+    var options = RuntimeConfigOptions.default
+    options.upstreamProxyEndpoint = outboundEndpoint(
+      id: "94000000-0000-0000-0000-000000000001",
+      kind: .http,
+      host: "upstream.example",
+      port: 8080
+    )
+    options.subscriptionProviderOptions = SubscriptionProviderOptions(
+      runtimeMergeYAML: """
+      proxy-providers:
+        merged-provider:
+          type: file
+          path: ./providers/merged.yaml
+          override:
+            dialer-proxy: ExistingChain
+      """
+    )
+
+    XCTAssertThrowsError(
+      try ConfigNormalizer().runtimeConfig(
+        from: outboundBaseConfig,
+        overrides: .defaultForLaunch(secret: "controller-secret"),
+        options: options
+      )
+    ) { error in
+      XCTAssertTrue(String(describing: error).localizedCaseInsensitiveContains("dialer-proxy"))
+    }
+  }
+
+  func testUpstreamTransformRejectsReservedNameConflictWithoutLeakingPassword() {
+    let endpointID = "95000000-0000-0000-0000-000000000001"
+    let generatedName = "__clashmax_outbound_95000000000000000000000000000001"
+    let endpointPassword = "never-leak-upstream-password"
+    var options = RuntimeConfigOptions.default
+    options.upstreamProxyEndpoint = outboundEndpoint(
+      id: endpointID,
+      kind: .http,
+      host: "upstream.example",
+      port: 8080,
+      username: "alice",
+      password: endpointPassword
+    )
+    let conflictingSources = [
+      """
+      proxies:
+        - name: \(generatedName)
+          type: ss
+          server: conflict.example
+          port: 443
+          cipher: aes-128-gcm
+          password: profile-secret
+      proxy-groups:
+        - name: Proxy
+          type: select
+          proxies: [\(generatedName)]
+      rules:
+        - MATCH,Proxy
+      """,
+      """
+      proxies:
+        - { name: Node, type: direct }
+      proxy-groups:
+        - name: \(generatedName)
+          type: select
+          proxies: [Node]
+      rules:
+        - MATCH,\(generatedName)
+      """,
+      """
+      proxies:
+        - { name: Node, type: direct }
+      proxy-providers:
+        \(generatedName):
+          type: file
+          path: ./providers/conflict.yaml
+      proxy-groups:
+        - name: Proxy
+          type: select
+          proxies: [Node]
+      rules:
+        - MATCH,Proxy
+      """
+    ]
+
+    for source in conflictingSources {
+      XCTAssertThrowsError(
+        try ConfigNormalizer().runtimeConfig(
+          from: source,
+          overrides: .defaultForLaunch(secret: "controller-secret"),
+          options: options
+        )
+      ) { error in
+        let message = String(describing: error)
+        XCTAssertTrue(message.localizedCaseInsensitiveContains("reserved"))
+        XCTAssertFalse(message.contains(endpointPassword))
+      }
+    }
+  }
+
+  func testManualAndUpstreamCannotUseSameEndpoint() {
+    let endpoint = outboundEndpoint(
+      id: "96000000-0000-0000-0000-000000000001",
+      kind: .socks5,
+      host: "same.example",
+      port: 1080,
+      udpEnabled: true
+    )
+    var options = RuntimeConfigOptions.default
+    options.manualProxyEndpoint = endpoint
+    options.upstreamProxyEndpoint = endpoint
+
+    XCTAssertThrowsError(
+      try ConfigNormalizer().runtimeConfig(
+        from: "ignored: [",
+        overrides: .defaultForLaunch(secret: "controller-secret"),
+        options: options
+      )
+    ) { error in
+      XCTAssertTrue(String(describing: error).localizedCaseInsensitiveContains("same"))
+    }
+  }
+
+  func testAuthenticatedEndpointRequiresResolvedSecret() {
+    var options = RuntimeConfigOptions.default
+    options.upstreamProxyEndpoint = outboundEndpoint(
+      id: "97000000-0000-0000-0000-000000000001",
+      kind: .http,
+      host: "upstream.example",
+      port: 8080,
+      username: "alice",
+      password: nil
+    )
+
+    XCTAssertThrowsError(
+      try ConfigNormalizer().runtimeConfig(
+        from: outboundBaseConfig,
+        overrides: .defaultForLaunch(secret: "controller-secret"),
+        options: options
+      )
+    ) { error in
+      XCTAssertTrue(String(describing: error).localizedCaseInsensitiveContains("secret"))
+    }
+  }
+
+  func testEndpointCannotTargetRuntimeMixedPortThroughLoopback() {
+    let loopbackHosts = ["localhost", "127.0.0.1", "127.42.0.9", "::1", "0:0:0:0:0:0:0:1"]
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "controller-secret")
+    overrides.mixedPort = 7890
+
+    for (index, host) in loopbackHosts.enumerated() {
+      var options = RuntimeConfigOptions.default
+      options.upstreamProxyEndpoint = outboundEndpoint(
+        id: String(format: "98000000-0000-0000-0000-%012d", index + 1),
+        kind: .http,
+        host: host,
+        port: overrides.mixedPort
+      )
+
+      XCTAssertThrowsError(
+        try ConfigNormalizer().runtimeConfig(
+          from: outboundBaseConfig,
+          overrides: overrides,
+          options: options
+        ),
+        "Expected \(host) to be rejected"
+      ) { error in
+        XCTAssertTrue(String(describing: error).localizedCaseInsensitiveContains("loopback"))
+      }
+    }
+  }
+
+  func testUpstreamDomainAddsOnlyProxyDNSBootstrapPolicy() throws {
+    var options = RuntimeConfigOptions.default
+    options.upstreamProxyEndpoint = outboundEndpoint(
+      id: "99000000-0000-0000-0000-000000000001",
+      kind: .socks5,
+      host: "Upstream.Example",
+      port: 1080,
+      udpEnabled: true
+    )
+    let source = """
+    proxies:
+      - name: Node
+        type: ss
+        server: node.example
+        port: 443
+        cipher: aes-128-gcm
+        password: profile-secret
+    proxy-groups:
+      - name: Proxy
+        type: select
+        proxies: [Node]
+    dns:
+      enable: true
+      nameserver: [1.1.1.1]
+      nameserver-policy:
+        "+.ordinary.example": 8.8.8.8
+      proxy-server-nameserver: []
+      proxy-server-nameserver-policy:
+        existing.example: 9.9.9.9
+    rules:
+      - MATCH,Proxy
+    """
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: source,
+      overrides: .defaultForLaunch(secret: "controller-secret"),
+      options: options
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let dns = try XCTUnwrap(yaml["dns"] as? [String: Any])
+    let nameserverPolicy = try XCTUnwrap(dns["nameserver-policy"] as? [String: Any])
+    let proxyPolicy = try XCTUnwrap(dns["proxy-server-nameserver-policy"] as? [String: Any])
+
+    XCTAssertEqual(dns["nameserver"] as? [String], ["1.1.1.1"])
+    XCTAssertEqual(nameserverPolicy["+.ordinary.example"] as? String, "8.8.8.8")
+    XCTAssertEqual(proxyPolicy["existing.example"] as? String, "9.9.9.9")
+    XCTAssertEqual(proxyPolicy["Upstream.Example"] as? String, "system")
+    XCTAssertFalse((dns["proxy-server-nameserver"] as? [String])?.isEmpty ?? true)
+  }
+
+  func testTCPOnlyOutboundPrependsUDPRejectAfterRuleOverlaysForTunAndNE() throws {
+    for useNetworkExtension in [false, true] {
+      var options = RuntimeConfigOptions.default
+      options.upstreamProxyEndpoint = outboundEndpoint(
+        id: useNetworkExtension
+          ? "9A000000-0000-0000-0000-000000000002"
+          : "9A000000-0000-0000-0000-000000000001",
+        kind: .http,
+        host: "upstream.example",
+        port: 8080
+      )
+      if useNetworkExtension {
+        options.networkExtensionRoutingSettings = .default
+      }
+      var overrides = RuntimeOverrides.defaultForLaunch(secret: "controller-secret")
+      overrides.tunEnabled = !useNetworkExtension
+      overrides.ruleOverlay = RuleOverlaySettings(
+        enabled: true,
+        prependRules: [
+          ManagedRuleOverlayRule(
+            kind: .domainSuffix,
+            value: "managed.example",
+            policy: "DIRECT"
+          )
+        ]
+      )
+
+      let output = try ConfigNormalizer().runtimeConfig(
+        from: outboundBaseConfig,
+        overrides: overrides,
+        options: options
+      )
+      let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+      let rules = try XCTUnwrap(yaml["rules"] as? [String])
+
+      XCTAssertEqual(rules.first, "NETWORK,UDP,REJECT")
+      XCTAssertEqual(rules.dropFirst().first, "DOMAIN-SUFFIX,managed.example,DIRECT")
+    }
+  }
+
+  func testTCPOnlyOutboundRejectsGlobalAndDirectPacketCapture() {
+    for mode in [RunMode.global, .direct] {
+      var options = RuntimeConfigOptions.default
+      options.upstreamProxyEndpoint = outboundEndpoint(
+        id: mode == .global
+          ? "9B000000-0000-0000-0000-000000000001"
+          : "9B000000-0000-0000-0000-000000000002",
+        kind: .http,
+        host: "upstream.example",
+        port: 8080
+      )
+      var overrides = RuntimeOverrides.defaultForLaunch(secret: "controller-secret")
+      overrides.mode = mode
+      overrides.tunEnabled = true
+
+      XCTAssertThrowsError(
+        try ConfigNormalizer().runtimeConfig(
+          from: outboundBaseConfig,
+          overrides: overrides,
+          options: options
+        )
+      ) { error in
+        let message = String(describing: error)
+        XCTAssertTrue(message.localizedCaseInsensitiveContains("udp"))
+        XCTAssertTrue(message.localizedCaseInsensitiveContains(mode.rawValue))
+      }
+    }
+  }
+
+  func testTCPOnlyOutboundDoesNotInjectUDPRejectWithoutPacketCapture() throws {
+    var options = RuntimeConfigOptions.default
+    options.upstreamProxyEndpoint = outboundEndpoint(
+      id: "9C000000-0000-0000-0000-000000000001",
+      kind: .http,
+      host: "upstream.example",
+      port: 8080
+    )
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: outboundBaseConfig,
+      overrides: .defaultForLaunch(secret: "controller-secret"),
+      options: options
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let rules = try XCTUnwrap(yaml["rules"] as? [String])
+
+    XCTAssertFalse(rules.contains("NETWORK,UDP,REJECT"))
+  }
+
+  func testUDPCapableSocksEndpointDoesNotInjectUDPRejectDuringCapture() throws {
+    var options = RuntimeConfigOptions.default
+    options.upstreamProxyEndpoint = outboundEndpoint(
+      id: "9D000000-0000-0000-0000-000000000001",
+      kind: .socks5,
+      host: "upstream.example",
+      port: 1080,
+      udpEnabled: true
+    )
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "controller-secret")
+    overrides.tunEnabled = true
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: outboundBaseConfig,
+      overrides: overrides,
+      options: options
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let rules = try XCTUnwrap(yaml["rules"] as? [String])
+
+    XCTAssertFalse(rules.contains("NETWORK,UDP,REJECT"))
+  }
+
+  func testUpstreamSkipsBuiltInProxyTypesAndPreservesProviderFields() throws {
+    let upstreamName = "__clashmax_outbound_9e000000000000000000000000000001"
+    var options = RuntimeConfigOptions.default
+    options.upstreamProxyEndpoint = outboundEndpoint(
+      id: "9E000000-0000-0000-0000-000000000001",
+      kind: .socks5,
+      host: "upstream.example",
+      port: 1080,
+      udpEnabled: true
+    )
+    let source = """
+    proxies:
+      - { name: Network, type: ss, server: node.example, port: 443, cipher: aes-128-gcm, password: profile-secret }
+      - { name: Direct, type: direct }
+      - { name: Reject, type: reject }
+      - { name: RejectDrop, type: reject-drop }
+      - { name: DNS, type: dns }
+      - { name: Pass, type: pass }
+      - { name: Compatible, type: compatible }
+    proxy-providers:
+      HTTP:
+        type: http
+        url: https://provider.example/nodes.yaml
+        path: ./providers/http.yaml
+        override:
+          additional-prefix: "[HTTP] "
+      File:
+        type: file
+        path: ./providers/file.yaml
+    rule-providers:
+      HTTP:
+        type: http
+        behavior: classical
+        url: https://provider.example/rules.yaml
+        path: ./rules/http.yaml
+      File:
+        type: file
+        behavior: classical
+        path: ./rules/file.yaml
+    proxy-groups:
+      - name: Proxy
+        type: select
+        proxies: [Network, Direct]
+    rules:
+      - MATCH,Proxy
+    """
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: source,
+      overrides: .defaultForLaunch(secret: "controller-secret"),
+      options: options
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let proxies = try XCTUnwrap(yaml["proxies"] as? [[String: Any]])
+    let network = try XCTUnwrap(proxies.first { $0["name"] as? String == "Network" })
+    let builtIns = proxies.filter {
+      ["Direct", "Reject", "RejectDrop", "DNS", "Pass", "Compatible"]
+        .contains($0["name"] as? String ?? "")
+    }
+    let proxyProviders = try XCTUnwrap(yaml["proxy-providers"] as? [String: Any])
+    let httpProvider = try XCTUnwrap(proxyProviders["HTTP"] as? [String: Any])
+    let fileProvider = try XCTUnwrap(proxyProviders["File"] as? [String: Any])
+    let httpOverride = try XCTUnwrap(httpProvider["override"] as? [String: Any])
+    let fileOverride = try XCTUnwrap(fileProvider["override"] as? [String: Any])
+    let ruleProviders = try XCTUnwrap(yaml["rule-providers"] as? [String: Any])
+    let httpRules = try XCTUnwrap(ruleProviders["HTTP"] as? [String: Any])
+    let fileRules = try XCTUnwrap(ruleProviders["File"] as? [String: Any])
+
+    XCTAssertEqual(network["dialer-proxy"] as? String, upstreamName)
+    XCTAssertTrue(builtIns.allSatisfy { $0["dialer-proxy"] == nil })
+    XCTAssertEqual(httpOverride["additional-prefix"] as? String, "[HTTP] ")
+    XCTAssertEqual(httpOverride["dialer-proxy"] as? String, upstreamName)
+    XCTAssertEqual(fileOverride["dialer-proxy"] as? String, upstreamName)
+    XCTAssertEqual(httpProvider["proxy"] as? String, upstreamName)
+    XCTAssertNil(fileProvider["proxy"])
+    XCTAssertEqual(httpRules["proxy"] as? String, upstreamName)
+    XCTAssertNil(fileRules["proxy"])
+  }
+
+  func testNilOutboundEndpointsPreserveExistingRuntimeBehavior() throws {
+    let overrides = RuntimeOverrides.defaultForLaunch(secret: "controller-secret")
+    let defaultOutput = try ConfigNormalizer().runtimeConfig(
+      from: outboundBaseConfig,
+      overrides: overrides
+    )
+    var explicitNilOptions = RuntimeConfigOptions.default
+    explicitNilOptions.manualProxyEndpoint = nil
+    explicitNilOptions.upstreamProxyEndpoint = nil
+    let explicitNilOutput = try ConfigNormalizer().runtimeConfig(
+      from: outboundBaseConfig,
+      overrides: overrides,
+      options: explicitNilOptions
+    )
+
+    XCTAssertEqual(explicitNilOutput, defaultOutput)
+    XCTAssertFalse(explicitNilOutput.contains("__clashmax_outbound_"))
+    XCTAssertFalse(explicitNilOutput.contains("dialer-proxy"))
+  }
+
   func testRuntimeConfigPreservesUnknownFieldsAndAppliesSafeOverrides() throws {
     let source = """
     mixed-port: 7000
@@ -930,6 +1526,8 @@ final class ConfigNormalizerTests: XCTestCase {
       "Global overlay",
       "Profile overlay",
       "Snippets",
+      "Manual Proxy",
+      "Upstream Proxy",
       "Final runtime YAML"
     ])
     XCTAssertEqual(snapshot.preflightStatus, .notRun)
@@ -2441,6 +3039,47 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(groups.first?.nodes[1].serverPort, 443)
     XCTAssertEqual(groups.first?.nodes[2].serverHost, "example.net")
     XCTAssertEqual(groups.first?.nodes[2].serverPort, 8443)
+  }
+
+  private var outboundBaseConfig: String {
+    """
+    proxies:
+      - name: Node
+        type: ss
+        server: node.example
+        port: 443
+        cipher: aes-128-gcm
+        password: profile-secret
+    proxy-groups:
+      - name: Proxy
+        type: select
+        proxies: [Node, DIRECT]
+    rules:
+      - MATCH,Proxy
+    """
+  }
+
+  private func outboundEndpoint(
+    id: String,
+    kind: OutboundProxyEndpointKind,
+    host: String,
+    port: Int,
+    username: String? = nil,
+    password: String? = nil,
+    udpEnabled: Bool = false
+  ) -> ResolvedOutboundProxyEndpoint {
+    ResolvedOutboundProxyEndpoint(
+      endpoint: OutboundProxyEndpoint(
+        id: UUID(uuidString: id)!,
+        name: "Test Outbound",
+        kind: kind,
+        host: host,
+        port: port,
+        authentication: username.map(OutboundProxyAuthentication.init(username:)),
+        socks5Options: OutboundProxySOCKS5Options(udpEnabled: udpEnabled)
+      ),
+      password: password
+    )
   }
 
   private func posixPermissions(at url: URL) throws -> Int {

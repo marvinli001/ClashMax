@@ -51,6 +51,261 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(reason.contains("No active profile"))
   }
 
+  func testEffectiveRuntimePreviewResolvesProfileUpstreamAndRedactsEndpointPassword() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let sourceURL = paths.appSupport.appendingPathComponent("upstream-preview.yaml")
+    try """
+    proxies:
+      - name: Node
+        type: ss
+        server: node.example
+        port: 443
+        cipher: aes-128-gcm
+        password: node-secret
+    proxy-groups:
+      - name: Proxy
+        type: select
+        proxies: [Node, DIRECT]
+    rules:
+      - MATCH,Proxy
+    """.write(to: sourceURL, atomically: true, encoding: .utf8)
+
+    let secrets = InMemorySecretStore()
+    let endpointStore = OutboundProxyEndpointStore(
+      manifestURL: paths.outboundProxyEndpointManifestURL,
+      secretStore: secrets
+    )
+    let endpoint = OutboundProxyEndpoint(
+      name: "Office upstream",
+      kind: .http,
+      host: "upstream.example",
+      port: 8443,
+      authentication: OutboundProxyAuthentication(username: "alice"),
+      httpOptions: OutboundProxyHTTPOptions(
+        tlsEnabled: true,
+        serverName: "upstream.example"
+      )
+    )
+    try await endpointStore.add(endpoint, password: "endpoint-preview-secret")
+
+    let profileStore = ProfileStore(paths: paths, keychain: secrets)
+    let imported = try await profileStore.importLocalConfig(from: sourceURL)
+    try await profileStore.updateUpstreamEndpoint(for: imported, endpointID: endpoint.id)
+    let profile = try XCTUnwrap(profileStore.profiles.first)
+    let preflightCore = try Self.makeRuleOverlayPreflightCore(
+      in: paths.appSupport,
+      rejectedToken: "never-matched"
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: profileStore,
+      outboundProxyEndpointStore: endpointStore,
+      defaults: try Self.makeIsolatedDefaults(),
+      bundledCoreURLProvider: { preflightCore }
+    )
+
+    await model.waitForOutboundProxyEndpointLoad()
+    let snapshot = try await model.preflightEffectiveRuntimeConfig(profile: profile)
+
+    XCTAssertTrue(snapshot.layers.contains { $0.id == "upstream-proxy" && $0.isActive })
+    XCTAssertTrue(snapshot.redactedFinalYAML.contains("dialer-proxy"))
+    XCTAssertTrue(snapshot.redactedFinalYAML.contains("__clashmax_outbound_"))
+    XCTAssertTrue(snapshot.redactedFinalYAML.contains("<redacted>"))
+    XCTAssertFalse(snapshot.redactedFinalYAML.contains("endpoint-preview-secret"))
+    XCTAssertFalse(snapshot.diffRows.contains { $0.text.contains("endpoint-preview-secret") })
+  }
+
+  func testAddManualProxyProfileAtomicallyCreatesSharedEndpointAndProfile() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let secrets = InMemorySecretStore()
+    let profileStore = ProfileStore(paths: paths, keychain: secrets)
+    let endpointStore = OutboundProxyEndpointStore(
+      manifestURL: paths.outboundProxyEndpointManifestURL,
+      secretStore: secrets
+    )
+    let preflightCore = try Self.makeRuleOverlayPreflightCore(
+      in: paths.appSupport,
+      rejectedToken: "never-matched"
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: profileStore,
+      outboundProxyEndpointStore: endpointStore,
+      defaults: try Self.makeIsolatedDefaults(),
+      bundledCoreURLProvider: { preflightCore }
+    )
+    let endpoint = OutboundProxyEndpoint(
+      name: "Manual SOCKS",
+      kind: .socks5,
+      host: "127.0.0.1",
+      port: 1080
+    )
+
+    let didAdd = await model.addManualProxyProfile(
+      endpoint: endpoint,
+      password: nil,
+      profileName: "Manual route"
+    )
+
+    XCTAssertTrue(didAdd, model.lastError ?? "manual profile creation returned false")
+    let storedEndpoints = try await endpointStore.endpoints()
+    XCTAssertEqual(storedEndpoints, [endpoint])
+    let profile = try XCTUnwrap(profileStore.profiles.first)
+    XCTAssertEqual(profile.name, "Manual route")
+    XCTAssertEqual(profile.source, .manualProxy(endpointID: endpoint.id))
+    XCTAssertEqual(profileStore.activeProfileID, profile.id)
+    XCTAssertEqual(model.outboundProxyEndpoints, [endpoint])
+  }
+
+  func testSetProfileUpstreamCanBindAndDisableSharedEndpoint() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let sourceURL = paths.appSupport.appendingPathComponent("bind-upstream.yaml")
+    try """
+    proxies:
+      - { name: Node, type: direct }
+    proxy-groups:
+      - { name: Proxy, type: select, proxies: [Node, DIRECT] }
+    rules:
+      - MATCH,Proxy
+    """.write(to: sourceURL, atomically: true, encoding: .utf8)
+    let secrets = InMemorySecretStore()
+    let profileStore = ProfileStore(paths: paths, keychain: secrets)
+    let profile = try await profileStore.importLocalConfig(from: sourceURL)
+    let endpointStore = OutboundProxyEndpointStore(
+      manifestURL: paths.outboundProxyEndpointManifestURL,
+      secretStore: secrets
+    )
+    let endpoint = OutboundProxyEndpoint(
+      name: "Shared HTTP",
+      kind: .http,
+      host: "upstream.example",
+      port: 8080
+    )
+    try await endpointStore.add(endpoint, password: nil)
+    let preflightCore = try Self.makeRuleOverlayPreflightCore(
+      in: paths.appSupport,
+      rejectedToken: "never-matched"
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: profileStore,
+      outboundProxyEndpointStore: endpointStore,
+      defaults: try Self.makeIsolatedDefaults(),
+      bundledCoreURLProvider: { preflightCore }
+    )
+
+    let didBind = await model.setUpstreamEndpoint(endpoint.id, for: profile)
+    XCTAssertTrue(didBind, model.lastError ?? "upstream binding returned false")
+    XCTAssertEqual(profileStore.profiles.first?.upstreamEndpointID, endpoint.id)
+
+    let updated = try XCTUnwrap(profileStore.profiles.first)
+    let didDisable = await model.setUpstreamEndpoint(nil, for: updated)
+    XCTAssertTrue(didDisable, model.lastError ?? "upstream disable returned false")
+    XCTAssertNil(profileStore.profiles.first?.upstreamEndpointID)
+  }
+
+  func testDeleteOutboundEndpointReportsReferencingProfiles() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let secrets = InMemorySecretStore()
+    let profileStore = ProfileStore(paths: paths, keychain: secrets)
+    let endpointStore = OutboundProxyEndpointStore(
+      manifestURL: paths.outboundProxyEndpointManifestURL,
+      secretStore: secrets
+    )
+    let endpoint = OutboundProxyEndpoint(
+      name: "Referenced",
+      kind: .socks5,
+      host: "127.0.0.1",
+      port: 1080
+    )
+    try await endpointStore.add(endpoint, password: nil)
+    _ = try await profileStore.addManualProxyProfile(name: "Manual reference", endpointID: endpoint.id)
+    let model = AppModel(
+      paths: paths,
+      profileStore: profileStore,
+      outboundProxyEndpointStore: endpointStore,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    let didDelete = await model.deleteOutboundProxyEndpoint(endpoint.id)
+
+    XCTAssertFalse(didDelete)
+    XCTAssertTrue(model.lastError?.contains("Manual reference") == true)
+    let storedEndpoints = try await endpointStore.endpoints()
+    XCTAssertEqual(storedEndpoints, [endpoint])
+  }
+
+  func testEditingActiveEndpointRestoresMetadataAndRuntimeAfterReloadFailure() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let sourceURL = paths.appSupport.appendingPathComponent("endpoint-rollback.yaml")
+    try """
+    proxies:
+      - { name: Node, type: direct }
+    proxy-groups:
+      - { name: Proxy, type: select, proxies: [Node, DIRECT] }
+    rules:
+      - MATCH,Proxy
+    """.write(to: sourceURL, atomically: true, encoding: .utf8)
+    let secrets = InMemorySecretStore()
+    let profileStore = ProfileStore(paths: paths, keychain: secrets)
+    let imported = try await profileStore.importLocalConfig(from: sourceURL)
+    let endpointStore = OutboundProxyEndpointStore(
+      manifestURL: paths.outboundProxyEndpointManifestURL,
+      secretStore: secrets
+    )
+    let endpoint = OutboundProxyEndpoint(
+      name: "Rollback upstream",
+      kind: .socks5,
+      host: "old.example",
+      port: 1080
+    )
+    try await endpointStore.add(endpoint, password: nil)
+    try await profileStore.updateUpstreamEndpoint(for: imported, endpointID: endpoint.id)
+    let profile = try XCTUnwrap(profileStore.profiles.first)
+    let controller = CoreProcessController(
+      launcher: FakeProcessLauncher(),
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [],
+      testDelayResult: 0,
+      reloadFailureMessages: ["reload rejected", nil]
+    )
+    let preflightCore = try Self.makeRuleOverlayPreflightCore(
+      in: paths.appSupport,
+      rejectedToken: "never-matched"
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: profileStore,
+      outboundProxyEndpointStore: endpointStore,
+      coreController: controller,
+      apiClient: client,
+      defaults: try Self.makeIsolatedDefaults(),
+      bundledCoreURLProvider: { preflightCore }
+    )
+    try await controller.startUserMode(
+      coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+      configURL: URL(fileURLWithPath: profile.originalConfigPath),
+      workDirectory: paths.runtime,
+      api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+    )
+    var edited = endpoint
+    edited.host = "new.example"
+
+    let didUpdate = await model.updateOutboundProxyEndpoint(edited, password: nil)
+
+    XCTAssertFalse(didUpdate)
+    let restoredEndpoint = try await endpointStore.resolve(id: endpoint.id)
+    let reloadRequestCount = await client.reloadRequestPaths().count
+    XCTAssertEqual(restoredEndpoint.endpoint.host, "old.example")
+    XCTAssertEqual(reloadRequestCount, 2)
+    XCTAssertTrue(model.lastError?.contains("reload rejected") == true)
+  }
+
   func testAddingSubscriptionShowsLoadingUntilRequestFinishes() async throws {
     let paths = try Self.makeRuntimePaths()
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
@@ -10291,7 +10546,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
 
     XCTAssertFalse(didUpdate)
-    XCTAssertTrue(model.lastError?.contains("rejected by test core") == true)
+    XCTAssertTrue(
+      model.lastError?.contains("rejected by test core") == true,
+      "Unexpected preflight error: \(model.lastError ?? "<nil>")"
+    )
   }
 
   func testProviderSideLoadPreflightRequiresDeveloperModeAndDoesNotReloadRuntime() async throws {
@@ -10342,6 +10600,56 @@ final class DashboardRuntimeStateTests: XCTestCase {
     }
     XCTAssertEqual(result.profileID, profile.id)
     XCTAssertEqual(result.fileName, "local-provider.txt")
+  }
+
+  func testProviderSideLoadPreflightAppliesProfileUpstreamTransformation() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let secrets = InMemorySecretStore()
+    let providerContent = """
+    trojan://remote-password@example.com:443?sni=example.com#Remote
+    """
+    let profileStore = ProfileStore(paths: paths, keychain: secrets)
+    let imported = try await profileStore.addSubscription(
+      url: try XCTUnwrap(URL(string: "https://example.com/sub")),
+      session: URLSession(configuration: URLProtocolRecorder.configurationReturning(providerContent)),
+      preflightValidator: NoopSubscriptionProfilePreflightValidator()
+    )
+    let endpointStore = OutboundProxyEndpointStore(
+      manifestURL: paths.outboundProxyEndpointManifestURL,
+      secretStore: secrets
+    )
+    let endpoint = OutboundProxyEndpoint(
+      name: "Provider upstream",
+      kind: .socks5,
+      host: "127.0.0.1",
+      port: 1080
+    )
+    try await endpointStore.add(endpoint, password: nil)
+    try await profileStore.updateUpstreamEndpoint(for: imported, endpointID: endpoint.id)
+    let profile = try XCTUnwrap(profileStore.profiles.first)
+    let localProviderURL = paths.appSupport.appendingPathComponent("local-provider.txt")
+    try "vless://00000000-0000-0000-0000-000000000000@local.example:443?security=tls#Local\n"
+      .write(to: localProviderURL, atomically: true, encoding: .utf8)
+    let validator = RecordingRuntimeConfigValidator(result: .success(()))
+    let model = AppModel(
+      paths: paths,
+      profileStore: profileStore,
+      outboundProxyEndpointStore: endpointStore,
+      defaults: try Self.makeIsolatedDefaults(),
+      bundledCoreURLProvider: { URL(fileURLWithPath: "/tmp/mihomo") },
+      providerSideLoadPreflightRunner: MihomoProviderSideLoadPreflightRunner(runtimeConfigValidator: validator)
+    )
+    model.setDeveloperMode(true)
+
+    let didPreflight = await model.preflightSideLoadedProviderContent(
+      for: profile,
+      providerFileURL: localProviderURL
+    )
+
+    XCTAssertTrue(didPreflight, model.lastError ?? "provider side-load preflight returned false")
+    let validatedConfig = try XCTUnwrap(validator.validatedConfigContent)
+    XCTAssertTrue(validatedConfig.contains("__clashmax_outbound_"))
+    XCTAssertTrue(validatedConfig.contains("dialer-proxy"))
   }
 
   func testProviderSideLoadPreflightRejectsNormalSubscriptionBeforeValidator() async throws {

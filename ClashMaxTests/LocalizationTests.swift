@@ -383,4 +383,85 @@ final class LocalizationTests: XCTestCase {
     let batchFailureFormat = zhBundle.localizedString(forKey: "Batch delay test finished with %lld failures.", value: nil, table: nil)
     XCTAssertEqual(String(format: batchFailureFormat, Int64(2)), "批量测速完成，2 个失败。")
   }
+
+  func testSimplifiedChineseStringCatalogProvidesOutboundProxyEndpointKeys() throws {
+    let bundle = try XCTUnwrap(Bundle(identifier: AppConstants.bundleIdentifier))
+    let zhPath = try XCTUnwrap(bundle.path(forResource: "zh-Hans", ofType: "lproj"))
+    let zhBundle = try XCTUnwrap(Bundle(path: zhPath))
+    let expectedTranslations = [
+      "Add Manual Proxy": "添加手动代理",
+      "Manage Proxy Endpoints": "管理代理端点",
+      "Download via": "下载经由",
+      "No Upstream": "无上游",
+      "Missing Password": "缺少密码",
+      "Manual Proxy · Missing Endpoint": "手动代理 · 缺少端点",
+      "Upstream Proxy": "上游代理",
+      "TCP Only: System Proxy does not capture UDP; TUN and Network Extension reject UDP for this profile.":
+        "仅 TCP：系统代理不接管 UDP；TUN 和网络扩展会拒绝此配置的 UDP。",
+      "SOCKS5": "SOCKS5",
+      "HTTP": "HTTP",
+      "Endpoint name": "端点名称",
+      "Server": "服务器",
+      "Host or IP address": "主机名或 IP 地址",
+      "Port": "端口",
+      "Authentication": "认证",
+      "Username": "用户名",
+      "Password": "密码",
+      "Required for new credentials; leave blank to keep the saved password":
+        "新凭据必须填写；留空则保留已存密码",
+      "TLS to Proxy": "到代理使用 TLS",
+      "SNI": "SNI",
+      "Optional TLS server name": "可选的 TLS 服务器名称",
+      "Skip Proxy Certificate Check": "跳过代理证书校验",
+      "The proxy certificate will not be verified.": "将不验证代理证书。",
+      "SOCKS5 UDP": "SOCKS5 UDP",
+      "TCP Only": "仅 TCP",
+      "Creates a shared endpoint and a profile that keeps private networks direct.":
+        "创建一个共享端点和一个保持私网直连的配置。",
+      "Profile Name": "配置名称",
+      "Optional; defaults to Manual Proxy": "可选；默认使用“手动代理”",
+      "Proxy Endpoints": "代理端点",
+      "Shared SOCKS5 and HTTP upstreams for manual profiles, subscriptions, and profile routing.":
+        "供手动配置、订阅和配置路由共用的 SOCKS5 与 HTTP 上游。",
+      "Add Endpoint": "添加端点",
+      "No proxy endpoints": "无代理端点",
+      "Add an endpoint here, or create one together with a Manual Proxy profile.":
+        "在此添加端点，或创建手动代理配置时一并添加。",
+      "Close": "关闭",
+      "Delete Proxy Endpoint?": "删除代理端点？",
+      "Referenced endpoints cannot be deleted. ClashMax will list the profiles that must be changed first.":
+        "被引用的端点无法删除。ClashMax 会列出需要先修改的配置。",
+      "Test": "测试",
+      "Delete proxy endpoint": "删除代理端点",
+      "Add Proxy Endpoint": "添加代理端点",
+      "Edit Proxy Endpoint": "编辑代理端点",
+      "Passwords are stored in Keychain and are never written to the endpoint manifest.":
+        "密码存储在钥匙串中，绝不会写入端点清单。",
+      "Untested": "未测试",
+      "Testing": "测试中",
+      "Ready": "就绪",
+      "Unreachable": "不可连接",
+      "Manual Proxy": "手动代理",
+      "Manual Profile": "手动配置",
+      "Upstream": "上游",
+      "Profile Upstream": "配置上游",
+      "The profile is generated from this shared proxy endpoint.": "此配置由该共享代理端点生成。",
+      "All network proxy nodes and remote providers use this upstream.":
+        "所有网络代理节点和远程 Provider 均使用此上游。",
+      "Not configured.": "未配置。",
+      "Connection test failed. You can still save this endpoint for offline use.":
+        "连接测试失败。仍可保存此端点以供离线使用。"
+    ]
+
+    for (key, expected) in expectedTranslations {
+      XCTAssertEqual(
+        zhBundle.localizedString(forKey: key, value: nil, table: nil),
+        expected,
+        "Missing or incorrect Simplified Chinese localization for \(key)"
+      )
+    }
+
+    let viaFormat = zhBundle.localizedString(forKey: "Via %@", value: nil, table: nil)
+    XCTAssertEqual(String(format: viaFormat, "Office"), "经由 Office")
+  }
 }

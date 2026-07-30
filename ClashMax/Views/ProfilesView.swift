@@ -9,6 +9,7 @@ struct ProfilesView: View {
   @EnvironmentObject private var profileCoordinator: ProfileCoordinator
   @EnvironmentObject private var providerAnalytics: ProviderAnalyticsStore
   @State private var subscriptionURL = ""
+  @State private var subscriptionUpstreamEndpointID: UUID?
   @State private var profileBeingEdited: Profile?
   @State private var providerInsightsProfile: Profile?
   @State private var editProfileName = ""
@@ -16,8 +17,11 @@ struct ProfilesView: View {
   @State private var editProviderOptions = SubscriptionProviderOptions.default
   @State private var editRollbackProviderOptions = SubscriptionProviderOptions.default
   @State private var editUpdatePolicy = SubscriptionUpdatePolicy.default
+  @State private var editUpstreamEndpointID: UUID?
   @State private var profilePendingDeletion: Profile?
   @State private var migrationReport: ClientMigrationReport?
+  @State private var manualProxySheetPresented = false
+  @State private var endpointManagerPresented = false
 
   var body: some View {
     AdaptivePage(
@@ -45,6 +49,18 @@ struct ProfilesView: View {
       }
 
       Button {
+        manualProxySheetPresented = true
+      } label: {
+        Label("Add Manual Proxy", systemImage: "point.3.connected.trianglepath.dotted")
+      }
+
+      Button {
+        endpointManagerPresented = true
+      } label: {
+        Label("Manage Proxy Endpoints", systemImage: "network")
+      }
+
+      Button {
         importClientMigration()
       } label: {
         Label("Import Client", systemImage: "arrow.triangle.branch")
@@ -68,6 +84,8 @@ struct ProfilesView: View {
                   isActive: profileStore.activeProfileID == profile.id,
                   isUpdating: profileCoordinator.updatingProfileIDs.contains(profile.id),
                   sourceURLString: profileStore.subscriptionURLString(for: profile),
+                  manualEndpoint: manualEndpoint(for: profile),
+                  upstreamEndpoint: upstreamEndpoint(for: profile),
                   selectAction: { appModel.selectProfile(profile) },
                   editAction: { beginEditing(profile) },
                   providerInsightsAction: { providerInsightsProfile = profile },
@@ -108,6 +126,8 @@ struct ProfilesView: View {
         providerOptions: $editProviderOptions,
         rollbackProviderOptions: editRollbackProviderOptions,
         updatePolicy: $editUpdatePolicy,
+        upstreamEndpointID: $editUpstreamEndpointID,
+        outboundProxyEndpoints: selectableUpstreamEndpoints(for: profile),
         subscriptionDefaultUpdateIntervalMinutes: appModel.settings.subscriptionFetchSettings.defaultUpdateIntervalMinutes,
         developerMode: appModel.developerMode,
         onCancel: closeEditSheet,
@@ -121,6 +141,28 @@ struct ProfilesView: View {
           saveProfileEdits(profile)
         }
       )
+    }
+    .sheet(isPresented: $manualProxySheetPresented) {
+      ManualProxyProfileSheet(
+        onCancel: { manualProxySheetPresented = false },
+        onSave: { endpoint, password, profileName in
+          Task { @MainActor in
+            guard await appModel.addManualProxyProfile(
+              endpoint: endpoint,
+              password: password,
+              profileName: profileName
+            ) else { return }
+            manualProxySheetPresented = false
+          }
+        }
+      )
+      .environmentObject(appModel)
+    }
+    .sheet(isPresented: $endpointManagerPresented) {
+      OutboundProxyEndpointManagerSheet(
+        onClose: { endpointManagerPresented = false }
+      )
+      .environmentObject(appModel)
     }
     .sheet(item: $providerInsightsProfile) { profile in
       let resolvedProfile = currentProfile(matching: profile) ?? profile
@@ -185,6 +227,22 @@ struct ProfilesView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
 
+        HStack(spacing: 10) {
+          Text("Download via")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+          Picker("Download via", selection: $subscriptionUpstreamEndpointID) {
+            Text("No Upstream").tag(nil as UUID?)
+            ForEach(appModel.outboundProxyEndpoints) { endpoint in
+              Text(endpointPickerLabel(endpoint))
+                .tag(Optional(endpoint.id))
+            }
+          }
+          .labelsHidden()
+          .frame(maxWidth: 260)
+          Spacer()
+        }
+
         if profileCoordinator.isAddingSubscription {
           subscriptionLoadingIndicator
         }
@@ -204,7 +262,10 @@ struct ProfilesView: View {
     Button {
       let urlString = subscriptionURL
       Task { @MainActor in
-        let didAdd = await appModel.addSubscription(urlString: urlString)
+        let didAdd = await appModel.addSubscription(
+          urlString: urlString,
+          upstreamEndpointID: subscriptionUpstreamEndpointID
+        )
         if didAdd {
           subscriptionURL = ""
         }
@@ -280,6 +341,7 @@ struct ProfilesView: View {
     editProviderOptions = profile.subscriptionProviderOptions
     editRollbackProviderOptions = profile.subscriptionProviderOptions
     editUpdatePolicy = profile.subscriptionUpdatePolicy
+    editUpstreamEndpointID = profile.upstreamEndpointID
     profileBeingEdited = profile
   }
 
@@ -290,6 +352,7 @@ struct ProfilesView: View {
     editProviderOptions = .default
     editRollbackProviderOptions = .default
     editUpdatePolicy = .default
+    editUpstreamEndpointID = nil
   }
 
   private func providerInsightsSummary(for profile: Profile) -> ProviderAnalyticsProfileSummary {
@@ -340,11 +403,47 @@ struct ProfilesView: View {
         workingProfile = currentProfile(matching: workingProfile) ?? workingProfile
       }
 
+      if workingProfile.upstreamEndpointID != editUpstreamEndpointID {
+        guard await appModel.setUpstreamEndpoint(editUpstreamEndpointID, for: workingProfile) else {
+          return
+        }
+        workingProfile = currentProfile(matching: workingProfile) ?? workingProfile
+      }
+
       if workingProfile.name != trimmedName {
         guard await appModel.renameProfileAsync(workingProfile, to: trimmedName) else { return }
       }
       closeEditSheet()
     }
+  }
+
+  private func manualEndpoint(for profile: Profile) -> OutboundProxyEndpoint? {
+    guard case let .manualProxy(endpointID) = profile.source else { return nil }
+    return appModel.outboundProxyEndpoints.first { $0.id == endpointID }
+  }
+
+  private func upstreamEndpoint(for profile: Profile) -> OutboundProxyEndpoint? {
+    guard let endpointID = profile.upstreamEndpointID else { return nil }
+    return appModel.outboundProxyEndpoints.first { $0.id == endpointID }
+  }
+
+  private func selectableUpstreamEndpoints(for profile: Profile) -> [OutboundProxyEndpoint] {
+    let manualEndpointID: UUID?
+    if case let .manualProxy(endpointID) = profile.source {
+      manualEndpointID = endpointID
+    } else {
+      manualEndpointID = nil
+    }
+    return appModel.outboundProxyEndpoints.filter { $0.id != manualEndpointID }
+  }
+
+  private func endpointPickerLabel(_ endpoint: OutboundProxyEndpoint) -> String {
+    let type = endpoint.kind == .socks5 ? "SOCKS5" : "HTTP"
+    let secretState = appModel.outboundProxyEndpointSecretStates[endpoint.id]
+    if secretState == .missingSecret {
+      return "\(endpoint.name) · \(type) · \(String(localized: "Missing Password"))"
+    }
+    return "\(endpoint.name) · \(type)"
   }
 
   private func resetRemoteName(_ profile: Profile) {
@@ -734,6 +833,8 @@ private struct ProfileCard: View {
   let isActive: Bool
   let isUpdating: Bool
   let sourceURLString: String?
+  let manualEndpoint: OutboundProxyEndpoint?
+  let upstreamEndpoint: OutboundProxyEndpoint?
   let selectAction: () -> Void
   let editAction: () -> Void
   let providerInsightsAction: () -> Void
@@ -785,6 +886,16 @@ private struct ProfileCard: View {
         .foregroundStyle(.secondary)
         .lineLimit(1)
         .truncationMode(.middle)
+
+      if let upstreamEndpoint {
+        Label(
+          String(format: String(localized: "Via %@"), upstreamEndpoint.name),
+          systemImage: "arrow.triangle.branch"
+        )
+        .font(.caption2.weight(.medium))
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+      }
     }
   }
 
@@ -841,6 +952,12 @@ private struct ProfileCard: View {
       return originalPath ?? localizedProfilesText("Local YAML")
     case .subscription:
       return localizedProfilesText("Subscription URL unavailable")
+    case .manualProxy:
+      guard let manualEndpoint else {
+        return localizedProfilesText("Manual Proxy · Missing Endpoint")
+      }
+      let type = manualEndpoint.kind == .socks5 ? "SOCKS5" : "HTTP"
+      return "\(localizedProfilesText("Manual")) \(type) · \(manualEndpoint.name)"
     }
   }
 }
@@ -1166,6 +1283,8 @@ private struct ProfileEditSheet: View {
   @Binding var providerOptions: SubscriptionProviderOptions
   let rollbackProviderOptions: SubscriptionProviderOptions
   @Binding var updatePolicy: SubscriptionUpdatePolicy
+  @Binding var upstreamEndpointID: UUID?
+  let outboundProxyEndpoints: [OutboundProxyEndpoint]
   let subscriptionDefaultUpdateIntervalMinutes: Int
   let developerMode: Bool
   let onCancel: () -> Void
@@ -1205,6 +1324,31 @@ private struct ProfileEditSheet: View {
                   onSave()
                 }
               }
+          }
+
+          ProfileEditRow("Upstream Proxy") {
+            Picker("Upstream Proxy", selection: $upstreamEndpointID) {
+              Text("Off").tag(nil as UUID?)
+              ForEach(outboundProxyEndpoints) { endpoint in
+                let type = endpoint.kind == .socks5 ? "SOCKS5" : "HTTP"
+                Text("\(endpoint.name) · \(type)")
+                  .tag(Optional(endpoint.id))
+              }
+            }
+            .labelsHidden()
+          }
+
+          if let upstreamEndpoint = outboundProxyEndpoints.first(where: { $0.id == upstreamEndpointID }),
+             upstreamEndpoint.isTCPOnly {
+            ProfileEditContentRow {
+              Label(
+                "TCP Only: System Proxy does not capture UDP; TUN and Network Extension reject UDP for this profile.",
+                systemImage: "exclamationmark.triangle"
+              )
+              .font(.caption)
+              .foregroundStyle(.orange)
+              .fixedSize(horizontal: false, vertical: true)
+            }
           }
 
           if profile.isSubscription {
@@ -2387,5 +2531,485 @@ private struct ProfileNumberStepperField: View {
 
   private func parsedDraft(_ text: String) -> Int? {
     Int(text.trimmingCharacters(in: .whitespacesAndNewlines))
+  }
+}
+
+private struct OutboundProxyEndpointDraft {
+  var id: UUID
+  var name: String
+  var kind: OutboundProxyEndpointKind
+  var host: String
+  var port: Int
+  var authenticationEnabled: Bool
+  var username: String
+  var password: String
+  var httpTLSEnabled: Bool
+  var httpServerName: String
+  var httpSkipCertificateVerification: Bool
+  var socks5UDPEnabled: Bool
+
+  init(endpoint: OutboundProxyEndpoint? = nil) {
+    id = endpoint?.id ?? UUID()
+    name = endpoint?.name ?? ""
+    kind = endpoint?.kind ?? .socks5
+    host = endpoint?.host ?? ""
+    port = endpoint?.port ?? 1080
+    authenticationEnabled = endpoint?.authentication != nil
+    username = endpoint?.authentication?.username ?? ""
+    password = ""
+    httpTLSEnabled = endpoint?.httpOptions.tlsEnabled ?? false
+    httpServerName = endpoint?.httpOptions.serverName ?? ""
+    httpSkipCertificateVerification = endpoint?.httpOptions.skipCertificateVerification ?? false
+    socks5UDPEnabled = endpoint?.socks5Options.udpEnabled ?? false
+  }
+
+  var endpoint: OutboundProxyEndpoint {
+    OutboundProxyEndpoint(
+      id: id,
+      name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+      kind: kind,
+      host: host.trimmingCharacters(in: .whitespacesAndNewlines),
+      port: port,
+      authentication: authenticationEnabled
+        ? OutboundProxyAuthentication(
+          username: username.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        : nil,
+      httpOptions: OutboundProxyHTTPOptions(
+        tlsEnabled: kind == .http && httpTLSEnabled,
+        serverName: normalizedOptional(httpServerName),
+        skipCertificateVerification: kind == .http
+          && httpTLSEnabled
+          && httpSkipCertificateVerification
+      ),
+      socks5Options: OutboundProxySOCKS5Options(
+        udpEnabled: kind == .socks5 && socks5UDPEnabled
+      )
+    )
+  }
+
+  var suppliedPassword: String? {
+    guard authenticationEnabled else { return nil }
+    return normalizedOptional(password)
+  }
+
+  var hasRequiredMetadata: Bool {
+    !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      && !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      && (1...65_535).contains(port)
+      && (!authenticationEnabled
+        || !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+  }
+
+  private func normalizedOptional(_ value: String) -> String? {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+  }
+}
+
+private struct OutboundProxyEndpointEditorFields: View {
+  @Binding var draft: OutboundProxyEndpointDraft
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      ProfileEditRow("Type") {
+        Picker("Type", selection: $draft.kind) {
+          Text("SOCKS5").tag(OutboundProxyEndpointKind.socks5)
+          Text("HTTP").tag(OutboundProxyEndpointKind.http)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .frame(maxWidth: 260)
+      }
+
+      ProfileEditRow("Name") {
+        TextField("Endpoint name", text: $draft.name)
+          .textFieldStyle(.roundedBorder)
+      }
+
+      ProfileEditRow("Server") {
+        HStack(spacing: 8) {
+          TextField("Host or IP address", text: $draft.host)
+            .textFieldStyle(.roundedBorder)
+          TextField("Port", value: $draft.port, format: .number.grouping(.never))
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 86)
+        }
+      }
+
+      ProfileEditToggleRow("Authentication", isOn: $draft.authenticationEnabled)
+
+      if draft.authenticationEnabled {
+        ProfileEditRow("Username") {
+          TextField("Username", text: $draft.username)
+            .textFieldStyle(.roundedBorder)
+        }
+        ProfileEditRow("Password") {
+          SecureField("Required for new credentials; leave blank to keep the saved password", text: $draft.password)
+            .textFieldStyle(.roundedBorder)
+        }
+      }
+
+      if draft.kind == .http {
+        ProfileEditToggleRow("TLS to Proxy", isOn: $draft.httpTLSEnabled)
+        if draft.httpTLSEnabled {
+          ProfileEditRow("SNI") {
+            TextField("Optional TLS server name", text: $draft.httpServerName)
+              .textFieldStyle(.roundedBorder)
+          }
+          ProfileEditToggleRow(
+            "Skip Proxy Certificate Check",
+            isOn: $draft.httpSkipCertificateVerification
+          )
+          if draft.httpSkipCertificateVerification {
+            ProfileEditContentRow {
+              Label(
+                "The proxy certificate will not be verified.",
+                systemImage: "exclamationmark.shield"
+              )
+              .font(.caption)
+              .foregroundStyle(.orange)
+            }
+          }
+        }
+      } else {
+        ProfileEditToggleRow("SOCKS5 UDP", isOn: $draft.socks5UDPEnabled)
+      }
+
+      if draft.endpoint.isTCPOnly {
+        ProfileEditContentRow {
+          Label("TCP Only", systemImage: "network.slash")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.orange)
+        }
+      }
+    }
+  }
+}
+
+private struct ManualProxyProfileSheet: View {
+  @EnvironmentObject private var appModel: AppModel
+  let onCancel: () -> Void
+  let onSave: (OutboundProxyEndpoint, String?, String) -> Void
+  @State private var profileName = ""
+  @State private var draft = OutboundProxyEndpointDraft()
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      VStack(alignment: .leading, spacing: 4) {
+        Text("Add Manual Proxy")
+          .font(.title3.weight(.semibold))
+        Text("Creates a shared endpoint and a profile that keeps private networks direct.")
+          .font(.callout)
+          .foregroundStyle(.secondary)
+      }
+
+      ScrollView {
+        VStack(alignment: .leading, spacing: 14) {
+          ProfileEditRow("Profile Name") {
+            TextField("Optional; defaults to Manual Proxy", text: $profileName)
+              .textFieldStyle(.roundedBorder)
+          }
+          Divider()
+          OutboundProxyEndpointEditorFields(draft: $draft)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+      }
+      .frame(maxHeight: 520)
+
+      if let error = appModel.lastError {
+        GlobalErrorBanner(message: error, details: appModel.lastErrorDetails)
+      }
+
+      Divider()
+      HStack {
+        Spacer()
+        Button("Cancel", action: onCancel)
+          .keyboardShortcut(.cancelAction)
+        Button("Add") {
+          onSave(
+            draft.endpoint,
+            draft.suppliedPassword,
+            profileName.trimmingCharacters(in: .whitespacesAndNewlines)
+          )
+        }
+        .keyboardShortcut(.defaultAction)
+        .disabled(!canSave)
+      }
+    }
+    .padding(20)
+    .frame(width: 640)
+  }
+
+  private var canSave: Bool {
+    draft.hasRequiredMetadata
+      && (!draft.authenticationEnabled || draft.suppliedPassword != nil)
+  }
+}
+
+private struct OutboundProxyEndpointEditorContext: Identifiable {
+  let id = UUID()
+  var existingEndpoint: OutboundProxyEndpoint?
+  var draft: OutboundProxyEndpointDraft
+
+  init(endpoint: OutboundProxyEndpoint? = nil) {
+    existingEndpoint = endpoint
+    draft = OutboundProxyEndpointDraft(endpoint: endpoint)
+  }
+}
+
+private struct OutboundProxyEndpointManagerSheet: View {
+  @EnvironmentObject private var appModel: AppModel
+  let onClose: () -> Void
+  @State private var editorContext: OutboundProxyEndpointEditorContext?
+  @State private var endpointPendingDeletion: OutboundProxyEndpoint?
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      HStack {
+        VStack(alignment: .leading, spacing: 4) {
+          Text("Proxy Endpoints")
+            .font(.title3.weight(.semibold))
+          Text("Shared SOCKS5 and HTTP upstreams for manual profiles, subscriptions, and profile routing.")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        }
+        Spacer()
+        Button {
+          editorContext = OutboundProxyEndpointEditorContext()
+        } label: {
+          Label("Add Endpoint", systemImage: "plus")
+        }
+      }
+
+      Divider()
+
+      if let loadError = appModel.outboundProxyEndpointLoadError {
+        GlobalErrorBanner(message: loadError, details: nil)
+      } else if appModel.outboundProxyEndpoints.isEmpty {
+        CenteredUnavailableState(
+          title: "No proxy endpoints",
+          systemImage: "network",
+          message: "Add an endpoint here, or create one together with a Manual Proxy profile."
+        )
+        .frame(maxWidth: .infinity, minHeight: 260)
+      } else {
+        ScrollView {
+          VStack(spacing: 0) {
+            ForEach(appModel.outboundProxyEndpoints) { endpoint in
+              endpointRow(endpoint)
+              if endpoint.id != appModel.outboundProxyEndpoints.last?.id {
+                Divider()
+              }
+            }
+          }
+          .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+          .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+              .strokeBorder(.quaternary, lineWidth: 1)
+          }
+        }
+      }
+
+      if let error = appModel.lastError {
+        GlobalErrorBanner(message: error, details: appModel.lastErrorDetails)
+      }
+
+      Divider()
+      HStack {
+        Spacer()
+        Button("Close", action: onClose)
+          .keyboardShortcut(.cancelAction)
+      }
+    }
+    .padding(20)
+    .frame(width: 760)
+    .frame(minHeight: 500)
+    .task {
+      await appModel.refreshOutboundProxyEndpoints()
+    }
+    .sheet(item: $editorContext) { context in
+      OutboundProxyEndpointEditorSheet(
+        initialContext: context,
+        onCancel: { editorContext = nil },
+        onSave: { endpoint, password in
+          Task { @MainActor in
+            let didSave: Bool
+            if context.existingEndpoint == nil {
+              didSave = await appModel.addOutboundProxyEndpoint(endpoint, password: password)
+            } else {
+              didSave = await appModel.updateOutboundProxyEndpoint(endpoint, password: password)
+            }
+            if didSave {
+              editorContext = nil
+            }
+          }
+        }
+      )
+      .environmentObject(appModel)
+    }
+    .alert("Delete Proxy Endpoint?", isPresented: deleteConfirmationPresented) {
+      Button("Delete", role: .destructive) {
+        guard let endpoint = endpointPendingDeletion else { return }
+        endpointPendingDeletion = nil
+        Task { @MainActor in
+          _ = await appModel.deleteOutboundProxyEndpoint(endpoint.id)
+        }
+      }
+      Button("Cancel", role: .cancel) {
+        endpointPendingDeletion = nil
+      }
+    } message: {
+      Text("Referenced endpoints cannot be deleted. ClashMax will list the profiles that must be changed first.")
+    }
+  }
+
+  private func endpointRow(_ endpoint: OutboundProxyEndpoint) -> some View {
+    HStack(alignment: .center, spacing: 12) {
+      Image(systemName: endpoint.kind == .socks5 ? "point.3.connected.trianglepath.dotted" : "network")
+        .foregroundStyle(.secondary)
+        .frame(width: 20)
+
+      VStack(alignment: .leading, spacing: 4) {
+        HStack(spacing: 7) {
+          Text(endpoint.name)
+            .font(.callout.weight(.semibold))
+            .lineLimit(1)
+          endpointBadges(endpoint)
+        }
+        Text("\(endpoint.kind == .socks5 ? "SOCKS5" : "HTTP") · \(endpoint.host):\(endpoint.port)")
+          .font(.caption.monospaced())
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+
+      Button("Test") {
+        Task { @MainActor in
+          await appModel.testOutboundProxyEndpoint(endpoint.id)
+        }
+      }
+      .disabled(appModel.outboundProxyEndpointTestStates[endpoint.id] == .testing)
+
+      Button("Edit") {
+        editorContext = OutboundProxyEndpointEditorContext(endpoint: endpoint)
+      }
+
+      Button(role: .destructive) {
+        endpointPendingDeletion = endpoint
+      } label: {
+        Image(systemName: "trash")
+      }
+      .help("Delete proxy endpoint")
+    }
+    .buttonStyle(.borderless)
+    .controlSize(.small)
+    .padding(.horizontal, 12)
+    .padding(.vertical, 10)
+  }
+
+  @ViewBuilder
+  private func endpointBadges(_ endpoint: OutboundProxyEndpoint) -> some View {
+    if appModel.outboundProxyEndpointSecretStates[endpoint.id] == .missingSecret {
+      endpointBadge("Missing Password", color: .red)
+    } else {
+      let state = appModel.outboundProxyEndpointTestStates[endpoint.id] ?? .untested
+      switch state {
+      case .untested:
+        endpointBadge("Untested", color: .secondary)
+      case .testing:
+        endpointBadge("Testing", color: .blue)
+      case .ready:
+        endpointBadge("Ready", color: .green)
+      case .unreachable:
+        endpointBadge("Unreachable", color: .orange)
+      }
+    }
+    if endpoint.isTCPOnly {
+      endpointBadge("TCP Only", color: .orange)
+    }
+  }
+
+  private func endpointBadge(_ title: LocalizedStringKey, color: Color) -> some View {
+    Text(title)
+      .font(.caption2.weight(.semibold))
+      .foregroundStyle(color)
+      .padding(.horizontal, 5)
+      .padding(.vertical, 2)
+      .background(color.opacity(0.1), in: Capsule())
+  }
+
+  private var deleteConfirmationPresented: Binding<Bool> {
+    Binding(
+      get: { endpointPendingDeletion != nil },
+      set: { isPresented in
+        if !isPresented {
+          endpointPendingDeletion = nil
+        }
+      }
+    )
+  }
+}
+
+private struct OutboundProxyEndpointEditorSheet: View {
+  @EnvironmentObject private var appModel: AppModel
+  let initialContext: OutboundProxyEndpointEditorContext
+  let onCancel: () -> Void
+  let onSave: (OutboundProxyEndpoint, String?) -> Void
+  @State private var draft: OutboundProxyEndpointDraft
+
+  init(
+    initialContext: OutboundProxyEndpointEditorContext,
+    onCancel: @escaping () -> Void,
+    onSave: @escaping (OutboundProxyEndpoint, String?) -> Void
+  ) {
+    self.initialContext = initialContext
+    self.onCancel = onCancel
+    self.onSave = onSave
+    _draft = State(initialValue: initialContext.draft)
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      VStack(alignment: .leading, spacing: 4) {
+        Text(initialContext.existingEndpoint == nil ? "Add Proxy Endpoint" : "Edit Proxy Endpoint")
+          .font(.title3.weight(.semibold))
+        Text("Passwords are stored in Keychain and are never written to the endpoint manifest.")
+          .font(.callout)
+          .foregroundStyle(.secondary)
+      }
+
+      ScrollView {
+        OutboundProxyEndpointEditorFields(draft: $draft)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      }
+      .frame(maxHeight: 520)
+
+      if let error = appModel.lastError {
+        GlobalErrorBanner(message: error, details: appModel.lastErrorDetails)
+      }
+
+      Divider()
+      HStack {
+        Spacer()
+        Button("Cancel", action: onCancel)
+          .keyboardShortcut(.cancelAction)
+        Button("Save") {
+          onSave(draft.endpoint, draft.suppliedPassword)
+        }
+        .keyboardShortcut(.defaultAction)
+        .disabled(!canSave)
+      }
+    }
+    .padding(20)
+    .frame(width: 640)
+  }
+
+  private var canSave: Bool {
+    guard draft.hasRequiredMetadata else { return false }
+    if initialContext.existingEndpoint == nil, draft.authenticationEnabled {
+      return draft.suppliedPassword != nil
+    }
+    return true
   }
 }

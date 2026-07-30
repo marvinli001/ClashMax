@@ -1,4 +1,6 @@
+import Darwin
 import Foundation
+import Network
 
 struct SubscriptionURLResolution: Equatable, Sendable {
   var url: URL
@@ -12,6 +14,206 @@ struct SubscriptionFetchError: Error, LocalizedError, CustomStringConvertible, S
 
   var errorDescription: String? { message }
   var description: String { message }
+}
+
+enum SubscriptionProxySessionFactoryError: Error, LocalizedError, Equatable, Sendable {
+  case missingEndpoint
+  case invalidEndpoint
+  case missingSecret
+
+  var errorDescription: String? {
+    switch self {
+    case .missingEndpoint:
+      return "The profile upstream proxy is unavailable."
+    case .invalidEndpoint:
+      return "The profile upstream proxy configuration is invalid."
+    case .missingSecret:
+      return "The profile upstream proxy credential is unavailable."
+    }
+  }
+}
+
+struct SubscriptionProxySessionPlan: Equatable, Sendable {
+  enum ProxyKind: Equatable, Sendable {
+    case socks5
+    case httpConnect
+  }
+
+  var endpointName: String
+  var proxyKind: ProxyKind
+  var host: String
+  var port: Int
+  var usesTLS: Bool
+  var tlsServerName: String?
+  var skipsCertificateVerification: Bool
+  var usesCredential: Bool
+  var allowFailover: Bool
+}
+
+enum SubscriptionProxySessionFactory {
+  private static let insecureTLSVerificationQueue = DispatchQueue(
+    label: "io.github.clashmax.subscription-proxy-tls-verification"
+  )
+
+  static func plan(
+    for resolvedEndpoint: ResolvedOutboundProxyEndpoint
+  ) throws -> SubscriptionProxySessionPlan {
+    let endpoint = resolvedEndpoint.endpoint
+    let host = endpoint.host.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard isValidHost(host), (1...65_535).contains(endpoint.port) else {
+      throw SubscriptionProxySessionFactoryError.invalidEndpoint
+    }
+
+    let usesCredential = endpoint.authentication != nil
+    if let authentication = endpoint.authentication {
+      guard
+        !authentication.username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        resolvedEndpoint.secretState == .ready
+      else {
+        throw SubscriptionProxySessionFactoryError.missingSecret
+      }
+    }
+
+    let usesTLS = endpoint.kind == .http && endpoint.httpOptions.tlsEnabled
+    let tlsServerName = usesTLS
+      ? normalizedOptional(endpoint.httpOptions.serverName)
+      : nil
+    if let tlsServerName, !isValidHost(tlsServerName) {
+      throw SubscriptionProxySessionFactoryError.invalidEndpoint
+    }
+
+    return SubscriptionProxySessionPlan(
+      endpointName: endpoint.name.trimmingCharacters(in: .whitespacesAndNewlines),
+      proxyKind: endpoint.kind == .socks5 ? .socks5 : .httpConnect,
+      host: host,
+      port: endpoint.port,
+      usesTLS: usesTLS,
+      tlsServerName: tlsServerName,
+      skipsCertificateVerification: usesTLS
+        && endpoint.httpOptions.skipCertificateVerification,
+      usesCredential: usesCredential,
+      allowFailover: false
+    )
+  }
+
+  static func configuration(
+    for resolvedEndpoint: ResolvedOutboundProxyEndpoint,
+    timeout: TimeInterval
+  ) throws -> URLSessionConfiguration {
+    let plan = try plan(for: resolvedEndpoint)
+    guard let port = NWEndpoint.Port(rawValue: UInt16(plan.port)) else {
+      throw SubscriptionProxySessionFactoryError.invalidEndpoint
+    }
+    let hostPort = NWEndpoint.hostPort(host: NWEndpoint.Host(plan.host), port: port)
+    var proxyConfiguration: ProxyConfiguration
+    switch plan.proxyKind {
+    case .socks5:
+      proxyConfiguration = ProxyConfiguration(socksv5Proxy: hostPort)
+    case .httpConnect:
+      let tlsOptions: NWProtocolTLS.Options?
+      if plan.usesTLS {
+        let options = NWProtocolTLS.Options()
+        if let serverName = plan.tlsServerName {
+          sec_protocol_options_set_tls_server_name(
+            options.securityProtocolOptions,
+            serverName
+          )
+        }
+        if plan.skipsCertificateVerification {
+          sec_protocol_options_set_verify_block(
+            options.securityProtocolOptions,
+            { _, _, completion in completion(true) },
+            insecureTLSVerificationQueue
+          )
+        }
+        tlsOptions = options
+      } else {
+        tlsOptions = nil
+      }
+      proxyConfiguration = ProxyConfiguration(
+        httpCONNECTProxy: hostPort,
+        tlsOptions: tlsOptions
+      )
+    }
+    proxyConfiguration.matchDomains = [""]
+    proxyConfiguration.allowFailover = plan.allowFailover
+    if let authentication = resolvedEndpoint.endpoint.authentication,
+       let password = resolvedEndpoint.password
+    {
+      proxyConfiguration.applyCredential(
+        username: authentication.username,
+        password: password
+      )
+    }
+
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.timeoutIntervalForRequest = timeout
+    configuration.timeoutIntervalForResource = timeout
+    configuration.proxyConfigurations = [proxyConfiguration]
+    return configuration
+  }
+
+  private static func normalizedOptional(_ value: String?) -> String? {
+    guard let value else { return nil }
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+  }
+
+  private static func isValidHost(_ host: String) -> Bool {
+    guard !host.isEmpty, host.count <= 253 else { return false }
+    guard !host.unicodeScalars.contains(where: {
+      CharacterSet.whitespacesAndNewlines.union(.controlCharacters).contains($0)
+    }) else {
+      return false
+    }
+    guard
+      !host.contains("://"),
+      !host.contains("/"),
+      !host.contains("\\"),
+      !host.contains("@"),
+      !host.contains("?"),
+      !host.contains("#")
+    else {
+      return false
+    }
+
+    let unwrappedHost: String
+    if host.hasPrefix("["), host.hasSuffix("]"), host.count > 2 {
+      unwrappedHost = String(host.dropFirst().dropLast())
+    } else {
+      unwrappedHost = host
+    }
+    if isIPAddress(unwrappedHost, family: AF_INET)
+      || isIPAddress(unwrappedHost, family: AF_INET6)
+    {
+      return true
+    }
+    guard !host.contains(":"), !host.hasPrefix("["), !host.hasSuffix("]") else {
+      return false
+    }
+
+    let candidate = host.hasSuffix(".") ? String(host.dropLast()) : host
+    let labels = candidate.split(separator: ".", omittingEmptySubsequences: false)
+    guard !labels.isEmpty else { return false }
+    return labels.allSatisfy { label in
+      guard
+        !label.isEmpty,
+        label.count <= 63,
+        label.first != "-",
+        label.last != "-"
+      else {
+        return false
+      }
+      return label.unicodeScalars.allSatisfy {
+        CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-")).contains($0)
+      }
+    }
+  }
+
+  private static func isIPAddress(_ host: String, family: Int32) -> Bool {
+    var address = in6_addr()
+    return host.withCString { inet_pton(family, $0, &address) } == 1
+  }
 }
 
 enum SubscriptionURLResolver {
@@ -127,6 +329,8 @@ struct SubscriptionFetcher {
     var userAgent: String
     var attemptedStrategies: [SubscriptionFetchStrategy]
     var successfulStrategy: SubscriptionFetchStrategy?
+    var endpointName: String?
+    var failureStage: String?
     var requestHeaders: [SubscriptionHeaderDiagnostic]
   }
 
@@ -144,7 +348,14 @@ struct SubscriptionFetcher {
     if let authorization = target.authorization {
       request.setValue(authorization, forHTTPHeaderField: "Authorization")
     }
+    let usesProfileUpstream = options.profileUpstreamEndpoint != nil ||
+      options.effectiveRetryOrder.contains(.profileUpstream)
     for (name, value) in options.customHeaders {
+      if usesProfileUpstream,
+         name.caseInsensitiveCompare("Proxy-Authorization") == .orderedSame
+      {
+        continue
+      }
       request.setValue(value, forHTTPHeaderField: name)
     }
     return request
@@ -152,11 +363,35 @@ struct SubscriptionFetcher {
 
   func fetch(url: URL, options: SubscriptionFetchOptions = SubscriptionFetchOptions()) async throws -> SubscriptionFetchResult {
     try await fetch(url: url, options: options) { strategy, userAgent in
-      let configuration = URLSessionConfiguration.ephemeral
-      configuration.timeoutIntervalForRequest = options.timeout
-      configuration.timeoutIntervalForResource = options.timeout
-      configuration.connectionProxyDictionary = proxyDictionary(for: strategy, options: options)
-      let delegate = options.allowsInsecureTLS ? SubscriptionInsecureTrustDelegate() : nil
+      let configuration: URLSessionConfiguration
+      var proxyUsername: String?
+      var proxyPassword: String?
+      if strategy == .profileUpstream {
+        guard let endpoint = options.profileUpstreamEndpoint else {
+          throw SubscriptionProxySessionFactoryError.missingEndpoint
+        }
+        configuration = try SubscriptionProxySessionFactory.configuration(
+          for: endpoint,
+          timeout: options.timeout
+        )
+        proxyUsername = endpoint.endpoint.authentication?.username
+        proxyPassword = endpoint.password
+      } else {
+        configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = options.timeout
+        configuration.timeoutIntervalForResource = options.timeout
+        configuration.connectionProxyDictionary = proxyDictionary(for: strategy, options: options)
+      }
+      let delegate: SubscriptionSessionDelegate?
+      if options.allowsInsecureTLS || (proxyUsername != nil && proxyPassword != nil) {
+        delegate = SubscriptionSessionDelegate(
+          allowsInsecureTLS: options.allowsInsecureTLS,
+          proxyUsername: proxyUsername,
+          proxyPassword: proxyPassword
+        )
+      } else {
+        delegate = nil
+      }
       let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
       defer { session.finishTasksAndInvalidate() }
       return try await session.data(for: request(url: url, options: options, userAgent: userAgent))
@@ -172,9 +407,27 @@ struct SubscriptionFetcher {
     let requestHeaders = requestHeaderDiagnostics(for: request)
     let sanitizedURL = Self.sanitizedURL(request.url ?? url)
     let compatibilityUserAgent = Self.compatibilityUserAgent(for: options)
+    let endpointName = Self.normalizedEndpointName(options.profileUpstreamEndpoint)
     var attemptedStrategies: [SubscriptionFetchStrategy] = []
     var lastError: Error?
-    for strategy in options.retryOrder {
+    let retryOrder = options.effectiveRetryOrder
+    let usesProfileUpstream = retryOrder.contains(.profileUpstream)
+    if retryOrder.contains(.profileUpstream) {
+      do {
+        guard let endpoint = options.profileUpstreamEndpoint else {
+          throw SubscriptionProxySessionFactoryError.missingEndpoint
+        }
+        _ = try SubscriptionProxySessionFactory.plan(for: endpoint)
+      } catch {
+        throw proxyConfigurationError(
+          sanitizedURL: sanitizedURL,
+          userAgent: options.userAgent,
+          endpointName: endpointName,
+          requestHeaders: requestHeaders
+        )
+      }
+    }
+    for strategy in retryOrder {
       attemptedStrategies.append(strategy)
       do {
         return try await attemptFetch(
@@ -182,6 +435,7 @@ struct SubscriptionFetcher {
           userAgent: options.userAgent,
           sanitizedURL: sanitizedURL,
           attemptedStrategies: attemptedStrategies,
+          endpointName: endpointName,
           requestHeaders: requestHeaders,
           attempt: attempt
         )
@@ -201,6 +455,7 @@ struct SubscriptionFetcher {
             userAgent: compatibilityUserAgent,
             sanitizedURL: sanitizedURL,
             attemptedStrategies: attemptedStrategies,
+            endpointName: endpointName,
             requestHeaders: requestHeaders,
             attempt: attempt
           )
@@ -212,6 +467,8 @@ struct SubscriptionFetcher {
             userAgent: compatibilityUserAgent,
             sanitizedURL: sanitizedURL,
             attemptedStrategies: attemptedStrategies,
+            endpointName: endpointName,
+            usesProfileUpstream: usesProfileUpstream,
             requestHeaders: requestHeaders
           )
         }
@@ -221,6 +478,8 @@ struct SubscriptionFetcher {
           userAgent: options.userAgent,
           sanitizedURL: sanitizedURL,
           attemptedStrategies: attemptedStrategies,
+          endpointName: endpointName,
+          usesProfileUpstream: usesProfileUpstream,
           requestHeaders: requestHeaders
         )
       }
@@ -234,6 +493,7 @@ struct SubscriptionFetcher {
     userAgent: String,
     sanitizedURL: String,
     attemptedStrategies: [SubscriptionFetchStrategy],
+    endpointName: String?,
     requestHeaders: [SubscriptionHeaderDiagnostic],
     attempt: Attempt
   ) async throws -> SubscriptionFetchResult {
@@ -246,6 +506,8 @@ struct SubscriptionFetcher {
         userAgent: userAgent,
         attemptedStrategies: attemptedStrategies,
         successfulStrategy: strategy,
+        endpointName: endpointName,
+        failureStage: nil,
         requestHeaders: requestHeaders
       )
     )
@@ -256,15 +518,41 @@ struct SubscriptionFetcher {
     userAgent: String,
     sanitizedURL: String,
     attemptedStrategies: [SubscriptionFetchStrategy],
+    endpointName: String?,
+    usesProfileUpstream: Bool,
     requestHeaders: [SubscriptionHeaderDiagnostic]
   ) -> SubscriptionFetchError {
-    SubscriptionFetchError(
+    return SubscriptionFetchError(
       kind: Self.failureKind(for: error),
-      message: "Subscription fetch failed: \(error.localizedDescription)",
+      message: usesProfileUpstream
+        ? "Subscription fetch through the profile upstream proxy failed."
+        : "Subscription fetch failed: \(error.localizedDescription)",
       diagnostics: SubscriptionFetchDiagnostics(
         sanitizedURL: sanitizedURL,
         userAgent: userAgent,
         attemptedStrategies: attemptedStrategies,
+        endpointName: endpointName,
+        failureStage: usesProfileUpstream ? "transport" : nil,
+        requestHeaders: requestHeaders
+      )
+    )
+  }
+
+  private func proxyConfigurationError(
+    sanitizedURL: String,
+    userAgent: String,
+    endpointName: String?,
+    requestHeaders: [SubscriptionHeaderDiagnostic]
+  ) -> SubscriptionFetchError {
+    SubscriptionFetchError(
+      kind: .network,
+      message: "The profile upstream proxy could not be configured.",
+      diagnostics: SubscriptionFetchDiagnostics(
+        sanitizedURL: sanitizedURL,
+        userAgent: userAgent,
+        attemptedStrategies: [],
+        endpointName: endpointName,
+        failureStage: "configuration",
         requestHeaders: requestHeaders
       )
     )
@@ -300,16 +588,20 @@ struct SubscriptionFetcher {
         userAgent: SubscriptionFetchOptions().userAgent,
         attemptedStrategies: [],
         successfulStrategy: nil,
+        endpointName: nil,
+        failureStage: nil,
         requestHeaders: []
       )
     )
   }
 
   private func decode(data: Data, response: URLResponse, context: DecodeContext) throws -> SubscriptionFetchResult {
+    let usesProfileUpstream = context.successfulStrategy == .profileUpstream
     guard let http = response as? HTTPURLResponse,
           (200..<300).contains(http.statusCode)
     else {
-      let diagnostics = diagnostics(from: response, context: context)
+      var diagnostics = diagnostics(from: response, context: context)
+      diagnostics.failureStage = usesProfileUpstream ? "response" : nil
       throw SubscriptionFetchError(
         kind: .httpStatus,
         message: httpStatusMessage(from: response),
@@ -319,6 +611,7 @@ struct SubscriptionFetcher {
 
     var diagnostics = diagnostics(from: http, context: context)
     guard let decoded = decodedString(from: data, response: http) else {
+      diagnostics.failureStage = usesProfileUpstream ? "decoding" : nil
       throw SubscriptionFetchError(
         kind: .decoding,
         message: "The subscription response could not be decoded as text.",
@@ -328,6 +621,7 @@ struct SubscriptionFetcher {
     diagnostics.decodedCharset = decoded.decodedCharset
     let cleanedSource = stripUTF8BOM(from: decoded.source)
     if bodyLooksLikePanelError(cleanedSource) {
+      diagnostics.failureStage = usesProfileUpstream ? "validation" : nil
       throw SubscriptionFetchError(
         kind: .panelResponse,
         message: panelErrorMessage,
@@ -337,6 +631,7 @@ struct SubscriptionFetcher {
     do {
       try ProfileConfigValidator.validateProfileSource(cleanedSource)
     } catch {
+      diagnostics.failureStage = usesProfileUpstream ? "validation" : nil
       if responseSuggestsPanelError(cleanedSource, response: http) {
         throw SubscriptionFetchError(
           kind: .panelResponse,
@@ -440,6 +735,9 @@ struct SubscriptionFetcher {
 
   private func requestHeaderDiagnostics(for request: URLRequest) -> [SubscriptionHeaderDiagnostic] {
     (request.allHTTPHeaderFields ?? [:])
+      .filter { name, _ in
+        name.caseInsensitiveCompare("Proxy-Authorization") != .orderedSame
+      }
       .map { name, value in
         SubscriptionHeaderDiagnostic(
           name: name,
@@ -456,6 +754,8 @@ struct SubscriptionFetcher {
         userAgent: context.userAgent,
         attemptedStrategies: context.attemptedStrategies,
         successfulStrategy: context.successfulStrategy,
+        endpointName: context.endpointName,
+        failureStage: context.failureStage,
         requestHeaders: context.requestHeaders
       )
     }
@@ -468,6 +768,8 @@ struct SubscriptionFetcher {
       userAgent: context.userAgent,
       attemptedStrategies: context.attemptedStrategies,
       successfulStrategy: context.successfulStrategy,
+      endpointName: context.endpointName,
+      failureStage: context.failureStage,
       requestHeaders: context.requestHeaders,
       responseHeaderNames: http.allHeaderFields.keys.map { String(describing: $0) }.sorted(),
       httpStatusCode: http.statusCode,
@@ -484,6 +786,29 @@ struct SubscriptionFetcher {
       return "The subscription did not return an HTTP response."
     }
     return "The subscription returned HTTP \(http.statusCode)."
+  }
+
+  private static func normalizedEndpointName(
+    _ resolvedEndpoint: ResolvedOutboundProxyEndpoint?
+  ) -> String? {
+    guard let resolvedEndpoint else { return nil }
+    let name = resolvedEndpoint.endpoint.name
+    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    let sensitiveValues = [
+      resolvedEndpoint.endpoint.authentication?.username,
+      resolvedEndpoint.password
+    ].compactMap { value -> String? in
+      guard let value else { return nil }
+      let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+      return trimmedValue.isEmpty ? nil : trimmedValue
+    }
+    guard !sensitiveValues.contains(where: {
+      trimmed.range(of: $0, options: [.caseInsensitive]) != nil
+    }) else {
+      return nil
+    }
+    return trimmed
   }
 
   private func metadata(from response: HTTPURLResponse) -> SubscriptionMetadata {
@@ -671,17 +996,82 @@ struct SubscriptionFetcher {
   }
 }
 
-private final class SubscriptionInsecureTrustDelegate: NSObject, URLSessionDelegate {
+private final class SubscriptionSessionDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+  private let allowsInsecureTLS: Bool
+  private let proxyUsername: String?
+  private let proxyPassword: String?
+
+  init(
+    allowsInsecureTLS: Bool,
+    proxyUsername: String?,
+    proxyPassword: String?
+  ) {
+    self.allowsInsecureTLS = allowsInsecureTLS
+    self.proxyUsername = proxyUsername
+    self.proxyPassword = proxyPassword
+  }
+
   func urlSession(
     _ session: URLSession,
-    didReceive challenge: URLAuthenticationChallenge
-  ) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
-    guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+    didReceive challenge: URLAuthenticationChallenge,
+    completionHandler: @escaping (
+      URLSession.AuthChallengeDisposition,
+      URLCredential?
+    ) -> Void
+  ) {
+    if let credential = proxyCredential(for: challenge) {
+      completionHandler(.useCredential, credential)
+      return
+    }
+    guard
+      allowsInsecureTLS,
+      challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
           let trust = challenge.protectionSpace.serverTrust
     else {
-      return (.performDefaultHandling, nil)
+      completionHandler(.performDefaultHandling, nil)
+      return
     }
-    return (.useCredential, URLCredential(trust: trust))
+    completionHandler(.useCredential, URLCredential(trust: trust))
+  }
+
+  func urlSession(
+    _ session: URLSession,
+    task: URLSessionTask,
+    didReceive challenge: URLAuthenticationChallenge,
+    completionHandler: @escaping (
+      URLSession.AuthChallengeDisposition,
+      URLCredential?
+    ) -> Void
+  ) {
+    guard let credential = proxyCredential(for: challenge) else {
+      completionHandler(.performDefaultHandling, nil)
+      return
+    }
+    completionHandler(.useCredential, credential)
+  }
+
+  private func proxyCredential(
+    for challenge: URLAuthenticationChallenge
+  ) -> URLCredential? {
+    let supportedMethods = [
+      NSURLAuthenticationMethodDefault,
+      NSURLAuthenticationMethodHTTPBasic,
+      NSURLAuthenticationMethodHTTPDigest
+    ]
+    guard
+      challenge.protectionSpace.isProxy(),
+      supportedMethods.contains(challenge.protectionSpace.authenticationMethod),
+      challenge.previousFailureCount == 0,
+      let proxyUsername,
+      let proxyPassword
+    else {
+      return nil
+    }
+    return URLCredential(
+      user: proxyUsername,
+      password: proxyPassword,
+      persistence: .forSession
+    )
   }
 }
 
@@ -705,6 +1095,8 @@ private func proxyDictionary(
       kCFNetworkProxiesHTTPSPort as String: options.localProxyPort
     ]
   case .systemProxy:
+    return nil
+  case .profileUpstream:
     return nil
   }
 }

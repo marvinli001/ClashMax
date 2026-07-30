@@ -135,6 +135,126 @@ final class CoreRuntimePreflightTests: XCTestCase {
     try await validator.validate(coreURL: coreURL, configURL: configURL, workDirectory: directory)
   }
 
+  func testBundledMihomoAcceptsGeneratedManualSOCKS5Profile() async throws {
+    guard let coreURL = Self.bundledCoreURL() else {
+      throw XCTSkip("Bundled Mihomo core is unavailable in Resources/Core.")
+    }
+
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxManualOutboundPreflight-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let endpoint = ResolvedOutboundProxyEndpoint(
+      endpoint: OutboundProxyEndpoint(
+        name: "Manual SOCKS",
+        kind: .socks5,
+        host: "127.0.0.1",
+        port: 10_880,
+        authentication: OutboundProxyAuthentication(username: "manual-user"),
+        socks5Options: OutboundProxySOCKS5Options(udpEnabled: true)
+      ),
+      password: "manual-runtime-secret"
+    )
+    let runtimeYAML = try ConfigNormalizer().runtimeConfig(
+      from: "This source must not be parsed for a manual profile.",
+      overrides: .defaultForLaunch(secret: "controller-secret"),
+      options: RuntimeConfigOptions(manualProxyEndpoint: endpoint)
+    )
+    let configURL = directory.appendingPathComponent("manual-runtime.yaml")
+    try SecureFileIO.writePrivateString(runtimeYAML, to: configURL)
+
+    let validator = MihomoRuntimeConfigValidator(timeout: 30)
+    try await validator.validate(coreURL: coreURL, configURL: configURL, workDirectory: directory)
+  }
+
+  func testBundledMihomoAcceptsGeneratedProfileUpstreamForNodesAndProviders() async throws {
+    guard let coreURL = Self.bundledCoreURL() else {
+      throw XCTSkip("Bundled Mihomo core is unavailable in Resources/Core.")
+    }
+
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxUpstreamPreflight-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    try SecureFileIO.writePrivateString(
+      """
+      proxies:
+        - name: Cached
+          type: ss
+          server: 127.0.0.1
+          port: 8389
+          cipher: aes-128-gcm
+          password: cached-secret
+      """,
+      to: directory.appendingPathComponent("proxy-provider.yaml")
+    )
+    try SecureFileIO.writePrivateString(
+      """
+      payload:
+        - DOMAIN-SUFFIX,provider.example
+      """,
+      to: directory.appendingPathComponent("rule-provider.yaml")
+    )
+
+    let source = """
+    proxies:
+      - name: Explicit
+        type: ss
+        server: 127.0.0.1
+        port: 8388
+        cipher: aes-128-gcm
+        password: explicit-secret
+    proxy-providers:
+      RemoteNodes:
+        type: http
+        url: https://provider.invalid/proxies
+        path: ./proxy-provider.yaml
+        interval: 3600
+    rule-providers:
+      RemoteRules:
+        type: http
+        behavior: classical
+        url: https://provider.invalid/rules
+        path: ./rule-provider.yaml
+        interval: 3600
+    proxy-groups:
+      - name: Proxy
+        type: select
+        proxies: [Explicit, DIRECT]
+        use: [RemoteNodes]
+    rules:
+      - RULE-SET,RemoteRules,Proxy
+      - MATCH,DIRECT
+    """
+    let endpoint = ResolvedOutboundProxyEndpoint(
+      endpoint: OutboundProxyEndpoint(
+        name: "HTTP upstream",
+        kind: .http,
+        host: "127.0.0.1",
+        port: 8_080,
+        authentication: OutboundProxyAuthentication(username: "upstream-user"),
+        httpOptions: OutboundProxyHTTPOptions(
+          tlsEnabled: true,
+          serverName: "proxy.example",
+          skipCertificateVerification: true
+        )
+      ),
+      password: "upstream-runtime-secret"
+    )
+    let runtimeYAML = try ConfigNormalizer().runtimeConfig(
+      from: source,
+      overrides: .defaultForLaunch(secret: "controller-secret"),
+      options: RuntimeConfigOptions(upstreamProxyEndpoint: endpoint)
+    )
+    let configURL = directory.appendingPathComponent("upstream-runtime.yaml")
+    try SecureFileIO.writePrivateString(runtimeYAML, to: configURL)
+
+    let validator = MihomoRuntimeConfigValidator(timeout: 30)
+    try await validator.validate(coreURL: coreURL, configURL: configURL, workDirectory: directory)
+  }
+
   func testGeneratedRuntimeConfigIsValidatedBeforeLaunch() async throws {
     let launcher = FakeProcessLauncher()
     let validator = RecordingRuntimeConfigValidator(result: .failure(AppError.configValidationFailed("bad config")))

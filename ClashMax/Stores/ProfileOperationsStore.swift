@@ -25,7 +25,7 @@ final class ProfileCoordinator: ObservableObject {
   func configureRuntimeHooks(
     automaticSubscriptionUpdatesEnabled: @escaping () -> Bool,
     subscriptionUpdateSettings: @escaping () -> SubscriptionFetchSettings,
-    subscriptionFetchOptions: @escaping (Profile?) -> SubscriptionFetchOptions,
+    subscriptionFetchOptions: @escaping (Profile?) async throws -> SubscriptionFetchOptions,
     preflightValidator: @escaping () -> any SubscriptionProfilePreflightValidating,
     reloadActiveRuntimeConfigIfNeeded: @escaping (Profile.ID, String) async throws -> Void,
     appendAppLog: @escaping (String, String) -> Void,
@@ -66,6 +66,7 @@ final class ProfileCoordinator: ObservableObject {
     displayNameHint: String? = nil,
     providerOptions: SubscriptionProviderOptions = .default,
     updatePolicy: SubscriptionUpdatePolicy = .default,
+    upstreamEndpointID: UUID? = nil,
     session: URLSession = .shared,
     fetchOptions: SubscriptionFetchOptions = SubscriptionFetchOptions(),
     preflightValidator: any SubscriptionProfilePreflightValidating = NoopSubscriptionProfilePreflightValidator()
@@ -81,6 +82,7 @@ final class ProfileCoordinator: ObservableObject {
       displayNameHint: displayNameHint,
       providerOptions: providerOptions,
       updatePolicy: updatePolicy,
+      upstreamEndpointID: upstreamEndpointID,
       session: session,
       fetchOptions: fetchOptions,
       preflightValidator: preflightValidator
@@ -473,7 +475,7 @@ final class ProfileCoordinator: ObservableObject {
         let updated = try await updateSubscriptionWithoutPostActions(
           profile,
           session: .shared,
-          fetchOptions: hooks.subscriptionFetchOptions(profile),
+          fetchOptions: try await hooks.subscriptionFetchOptions(profile),
           preflightValidator: hooks.preflightValidator(),
           trigger: cancelScheduledTask ? .manual : .automatic
         )
@@ -513,7 +515,9 @@ typealias ProfileOperationsStore = ProfileCoordinator
 private struct ProfileCoordinatorHooks {
   var automaticSubscriptionUpdatesEnabled: () -> Bool = { false }
   var subscriptionUpdateSettings: () -> SubscriptionFetchSettings = { .default }
-  var subscriptionFetchOptions: (Profile?) -> SubscriptionFetchOptions = { _ in SubscriptionFetchOptions() }
+  var subscriptionFetchOptions: (Profile?) async throws -> SubscriptionFetchOptions = {
+    _ in SubscriptionFetchOptions()
+  }
   var preflightValidator: () -> any SubscriptionProfilePreflightValidating = {
     NoopSubscriptionProfilePreflightValidator()
   }

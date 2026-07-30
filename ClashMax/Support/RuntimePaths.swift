@@ -38,6 +38,10 @@ struct RuntimePaths: Sendable {
     appSupport.appendingPathComponent("profiles.json")
   }
 
+  var outboundProxyEndpointManifestURL: URL {
+    appSupport.appendingPathComponent("outbound-proxies.json")
+  }
+
   var runtimeSnippetLibraryURL: URL {
     appSupport.appendingPathComponent("runtime-snippets.json")
   }

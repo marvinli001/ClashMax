@@ -7,6 +7,596 @@ import XCTest
 final class BackupRestoreServiceTests: XCTestCase {
   private let service = BackupRestoreService()
 
+  func testSchema2ExportWritesEndpointManifestAndSchema1WithoutItStillRestores() async throws {
+    let source = try BackupFixture()
+    let sourceStore = ProfileStore(paths: source.paths, keychain: InMemorySecretStore())
+    await sourceStore.waitForManifestLoad()
+    let backupURL = source.root.appendingPathComponent("schema-2.clashmax-backup")
+
+    try await service.exportBackup(
+      to: backupURL,
+      profileStore: sourceStore,
+      settings: makeSettings(defaults: source.defaults),
+      proxyPreview: ProxyPreviewStore(defaults: source.defaults),
+      runtimeSnippetLibrary: await makeSnippetLibrary(paths: source.paths),
+      includeSecrets: false,
+      password: nil
+    )
+
+    let encodedObject = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: Data(contentsOf: backupURL)) as? [String: Any]
+    )
+    XCTAssertEqual(encodedObject["schemaVersion"] as? Int, 2)
+    XCTAssertNotNil(encodedObject["outboundProxyManifest"])
+
+    var schema1Object = encodedObject
+    schema1Object["schemaVersion"] = 1
+    schema1Object.removeValue(forKey: "outboundProxyManifest")
+    if var omittedSummary = schema1Object["omittedSecretSummary"] as? [String: Any] {
+      omittedSummary.removeValue(forKey: "outboundProxyPasswordCount")
+      schema1Object["omittedSecretSummary"] = omittedSummary
+    }
+    let schema1URL = source.root.appendingPathComponent("schema-1.clashmax-backup")
+    try JSONSerialization.data(
+      withJSONObject: schema1Object,
+      options: [.prettyPrinted, .sortedKeys]
+    ).write(to: schema1URL, options: [.atomic])
+
+    let preview = try service.previewBackup(at: schema1URL)
+    XCTAssertEqual(preview.profileCount, 0)
+
+    let restore = try BackupFixture()
+    let restoreStore = ProfileStore(paths: restore.paths, keychain: InMemorySecretStore())
+    await restoreStore.waitForManifestLoad()
+    let summary = try await service.restoreBackup(
+      from: schema1URL,
+      password: nil,
+      profileStore: restoreStore,
+      settings: makeSettings(defaults: restore.defaults),
+      proxyPreview: ProxyPreviewStore(defaults: restore.defaults),
+      runtimeSnippetLibrary: await makeSnippetLibrary(paths: restore.paths)
+    )
+
+    XCTAssertEqual(summary.importedProfileCount, 0)
+    XCTAssertTrue(restoreStore.profiles.isEmpty)
+
+    var futureSchemaObject = encodedObject
+    futureSchemaObject["schemaVersion"] = 3
+    let futureSchemaURL = source.root.appendingPathComponent("schema-3.clashmax-backup")
+    try JSONSerialization.data(
+      withJSONObject: futureSchemaObject,
+      options: [.prettyPrinted, .sortedKeys]
+    ).write(to: futureSchemaURL, options: [.atomic])
+    XCTAssertThrowsError(try service.previewBackup(at: futureSchemaURL)) { error in
+      XCTAssertEqual(error as? BackupRestoreError, .unsupportedSchema(3))
+    }
+  }
+
+  func testLegacySecretJSONDefaultsEndpointPasswordFieldsToEmpty() throws {
+    let summary = try JSONDecoder().decode(
+      BackupSecretSummary.self,
+      from: Data(
+        """
+        {
+          "subscriptionURLCount": 1,
+          "requestHeaderValueCount": 2,
+          "runtimeMergeYAMLCount": 3,
+          "profileSourceCredentialCount": 4,
+          "runtimeSnippetCount": 5
+        }
+        """.utf8
+      )
+    )
+    let secrets = try JSONDecoder().decode(
+      BackupSecretsBundle.self,
+      from: Data(#"{"subscriptions":[]}"#.utf8)
+    )
+
+    XCTAssertEqual(summary.outboundProxyPasswordCount, 0)
+    XCTAssertEqual(summary.totalCount, 15)
+    XCTAssertEqual(secrets.outboundProxyPasswords, [])
+  }
+
+  func testPasswordlessEndpointExportIsRedactedCountedAndRestoresMissingSecret() async throws {
+    let source = try BackupFixture()
+    let sourceProfileStore = ProfileStore(paths: source.paths, keychain: InMemorySecretStore())
+    await sourceProfileStore.waitForManifestLoad()
+    let sourceEndpointSecrets = InMemorySecretStore()
+    let sourceEndpointStore = OutboundProxyEndpointStore(
+      manifestURL: source.paths.outboundProxyEndpointManifestURL,
+      secretStore: sourceEndpointSecrets
+    )
+    let endpoint = OutboundProxyEndpoint(
+      id: UUID(uuidString: "81000000-0000-0000-0000-000000000001")!,
+      name: "Authenticated Endpoint",
+      kind: .http,
+      host: "auth.example",
+      port: 8080,
+      authentication: OutboundProxyAuthentication(username: "alice")
+    )
+    _ = try await sourceEndpointStore.add(endpoint, password: "endpoint-password")
+    let backupURL = source.root.appendingPathComponent("endpoint-redacted.clashmax-backup")
+
+    let exportSummary = try await service.exportBackup(
+      to: backupURL,
+      profileStore: sourceProfileStore,
+      settings: makeSettings(defaults: source.defaults),
+      proxyPreview: ProxyPreviewStore(defaults: source.defaults),
+      runtimeSnippetLibrary: await makeSnippetLibrary(paths: source.paths),
+      outboundProxyStore: sourceEndpointStore,
+      includeSecrets: false,
+      password: nil
+    )
+
+    let backupText = try String(contentsOf: backupURL, encoding: .utf8)
+    let backup = try readBackup(at: backupURL)
+    let preview = try service.previewBackup(at: backupURL)
+    XCTAssertFalse(backupText.contains("endpoint-password"))
+    XCTAssertEqual(backup.outboundProxyManifest.endpoints, [endpoint])
+    XCTAssertNil(backup.encryptedSecrets)
+    XCTAssertEqual(backup.omittedSecretSummary.outboundProxyPasswordCount, 1)
+    XCTAssertEqual(backup.omittedSecretSummary.totalCount, 1)
+    XCTAssertEqual(exportSummary.importedEndpointCount, 1)
+    XCTAssertEqual(exportSummary.skippedSecretCount, 1)
+    XCTAssertEqual(preview.endpointCount, 1)
+
+    let restore = try BackupFixture()
+    let restoreProfileStore = ProfileStore(paths: restore.paths, keychain: InMemorySecretStore())
+    await restoreProfileStore.waitForManifestLoad()
+    let restoreEndpointStore = OutboundProxyEndpointStore(
+      manifestURL: restore.paths.outboundProxyEndpointManifestURL,
+      secretStore: InMemorySecretStore()
+    )
+    let restoreSummary = try await service.restoreBackup(
+      from: backupURL,
+      password: nil,
+      profileStore: restoreProfileStore,
+      settings: makeSettings(defaults: restore.defaults),
+      proxyPreview: ProxyPreviewStore(defaults: restore.defaults),
+      runtimeSnippetLibrary: await makeSnippetLibrary(paths: restore.paths),
+      outboundProxyStore: restoreEndpointStore
+    )
+
+    let resolved = try await restoreEndpointStore.resolve(id: endpoint.id)
+    XCTAssertEqual(restoreSummary.importedEndpointCount, 1)
+    XCTAssertEqual(restoreSummary.restoredSecretCount, 0)
+    XCTAssertEqual(restoreSummary.skippedSecretCount, 1)
+    XCTAssertNil(resolved.password)
+    XCTAssertEqual(resolved.secretState, .missingSecret)
+  }
+
+  func testPasswordEndpointExportEncryptsPasswordAndRestoresIt() async throws {
+    let source = try BackupFixture()
+    let sourceProfileStore = ProfileStore(paths: source.paths, keychain: InMemorySecretStore())
+    await sourceProfileStore.waitForManifestLoad()
+    let sourceEndpointStore = OutboundProxyEndpointStore(
+      manifestURL: source.paths.outboundProxyEndpointManifestURL,
+      secretStore: InMemorySecretStore()
+    )
+    let endpoint = OutboundProxyEndpoint(
+      id: UUID(uuidString: "82000000-0000-0000-0000-000000000001")!,
+      name: "Encrypted Endpoint",
+      kind: .socks5,
+      host: "encrypted.example",
+      port: 1080,
+      authentication: OutboundProxyAuthentication(username: "bob")
+    )
+    _ = try await sourceEndpointStore.add(endpoint, password: "encrypted-endpoint-password")
+    let backupURL = source.root.appendingPathComponent("endpoint-encrypted.clashmax-backup")
+
+    let exportSummary = try await service.exportBackup(
+      to: backupURL,
+      profileStore: sourceProfileStore,
+      settings: makeSettings(defaults: source.defaults),
+      proxyPreview: ProxyPreviewStore(defaults: source.defaults),
+      runtimeSnippetLibrary: await makeSnippetLibrary(paths: source.paths),
+      outboundProxyStore: sourceEndpointStore,
+      includeSecrets: true,
+      password: "correct-password"
+    )
+
+    let backupText = try String(contentsOf: backupURL, encoding: .utf8)
+    let backup = try readBackup(at: backupURL)
+    XCTAssertFalse(backupText.contains("encrypted-endpoint-password"))
+    XCTAssertEqual(backup.encryptedSecrets?.secretCount, 1)
+    XCTAssertEqual(backup.omittedSecretSummary.outboundProxyPasswordCount, 0)
+    XCTAssertEqual(exportSummary.importedEndpointCount, 1)
+    XCTAssertEqual(exportSummary.restoredSecretCount, 1)
+
+    let restore = try BackupFixture()
+    let restoreProfileStore = ProfileStore(paths: restore.paths, keychain: InMemorySecretStore())
+    await restoreProfileStore.waitForManifestLoad()
+    let restoreEndpointStore = OutboundProxyEndpointStore(
+      manifestURL: restore.paths.outboundProxyEndpointManifestURL,
+      secretStore: InMemorySecretStore()
+    )
+    let restoreSummary = try await service.restoreBackup(
+      from: backupURL,
+      password: "correct-password",
+      profileStore: restoreProfileStore,
+      settings: makeSettings(defaults: restore.defaults),
+      proxyPreview: ProxyPreviewStore(defaults: restore.defaults),
+      runtimeSnippetLibrary: await makeSnippetLibrary(paths: restore.paths),
+      outboundProxyStore: restoreEndpointStore
+    )
+
+    let resolved = try await restoreEndpointStore.resolve(id: endpoint.id)
+    XCTAssertEqual(restoreSummary.importedEndpointCount, 1)
+    XCTAssertEqual(restoreSummary.restoredSecretCount, 1)
+    XCTAssertEqual(resolved.password, "encrypted-endpoint-password")
+    XCTAssertEqual(resolved.secretState, .ready)
+
+    let skippedRestore = try BackupFixture()
+    let skippedProfileStore = ProfileStore(
+      paths: skippedRestore.paths,
+      keychain: InMemorySecretStore()
+    )
+    await skippedProfileStore.waitForManifestLoad()
+    let skippedEndpointStore = OutboundProxyEndpointStore(
+      manifestURL: skippedRestore.paths.outboundProxyEndpointManifestURL,
+      secretStore: InMemorySecretStore()
+    )
+    let skippedSummary = try await service.restoreBackup(
+      from: backupURL,
+      password: nil,
+      profileStore: skippedProfileStore,
+      settings: makeSettings(defaults: skippedRestore.defaults),
+      proxyPreview: ProxyPreviewStore(defaults: skippedRestore.defaults),
+      runtimeSnippetLibrary: await makeSnippetLibrary(paths: skippedRestore.paths),
+      outboundProxyStore: skippedEndpointStore
+    )
+    let skippedResolved = try await skippedEndpointStore.resolve(id: endpoint.id)
+    XCTAssertEqual(skippedSummary.restoredSecretCount, 0)
+    XCTAssertEqual(skippedSummary.skippedSecretCount, 1)
+    XCTAssertNil(skippedResolved.password)
+    XCTAssertEqual(skippedResolved.secretState, .missingSecret)
+  }
+
+  func testRestoreRemapsEndpointAndProfileCollisionsBeforeRewritingManualAndUpstreamReferences() async throws {
+    let manualEndpointID = UUID(uuidString: "83000000-0000-0000-0000-000000000001")!
+    let upstreamEndpointID = UUID(uuidString: "83000000-0000-0000-0000-000000000002")!
+    let source = try BackupFixture()
+    let sourceEndpointStore = OutboundProxyEndpointStore(
+      manifestURL: source.paths.outboundProxyEndpointManifestURL,
+      secretStore: InMemorySecretStore()
+    )
+    _ = try await sourceEndpointStore.add(
+      OutboundProxyEndpoint(
+        id: manualEndpointID,
+        name: "Source Manual Endpoint",
+        kind: .http,
+        host: "manual.source.example",
+        port: 8080
+      ),
+      password: nil
+    )
+    _ = try await sourceEndpointStore.add(
+      OutboundProxyEndpoint(
+        id: upstreamEndpointID,
+        name: "Source Upstream Endpoint",
+        kind: .socks5,
+        host: "upstream.source.example",
+        port: 1080
+      ),
+      password: nil
+    )
+    let sourceProfileStore = ProfileStore(paths: source.paths, keychain: InMemorySecretStore())
+    _ = try await sourceProfileStore.addManualProxyProfile(
+      name: "Manual Source",
+      endpointID: manualEndpointID
+    )
+    let sourceUpstreamProfile = try await sourceProfileStore.importLocalConfig(from: source.localProfileURL)
+    try await sourceProfileStore.updateUpstreamEndpoint(
+      for: sourceUpstreamProfile,
+      endpointID: upstreamEndpointID
+    )
+    let backupURL = source.root.appendingPathComponent("two-level-remap.clashmax-backup")
+    try await service.exportBackup(
+      to: backupURL,
+      profileStore: sourceProfileStore,
+      settings: makeSettings(defaults: source.defaults),
+      proxyPreview: ProxyPreviewStore(defaults: source.defaults),
+      runtimeSnippetLibrary: await makeSnippetLibrary(paths: source.paths),
+      outboundProxyStore: sourceEndpointStore,
+      includeSecrets: false,
+      password: nil
+    )
+
+    let restore = try BackupFixture()
+    let restoreEndpointStore = OutboundProxyEndpointStore(
+      manifestURL: restore.paths.outboundProxyEndpointManifestURL,
+      secretStore: InMemorySecretStore()
+    )
+    _ = try await restoreEndpointStore.add(
+      OutboundProxyEndpoint(
+        id: manualEndpointID,
+        name: "Existing Manual ID",
+        kind: .http,
+        host: "manual.existing.example",
+        port: 8081
+      ),
+      password: nil
+    )
+    _ = try await restoreEndpointStore.add(
+      OutboundProxyEndpoint(
+        id: upstreamEndpointID,
+        name: "Existing Upstream ID",
+        kind: .socks5,
+        host: "upstream.existing.example",
+        port: 1081
+      ),
+      password: nil
+    )
+    let restoreProfileStore = ProfileStore(paths: restore.paths, keychain: InMemorySecretStore())
+    let existingProfile = try await restoreProfileStore.importLocalConfig(from: restore.localProfileURL)
+
+    var collidingBackup = try readBackup(at: backupURL)
+    let manualIndex = try XCTUnwrap(
+      collidingBackup.profilesManifest.profiles.firstIndex(where: {
+        if case .manualProxy = $0.source { return true }
+        return false
+      })
+    )
+    let originalManualProfileID = collidingBackup.profilesManifest.profiles[manualIndex].id
+    collidingBackup.profilesManifest.profiles[manualIndex].id = existingProfile.id
+    let manualSourceIndex = try XCTUnwrap(
+      collidingBackup.profileSources.firstIndex(where: { $0.profileID == originalManualProfileID })
+    )
+    collidingBackup.profileSources[manualSourceIndex].profileID = existingProfile.id
+    if collidingBackup.profilesManifest.activeProfileID == originalManualProfileID {
+      collidingBackup.profilesManifest.activeProfileID = existingProfile.id
+    }
+    try writeBackup(collidingBackup, to: backupURL)
+
+    let summary = try await service.restoreBackup(
+      from: backupURL,
+      password: nil,
+      profileStore: restoreProfileStore,
+      settings: makeSettings(defaults: restore.defaults),
+      proxyPreview: ProxyPreviewStore(defaults: restore.defaults),
+      runtimeSnippetLibrary: await makeSnippetLibrary(paths: restore.paths),
+      outboundProxyStore: restoreEndpointStore
+    )
+
+    let endpoints = try await restoreEndpointStore.endpoints()
+    let restoredManualEndpoint = try XCTUnwrap(
+      endpoints.first(where: { $0.host == "manual.source.example" })
+    )
+    let restoredUpstreamEndpoint = try XCTUnwrap(
+      endpoints.first(where: { $0.host == "upstream.source.example" })
+    )
+    let restoredManualProfile = try XCTUnwrap(
+      restoreProfileStore.profiles.first(where: {
+        if case .manualProxy = $0.source { return true }
+        return false
+      })
+    )
+    let restoredUpstreamProfile = try XCTUnwrap(
+      restoreProfileStore.profiles.first(where: {
+        $0.id != existingProfile.id && $0.upstreamEndpointID != nil
+      })
+    )
+
+    XCTAssertEqual(summary.importedEndpointCount, 2)
+    XCTAssertEqual(summary.importedProfileCount, 2)
+    XCTAssertNotEqual(restoredManualEndpoint.id, manualEndpointID)
+    XCTAssertNotEqual(restoredUpstreamEndpoint.id, upstreamEndpointID)
+    XCTAssertNotEqual(restoredManualProfile.id, existingProfile.id)
+    XCTAssertEqual(
+      restoredManualProfile.source,
+      .manualProxy(endpointID: restoredManualEndpoint.id)
+    )
+    XCTAssertEqual(restoredUpstreamProfile.upstreamEndpointID, restoredUpstreamEndpoint.id)
+  }
+
+  func testManualProfileExportNeverReadsTamperedPayloadAndRestoreAlwaysWritesCanonicalMarker() async throws {
+    let endpointID = UUID(uuidString: "84000000-0000-0000-0000-000000000001")!
+    let source = try BackupFixture()
+    let sourceEndpointStore = OutboundProxyEndpointStore(
+      manifestURL: source.paths.outboundProxyEndpointManifestURL,
+      secretStore: InMemorySecretStore()
+    )
+    _ = try await sourceEndpointStore.add(
+      OutboundProxyEndpoint(
+        id: endpointID,
+        name: "Manual Endpoint",
+        kind: .http,
+        host: "manual.example",
+        port: 8080
+      ),
+      password: nil
+    )
+    let sourceProfileStore = ProfileStore(paths: source.paths, keychain: InMemorySecretStore())
+    let manualProfile = try await sourceProfileStore.addManualProxyProfile(
+      name: "Manual",
+      endpointID: endpointID
+    )
+    try "password: tampered-manual-file-secret\n".write(
+      toFile: manualProfile.originalConfigPath,
+      atomically: true,
+      encoding: .utf8
+    )
+    let backupURL = source.root.appendingPathComponent("manual-marker.clashmax-backup")
+
+    try await service.exportBackup(
+      to: backupURL,
+      profileStore: sourceProfileStore,
+      settings: makeSettings(defaults: source.defaults),
+      proxyPreview: ProxyPreviewStore(defaults: source.defaults),
+      runtimeSnippetLibrary: await makeSnippetLibrary(paths: source.paths),
+      outboundProxyStore: sourceEndpointStore,
+      includeSecrets: false,
+      password: nil
+    )
+
+    var backup = try readBackup(at: backupURL)
+    let manualSourceIndex = try XCTUnwrap(
+      backup.profileSources.firstIndex(where: { $0.profileID == manualProfile.id })
+    )
+    XCTAssertFalse(
+      try String(contentsOf: backupURL, encoding: .utf8)
+        .contains("tampered-manual-file-secret")
+    )
+    XCTAssertEqual(backup.profileSources[manualSourceIndex].source, canonicalManualProxyMarker)
+
+    backup.profileSources[manualSourceIndex].source = "password: malicious-backup-payload\n"
+    try writeBackup(backup, to: backupURL)
+
+    let restore = try BackupFixture()
+    let restoreProfileStore = ProfileStore(paths: restore.paths, keychain: InMemorySecretStore())
+    await restoreProfileStore.waitForManifestLoad()
+    let restoreEndpointStore = OutboundProxyEndpointStore(
+      manifestURL: restore.paths.outboundProxyEndpointManifestURL,
+      secretStore: InMemorySecretStore()
+    )
+    try await service.restoreBackup(
+      from: backupURL,
+      password: nil,
+      profileStore: restoreProfileStore,
+      settings: makeSettings(defaults: restore.defaults),
+      proxyPreview: ProxyPreviewStore(defaults: restore.defaults),
+      runtimeSnippetLibrary: await makeSnippetLibrary(paths: restore.paths),
+      outboundProxyStore: restoreEndpointStore
+    )
+
+    let restoredManualProfile = try XCTUnwrap(restoreProfileStore.profiles.first)
+    XCTAssertEqual(
+      try String(contentsOfFile: restoredManualProfile.originalConfigPath, encoding: .utf8),
+      canonicalManualProxyMarker
+    )
+    XCTAssertFalse(
+      try String(contentsOfFile: restoredManualProfile.originalConfigPath, encoding: .utf8)
+        .contains("malicious-backup-payload")
+    )
+  }
+
+  func testInvalidEndpointMetadataDuplicateIDsAndUnicodeNamesAreRejectedBeforeMutation() async throws {
+    let source = try BackupFixture()
+    let validBackup = try await exportLocalBackup(in: source)
+    let duplicateID = UUID(uuidString: "85000000-0000-0000-0000-000000000001")!
+    let cases: [(String, [OutboundProxyEndpoint])] = [
+      (
+        "invalid-port",
+        [
+          OutboundProxyEndpoint(
+            name: "Invalid Port",
+            kind: .http,
+            host: "invalid.example",
+            port: 0
+          )
+        ]
+      ),
+      (
+        "duplicate-id",
+        [
+          OutboundProxyEndpoint(
+            id: duplicateID,
+            name: "First",
+            kind: .http,
+            host: "first.example",
+            port: 8080
+          ),
+          OutboundProxyEndpoint(
+            id: duplicateID,
+            name: "Second",
+            kind: .socks5,
+            host: "second.example",
+            port: 1080
+          )
+        ]
+      ),
+      (
+        "unicode-name",
+        [
+          OutboundProxyEndpoint(
+            name: "straße",
+            kind: .http,
+            host: "one.example",
+            port: 8080
+          ),
+          OutboundProxyEndpoint(
+            name: "STRASSE",
+            kind: .socks5,
+            host: "two.example",
+            port: 1080
+          )
+        ]
+      )
+    ]
+
+    for (name, endpoints) in cases {
+      var malformed = validBackup
+      malformed.outboundProxyManifest = OutboundProxyEndpointManifest(endpoints: endpoints)
+      try await assertRestoreRejectsBeforeMutation(
+        malformed,
+        password: nil,
+        fileName: "\(name).clashmax-backup"
+      )
+    }
+  }
+
+  func testUnknownManualAndUpstreamEndpointReferencesAreRejectedBeforeMutation() async throws {
+    let source = try BackupFixture()
+    let validBackup = try await exportLocalBackup(in: source)
+    let unknownEndpointID = UUID(uuidString: "86000000-0000-0000-0000-000000000001")!
+
+    for kind in ["manual", "upstream"] {
+      var malformed = validBackup
+      if kind == "manual" {
+        malformed.profilesManifest.profiles[0].source = .manualProxy(
+          endpointID: unknownEndpointID
+        )
+      } else {
+        malformed.profilesManifest.profiles[0].upstreamEndpointID = unknownEndpointID
+      }
+      try await assertRestoreRejectsBeforeMutation(
+        malformed,
+        password: nil,
+        fileName: "unknown-\(kind)-endpoint.clashmax-backup"
+      )
+    }
+  }
+
+  func testEncryptedEndpointPasswordReferenceIsRejectedBeforeMutation() async throws {
+    let source = try BackupFixture()
+    let sourceProfileStore = ProfileStore(paths: source.paths, keychain: InMemorySecretStore())
+    await sourceProfileStore.waitForManifestLoad()
+    let sourceEndpointStore = OutboundProxyEndpointStore(
+      manifestURL: source.paths.outboundProxyEndpointManifestURL,
+      secretStore: InMemorySecretStore()
+    )
+    let endpoint = OutboundProxyEndpoint(
+      id: UUID(uuidString: "87000000-0000-0000-0000-000000000001")!,
+      name: "Password Reference",
+      kind: .http,
+      host: "password-ref.example",
+      port: 8080,
+      authentication: OutboundProxyAuthentication(username: "alice")
+    )
+    _ = try await sourceEndpointStore.add(endpoint, password: "hidden-endpoint-secret")
+    let backupURL = source.root.appendingPathComponent("password-ref-source.clashmax-backup")
+    try await service.exportBackup(
+      to: backupURL,
+      profileStore: sourceProfileStore,
+      settings: makeSettings(defaults: source.defaults),
+      proxyPreview: ProxyPreviewStore(defaults: source.defaults),
+      runtimeSnippetLibrary: await makeSnippetLibrary(paths: source.paths),
+      outboundProxyStore: sourceEndpointStore,
+      includeSecrets: true,
+      password: "correct-password"
+    )
+
+    var malformed = try readBackup(at: backupURL)
+    malformed.outboundProxyManifest.endpoints[0].id = UUID(
+      uuidString: "87000000-0000-0000-0000-000000000002"
+    )!
+    try await assertRestoreRejectsBeforeMutation(
+      malformed,
+      password: "correct-password",
+      fileName: "unknown-password-reference.clashmax-backup"
+    )
+  }
+
   func testDefaultExportOmitsSubscriptionProviderAndControllerSecrets() async throws {
     let fixture = try BackupFixture()
     let secrets = InMemorySecretStore()
@@ -901,6 +1491,307 @@ final class BackupRestoreServiceTests: XCTestCase {
     XCTAssertEqual(reloadedLibrary.snippets, snippetsBefore)
   }
 
+  func testRuntimeSnippetPostWriteFailureRollsBackEndpointsOrphanSecretAndAllRestoreState() async throws {
+    let importedEndpointID = UUID(uuidString: "88000000-0000-0000-0000-000000000001")!
+    let source = try BackupFixture()
+    let sourceEndpointStore = OutboundProxyEndpointStore(
+      manifestURL: source.paths.outboundProxyEndpointManifestURL,
+      secretStore: InMemorySecretStore()
+    )
+    _ = try await sourceEndpointStore.add(
+      OutboundProxyEndpoint(
+        id: importedEndpointID,
+        name: "Imported Endpoint",
+        kind: .http,
+        host: "imported.example",
+        port: 8080,
+        authentication: OutboundProxyAuthentication(username: "source")
+      ),
+      password: "source-endpoint-secret"
+    )
+    let sourceProfileStore = ProfileStore(paths: source.paths, keychain: InMemorySecretStore())
+    let sourceProfile = try await sourceProfileStore.addManualProxyProfile(
+      name: "Imported Manual",
+      endpointID: importedEndpointID
+    )
+    let sourceSettings = makeSettings(defaults: source.defaults)
+    sourceSettings.appTheme = .light
+    sourceSettings.overrides.mixedPort = 17_701
+    let sourcePreview = ProxyPreviewStore(defaults: source.defaults)
+    sourcePreview.previewSelections = ["Proxy": "Imported"]
+    sourcePreview.saveSelections(for: sourceProfile.id)
+    let sourceSnippetLibrary = await makeSnippetLibrary(paths: source.paths)
+    try await sourceSnippetLibrary.saveSnippet(
+      RuntimeSnippet(
+        name: "Imported Runtime",
+        payload: .dnsPatch(TunDNSSettings(respectRules: true))
+      )
+    )
+    let backupURL = source.root.appendingPathComponent("endpoint-rollback.clashmax-backup")
+    try await service.exportBackup(
+      to: backupURL,
+      profileStore: sourceProfileStore,
+      settings: sourceSettings,
+      proxyPreview: sourcePreview,
+      runtimeSnippetLibrary: sourceSnippetLibrary,
+      outboundProxyStore: sourceEndpointStore,
+      includeSecrets: true,
+      password: "correct-password"
+    )
+
+    let restore = try BackupFixture()
+    let endpointSecrets = InMemorySecretStore()
+    try endpointSecrets.save(
+      "orphan-before-restore",
+      account: OutboundProxyEndpointStore.passwordAccount(for: importedEndpointID)
+    )
+    let restoreEndpointStore = OutboundProxyEndpointStore(
+      manifestURL: restore.paths.outboundProxyEndpointManifestURL,
+      secretStore: endpointSecrets
+    )
+    let existingEndpoint = OutboundProxyEndpoint(
+      id: UUID(uuidString: "88000000-0000-0000-0000-000000000002")!,
+      name: "Existing Endpoint",
+      kind: .socks5,
+      host: "existing.example",
+      port: 1080,
+      authentication: OutboundProxyAuthentication(username: "existing")
+    )
+    _ = try await restoreEndpointStore.add(existingEndpoint, password: "existing-endpoint-secret")
+
+    let restoreProfileStore = ProfileStore(paths: restore.paths, keychain: InMemorySecretStore())
+    let existingProfile = try await restoreProfileStore.importLocalConfig(from: restore.localProfileURL)
+    let restoreSettings = makeSettings(defaults: restore.defaults)
+    restoreSettings.appTheme = .dark
+    restoreSettings.overrides.mixedPort = 18_801
+    let restorePreview = ProxyPreviewStore(defaults: restore.defaults)
+    restorePreview.previewSelections = ["Elite": "Existing"]
+    restorePreview.saveSelections(for: existingProfile.id)
+    let seedSnippetLibrary = await makeSnippetLibrary(paths: restore.paths)
+    let existingSnippet = RuntimeSnippet(
+      name: "Existing Runtime",
+      payload: .rules(RuleOverlaySettings(enabled: true))
+    )
+    try await seedSnippetLibrary.saveSnippet(existingSnippet)
+    let failingSnippetLibrary = RuntimeSnippetLibraryStore(
+      paths: restore.paths,
+      diskIO: FailOnceAfterStoringRuntimeSnippetLibraryDiskIO()
+    )
+    await failingSnippetLibrary.waitForLoad()
+
+    let endpointsBefore = try await restoreEndpointStore.endpoints()
+    let endpointSecretsBefore = endpointSecrets.storedValues
+    let profilesBefore = restoreProfileStore.profiles
+    let activeProfileIDBefore = restoreProfileStore.activeProfileID
+    let existingSourceBefore = try String(
+      contentsOfFile: existingProfile.originalConfigPath,
+      encoding: .utf8
+    )
+    let settingsBefore = restoreSettings.backupSnapshot()
+    let selectionsBefore = restorePreview.backupSelections()
+    let previewSelectionsBefore = restorePreview.previewSelections
+    let snippetsBefore = failingSnippetLibrary.snippets
+
+    await XCTAssertThrowsErrorAsync {
+      try await self.service.restoreBackup(
+        from: backupURL,
+        password: "correct-password",
+        profileStore: restoreProfileStore,
+        settings: restoreSettings,
+        proxyPreview: restorePreview,
+        runtimeSnippetLibrary: failingSnippetLibrary,
+        outboundProxyStore: restoreEndpointStore
+      )
+    } handler: { _ in }
+
+    let endpointsAfter = try await restoreEndpointStore.endpoints()
+    XCTAssertEqual(endpointsAfter, endpointsBefore)
+    XCTAssertEqual(endpointSecrets.storedValues, endpointSecretsBefore)
+    XCTAssertEqual(
+      try endpointSecrets.load(
+        account: OutboundProxyEndpointStore.passwordAccount(for: importedEndpointID)
+      ),
+      "orphan-before-restore"
+    )
+    XCTAssertEqual(restoreProfileStore.profiles, profilesBefore)
+    XCTAssertEqual(restoreProfileStore.activeProfileID, activeProfileIDBefore)
+    XCTAssertEqual(
+      try String(contentsOfFile: existingProfile.originalConfigPath, encoding: .utf8),
+      existingSourceBefore
+    )
+    XCTAssertEqual(restoreSettings.backupSnapshot(), settingsBefore)
+    XCTAssertEqual(restorePreview.backupSelections(), selectionsBefore)
+    XCTAssertEqual(restorePreview.previewSelections, previewSelectionsBefore)
+    XCTAssertEqual(failingSnippetLibrary.snippets, snippetsBefore)
+
+    let reloadedSnippetLibrary = RuntimeSnippetLibraryStore(paths: restore.paths)
+    await reloadedSnippetLibrary.waitForLoad()
+    XCTAssertEqual(reloadedSnippetLibrary.snippets, snippetsBefore)
+  }
+
+  func testEndpointRollbackFailureIsReportedAfterOtherRestoreStateRollbacks() async throws {
+    let source = try BackupFixture()
+    let sourceEndpointStore = OutboundProxyEndpointStore(
+      manifestURL: source.paths.outboundProxyEndpointManifestURL,
+      secretStore: InMemorySecretStore()
+    )
+    let endpoint = OutboundProxyEndpoint(
+      id: UUID(uuidString: "89000000-0000-0000-0000-000000000001")!,
+      name: "Rollback Failure Endpoint",
+      kind: .http,
+      host: "rollback-failure.example",
+      port: 8080
+    )
+    _ = try await sourceEndpointStore.add(endpoint, password: nil)
+    let sourceProfileStore = ProfileStore(paths: source.paths, keychain: InMemorySecretStore())
+    _ = try await sourceProfileStore.addManualProxyProfile(
+      name: "Rollback Failure Manual",
+      endpointID: endpoint.id
+    )
+    let sourceSnippets = await makeSnippetLibrary(paths: source.paths)
+    try await sourceSnippets.saveSnippet(
+      RuntimeSnippet(
+        name: "Triggers Later Failure",
+        payload: .rules(RuleOverlaySettings(enabled: true))
+      )
+    )
+    let backupURL = source.root.appendingPathComponent("endpoint-rollback-failure.clashmax-backup")
+    try await service.exportBackup(
+      to: backupURL,
+      profileStore: sourceProfileStore,
+      settings: makeSettings(defaults: source.defaults),
+      proxyPreview: ProxyPreviewStore(defaults: source.defaults),
+      runtimeSnippetLibrary: sourceSnippets,
+      outboundProxyStore: sourceEndpointStore,
+      includeSecrets: true,
+      password: "correct-password"
+    )
+
+    let restore = try BackupFixture()
+    let restoreProfileStore = ProfileStore(paths: restore.paths, keychain: InMemorySecretStore())
+    await restoreProfileStore.waitForManifestLoad()
+    let restoreSettings = makeSettings(defaults: restore.defaults)
+    restoreSettings.appTheme = .dark
+    let settingsBefore = restoreSettings.backupSnapshot()
+    let restorePreview = ProxyPreviewStore(defaults: restore.defaults)
+    let restoreSnippets = RuntimeSnippetLibraryStore(
+      paths: restore.paths,
+      diskIO: FailOnceAfterStoringRuntimeSnippetLibraryDiskIO()
+    )
+    await restoreSnippets.waitForLoad()
+    let restoreEndpointStore = OutboundProxyEndpointStore(
+      manifestURL: restore.paths.outboundProxyEndpointManifestURL,
+      secretStore: InMemorySecretStore(),
+      diskIO: FailOnSecondOutboundProxyEndpointManifestSave()
+    )
+
+    await XCTAssertThrowsErrorAsync {
+      try await self.service.restoreBackup(
+        from: backupURL,
+        password: "correct-password",
+        profileStore: restoreProfileStore,
+        settings: restoreSettings,
+        proxyPreview: restorePreview,
+        runtimeSnippetLibrary: restoreSnippets,
+        outboundProxyStore: restoreEndpointStore
+      )
+    } handler: { error in
+      XCTAssertEqual(error as? BackupRestoreError, .rollbackFailed)
+    }
+
+    XCTAssertTrue(restoreProfileStore.profiles.isEmpty)
+    XCTAssertNil(restoreProfileStore.activeProfileID)
+    XCTAssertEqual(restoreSettings.backupSnapshot(), settingsBefore)
+    XCTAssertTrue(restorePreview.backupSelections().isEmpty)
+    XCTAssertTrue(restorePreview.previewSelections.isEmpty)
+    XCTAssertTrue(restoreSnippets.snippets.isEmpty)
+    let reloadedSnippets = RuntimeSnippetLibraryStore(paths: restore.paths)
+    await reloadedSnippets.waitForLoad()
+    XCTAssertTrue(reloadedSnippets.snippets.isEmpty)
+  }
+
+  private func assertRestoreRejectsBeforeMutation(
+    _ backup: ClashMaxBackupFile,
+    password: String?,
+    fileName: String
+  ) async throws {
+    let fixture = try BackupFixture()
+    let backupURL = fixture.root.appendingPathComponent(fileName)
+    try writeBackup(backup, to: backupURL)
+
+    let endpointSecrets = InMemorySecretStore()
+    let endpointStore = OutboundProxyEndpointStore(
+      manifestURL: fixture.paths.outboundProxyEndpointManifestURL,
+      secretStore: endpointSecrets
+    )
+    let existingEndpoint = OutboundProxyEndpoint(
+      name: "Existing Endpoint",
+      kind: .http,
+      host: "existing.example",
+      port: 8080,
+      authentication: OutboundProxyAuthentication(username: "existing")
+    )
+    _ = try await endpointStore.add(existingEndpoint, password: "existing-endpoint-secret")
+
+    let profileStore = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
+    let existingProfile = try await profileStore.importLocalConfig(from: fixture.localProfileURL)
+    let settings = makeSettings(defaults: fixture.defaults)
+    settings.appTheme = .dark
+    settings.overrides.mixedPort = 18_700
+    let preview = ProxyPreviewStore(defaults: fixture.defaults)
+    preview.previewSelections = ["Elite": "Existing"]
+    preview.saveSelections(for: existingProfile.id)
+    let snippetLibrary = await makeSnippetLibrary(paths: fixture.paths)
+    let existingSnippet = RuntimeSnippet(
+      name: "Existing Snippet",
+      payload: .dnsPatch(TunDNSSettings(respectRules: true))
+    )
+    try await snippetLibrary.saveSnippet(existingSnippet)
+
+    let endpointsBefore = try await endpointStore.endpoints()
+    let endpointSecretsBefore = endpointSecrets.storedValues
+    let profilesBefore = profileStore.profiles
+    let activeProfileIDBefore = profileStore.activeProfileID
+    let profileSourceBefore = try String(
+      contentsOfFile: existingProfile.originalConfigPath,
+      encoding: .utf8
+    )
+    let settingsBefore = settings.backupSnapshot()
+    let selectionsBefore = preview.backupSelections()
+    let previewSelectionsBefore = preview.previewSelections
+    let snippetsBefore = snippetLibrary.snippets
+
+    await XCTAssertThrowsErrorAsync {
+      try await self.service.restoreBackup(
+        from: backupURL,
+        password: password,
+        profileStore: profileStore,
+        settings: settings,
+        proxyPreview: preview,
+        runtimeSnippetLibrary: snippetLibrary,
+        outboundProxyStore: endpointStore
+      )
+    } handler: { error in
+      self.assertInvalidBackup(error)
+    }
+
+    let endpointsAfter = try await endpointStore.endpoints()
+    XCTAssertEqual(endpointsAfter, endpointsBefore, file: #filePath, line: #line)
+    XCTAssertEqual(endpointSecrets.storedValues, endpointSecretsBefore, file: #filePath, line: #line)
+    XCTAssertEqual(profileStore.profiles, profilesBefore, file: #filePath, line: #line)
+    XCTAssertEqual(profileStore.activeProfileID, activeProfileIDBefore, file: #filePath, line: #line)
+    XCTAssertEqual(
+      try String(contentsOfFile: existingProfile.originalConfigPath, encoding: .utf8),
+      profileSourceBefore,
+      file: #filePath,
+      line: #line
+    )
+    XCTAssertEqual(settings.backupSnapshot(), settingsBefore, file: #filePath, line: #line)
+    XCTAssertEqual(preview.backupSelections(), selectionsBefore, file: #filePath, line: #line)
+    XCTAssertEqual(preview.previewSelections, previewSelectionsBefore, file: #filePath, line: #line)
+    XCTAssertEqual(snippetLibrary.snippets, snippetsBefore, file: #filePath, line: #line)
+  }
+
   private func makeSubscriptionStore(
     paths: RuntimePaths,
     secrets: InMemorySecretStore
@@ -995,6 +1886,23 @@ final class BackupRestoreServiceTests: XCTestCase {
       - { name: Elite, type: select, proxies: [Japan, DIRECT] }
     rules:
       - MATCH,Elite
+    """
+  }
+
+  private var canonicalManualProxyMarker: String {
+    """
+    # ClashMax managed manual proxy profile
+    mode: rule
+    proxies:
+      - name: ClashMax Managed Block
+        type: reject
+    proxy-groups:
+      - name: Proxy
+        type: select
+        proxies:
+          - ClashMax Managed Block
+    rules:
+      - MATCH,REJECT
     """
   }
 
@@ -1100,5 +2008,43 @@ private struct FailingRuntimeSnippetLibraryDiskIO: RuntimeSnippetLibraryDiskIOPr
 
   func save(_ snippets: [RuntimeSnippet], to url: URL) async throws {
     throw CocoaError(.fileWriteNoPermission)
+  }
+}
+
+private actor FailOnceAfterStoringRuntimeSnippetLibraryDiskIO: RuntimeSnippetLibraryDiskIOProviding {
+  private let base = RuntimeSnippetLibraryDiskIO()
+  private var shouldFailNextSave = true
+
+  func load(from url: URL) async throws -> [RuntimeSnippet] {
+    try await base.load(from: url)
+  }
+
+  func save(_ snippets: [RuntimeSnippet], to url: URL) async throws {
+    try await base.save(snippets, to: url)
+    if shouldFailNextSave {
+      shouldFailNextSave = false
+      throw CocoaError(.fileWriteNoPermission)
+    }
+  }
+}
+
+private actor FailOnSecondOutboundProxyEndpointManifestSave:
+  OutboundProxyEndpointManifestStoring {
+  private let base = OutboundProxyEndpointDiskIO()
+  private var saveCount = 0
+
+  func loadManifest(from url: URL) async throws -> OutboundProxyEndpointManifest? {
+    try await base.loadManifest(from: url)
+  }
+
+  func saveManifest(
+    _ manifest: OutboundProxyEndpointManifest,
+    to url: URL
+  ) async throws {
+    saveCount += 1
+    if saveCount == 2 {
+      throw CocoaError(.fileWriteNoPermission)
+    }
+    try await base.saveManifest(manifest, to: url)
   }
 }

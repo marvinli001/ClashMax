@@ -476,6 +476,7 @@ protocol ProviderSideLoadPreflightRunning {
     overrides: RuntimeOverrides,
     selectionOverrides: [String: String],
     runtimeSnippets: [RuntimeSnippet],
+    runtimeOptions: RuntimeConfigOptions,
     coreURL: URL
   ) async throws
 }
@@ -500,6 +501,7 @@ struct MihomoProviderSideLoadPreflightRunner: ProviderSideLoadPreflightRunning {
     overrides: RuntimeOverrides,
     selectionOverrides: [String: String],
     runtimeSnippets: [RuntimeSnippet],
+    runtimeOptions: RuntimeConfigOptions,
     coreURL: URL
   ) async throws {
     let preflightDirectory = paths.runtime.appendingPathComponent(
@@ -513,7 +515,7 @@ struct MihomoProviderSideLoadPreflightRunner: ProviderSideLoadPreflightRunning {
 
     var preflightOverrides = overrides
     preflightOverrides.tunEnabled = false
-    var options = RuntimeConfigOptions.default
+    var options = runtimeOptions
     options.subscriptionProviderOptions = profile.subscriptionProviderOptions
     options.runtimeSnippets = runtimeSnippets
     let materialization = try await materializer.materializeResult(
@@ -727,6 +729,10 @@ final class AppModel: ObservableObject {
   @Published private(set) var lastAppliedNetworkPolicyID: NetworkPolicyRule.ID?
   @Published private(set) var backupRestoreStatusMessage: String?
   @Published private(set) var pendingBackupRestorePreview: BackupRestorePreview?
+  @Published private(set) var outboundProxyEndpoints: [OutboundProxyEndpoint] = []
+  @Published private(set) var outboundProxyEndpointSecretStates: [UUID: OutboundProxyEndpointSecretState] = [:]
+  @Published private(set) var outboundProxyEndpointTestStates: [UUID: OutboundProxyEndpointTestState] = [:]
+  @Published private(set) var outboundProxyEndpointLoadError: String?
   var updatingProfileIDs: Set<Profile.ID> { profileCoordinator.updatingProfileIDs }
   var profileOperationMessage: String? { profileCoordinator.message }
   var profilePreviewGroups: [ProxyGroup] {
@@ -757,6 +763,7 @@ final class AppModel: ObservableObject {
   let profileCoordinator: ProfileCoordinator
   let systemProxy: SystemProxyCoordinator
   let profileStore: ProfileStore
+  let outboundProxyEndpointStore: OutboundProxyEndpointStore
   let providerAnalytics: ProviderAnalyticsStore
   let coreController: CoreProcessController
   var systemProxyController: SystemProxyController { systemProxy.controller }
@@ -826,6 +833,7 @@ final class AppModel: ObservableObject {
   private var networkPolicyRestoreSnapshot: NetworkPolicyRestoreSnapshot?
   private var networkEnvironmentTask: Task<Void, Never>?
   private var networkEnvironmentDebounceTask: Task<Void, Never>?
+  private var outboundProxyEndpointLoadTask: Task<Void, Never>?
   private var runtimeReloadTask: Task<Void, Never>?
   private var runtimeReloadToken: UUID?
   private var runtimeReloadPending = false
@@ -890,6 +898,7 @@ final class AppModel: ObservableObject {
   init(
     paths: RuntimePaths,
     profileStore: ProfileStore? = nil,
+    outboundProxyEndpointStore: OutboundProxyEndpointStore? = nil,
     coreController: CoreProcessController = CoreProcessController(),
     systemProxyController: SystemProxyController? = nil,
     helperClient: TunnelHelperClient = TunnelHelperClient(),
@@ -921,6 +930,8 @@ final class AppModel: ObservableObject {
     self.providerSideLoadPreflightRunner = providerSideLoadPreflightRunner
     self.bundledCoreURLProvider = bundledCoreURLProvider ?? Self.resolveBundledCoreURL
     self.profileStore = profileStore ?? ProfileStore(paths: paths)
+    self.outboundProxyEndpointStore = outboundProxyEndpointStore
+      ?? OutboundProxyEndpointStore(manifestURL: paths.outboundProxyEndpointManifestURL)
     self.runtimeSnippetLibrary = runtimeSnippetLibrary ?? RuntimeSnippetLibraryStore(paths: paths)
     self.providerAnalytics = providerAnalytics ?? ProviderAnalyticsStore(paths: paths)
     self.proxyPreview = ProxyPreviewStore(defaults: defaults)
@@ -952,7 +963,7 @@ final class AppModel: ObservableObject {
       subscriptionFetchOptions: { [weak self] profile in
         guard let self else { return SubscriptionFetchOptions() }
         if let profile {
-          return self.subscriptionFetchOptions(for: profile)
+          return try await self.subscriptionFetchOptions(for: profile)
         }
         return self.subscriptionFetchOptions
       },
@@ -1046,6 +1057,9 @@ final class AppModel: ObservableObject {
       .store(in: &storeCancellables)
     recoverDanglingSystemProxyIfNeeded()
     recoverDanglingManagedDNSIfNeeded()
+    outboundProxyEndpointLoadTask = Task { @MainActor [weak self] in
+      await self?.refreshOutboundProxyEndpoints()
+    }
     let needsManifestRefresh = self.profileStore.activeProfileID == nil
     refreshProfilePreview()
     loadPreviewSelectionsForActiveProfile()
@@ -1065,6 +1079,297 @@ final class AppModel: ObservableObject {
   var isCoreRunning: Bool {
     if case .running = coreController.status { return true }
     return tunnelCoreRunning
+  }
+
+  func waitForOutboundProxyEndpointLoad() async {
+    await outboundProxyEndpointLoadTask?.value
+  }
+
+  func refreshOutboundProxyEndpoints() async {
+    do {
+      let endpoints = try await outboundProxyEndpointStore.endpoints()
+      var secretStates: [UUID: OutboundProxyEndpointSecretState] = [:]
+      for endpoint in endpoints {
+        secretStates[endpoint.id] = try await outboundProxyEndpointStore.resolve(id: endpoint.id).secretState
+      }
+      outboundProxyEndpoints = endpoints
+      outboundProxyEndpointSecretStates = secretStates
+      for endpoint in endpoints where outboundProxyEndpointTestStates[endpoint.id] == nil {
+        outboundProxyEndpointTestStates[endpoint.id] = .untested
+      }
+      outboundProxyEndpointTestStates = outboundProxyEndpointTestStates.filter { entry in
+        endpoints.contains(where: { $0.id == entry.key })
+      }
+      outboundProxyEndpointLoadError = nil
+    } catch {
+      outboundProxyEndpoints = []
+      outboundProxyEndpointSecretStates = [:]
+      outboundProxyEndpointTestStates = [:]
+      outboundProxyEndpointLoadError = UserFacingError.message(for: error)
+    }
+  }
+
+  @discardableResult
+  func addOutboundProxyEndpoint(
+    _ endpoint: OutboundProxyEndpoint,
+    password: String?
+  ) async -> Bool {
+    do {
+      try await outboundProxyEndpointStore.add(endpoint, password: password)
+      await refreshOutboundProxyEndpoints()
+      outboundProxyEndpointTestStates[endpoint.id] = .untested
+      lastError = nil
+      return true
+    } catch {
+      lastError = UserFacingError.message(for: error)
+      return false
+    }
+  }
+
+  @discardableResult
+  func addManualProxyProfile(
+    endpoint: OutboundProxyEndpoint,
+    password: String?,
+    profileName: String = ""
+  ) async -> Bool {
+    do {
+      let endpointSnapshot = try await outboundProxyEndpointStore.rollbackSnapshot(
+        additionalAffectedEndpointIDs: [endpoint.id]
+      )
+      let profileSnapshot = try await profileStore.rollbackSnapshot()
+      do {
+        try await outboundProxyEndpointStore.add(endpoint, password: password)
+        let profile = try await profileStore.addManualProxyProfile(
+          name: profileName,
+          endpointID: endpoint.id
+        )
+        var preflightOverrides = overrides
+        preflightOverrides.tunEnabled = proxyRoutingMode == .tun
+        preflightOverrides.tunSettings = tunSettings
+        let runtimeOptions = try await resolvedRuntimeConfigOptions(
+          for: profile,
+          baseOptions: currentRoutingRuntimeConfigOptions()
+        )
+        _ = try await preflightEffectiveRuntimeConfig(
+          profile: profile,
+          overrides: preflightOverrides,
+          runtimeOptions: runtimeOptions
+        )
+      } catch {
+        let operationError = error
+        do {
+          try await profileStore.restoreRollbackSnapshot(profileSnapshot)
+          try await outboundProxyEndpointStore.restoreRollbackSnapshot(endpointSnapshot)
+        } catch {
+          appendAppLog(
+            level: "error",
+            message: "Manual proxy creation rollback failed."
+          )
+        }
+        throw operationError
+      }
+      await refreshOutboundProxyEndpoints()
+      await refreshProfilePreviewAndWait()
+      loadPreviewSelectionsForActiveProfile()
+      resetEffectiveRuntimeConfigPreview()
+      restartPreviewRuntimeIfNeeded(reason: "manual proxy import")
+      lastError = nil
+      return true
+    } catch {
+      lastError = UserFacingError.message(for: error)
+      return false
+    }
+  }
+
+  @discardableResult
+  func setUpstreamEndpoint(
+    _ endpointID: UUID?,
+    for profile: Profile
+  ) async -> Bool {
+    let currentProfile = profileStore.profiles.first(where: { $0.id == profile.id }) ?? profile
+    guard currentProfile.upstreamEndpointID != endpointID else {
+      lastError = nil
+      return true
+    }
+    do {
+      var proposedProfile = currentProfile
+      proposedProfile.upstreamEndpointID = endpointID
+      var preflightOverrides = overrides
+      preflightOverrides.tunEnabled = proxyRoutingMode == .tun
+      preflightOverrides.tunSettings = tunSettings
+      let proposedOptions = try await resolvedRuntimeConfigOptions(
+        for: proposedProfile,
+        baseOptions: currentRoutingRuntimeConfigOptions()
+      )
+      _ = try await preflightEffectiveRuntimeConfig(
+        profile: proposedProfile,
+        overrides: preflightOverrides,
+        runtimeOptions: proposedOptions
+      )
+
+      let previousEndpointID = currentProfile.upstreamEndpointID
+      try await profileStore.updateUpstreamEndpoint(for: currentProfile, endpointID: endpointID)
+      do {
+        if currentProfile.id == profileStore.activeProfileID,
+           isRunning || previewRuntimeActive {
+          try await reloadActiveRuntimeConfigIfNeeded(
+            for: currentProfile.id,
+            logMessage: "Upstream proxy updated: Mihomo reloaded"
+          )
+        }
+      } catch {
+        let reloadError = error
+        do {
+          let storedProfile = profileStore.profiles.first(where: { $0.id == currentProfile.id })
+            ?? proposedProfile
+          try await profileStore.updateUpstreamEndpoint(
+            for: storedProfile,
+            endpointID: previousEndpointID
+          )
+          try await reloadActiveRuntimeConfigIfNeeded(
+            for: currentProfile.id,
+            logMessage: "Upstream proxy rollback: Mihomo reloaded"
+          )
+        } catch {
+          appendAppLog(
+            level: "error",
+            message: "Upstream proxy rollback failed for \(currentProfile.name)."
+          )
+        }
+        throw reloadError
+      }
+
+      resetEffectiveRuntimeConfigPreviewIfNeeded(invalidatedProfileID: currentProfile.id)
+      lastError = nil
+      return true
+    } catch {
+      lastError = UserFacingError.message(for: error)
+      return false
+    }
+  }
+
+  @discardableResult
+  func updateOutboundProxyEndpoint(
+    _ endpoint: OutboundProxyEndpoint,
+    password: String?
+  ) async -> Bool {
+    do {
+      let previousResolved = try await outboundProxyEndpointStore.resolve(id: endpoint.id)
+      let proposedResolved = ResolvedOutboundProxyEndpoint(
+        endpoint: endpoint,
+        password: endpoint.authentication == nil ? nil : (password ?? previousResolved.password)
+      )
+      _ = try SubscriptionProxySessionFactory.plan(for: proposedResolved)
+
+      let references = try await profileStore.references(to: endpoint.id)
+      var preflightOverrides = overrides
+      preflightOverrides.tunEnabled = proxyRoutingMode == .tun
+      preflightOverrides.tunSettings = tunSettings
+      for reference in references {
+        guard let referencedProfile = profileStore.profiles.first(where: { $0.id == reference.profileID }) else {
+          continue
+        }
+        let options = try await resolvedRuntimeConfigOptions(
+          for: referencedProfile,
+          baseOptions: currentRoutingRuntimeConfigOptions(),
+          endpointOverrides: [endpoint.id: proposedResolved]
+        )
+        _ = try await preflightEffectiveRuntimeConfig(
+          profile: referencedProfile,
+          overrides: preflightOverrides,
+          runtimeOptions: options
+        )
+      }
+
+      let rollbackSnapshot = try await outboundProxyEndpointStore.rollbackSnapshot()
+      try await outboundProxyEndpointStore.update(endpoint, password: password)
+      do {
+        if references.contains(where: { $0.profileID == profileStore.activeProfileID }),
+           isRunning || previewRuntimeActive,
+           let activeProfileID = profileStore.activeProfileID {
+          try await reloadActiveRuntimeConfigIfNeeded(
+            for: activeProfileID,
+            logMessage: "Outbound proxy updated: Mihomo reloaded"
+          )
+        }
+      } catch {
+        let reloadError = error
+        do {
+          try await outboundProxyEndpointStore.restoreRollbackSnapshot(rollbackSnapshot)
+          if let activeProfileID = profileStore.activeProfileID {
+            try await reloadActiveRuntimeConfigIfNeeded(
+              for: activeProfileID,
+              logMessage: "Outbound proxy rollback: Mihomo reloaded"
+            )
+          }
+        } catch {
+          appendAppLog(level: "error", message: "Outbound proxy rollback failed for \(endpoint.name).")
+        }
+        throw reloadError
+      }
+
+      await refreshOutboundProxyEndpoints()
+      outboundProxyEndpointTestStates[endpoint.id] = .untested
+      resetEffectiveRuntimeConfigPreviewIfNeeded(invalidatedProfileID: profileStore.activeProfileID)
+      lastError = nil
+      return true
+    } catch {
+      await refreshOutboundProxyEndpoints()
+      lastError = UserFacingError.message(for: error)
+      return false
+    }
+  }
+
+  @discardableResult
+  func deleteOutboundProxyEndpoint(_ endpointID: UUID) async -> Bool {
+    do {
+      let references = try await profileStore.references(to: endpointID)
+      guard references.isEmpty else {
+        let names = references.map { "\($0.profileName) (\($0.kind.displayName))" }
+          .joined(separator: ", ")
+        throw AppError.invalidProfileConfig(
+          "This proxy endpoint is still used by: \(names). Remove those bindings first."
+        )
+      }
+      try await outboundProxyEndpointStore.delete(id: endpointID)
+      await refreshOutboundProxyEndpoints()
+      outboundProxyEndpointTestStates[endpointID] = nil
+      lastError = nil
+      return true
+    } catch {
+      lastError = UserFacingError.message(for: error)
+      return false
+    }
+  }
+
+  func testOutboundProxyEndpoint(_ endpointID: UUID) async {
+    outboundProxyEndpointTestStates[endpointID] = .testing
+    do {
+      let endpoint = try await outboundProxyEndpointStore.resolve(id: endpointID)
+      let configuration = try SubscriptionProxySessionFactory.configuration(
+        for: endpoint,
+        timeout: 10
+      )
+      let session = URLSession(configuration: configuration)
+      defer { session.finishTasksAndInvalidate() }
+      var request = URLRequest(url: AppConstants.defaultDelayTestURL)
+      request.timeoutInterval = 10
+      let (_, response) = try await session.data(for: request)
+      guard let httpResponse = response as? HTTPURLResponse,
+            (200...299).contains(httpResponse.statusCode)
+      else {
+        throw URLError(.badServerResponse)
+      }
+      outboundProxyEndpointTestStates[endpointID] = .ready
+      lastError = nil
+    } catch {
+      let message = String(localized: "Connection test failed. You can still save this endpoint for offline use.")
+      outboundProxyEndpointTestStates[endpointID] = .unreachable(message)
+      publishWarningNotice(
+        message,
+        logMessage: "Outbound proxy connection test failed during transport."
+      )
+    }
   }
 
   var isRunning: Bool {
@@ -1621,6 +1926,10 @@ final class AppModel: ObservableObject {
         overrides: overrides,
         selectionOverrides: previewSelections,
         runtimeSnippets: runtimeSnippetLibrary.snippets(applyingTo: targetProfile.id),
+        runtimeOptions: try await resolvedRuntimeConfigOptions(
+          for: targetProfile,
+          baseOptions: currentRoutingRuntimeConfigOptions()
+        ),
         coreURL: try bundledCoreURL()
       )
       providerSideLoadPreflightStatus = .succeeded(
@@ -1682,6 +1991,7 @@ final class AppModel: ObservableObject {
           settings: settings,
           proxyPreview: proxyPreview,
           runtimeSnippetLibrary: runtimeSnippetLibrary,
+          outboundProxyStore: outboundProxyEndpointStore,
           includeSecrets: includeSecrets,
           password: password
         )
@@ -1735,8 +2045,10 @@ final class AppModel: ObservableObject {
         profileStore: profileStore,
         settings: settings,
         proxyPreview: proxyPreview,
-        runtimeSnippetLibrary: runtimeSnippetLibrary
+        runtimeSnippetLibrary: runtimeSnippetLibrary,
+        outboundProxyStore: outboundProxyEndpointStore
       )
+      await refreshOutboundProxyEndpoints()
       profileCoordinator.clearMessage()
       proxyGroups = []
       await refreshProfilePreviewAndWait()
@@ -1799,6 +2111,7 @@ final class AppModel: ObservableObject {
     urlString: String,
     providerOptions: SubscriptionProviderOptions = .default,
     updatePolicy: SubscriptionUpdatePolicy = .default,
+    upstreamEndpointID: UUID? = nil,
     session: URLSession = .shared
   ) async -> Bool {
     let trimmedURLString = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1812,15 +2125,29 @@ final class AppModel: ObservableObject {
     profileCoordinator.clearMessage()
 
     do {
+      var fetchOptions = providerOptions.fetchOptions(from: subscriptionFetchOptions)
+      let resolvedUpstream: ResolvedOutboundProxyEndpoint?
+      if let upstreamEndpointID {
+        let endpoint = try await outboundProxyEndpointStore.resolve(id: upstreamEndpointID)
+        guard endpoint.isReady else {
+          throw OutboundProxyEndpointStoreError.passwordRequired
+        }
+        fetchOptions.profileUpstreamEndpoint = endpoint
+        fetchOptions.retryOrder = [.profileUpstream]
+        resolvedUpstream = endpoint
+      } else {
+        resolvedUpstream = nil
+      }
       guard try await profileCoordinator.addSubscription(
         name: name,
         url: resolution.url,
         displayNameHint: resolution.displayNameHint,
         providerOptions: providerOptions,
         updatePolicy: updatePolicy,
+        upstreamEndpointID: upstreamEndpointID,
         session: session,
-        fetchOptions: providerOptions.fetchOptions(from: subscriptionFetchOptions),
-        preflightValidator: subscriptionPreflightValidator()
+        fetchOptions: fetchOptions,
+        preflightValidator: subscriptionPreflightValidator(fixedUpstreamEndpoint: resolvedUpstream)
       ) != nil else {
         return false
       }
@@ -2385,7 +2712,7 @@ final class AppModel: ObservableObject {
       let updated = try await profileCoordinator.updateSubscription(
         profile,
         session: session,
-        fetchOptions: subscriptionFetchOptions(for: profile),
+        fetchOptions: try await subscriptionFetchOptions(for: profile),
         preflightValidator: subscriptionPreflightValidator()
       )
       if updated, profile.id == profileStore.activeProfileID {
@@ -2418,7 +2745,7 @@ final class AppModel: ObservableObject {
         url: resolution.url,
         displayNameHint: resolution.displayNameHint,
         session: session,
-        fetchOptions: subscriptionFetchOptions(for: profile),
+        fetchOptions: try await subscriptionFetchOptions(for: profile),
         preflightValidator: subscriptionPreflightValidator()
       )
       if updated {
@@ -2479,7 +2806,7 @@ final class AppModel: ObservableObject {
         displayNameHint: resolution.displayNameHint,
         options: options,
         session: session,
-        fetchOptions: options.fetchOptions(from: subscriptionFetchOptions),
+        fetchOptions: try await subscriptionFetchOptions(for: profile, providerOptions: options),
         preflightValidator: subscriptionPreflightValidator()
       )
       if updated {
@@ -2619,8 +2946,21 @@ final class AppModel: ObservableObject {
     )
   }
 
-  private func subscriptionFetchOptions(for profile: Profile) -> SubscriptionFetchOptions {
-    profile.subscriptionProviderOptions.fetchOptions(from: subscriptionFetchOptions)
+  private func subscriptionFetchOptions(
+    for profile: Profile,
+    providerOptions: SubscriptionProviderOptions? = nil
+  ) async throws -> SubscriptionFetchOptions {
+    var options = (providerOptions ?? profile.subscriptionProviderOptions)
+      .fetchOptions(from: subscriptionFetchOptions)
+    if let endpointID = profile.upstreamEndpointID {
+      let endpoint = try await outboundProxyEndpointStore.resolve(id: endpointID)
+      guard endpoint.isReady else {
+        throw OutboundProxyEndpointStoreError.passwordRequired
+      }
+      options.profileUpstreamEndpoint = endpoint
+      options.retryOrder = [.profileUpstream]
+    }
+    return options
   }
 
   private func reloadActiveRuntimeConfigIfNeeded(for profileID: Profile.ID, logMessage: String) async throws {
@@ -2649,7 +2989,9 @@ final class AppModel: ObservableObject {
     reloadRuntimeData()
   }
 
-  private func subscriptionPreflightValidator() -> any SubscriptionProfilePreflightValidating {
+  private func subscriptionPreflightValidator(
+    fixedUpstreamEndpoint: ResolvedOutboundProxyEndpoint? = nil
+  ) -> any SubscriptionProfilePreflightValidating {
     MihomoSubscriptionProfilePreflightValidator(
       paths: paths,
       overrides: overrides,
@@ -2661,6 +3003,21 @@ final class AppModel: ObservableObject {
         guard let self, let profileID else { return [] }
         await self.runtimeSnippetLibrary.waitForLoad()
         return self.runtimeSnippetLibrary.snippets(applyingTo: profileID)
+      },
+      runtimeEndpointOptionsProvider: { [weak self] profileID in
+        if let fixedUpstreamEndpoint {
+          var options = RuntimeConfigOptions.default
+          options.upstreamProxyEndpoint = fixedUpstreamEndpoint
+          return options
+        }
+        guard
+          let self,
+          let profileID,
+          let profile = self.profileStore.profiles.first(where: { $0.id == profileID })
+        else {
+          return .default
+        }
+        return try await self.resolvedRuntimeConfigOptions(for: profile)
       }
     )
   }
@@ -7238,7 +7595,8 @@ final class AppModel: ObservableObject {
     profile: Profile? = nil,
     overrides: RuntimeOverrides? = nil,
     runtimeSnippets: [RuntimeSnippet]? = nil,
-    selectionOverrides: [String: String]? = nil
+    selectionOverrides: [String: String]? = nil,
+    runtimeOptions: RuntimeConfigOptions? = nil
   ) async throws -> EffectiveRuntimeConfigSnapshot {
     let targetProfile = try profile ?? requireActiveProfile()
     let snippets: [RuntimeSnippet]
@@ -7253,6 +7611,7 @@ final class AppModel: ObservableObject {
       overrides: overrides ?? self.overrides,
       selectionOverrides: selectionOverrides ?? previewSelections,
       runtimeSnippets: snippets,
+      runtimeOptions: runtimeOptions,
       preflight: .requireCore
     )
   }
@@ -7262,6 +7621,7 @@ final class AppModel: ObservableObject {
     overrides: RuntimeOverrides,
     selectionOverrides: [String: String]? = nil,
     runtimeSnippets: [RuntimeSnippet],
+    runtimeOptions: RuntimeConfigOptions? = nil,
     preflight: EffectiveRuntimeConfigValidationIntent
   ) async throws -> EffectiveRuntimeConfigSnapshot {
     let preflightMode: EffectiveRuntimeConfigPreflightMode
@@ -7283,6 +7643,12 @@ final class AppModel: ObservableObject {
       optionalCoreErrorMessage = nil
       preflightMode = .validate(coreURL: try bundledCoreURL(), validator: MihomoRuntimeConfigValidator())
     }
+    let effectiveRuntimeOptions: RuntimeConfigOptions
+    if let runtimeOptions {
+      effectiveRuntimeOptions = runtimeOptions
+    } else {
+      effectiveRuntimeOptions = try await resolvedRuntimeConfigOptions(for: profile)
+    }
     var snapshot = try await EffectiveRuntimeConfigBuilder(
       materializer: runtimeConfigMaterializer
     ).snapshot(
@@ -7291,6 +7657,7 @@ final class AppModel: ObservableObject {
       overrides: overrides,
       selectionOverrides: selectionOverrides ?? previewSelections,
       runtimeSnippets: runtimeSnippets,
+      options: effectiveRuntimeOptions,
       preflight: preflightMode
     )
     if let optionalCoreErrorMessage {
@@ -7329,6 +7696,10 @@ final class AppModel: ObservableObject {
     effectiveOptions.subscriptionProviderOptions = profile.subscriptionProviderOptions
     await runtimeSnippetLibrary.waitForLoad()
     effectiveOptions.runtimeSnippets = runtimeSnippetLibrary.snippets(applyingTo: profile.id)
+    effectiveOptions = try await resolvedRuntimeConfigOptions(
+      for: profile,
+      baseOptions: effectiveOptions
+    )
     return try await runtimeConfigMaterializer.materializeResult(
       RuntimeConfigMaterializationRequest(
         profileName: profile.name,
@@ -7340,6 +7711,37 @@ final class AppModel: ObservableObject {
         options: effectiveOptions,
         protectedArtifactURLs: protectedRuntimeArtifactURLs
       )
+    )
+  }
+
+  private func resolvedRuntimeConfigOptions(
+    for profile: Profile,
+    baseOptions: RuntimeConfigOptions = .default,
+    endpointOverrides: [UUID: ResolvedOutboundProxyEndpoint] = [:]
+  ) async throws -> RuntimeConfigOptions {
+    var options = baseOptions
+    if case let .manualProxy(endpointID) = profile.source {
+      options.manualProxyEndpoint = if let overridden = endpointOverrides[endpointID] {
+        overridden
+      } else {
+        try await outboundProxyEndpointStore.resolve(id: endpointID)
+      }
+    }
+    if let endpointID = profile.upstreamEndpointID {
+      options.upstreamProxyEndpoint = if let overridden = endpointOverrides[endpointID] {
+        overridden
+      } else {
+        try await outboundProxyEndpointStore.resolve(id: endpointID)
+      }
+    }
+    return options
+  }
+
+  private func currentRoutingRuntimeConfigOptions() -> RuntimeConfigOptions {
+    RuntimeConfigOptions(
+      networkExtensionRoutingSettings: proxyRoutingMode == .neProxy
+        ? networkExtensionRoutingSettings
+        : nil
     )
   }
 
