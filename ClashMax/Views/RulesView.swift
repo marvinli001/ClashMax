@@ -7,13 +7,7 @@ struct RulesView: View {
 
   var body: some View {
     let rules = filteredRules
-    AdaptivePage(
-      title: "Rules",
-      subtitle: String.localizedStringWithFormat(
-        NSLocalizedString("%lld loaded", comment: ""),
-        Int64(runtimeData.rules.count)
-      )
-    ) {
+    AdaptivePage(title: "Rules") {
       EmptyView()
     } content: {
       if showsLoadingSkeleton {
@@ -73,6 +67,8 @@ struct RulesView: View {
               .width(min: 110, ideal: 150)
             }
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+            PageStatusFooter(text: ruleSummary)
           }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -92,9 +88,6 @@ struct RulesView: View {
         .textFieldStyle(.roundedBorder)
         .frame(minWidth: 220, idealWidth: 360, maxWidth: 460)
       Spacer()
-      Text(ruleSummary)
-        .font(.caption)
-        .foregroundStyle(.secondary)
     }
   }
 

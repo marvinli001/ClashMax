@@ -41,10 +41,8 @@ struct ProxiesView: View {
       readinessIssue: appModel.readinessIssue
     )
 
-    AdaptivePage(
-      title: "Proxies",
-      subtitle: subtitle(for: groups)
-    ) {
+    AdaptivePage(title: "Proxies") {
+      searchProgressIndicator
       testAllButton
       if !appModel.isRunning, appModel.profileStore.activeProfile != nil {
         Button {
@@ -88,6 +86,8 @@ struct ProxiesView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       }
     }
+    .searchable(text: $searchText, placement: .toolbar, prompt: Text("Search"))
+    .animation(.easeInOut(duration: 0.15), value: searchCoordinator.isComputing)
     .task {
       // First population: build the snapshot off-main so the initial paint of a large config
       // doesn't block the main thread.
@@ -135,29 +135,6 @@ struct ProxiesView: View {
   private func showsEmptyState(rawGroups: [ProxyGroup], snapshot: ProxySearchSnapshot) -> Bool {
     if rawGroups.isEmpty { return true }
     return snapshot.hasResolved && snapshot.filteredGroups.isEmpty
-  }
-
-  private func subtitle(for groups: [ProxyGroup]) -> String {
-    if groups.isEmpty {
-      return String(localized: "Proxy groups load from the active profile and runtime.")
-    }
-    let count = groups.count
-    if appModel.previewRuntimeActive {
-      if count == 1 {
-        return String(localized: "1 group · preview core")
-      }
-      return localizedProxiesCount("%lld groups · preview core", count)
-    }
-    if appModel.isShowingProxyPreview {
-      if count == 1 {
-        return String(localized: "1 preview group")
-      }
-      return localizedProxiesCount("%lld preview groups", count)
-    }
-    if count == 1 {
-      return String(localized: "1 group")
-    }
-    return localizedProxiesCount("%lld groups", count)
   }
 
   private func proxyWorkspace(
@@ -238,40 +215,30 @@ struct ProxiesView: View {
     }
   }
 
+  /// Search now lives in the window toolbar via `.searchable`, so this strip only
+  /// carries the view/sort/presentation controls.
   private var proxyWorkspaceControls: some View {
     ViewThatFits(in: .horizontal) {
       HStack(spacing: 10) {
-        searchField
         proxyWorkspaceControlStrip
         Spacer(minLength: 0)
       }
 
-      VStack(alignment: .leading, spacing: 8) {
-        searchField
-        ViewThatFits(in: .horizontal) {
-          proxyWorkspaceControlStrip
-          splitProxyWorkspaceControlStrip
-        }
-      }
+      splitProxyWorkspaceControlStrip
     }
   }
 
-  private var searchField: some View {
-    HStack(spacing: 8) {
-      TextField("Search", text: $searchText)
-        .textFieldStyle(.roundedBorder)
-        .frame(minWidth: 180, idealWidth: 260, maxWidth: 340)
-      if ProxySearchActivityPolicy.showsSearchProgress(
-        searchText: searchText,
-        isComputing: searchCoordinator.isComputing
-      ) {
-        ProgressView()
-          .controlSize(.small)
-          .help("Updating search results…")
-          .transition(.opacity)
-      }
+  @ViewBuilder
+  private var searchProgressIndicator: some View {
+    if ProxySearchActivityPolicy.showsSearchProgress(
+      searchText: searchText,
+      isComputing: searchCoordinator.isComputing
+    ) {
+      ProgressView()
+        .controlSize(.small)
+        .help("Updating search results…")
+        .transition(.opacity)
     }
-    .animation(.easeInOut(duration: 0.15), value: searchCoordinator.isComputing)
   }
 
   private var proxyWorkspaceControlStrip: some View {
@@ -805,7 +772,7 @@ private struct ProxyWorkspaceSurface<Content: View>: View {
   }
 
   var body: some View {
-    let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+    let shape = SurfaceRadius.shape(SurfaceRadius.card)
     VStack(alignment: .leading, spacing: 0) {
       content
     }
@@ -929,9 +896,9 @@ private struct ProxyGroupNavigatorRow: View {
     .padding(.horizontal, 10)
     .padding(.vertical, 7)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+    .contentShape(SurfaceRadius.shape(SurfaceRadius.tile))
     .background {
-      RoundedRectangle(cornerRadius: 7, style: .continuous)
+      SurfaceRadius.shape(SurfaceRadius.tile)
         .fill(isSelected ? Color.accentColor : .clear)
     }
   }

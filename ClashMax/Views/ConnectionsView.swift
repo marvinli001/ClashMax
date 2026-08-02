@@ -26,10 +26,7 @@ struct ConnectionsView: View {
   @StateObject private var appIconCache = ConnectionAppIconCache()
 
   var body: some View {
-    AdaptivePage(
-      title: "Connections",
-      subtitle: subtitle
-    ) {
+    AdaptivePage(title: "Connections") {
       Button {
         closeSelected()
       } label: {
@@ -57,23 +54,23 @@ struct ConnectionsView: View {
           message: emptyMessage
         )
       } else {
-        GeometryReader { proxy in
-          connectionsWorkspace(mode: ConnectionsLayout.mode(forWidth: proxy.size.width))
+        VStack(spacing: 8) {
+          GeometryReader { proxy in
+            connectionsWorkspace(mode: ConnectionsLayout.mode(forWidth: proxy.size.width))
+          }
+          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+          PageStatusFooter(text: String.localizedStringWithFormat(
+            NSLocalizedString("%lld active, %lld retained", comment: ""),
+            Int64(runtimeData.connections.count),
+            Int64(runtimeData.connectionRecords.count)
+          ))
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       }
     }
     .onChange(of: visibleConnections.map(\.id)) { _, ids in
       selectedConnectionIDs = selectedConnectionIDs.intersection(Set(ids))
     }
-  }
-
-  private var subtitle: String {
-    String.localizedStringWithFormat(
-      NSLocalizedString("%lld active, %lld retained", comment: ""),
-      Int64(runtimeData.connections.count),
-      Int64(runtimeData.connectionRecords.count)
-    )
   }
 
   private var controls: some View {
@@ -537,6 +534,6 @@ private struct ConnectionRow: View {
     }
     .padding(.horizontal, 10)
     .padding(.vertical, 7)
-    .background(isSelected ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 6))
+    .background(isSelected ? Color.accentColor.opacity(0.12) : Color.clear, in: SurfaceRadius.shape(SurfaceRadius.chip))
   }
 }

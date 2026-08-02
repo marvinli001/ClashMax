@@ -14,6 +14,12 @@ struct ContentView: View {
           .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       }
         .toolbar {
+          // Deliberately the default placement, not `.navigation`: `.navigation` sits
+          // *before* the window title and pushes the app name off the leading edge.
+          // The title owns the leading edge, these global runtime controls own the
+          // trailing side, and they are the only things in here — per-page controls
+          // stay inside the page (see `AdaptivePage.pageActionBar`) so they never read
+          // as an extension of the run-mode picker.
           ToolbarItemGroup {
             RunModePicker(selection: Binding(
               get: { appModel.overrides.mode },

@@ -24,10 +24,7 @@ struct SettingsView: View {
   }
 
   var body: some View {
-    AdaptivePage(
-      title: "Settings",
-      subtitle: "Runtime overrides and system integration controls."
-    ) {
+    AdaptivePage(title: "Settings") {
       EmptyView()
     } content: {
       Form {
@@ -1180,7 +1177,7 @@ private struct NetworkPolicySettingsPopover: View {
     }
     .padding(.horizontal, 10)
     .padding(.vertical, 8)
-    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+    .background(.quaternary, in: SurfaceRadius.shape(SurfaceRadius.chip))
   }
 
   private func addRule() {
@@ -1303,7 +1300,7 @@ private struct ExternalDashboardProfilesPopover: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
-            .background(.quaternary, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .background(.quaternary, in: SurfaceRadius.shape(SurfaceRadius.chip))
           }
         }
       }
@@ -2039,7 +2036,7 @@ private struct RuleOverlayListRowModifier: ViewModifier {
   @Environment(\.colorScheme) private var colorScheme
 
   func body(content: Content) -> some View {
-    let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
+    let shape = SurfaceRadius.shape(SurfaceRadius.chip)
     content
       .background(RuleOverlaySurface.row(for: colorScheme), in: shape)
       .overlay {
@@ -2701,7 +2698,7 @@ private struct ExternalControlCORSSettingsPopover: View {
           .foregroundStyle(.secondary)
           .padding(.horizontal, 8)
           .padding(.vertical, 6)
-          .background(.quaternary, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+          .background(.quaternary, in: SurfaceRadius.shape(SurfaceRadius.chip))
           .lineLimit(2)
           .fixedSize(horizontal: false, vertical: true)
       }

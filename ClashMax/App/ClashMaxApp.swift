@@ -136,6 +136,9 @@ struct ClashMaxApp: App {
 
     Settings {
       SettingsView(bundledCoreInfo: bundledCoreInfo)
+        // The Settings scene has no window toolbar to publish into, so this page
+        // keeps its inline header instead of the title-bar chrome the main window uses.
+        .environment(\.pageChromePlacement, .inline)
         .environmentObject(appModel)
         .environmentObject(appModel.settings)
         .environmentObject(appModel.profileStore)
@@ -198,17 +201,40 @@ private struct MenuBarStatusLabel: View {
   }
 }
 
+// MenuBarExtra clamps a SwiftUI label to one text line, so a VStack of two Texts
+// gets bottom-clipped in the status bar (only the upload row survived). Drawing
+// both rows into a template NSImage sidesteps that limit — status items render
+// images at full menu-bar height and tint templates for light/dark automatically.
 private struct MenuBarTrafficStatusLines: View {
   let lines: MenuBarTrafficStatusLabel.Lines
 
   var body: some View {
-    VStack(alignment: .leading, spacing: -1) {
-      Text(lines.upload)
-      Text(lines.download)
+    Image(nsImage: Self.render(lines))
+  }
+
+  private static func render(_ lines: MenuBarTrafficStatusLabel.Lines) -> NSImage {
+    let font = NSFont.monospacedDigitSystemFont(ofSize: 8.5, weight: .medium)
+    let attributes: [NSAttributedString.Key: Any] = [
+      .font: font,
+      .foregroundColor: NSColor.black,
+    ]
+    let upload = NSAttributedString(string: lines.upload, attributes: attributes)
+    let download = NSAttributedString(string: lines.download, attributes: attributes)
+    let uploadSize = upload.size()
+    let downloadSize = download.size()
+    let width = ceil(max(uploadSize.width, downloadSize.width))
+    // Two 9pt rows keep the image inside the 22pt status-item height.
+    let rowHeight: CGFloat = 9
+    let size = NSSize(width: width, height: rowHeight * 2)
+
+    let image = NSImage(size: size, flipped: false) { _ in
+      // Right-aligned rows keep the units flush while the digit widths vary.
+      download.draw(at: NSPoint(x: width - downloadSize.width, y: 0))
+      upload.draw(at: NSPoint(x: width - uploadSize.width, y: rowHeight))
+      return true
     }
-    .font(.system(size: 8.5, weight: .medium).monospacedDigit())
-    .lineLimit(1)
-    .fixedSize()
+    image.isTemplate = true
+    return image
   }
 }
 

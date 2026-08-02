@@ -9,14 +9,7 @@ struct LogsView: View {
     let retainedLogs = runtimeData.visibleLogs(developerMode: appModel.developerMode)
     let visibleLogs = filteredLogs(from: retainedLogs)
 
-    AdaptivePage(
-      title: "Logs",
-      subtitle: String.localizedStringWithFormat(
-        NSLocalizedString("%lld visible / %lld retained", comment: ""),
-        Int64(visibleLogs.count),
-        Int64(runtimeData.logs.count)
-      )
-    ) {
+    AdaptivePage(title: "Logs") {
       Picker("Level", selection: $levelFilter) {
         ForEach(LogLevelFilter.allCases) { filter in
           Text(filter.displayName).tag(filter)
@@ -36,23 +29,31 @@ struct LogsView: View {
             : "No retained logs match the selected level."
         )
       } else {
-        List(visibleLogs) { entry in
-          HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text(DisplayFormatters.date.string(from: entry.date))
-              .foregroundStyle(.secondary)
-              .frame(width: 80, alignment: .leading)
-            Text(entry.level.uppercased())
-              .fontWeight(.semibold)
-              .foregroundStyle(LogLevelStyle.color(for: entry.level))
-              .frame(width: 70, alignment: .leading)
-            Text(entry.message)
-              .font(.system(.body, design: .monospaced))
-              .lineLimit(2)
-              .truncationMode(.middle)
-              .help(entry.message)
+        VStack(spacing: 8) {
+          List(visibleLogs) { entry in
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+              Text(DisplayFormatters.date.string(from: entry.date))
+                .foregroundStyle(.secondary)
+                .frame(width: 80, alignment: .leading)
+              Text(entry.level.uppercased())
+                .fontWeight(.semibold)
+                .foregroundStyle(LogLevelStyle.color(for: entry.level))
+                .frame(width: 70, alignment: .leading)
+              Text(entry.message)
+                .font(.system(.body, design: .monospaced))
+                .lineLimit(2)
+                .truncationMode(.middle)
+                .help(entry.message)
+            }
           }
+          .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+          PageStatusFooter(text: String.localizedStringWithFormat(
+            NSLocalizedString("%lld visible / %lld retained", comment: ""),
+            Int64(visibleLogs.count),
+            Int64(runtimeData.logs.count)
+          ))
         }
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
       }
     }
   }

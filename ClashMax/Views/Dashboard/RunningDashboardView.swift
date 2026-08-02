@@ -377,7 +377,7 @@ private struct DashboardMiniInfoItem: View {
         .font(.system(size: 12, weight: .semibold))
         .foregroundStyle(tint)
         .frame(width: 22, height: 22)
-        .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .background(tint.opacity(0.12), in: SurfaceRadius.shape(SurfaceRadius.chip))
 
       VStack(alignment: .leading, spacing: 1) {
         Text(title)
@@ -964,10 +964,7 @@ struct StatusView: View {
   @EnvironmentObject private var appModel: AppModel
 
   var body: some View {
-    AdaptivePage(
-      title: "Status",
-      subtitle: "Runtime facts, diagnostics, logs, and repair."
-    ) {
+    AdaptivePage(title: "Status") {
       ViewThatFits(in: .horizontal) {
         HStack(spacing: 8) {
           statusActions
@@ -1333,7 +1330,7 @@ private extension View {
   }
 
   func statusFactSurface() -> some View {
-    let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
+    let shape = SurfaceRadius.shape(SurfaceRadius.tile)
     return background(.tileSurface, in: shape)
       .overlay(shape.strokeBorder(.separator.opacity(0.7), lineWidth: 0.75))
   }

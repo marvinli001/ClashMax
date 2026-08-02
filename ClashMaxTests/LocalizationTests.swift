@@ -34,8 +34,7 @@ final class LocalizationTests: XCTestCase {
     "Src Port",
     "Stop Core",
     "Trust this dashboard to receive the API secret automatically",
-    "Trusted for automatic secret autofill",
-    "Typed snippets are merged into generated runtime YAML without editing original profiles."
+    "Trusted for automatic secret autofill"
   ]
 
   func testStatusSectionAppearsAfterHome() {

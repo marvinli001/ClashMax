@@ -1,6 +1,24 @@
 import Pow
 import SwiftUI
 
+/// One geometric scale for every rounded surface in the app.
+///
+/// The values are concentric on purpose — a `chip` nested in a `tile` nested in a
+/// `card` keeps a constant gap between curves, which is what stops nested rounded
+/// rectangles from looking subtly wrong. Prefer these over inline literals.
+enum SurfaceRadius {
+  /// Top-level content cards (dashboard cards, workspace surfaces).
+  static let card: CGFloat = 10
+  /// Blocks sitting directly on a card (node tiles, inspector panels, fact tiles).
+  static let tile: CGFloat = 8
+  /// Small inline affordances (badges, delay pills, filter chips).
+  static let chip: CGFloat = 6
+
+  static func shape(_ radius: CGFloat) -> RoundedRectangle {
+    RoundedRectangle(cornerRadius: radius, style: .continuous)
+  }
+}
+
 enum DashboardLayoutMetrics {
   static let runModePickerWidth: CGFloat = 214
   static let proxyRoutingModePickerWidth: CGFloat = 272
@@ -770,7 +788,7 @@ private struct CurrentSystemProxySummary: View {
       .padding(.horizontal, 10)
       .padding(.vertical, 9)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .background(.quaternary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+      .background(.quaternary, in: SurfaceRadius.shape(SurfaceRadius.tile))
     }
     .frame(maxWidth: .infinity, alignment: .leading)
   }
@@ -966,7 +984,7 @@ private struct EditableKeyValueList: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
-            .background(.quaternary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(.quaternary, in: SurfaceRadius.shape(SurfaceRadius.tile))
           }
         }
       }
@@ -1098,9 +1116,9 @@ struct DashboardStatusPill: View {
     }
     .padding(.horizontal, 10)
     .padding(.vertical, 7)
-    .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .background(tint.opacity(0.08), in: SurfaceRadius.shape(SurfaceRadius.tile))
     .overlay {
-      RoundedRectangle(cornerRadius: 8, style: .continuous)
+      SurfaceRadius.shape(SurfaceRadius.tile)
         .strokeBorder(tint.opacity(0.20), lineWidth: 1)
     }
   }
@@ -1121,7 +1139,7 @@ struct DashboardMetricTile: View {
           .font(.system(size: 15, weight: .semibold))
           .foregroundStyle(tint)
           .frame(width: 28, height: 28)
-          .background(tint.opacity(0.13), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+          .background(tint.opacity(0.13), in: SurfaceRadius.shape(SurfaceRadius.tile))
 
         Spacer()
       }
@@ -1144,7 +1162,7 @@ struct DashboardMetricTile: View {
             .lineLimit(1)
             .minimumScaleFactor(0.62)
             .contentTransition(.numericText())
-            .changeEffect(.pulse(shape: RoundedRectangle(cornerRadius: 8), style: tint.opacity(0.18), count: 1), value: value)
+            .changeEffect(.pulse(shape: SurfaceRadius.shape(SurfaceRadius.tile), style: tint.opacity(0.18), count: 1), value: value)
 
           if let footnote {
             Text(footnote)
@@ -1255,18 +1273,59 @@ extension ShapeStyle where Self == TileSurface {
 
 struct DashboardCardModifier: ViewModifier {
   @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  /// Cards that respond to the pointer (the whole card is a control or opens a
+  /// detail). Drives a hover lift so the affordance is discoverable before click.
   var interactive = false
+  @State private var isHovering = false
+
+  private var isDark: Bool { colorScheme == .dark }
+  private var isLifted: Bool { interactive && isHovering }
 
   func body(content: Content) -> some View {
-    let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
-    content
-      .background(.cardSurface, in: shape)
-      .overlay(shape.strokeBorder(.separator, lineWidth: 1))
-      .shadow(
-        color: .black.opacity(colorScheme == .dark ? 0.16 : 0.04),
-        radius: colorScheme == .dark ? 16 : 10,
-        y: colorScheme == .dark ? 8 : 2
-      )
+    let shape = SurfaceRadius.shape(SurfaceRadius.card)
+    if #available(macOS 26, *), interactive {
+      // Glass is reserved for cards that behave like controls. That keeps the
+      // material meaningful — glass reads as "you can act on this", opaque reads
+      // as "this is data" — instead of decorating every dense panel, and it avoids
+      // putting a translucent surface behind small operational text.
+      content
+        .glassEffect(.regular.interactive(), in: shape)
+        .contentShape(shape)
+    } else {
+      content
+        .background(.cardSurface, in: shape)
+        .overlay(shape.strokeBorder(borderStyle, lineWidth: 1))
+        .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, y: shadowOffsetY)
+        .contentShape(shape)
+        .onHover { hovering in
+          guard interactive else { return }
+          withAnimation(reduceMotion ? nil : .easeOut(duration: 0.12)) {
+            isHovering = hovering
+          }
+        }
+    }
+  }
+
+  /// Pre-macOS 26 fallback for the hover affordance: emphasise the border that is
+  /// already there rather than introducing a second one.
+  private var borderStyle: AnyShapeStyle {
+    isLifted ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.separator)
+  }
+
+  private var shadowOpacity: Double {
+    if isDark { return isLifted ? 0.24 : 0.16 }
+    return isLifted ? 0.08 : 0.04
+  }
+
+  private var shadowRadius: CGFloat {
+    if isDark { return isLifted ? 20 : 16 }
+    return isLifted ? 14 : 10
+  }
+
+  private var shadowOffsetY: CGFloat {
+    if isDark { return isLifted ? 10 : 8 }
+    return isLifted ? 4 : 2
   }
 }
 

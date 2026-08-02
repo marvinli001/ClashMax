@@ -100,10 +100,7 @@ struct RoutingView: View {
   @StateObject private var simulationDebouncer = RuleMatchSimulationDebouncer()
 
   var body: some View {
-    AdaptivePage(
-      title: "Routing",
-      subtitle: String(localized: "Typed snippets are merged into generated runtime YAML without editing original profiles.")
-    ) {
+    AdaptivePage(title: "Routing") {
       routingPageActions
     } content: {
       routingWorkspace
@@ -1340,7 +1337,7 @@ private struct RuntimeDNSPatchEditor: View {
         }
       }
       .overlay {
-        RoundedRectangle(cornerRadius: 6, style: .continuous)
+        SurfaceRadius.shape(SurfaceRadius.chip)
           .strokeBorder(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 1)
       }
   }

@@ -24,10 +24,7 @@ struct ProfilesView: View {
   @State private var endpointManagerPresented = false
 
   var body: some View {
-    AdaptivePage(
-      title: "Profiles",
-      subtitle: profilesSubtitle
-    ) {
+    AdaptivePage(title: "Profiles") {
       Button {
         appModel.updateDueSubscriptions()
       } label: {
@@ -198,17 +195,6 @@ struct ProfilesView: View {
     .onReceive(NotificationCenter.default.publisher(for: .clashMaxImportClashXRequested)) { _ in
       importClientMigration()
     }
-  }
-
-  private var profilesSubtitle: String {
-    let count = profileStore.profiles.count
-    if count == 0 {
-      return String(localized: "Import a local YAML file or add a subscription.")
-    }
-    if count == 1 {
-      return String(localized: "1 profile")
-    }
-    return String.localizedStringWithFormat(NSLocalizedString("%lld profiles", comment: ""), Int64(count))
   }
 
   private var subscriptionControls: some View {
@@ -1764,7 +1750,7 @@ private struct GlobalErrorBanner: View {
         .frame(maxHeight: 220)
         .background(
           .quaternary,
-          in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+          in: SurfaceRadius.shape(SurfaceRadius.chip)
         )
 
         Text("Review before sharing: this may include hostnames, ports, or other details from your profile.")
@@ -1893,7 +1879,7 @@ private struct SubscriptionDiagnosticsView: View {
         .frame(maxHeight: 220)
         .background(
           .quaternary,
-          in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+          in: SurfaceRadius.shape(SurfaceRadius.chip)
         )
 
         Text("Review before sharing: this may include hostnames, ports, or other details from your profile.")
