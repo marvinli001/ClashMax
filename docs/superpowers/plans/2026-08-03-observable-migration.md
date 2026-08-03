@@ -80,6 +80,8 @@ Task 12 is the dedicated audit step and spells out the procedure.
 
 **Modified — Stage 3 (view call sites):** `ClashMax/App/ClashMaxApp.swift` and the 17 view files holding the 57 `@EnvironmentObject` declarations.
 
+**Counts** (verified against the working tree, not HEAD): 57 `@EnvironmentObject`, 33 `.environmentObject(`, 5 `@StateObject`, 7 `@ObservedObject`, 81 `@Published`.
+
 **Modified — Stage 4 (tests):** `ClashMaxTests/DashboardRuntimeStateTests.swift`, `ClashMaxTests/ProfileStoreTests.swift`, `ClashMaxTests/ProxySearchPipelineTests.swift`, `ClashMaxTests/MenuBarPanelLayoutTests.swift`
 
 ---
@@ -578,7 +580,7 @@ This type guards the issue #10/#11 perf work. The `if snapshot != self.snapshot`
 **Files:**
 - Modify: `ClashMax/Views/ProxySearchCoordinator.swift:13`, `:25`, `:27`
 - Modify: `ClashMaxTests/ProxySearchPipelineTests.swift:280`, `:308`, `:350`
-- Modify: `ClashMax/Views/ProxiesView.swift:8`, `ClashMax/Views/Dashboard/RunningDashboardView.swift:7` (`@StateObject` owners)
+- Modify: `ClashMax/Views/ProxiesView.swift:8`, `ClashMax/Views/Dashboard/RunningDashboardView.swift:7` (`@ObservedObject` consumers — the coordinators are owned by `AppModel`, not these views)
 
 - [ ] **Step 1: Rewrite the three emission tests against Observation first**
 
@@ -647,19 +649,25 @@ Apply rule R2 to the internals at `:38-44` — none of these should invalidate a
 
 Delete `import Combine` at `:1`.
 
-- [ ] **Step 4: Convert the two owners to `@State`**
+- [ ] **Step 4: Convert the two consumers to plain lets**
+
+**Do not reintroduce per-view ownership.** Uncommitted work in the tree moved both coordinators onto `AppModel` (`let proxiesSearchCoordinator` / `let dashboardCurrentNodeCoordinator`, `AppModel.swift:808-809`) precisely because view-owned `@StateObject` instances were torn down on every tab switch, so returning to the page repainted from an empty snapshot. The views now receive the coordinator through an `init` and hold it as `@ObservedObject`. Converting these back to `@State` would revert that fix.
 
 `ClashMax/Views/ProxiesView.swift:8`:
 
 ```swift
-@State private var searchCoordinator = ProxySearchCoordinator()
+let searchCoordinator: ProxySearchCoordinator
 ```
 
 `ClashMax/Views/Dashboard/RunningDashboardView.swift:7`:
 
 ```swift
-@State private var currentNodeCoordinator = ProxySearchCoordinator()
+let currentNodeCoordinator: ProxySearchCoordinator
 ```
+
+Leave both `init`s and the `ContentView.swift:91` / dashboard call sites exactly as they are. Observation tracks reads through a plain reference, so no property wrapper is needed.
+
+`AppModel` holds both as `let`, so once it becomes `@Observable` in Stage 2, nested tracking covers any view that reaches a coordinator *through* the model. The views here hold it directly, which already works as soon as `ProxySearchCoordinator` is `@Observable`.
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
