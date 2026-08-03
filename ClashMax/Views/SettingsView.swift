@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 struct SettingsView: View {
   @EnvironmentObject private var appModel: AppModel
   @EnvironmentObject private var settings: PersistedSettingsStore
-  @EnvironmentObject private var appUpdateController: AppUpdateController
+  @Environment(AppUpdateController.self) private var appUpdateController
   private let bundledCoreInfo: BundledCoreInfo
   @State private var isRuleOverlayPresented = false
   @State private var isNetworkPoliciesPresented = false

@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct CheckForUpdatesButton: View {
-  @ObservedObject var updateController: AppUpdateController
+  let updateController: AppUpdateController
   var fillsWidth = false
 
   var body: some View {

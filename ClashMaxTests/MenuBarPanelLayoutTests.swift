@@ -287,7 +287,7 @@ final class MenuBarPanelLayoutTests: XCTestCase {
     MenuBarView()
       .environmentObject(model)
       .environment(model.runtimeData)
-      .environmentObject(AppUpdateController())
+      .environment(AppUpdateController())
       .environment(\.locale, Locale(identifier: localeIdentifier))
   }
 

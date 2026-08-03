@@ -5,7 +5,7 @@ import SwiftUI
 struct ClashMaxApp: App {
   @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
   @StateObject private var appModel = AppModel.bootstrap()
-  @StateObject private var appUpdateController = AppUpdateController()
+  @State private var appUpdateController = AppUpdateController()
   @Environment(\.openWindow) private var openWindow
   private let bundledCoreInfo = BundledCoreInfo()
   // Read once at process start: launch behavior is a scene-construction decision,
@@ -24,7 +24,7 @@ struct ClashMaxApp: App {
         .environmentObject(appModel.systemProxy)
         .environment(appModel.runtimeData)
         .environment(appModel.publicIP)
-        .environmentObject(appUpdateController)
+        .environment(appUpdateController)
         .appThemeAppearance(appModel.settings.appTheme)
         .frame(minWidth: 980, minHeight: 660)
         .onAppear {
@@ -128,7 +128,7 @@ struct ClashMaxApp: App {
         .environmentObject(appModel.systemProxy)
         .environment(appModel.runtimeData)
         .environment(appModel.publicIP)
-        .environmentObject(appUpdateController)
+        .environment(appUpdateController)
         .appThemeAppearance(appModel.settings.appTheme)
         .onAppear {
           appDelegate.appModel = appModel
@@ -161,7 +161,7 @@ struct ClashMaxApp: App {
         .environmentObject(appModel.systemProxy)
         .environment(appModel.runtimeData)
         .environment(appModel.publicIP)
-        .environmentObject(appUpdateController)
+        .environment(appUpdateController)
         .appThemeAppearance(appModel.settings.appTheme)
         .onAppear {
           appDelegate.appModel = appModel

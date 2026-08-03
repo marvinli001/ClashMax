@@ -2,12 +2,13 @@ import Foundation
 import Sparkle
 
 @MainActor
-final class AppUpdateController: NSObject, ObservableObject {
-  @Published private(set) var canCheckForUpdates = false
-  @Published private(set) var statusMessage = String(localized: "Checking for updates is not configured for this build.")
+@Observable
+final class AppUpdateController: NSObject {
+  private(set) var canCheckForUpdates = false
+  private(set) var statusMessage = String(localized: "Checking for updates is not configured for this build.")
 
-  private let updaterController: SPUStandardUpdaterController?
-  private var canCheckObservation: NSKeyValueObservation?
+  @ObservationIgnored private let updaterController: SPUStandardUpdaterController?
+  @ObservationIgnored private var canCheckObservation: NSKeyValueObservation?
 
   override init() {
     if Self.hasConfiguredPublicKey {

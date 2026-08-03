@@ -94,7 +94,7 @@ private struct MenuBarPanelWindowConfigurator: NSViewRepresentable {
 struct MenuBarView: View {
   @EnvironmentObject private var appModel: AppModel
   @Environment(RuntimeDataStore.self) private var runtimeData
-  @EnvironmentObject private var appUpdateController: AppUpdateController
+  @Environment(AppUpdateController.self) private var appUpdateController
 
   var body: some View {
     let runtime = MenuBarRuntimePresentation(appModel: appModel)
