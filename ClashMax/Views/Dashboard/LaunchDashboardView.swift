@@ -2,7 +2,7 @@ import Pow
 import SwiftUI
 
 struct LaunchDashboardView: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
   @State private var coreActivationTrigger = 0
   let state: DashboardRuntimeState
   let namespace: Namespace.ID
@@ -142,7 +142,7 @@ struct LaunchDashboardView: View {
 }
 
 private struct LaunchControlDeck: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
   let state: DashboardRuntimeState
   let namespace: Namespace.ID
   let reduceMotion: Bool
@@ -312,7 +312,7 @@ private struct LaunchControlDeck: View {
 }
 
 private struct LaunchStatusMessage: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
   let state: DashboardRuntimeState
 
   var body: some View {

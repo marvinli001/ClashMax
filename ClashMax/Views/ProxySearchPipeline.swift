@@ -77,7 +77,7 @@ enum ProxySearchPipeline {
 }
 
 /// Immutable result the view renders. Excludes `durationMs` and derived counts from equality so a
-/// re-run that produces identical display content doesn't churn `@Published` subscribers.
+/// re-run that produces identical display content doesn't churn observers.
 struct ProxySearchSnapshot: Sendable {
   var searchText: String
   var query: ProxySearchQuery

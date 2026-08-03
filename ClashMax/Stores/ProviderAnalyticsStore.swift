@@ -1,7 +1,8 @@
 import Foundation
 
 @MainActor
-final class ProviderAnalyticsStore: ObservableObject {
+@Observable
+final class ProviderAnalyticsStore {
   private struct RecordKey: Hashable {
     var profileID: Profile.ID
     var kind: ProviderKind
@@ -12,7 +13,7 @@ final class ProviderAnalyticsStore: ObservableObject {
   private static let retainedSnapshotCount = 2
   private static let successRateWindow = 20
 
-  @Published private(set) var records: [ProviderAnalyticsRecord] = []
+  private(set) var records: [ProviderAnalyticsRecord] = []
 
   private let fileURL: URL
   private let fileManager: FileManager

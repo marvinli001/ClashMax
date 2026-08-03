@@ -93,9 +93,10 @@ final class ProxySearchCoordinator {
     if committed {
       // Skip re-assigning `snapshot` when a recompute resolves to display content identical to
       // what's already published (e.g. a redundant re-submit of the same query/data), so the
-      // snapshot publisher doesn't emit a no-op `objectWillChange`. This does NOT suppress
-      // re-renders driven by `appModel` updates or the `isComputing` toggle — those are separate
-      // publishers. Equality is over the display fields only (see `ProxySearchSnapshot.==`).
+      // assignment doesn't invalidate observers for a no-op. Observation has no inequality check
+      // of its own: every setter call invalidates, so this guard is load-bearing. It does NOT
+      // suppress re-renders driven by `appModel` updates or the `isComputing` toggle — those are
+      // tracked separately. Equality is over the display fields only (see `ProxySearchSnapshot.==`).
       if snapshot != self.snapshot {
         self.snapshot = snapshot
       }

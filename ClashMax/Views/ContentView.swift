@@ -1,10 +1,13 @@
 import SwiftUI
 
 struct ContentView: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
 
   var body: some View {
-    NavigationSplitView {
+    // @Environment does not vend bindings; @Bindable wraps the tracked reference so
+    // `$appModel.selectedSection` still resolves.
+    @Bindable var appModel = appModel
+    return NavigationSplitView {
       SidebarView(selection: $appModel.selectedSection)
     } detail: {
       VStack(spacing: 0) {
@@ -165,7 +168,7 @@ private struct InitialTunHelperPromptSheet: View {
 }
 
 struct StatusStrip: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
 
   var body: some View {
     StatusStripContent(

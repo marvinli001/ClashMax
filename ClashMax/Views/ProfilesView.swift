@@ -4,10 +4,10 @@ import SwiftUI
 import Yams
 
 struct ProfilesView: View {
-  @EnvironmentObject private var appModel: AppModel
-  @EnvironmentObject private var profileStore: ProfileStore
-  @EnvironmentObject private var profileCoordinator: ProfileCoordinator
-  @EnvironmentObject private var providerAnalytics: ProviderAnalyticsStore
+  @Environment(AppModel.self) private var appModel
+  @Environment(ProfileStore.self) private var profileStore
+  @Environment(ProfileCoordinator.self) private var profileCoordinator
+  @Environment(ProviderAnalyticsStore.self) private var providerAnalytics
   @State private var subscriptionURL = ""
   @State private var subscriptionUpstreamEndpointID: UUID?
   @State private var profileBeingEdited: Profile?
@@ -153,13 +153,13 @@ struct ProfilesView: View {
           }
         }
       )
-      .environmentObject(appModel)
+      .environment(appModel)
     }
     .sheet(isPresented: $endpointManagerPresented) {
       OutboundProxyEndpointManagerSheet(
         onClose: { endpointManagerPresented = false }
       )
-      .environmentObject(appModel)
+      .environment(appModel)
     }
     .sheet(item: $providerInsightsProfile) { profile in
       let resolvedProfile = currentProfile(matching: profile) ?? profile
@@ -2061,7 +2061,7 @@ private struct SubscriptionDiagnosticsView: View {
 }
 
 private struct SubscriptionProviderOptionsEditor: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
   let profile: Profile
   @Binding var options: SubscriptionProviderOptions
   @Binding var validationError: String?
@@ -2674,7 +2674,7 @@ private struct OutboundProxyEndpointEditorFields: View {
 }
 
 private struct ManualProxyProfileSheet: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
   let onCancel: () -> Void
   let onSave: (OutboundProxyEndpoint, String?, String) -> Void
   @State private var profileName = ""
@@ -2745,7 +2745,7 @@ private struct OutboundProxyEndpointEditorContext: Identifiable {
 }
 
 private struct OutboundProxyEndpointManagerSheet: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
   let onClose: () -> Void
   @State private var editorContext: OutboundProxyEndpointEditorContext?
   @State private var endpointPendingDeletion: OutboundProxyEndpoint?
@@ -2832,7 +2832,7 @@ private struct OutboundProxyEndpointManagerSheet: View {
           }
         }
       )
-      .environmentObject(appModel)
+      .environment(appModel)
     }
     .alert("Delete Proxy Endpoint?", isPresented: deleteConfirmationPresented) {
       Button("Delete", role: .destructive) {
@@ -2938,7 +2938,7 @@ private struct OutboundProxyEndpointManagerSheet: View {
 }
 
 private struct OutboundProxyEndpointEditorSheet: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
   let initialContext: OutboundProxyEndpointEditorContext
   let onCancel: () -> Void
   let onSave: (OutboundProxyEndpoint, String?) -> Void

@@ -1,5 +1,4 @@
 import AppKit
-import Combine
 import Foundation
 import NetworkExtension
 import SystemExtensions
@@ -331,20 +330,22 @@ enum NetworkExtensionControllerError: LocalizedError, Equatable {
 }
 
 @MainActor
-final class NetworkExtensionController: ObservableObject {
+@Observable
+final class NetworkExtensionController {
   nonisolated static let providerBundleIdentifier = NetworkExtensionRuntimeConstants.providerBundleIdentifier
   nonisolated static let appGroupIdentifier = NetworkExtensionRuntimeConstants.appGroupIdentifier
 
-  @Published private(set) var systemExtensionState: NetworkExtensionInstallState = .notInstalled
-  @Published private(set) var vpnStatus: NetworkExtensionTunnelStatus = .disconnected
-  @Published private(set) var recentError: String?
-  @Published private(set) var diagnostics: NetworkExtensionDiagnosticsSnapshot = .empty
+  private(set) var systemExtensionState: NetworkExtensionInstallState = .notInstalled
+  private(set) var vpnStatus: NetworkExtensionTunnelStatus = .disconnected
+  private(set) var recentError: String?
+  private(set) var diagnostics: NetworkExtensionDiagnosticsSnapshot = .empty
 
   private let systemExtensionRequester: any SystemExtensionRequesting
   private let transparentProxyManager: any TransparentProxyManaging
   private let launchServicesRegistrar: any LaunchServicesRegistering
   private let diagnosticsStore: NetworkExtensionDiagnosticsFileStore
-  private var systemDNSOverrideDiagnosticsState: (applied: Bool, status: String)?
+  /// Staging value folded into `diagnostics` when the snapshot is rebuilt; not read by any view.
+  @ObservationIgnored private var systemDNSOverrideDiagnosticsState: (applied: Bool, status: String)?
 
   init(
     systemExtensionRequester: any SystemExtensionRequesting = OSSystemExtensionRequestBridge(),

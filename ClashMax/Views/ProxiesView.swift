@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 struct ProxiesView: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
   @Environment(RuntimeDataStore.self) private var runtimeData
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   // Owned by AppModel so the resolved snapshot survives tab switches; a fresh
@@ -935,7 +935,7 @@ private struct ProxyGroupNavigatorRow: View {
 }
 
 private struct ProxyGroupDetailPane: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
   @State private var scrollToSelectedRequest = 0
   let group: ProxyGroup
   let nodePresentation: ProxyNodePresentation
@@ -1318,7 +1318,7 @@ private struct ProxyDelayBatchMetric: View {
 }
 
 private struct ProxyProviderList: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
   @Environment(RuntimeDataStore.self) private var runtimeData
   let providers: [ProxyProvider]
 
@@ -1574,7 +1574,7 @@ private struct ProxyGroupCard: View {
 }
 
 private struct ProxyNodeCard: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @GestureState private var isPressing = false
   let group: ProxyGroup

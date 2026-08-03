@@ -2,7 +2,7 @@ import Pow
 import SwiftUI
 
 struct DashboardView: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Namespace private var dashboardNamespace
 

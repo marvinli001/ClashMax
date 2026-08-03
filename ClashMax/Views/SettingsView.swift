@@ -3,8 +3,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct SettingsView: View {
-  @EnvironmentObject private var appModel: AppModel
-  @EnvironmentObject private var settings: PersistedSettingsStore
+  @Environment(AppModel.self) private var appModel
+  @Environment(PersistedSettingsStore.self) private var settings
   @Environment(AppUpdateController.self) private var appUpdateController
   private let bundledCoreInfo: BundledCoreInfo
   @State private var isRuleOverlayPresented = false
@@ -24,7 +24,10 @@ struct SettingsView: View {
   }
 
   var body: some View {
-    AdaptivePage(title: "Settings") {
+    // @Environment does not vend bindings; @Bindable wraps the tracked reference so the
+    // `$settings.*` bindings below still resolve.
+    @Bindable var settings = settings
+    return AdaptivePage(title: "Settings") {
       EmptyView()
     } content: {
       Form {
@@ -516,7 +519,7 @@ struct SettingsView: View {
           isBackupRestorePresented = false
         }
       )
-      .environmentObject(appModel)
+      .environment(appModel)
     }
   }
 
@@ -800,7 +803,7 @@ private struct BackupExportSheet: View {
 }
 
 private struct BackupRestoreSheet: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
   @State private var password = ""
   @State private var isRestoring = false
   let onCancel: () -> Void
@@ -2297,8 +2300,8 @@ private struct UpdateVersionRow<Action: View>: View {
 }
 
 private struct ExternalControlSettingsRow: View {
-  @EnvironmentObject private var appModel: AppModel
-  @EnvironmentObject private var settings: PersistedSettingsStore
+  @Environment(AppModel.self) private var appModel
+  @Environment(PersistedSettingsStore.self) private var settings
   @State private var isControllerPresented = false
   @State private var isCORSPresented = false
   @State private var draft = ExternalControllerSettings.default

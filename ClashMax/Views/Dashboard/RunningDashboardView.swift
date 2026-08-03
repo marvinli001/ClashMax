@@ -2,7 +2,7 @@ import Pow
 import SwiftUI
 
 struct RunningDashboardView: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
   @Environment(RuntimeDataStore.self) private var runtimeData
   // Owned by AppModel so the Current Node card repaints from the retained
   // snapshot when the user returns to the dashboard tab (see ProxiesView).
@@ -205,7 +205,7 @@ struct RunningDashboardView: View {
 }
 
 private struct RunningHeaderCard: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
   @Environment(RuntimeDataStore.self) private var runtimeData
   let state: DashboardRuntimeState
   let namespace: Namespace.ID
@@ -487,7 +487,7 @@ enum DashboardProxySelectionState {
 }
 
 private struct CurrentProxyRuntimeCard: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
   let state: DashboardRuntimeState
   let availableWidth: CGFloat
   /// Provider-resolved + sorted groups supplied by `RunningDashboardView` (shares the Proxies page's
@@ -686,7 +686,7 @@ private struct DashboardLabeledControl<Content: View>: View {
 }
 
 private struct RunningStatusCard: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
   @Environment(RuntimeDataStore.self) private var runtimeData
 
   var body: some View {
@@ -715,7 +715,7 @@ private struct RunningStatusCard: View {
 }
 
 private struct NetworkStatusCard: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
 
   var body: some View {
     VStack(alignment: .leading, spacing: 14) {
@@ -757,7 +757,7 @@ private struct NetworkStatusCard: View {
 }
 
 private struct TunDiagnosticsRuntimeCard: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
 
   var body: some View {
     VStack(alignment: .leading, spacing: 14) {
@@ -919,7 +919,7 @@ private struct TunDiagnosticCheckRow: View {
 }
 
 private struct NetworkExtensionDiagnosticsRuntimeCard: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
 
   var body: some View {
     VStack(alignment: .leading, spacing: 14) {
@@ -977,7 +977,7 @@ private struct NetworkExtensionDiagnosticsRuntimeCard: View {
 }
 
 struct StatusView: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
 
   var body: some View {
     AdaptivePage(title: "Status") {
@@ -1353,7 +1353,7 @@ private extension View {
 }
 
 private struct StatusRuntimeOverviewCard: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
@@ -1405,7 +1405,7 @@ private struct StatusRuntimeOverviewCard: View {
 }
 
 private struct StatusDNSCard: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
@@ -1448,7 +1448,7 @@ private struct StatusDNSCard: View {
 }
 
 private struct StatusRuleOverlayCard: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
@@ -1502,7 +1502,7 @@ private struct StatusRuleOverlayCard: View {
 }
 
 private struct StatusHelperDiagnosticsCard: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
@@ -1600,7 +1600,7 @@ private struct StatusHelperDiagnosticsCard: View {
 }
 
 private struct StatusTunDiagnosticsCard: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
@@ -1780,7 +1780,7 @@ private struct StatusTunDiagnosticCheckTile: View {
 }
 
 private struct StatusNetworkExtensionDiagnosticsCard: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
@@ -1865,7 +1865,7 @@ private struct TrafficRuntimeCard: View {
 }
 
 private struct ProxyGroupsRuntimeCard: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
   @Environment(RuntimeDataStore.self) private var runtimeData
 
   var body: some View {
@@ -1917,7 +1917,7 @@ private struct ProxyGroupsRuntimeCard: View {
 }
 
 private struct ConnectionsRulesRuntimeCard: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
   @Environment(RuntimeDataStore.self) private var runtimeData
 
   var body: some View {
@@ -1957,7 +1957,7 @@ private struct ConnectionsRulesRuntimeCard: View {
 }
 
 private struct RecentLogsRuntimeCard: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
   @Environment(RuntimeDataStore.self) private var runtimeData
 
   var body: some View {

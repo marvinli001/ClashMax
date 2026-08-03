@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct PublicIPInfoCard: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
   @Environment(PublicIPCoordinator.self) private var publicIP
   let availableWidth: CGFloat
   /// Provider-resolved current group/node supplied by `RunningDashboardView` so the proxy-effect

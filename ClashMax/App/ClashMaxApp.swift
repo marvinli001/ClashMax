@@ -4,7 +4,7 @@ import SwiftUI
 @main
 struct ClashMaxApp: App {
   @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-  @StateObject private var appModel = AppModel.bootstrap()
+  @State private var appModel = AppModel.bootstrap()
   @State private var appUpdateController = AppUpdateController()
   @Environment(\.openWindow) private var openWindow
   private let bundledCoreInfo = BundledCoreInfo()
@@ -15,13 +15,13 @@ struct ClashMaxApp: App {
   var body: some Scene {
     WindowGroup("ClashMax", id: "main") {
       ContentView()
-        .environmentObject(appModel)
-        .environmentObject(appModel.settings)
-        .environmentObject(appModel.profileStore)
-        .environmentObject(appModel.providerAnalytics)
-        .environmentObject(appModel.runtimeSnippetLibrary)
-        .environmentObject(appModel.profileCoordinator)
-        .environmentObject(appModel.systemProxy)
+        .environment(appModel)
+        .environment(appModel.settings)
+        .environment(appModel.profileStore)
+        .environment(appModel.providerAnalytics)
+        .environment(appModel.runtimeSnippetLibrary)
+        .environment(appModel.profileCoordinator)
+        .environment(appModel.systemProxy)
         .environment(appModel.runtimeData)
         .environment(appModel.publicIP)
         .environment(appUpdateController)
@@ -119,13 +119,13 @@ struct ClashMaxApp: App {
     MenuBarExtra {
       MenuBarView()
         .menuBarPanelChrome()
-        .environmentObject(appModel)
-        .environmentObject(appModel.settings)
-        .environmentObject(appModel.profileStore)
-        .environmentObject(appModel.providerAnalytics)
-        .environmentObject(appModel.runtimeSnippetLibrary)
-        .environmentObject(appModel.profileCoordinator)
-        .environmentObject(appModel.systemProxy)
+        .environment(appModel)
+        .environment(appModel.settings)
+        .environment(appModel.profileStore)
+        .environment(appModel.providerAnalytics)
+        .environment(appModel.runtimeSnippetLibrary)
+        .environment(appModel.profileCoordinator)
+        .environment(appModel.systemProxy)
         .environment(appModel.runtimeData)
         .environment(appModel.publicIP)
         .environment(appUpdateController)
@@ -152,13 +152,13 @@ struct ClashMaxApp: App {
         // The Settings scene has no window toolbar to publish into, so this page
         // keeps its inline header instead of the title-bar chrome the main window uses.
         .environment(\.pageChromePlacement, .inline)
-        .environmentObject(appModel)
-        .environmentObject(appModel.settings)
-        .environmentObject(appModel.profileStore)
-        .environmentObject(appModel.providerAnalytics)
-        .environmentObject(appModel.runtimeSnippetLibrary)
-        .environmentObject(appModel.profileCoordinator)
-        .environmentObject(appModel.systemProxy)
+        .environment(appModel)
+        .environment(appModel.settings)
+        .environment(appModel.profileStore)
+        .environment(appModel.providerAnalytics)
+        .environment(appModel.runtimeSnippetLibrary)
+        .environment(appModel.profileCoordinator)
+        .environment(appModel.systemProxy)
         .environment(appModel.runtimeData)
         .environment(appModel.publicIP)
         .environment(appUpdateController)
@@ -180,11 +180,9 @@ struct ClashMaxApp: App {
 }
 
 private struct MenuBarStatusLabel: View {
-  @ObservedObject var appModel: AppModel
-  // RuntimeDataStore is @Observable, so SwiftUI tracks the `trafficSample` /
-  // `trafficHistory` reads in `body` directly off this plain reference — no
-  // property wrapper needed. appModel stays @ObservedObject for now (its broad
-  // ObservableObject migration is out of scope for this change).
+  let appModel: AppModel
+  // Both types are @Observable, so SwiftUI tracks the property reads in `body`
+  // directly off these plain references — no property wrapper needed.
   let runtimeData: RuntimeDataStore
 
   init(appModel: AppModel) {

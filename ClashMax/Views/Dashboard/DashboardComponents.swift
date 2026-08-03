@@ -95,7 +95,7 @@ struct ProxyRoutingModePicker: View {
 }
 
 struct ProxyRoutingSettingsButton: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
   @State private var isPresented = false
   @State private var systemDraft = SystemProxySettings.default
   @State private var tunDraft = TunSettings.default
@@ -195,7 +195,7 @@ struct ProxyRoutingSettingsButton: View {
 }
 
 private struct NetworkExtensionSettingsPopover: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
   @Binding var settings: NetworkExtensionRoutingSettings
   let error: String?
   let onCancel: () -> Void

@@ -1,5 +1,4 @@
 import AppKit
-import Combine
 import CoreWLAN
 import Foundation
 @preconcurrency import UserNotifications
@@ -540,8 +539,9 @@ struct MihomoProviderSideLoadPreflightRunner: ProviderSideLoadPreflightRunning {
 }
 
 @MainActor
-final class AppModel: ObservableObject {
-  @Published var selectedSection: AppSection = .home
+@Observable
+final class AppModel {
+  var selectedSection: AppSection = .home
   var overrides: RuntimeOverrides {
     get { settings.overrides }
     set { settings.overrides = newValue }
@@ -607,13 +607,13 @@ final class AppModel: ObservableObject {
     get { settings.developerMode }
     set { setDeveloperMode(newValue) }
   }
-  @Published private(set) var runtimeOwner: RuntimeOwner = .stopped
+  private(set) var runtimeOwner: RuntimeOwner = .stopped
   var systemProxyEnabled: Bool {
     get { systemProxy.enabled }
     set { systemProxy.enabled = newValue }
   }
-  @Published var tunEnabled = false
-  @Published private(set) var tunHelperPID: Int?
+  var tunEnabled = false
+  private(set) var tunHelperPID: Int?
   var networkExtensionEnabled: Bool {
     runtimeOwner == .networkExtension && networkExtensionController.vpnStatus.isActive
   }
@@ -636,17 +636,17 @@ final class AppModel: ObservableObject {
       || tunDiagnostics.primaryIssue != nil
       || systemProxyController.hasManagedSystemDNSState
   }
-  @Published var tunnelCoreRunning = false
-  @Published private(set) var networkExtensionSystemDNSState: SystemDNSOverrideState = .inactive
-  @Published private(set) var tunSystemDNSState: SystemDNSOverrideState = .inactive
-  @Published private(set) var tunDiagnostics: TunDiagnosticsSnapshot = .empty
-  @Published private(set) var tunHelperPreparationState: TunHelperPreparationState = .idle
-  @Published private(set) var tunHelperStatusDetail: TunnelHelperStatusDetail = .unknown
+  var tunnelCoreRunning = false
+  private(set) var networkExtensionSystemDNSState: SystemDNSOverrideState = .inactive
+  private(set) var tunSystemDNSState: SystemDNSOverrideState = .inactive
+  private(set) var tunDiagnostics: TunDiagnosticsSnapshot = .empty
+  private(set) var tunHelperPreparationState: TunHelperPreparationState = .idle
+  private(set) var tunHelperStatusDetail: TunnelHelperStatusDetail = .unknown
   var isAddingSubscription: Bool { profileCoordinator.isAddingSubscription }
-  @Published private(set) var startInFlight = false
-  @Published private(set) var runtimeDataLoading = false
-  @Published private(set) var sessionStartedAt: Date?
-  @Published private var networkExtensionCoreCrashMessage: String?
+  private(set) var startInFlight = false
+  private(set) var runtimeDataLoading = false
+  private(set) var sessionStartedAt: Date?
+  private var networkExtensionCoreCrashMessage: String?
   var proxyGroups: [ProxyGroup] {
     get { runtimeData.proxyGroups }
     set { runtimeData.proxyGroups = newValue }
@@ -670,10 +670,10 @@ final class AppModel: ObservableObject {
   var logs: [LogEntry] {
     get { runtimeData.logs }
   }
-  @Published var helperLogs: [String] = []
-  @Published private(set) var initialTunHelperPrompt: InitialTunHelperPrompt?
-  @Published private(set) var initialTunHelperPromptActionInFlight = false
-  @Published private(set) var shortcutRegistrationStatus: GlobalShortcutRegistrationStatus?
+  var helperLogs: [String] = []
+  private(set) var initialTunHelperPrompt: InitialTunHelperPrompt?
+  private(set) var initialTunHelperPromptActionInFlight = false
+  private(set) var shortcutRegistrationStatus: GlobalShortcutRegistrationStatus?
   var trafficSample: TrafficSample {
     get { runtimeData.trafficSample }
     set { runtimeData.trafficSample = newValue }
@@ -683,19 +683,19 @@ final class AppModel: ObservableObject {
     set { runtimeData.trafficHistory = newValue }
   }
   var publicIPInfoState: PublicIPInfoState { publicIP.state }
-  @Published private(set) var appNotice: AppNotice?
-  @Published private(set) var runtimeSettingsApplyState: RuntimeSettingsApplyState = .idle
-  @Published private(set) var effectiveRuntimeConfigState: EffectiveRuntimeConfigState = .idle
+  private(set) var appNotice: AppNotice?
+  private(set) var runtimeSettingsApplyState: RuntimeSettingsApplyState = .idle
+  private(set) var effectiveRuntimeConfigState: EffectiveRuntimeConfigState = .idle
   var hasLoadedEffectiveRuntimeConfigForActiveProfile: Bool {
     effectiveRuntimeConfigSnapshotForActiveProfile != nil
   }
-  @Published private(set) var providerSideLoadPreflightStatus: ProviderSideLoadPreflightStatus = .idle
-  @Published private(set) var proxyDelayBatchProgress: ProxyDelayBatchProgress?
-  @Published var routingSimulationRequest: RoutingSimulationRequest?
-  private var lastErrorOrigin: LastErrorOrigin?
-  private var isPublishingNetworkExtensionLastError = false
-  private var isPublishingLastErrorWithDetails = false
-  @Published var lastError: String? {
+  private(set) var providerSideLoadPreflightStatus: ProviderSideLoadPreflightStatus = .idle
+  private(set) var proxyDelayBatchProgress: ProxyDelayBatchProgress?
+  var routingSimulationRequest: RoutingSimulationRequest?
+  @ObservationIgnored private var lastErrorOrigin: LastErrorOrigin?
+  @ObservationIgnored private var isPublishingNetworkExtensionLastError = false
+  @ObservationIgnored private var isPublishingLastErrorWithDetails = false
+  var lastError: String? {
     didSet {
       if !isPublishingNetworkExtensionLastError {
         lastErrorOrigin = nil
@@ -705,7 +705,7 @@ final class AppModel: ObservableObject {
       }
     }
   }
-  @Published private(set) var lastErrorDetails: String?
+  private(set) var lastErrorDetails: String?
 
   func publishSubscriptionFailure(_ error: Error) {
     let preflightError = error as? SubscriptionPreflightValidationError
@@ -724,15 +724,15 @@ final class AppModel: ObservableObject {
     appNotice = AppNotice(message: message, tone: .warning)
     appendAppLog(level: "warn", message: logMessage ?? message)
   }
-  @Published private(set) var currentNetworkSSID: String?
-  @Published private(set) var networkPolicyStatusMessage: String?
-  @Published private(set) var lastAppliedNetworkPolicyID: NetworkPolicyRule.ID?
-  @Published private(set) var backupRestoreStatusMessage: String?
-  @Published private(set) var pendingBackupRestorePreview: BackupRestorePreview?
-  @Published private(set) var outboundProxyEndpoints: [OutboundProxyEndpoint] = []
-  @Published private(set) var outboundProxyEndpointSecretStates: [UUID: OutboundProxyEndpointSecretState] = [:]
-  @Published private(set) var outboundProxyEndpointTestStates: [UUID: OutboundProxyEndpointTestState] = [:]
-  @Published private(set) var outboundProxyEndpointLoadError: String?
+  private(set) var currentNetworkSSID: String?
+  private(set) var networkPolicyStatusMessage: String?
+  private(set) var lastAppliedNetworkPolicyID: NetworkPolicyRule.ID?
+  private(set) var backupRestoreStatusMessage: String?
+  private(set) var pendingBackupRestorePreview: BackupRestorePreview?
+  private(set) var outboundProxyEndpoints: [OutboundProxyEndpoint] = []
+  private(set) var outboundProxyEndpointSecretStates: [UUID: OutboundProxyEndpointSecretState] = [:]
+  private(set) var outboundProxyEndpointTestStates: [UUID: OutboundProxyEndpointTestState] = [:]
+  private(set) var outboundProxyEndpointLoadError: String?
   var updatingProfileIDs: Set<Profile.ID> { profileCoordinator.updatingProfileIDs }
   var profileOperationMessage: String? { profileCoordinator.message }
   var profilePreviewGroups: [ProxyGroup] {
@@ -777,97 +777,103 @@ final class AppModel: ObservableObject {
   private let pingTester: any PingTesting
   private let paths: RuntimePaths
   private let runtimeConfigMaterializer = RuntimeConfigMaterializer()
-  private var activeRuntimeConfigMaterialization: RuntimeConfigMaterializationResult?
+  @ObservationIgnored private var activeRuntimeConfigMaterialization: RuntimeConfigMaterializationResult?
+  // The five properties below are deliberately left observable: each is read by a
+  // view-visible computed property (`canControlRuntimeProxies`, `canStopRuntime`,
+  // `canRepairTunRouting`), so under Observation they are effectively view state.
+  // They flip a handful of times per runtime transition, and the newly-correct
+  // invalidation is the point — the runtime/repair buttons' enabled state could
+  // previously go stale because these were never `@Published`. Everything else
+  // private in this section is machinery and carries `@ObservationIgnored`.
   private var apiClient: (any MihomoAPIControlling)?
-  private var startTask: Task<Void, Never>?
-  private var startTaskID: UUID?
+  @ObservationIgnored private var startTask: Task<Void, Never>?
+  @ObservationIgnored private var startTaskID: UUID?
   private var lifecycleStopInFlight = false
-  private var lifecycleStopTask: Task<Void, Never>?
-  private var pendingStartAfterStop: Bool?
+  @ObservationIgnored private var lifecycleStopTask: Task<Void, Never>?
+  @ObservationIgnored private var pendingStartAfterStop: Bool?
   private var tunLaunchInFlight = false
   private var tunStartAwaitingHelperReply = false
   private var tunHelperStopUnconfirmed = false
-  private var previewTask: Task<Void, Never>?
-  private var previewRuntimeRequested = false
-  private var previewRuntimeOverrides: RuntimeOverrides?
-  private var stopTask: Task<RuntimeStopResult, Never>?
-  private var stopTaskID: UUID?
-  private var stopTaskPurpose: RuntimeStopPurpose?
-  private var pendingModeTask: Task<Void, Never>?
-  private var pendingRoutingModeTask: Task<Void, Never>?
-  private var tunHelperPreparationTask: Task<Void, Never>?
-  private var didWarmTunHelperRegistrationOnLaunch = false
-  private var initialTunHelperPromptDeferredDuringSilentStart = false
-  private var launchAtLoginRepairAttempted = false
+  @ObservationIgnored private var previewTask: Task<Void, Never>?
+  @ObservationIgnored private var previewRuntimeRequested = false
+  @ObservationIgnored private var previewRuntimeOverrides: RuntimeOverrides?
+  @ObservationIgnored private var stopTask: Task<RuntimeStopResult, Never>?
+  @ObservationIgnored private var stopTaskID: UUID?
+  @ObservationIgnored private var stopTaskPurpose: RuntimeStopPurpose?
+  @ObservationIgnored private var pendingModeTask: Task<Void, Never>?
+  @ObservationIgnored private var pendingRoutingModeTask: Task<Void, Never>?
+  @ObservationIgnored private var tunHelperPreparationTask: Task<Void, Never>?
+  @ObservationIgnored private var didWarmTunHelperRegistrationOnLaunch = false
+  @ObservationIgnored private var initialTunHelperPromptDeferredDuringSilentStart = false
+  @ObservationIgnored private var launchAtLoginRepairAttempted = false
 
   /// Long-lived search coordinators for the Proxies page and the dashboard's
   /// Current Node card. The section switch in ContentView tears the page views
-  /// down on every tab change, so coordinators owned by the views (@StateObject)
-  /// lost their published snapshot each time and every return to the page
-  /// repainted from empty — the visible "page takes a beat to appear" delay.
+  /// down on every tab change, so view-owned coordinators lost their published
+  /// snapshot each time and every return to the page repainted from empty —
+  /// the visible "page takes a beat to appear" delay.
   /// Owning them here keeps the last snapshot alive across switches; the pages
   /// still resubmit on entry, and the coordinator's equality gate turns a
   /// no-change recompute into a no-op publish.
   let proxiesSearchCoordinator = ProxySearchCoordinator()
   let dashboardCurrentNodeCoordinator = ProxySearchCoordinator()
-  private var didResumeInitialTunHelperPromptAfterUserOpen = false
-  private var didWarmPreviewRuntimeOnLaunch = false
-  private var modeUpdateTask: Task<Void, Never>?
-  private var modeUpdateToken: UUID?
-  private var ipv6UpdateTask: Task<Void, Never>?
-  private var ipv6UpdateToken: UUID?
-  private var runtimeSettingsApplyTask: Task<Void, Never>?
-  private var runtimeSettingsApplyToken: UUID?
-  private var pendingRuntimeSettingsApplyReason: String?
-  private var proxySelectionTasks: [ProxyGroup.ID: Task<Void, Never>] = [:]
-  private var proxySelectionTokens: [ProxyGroup.ID: UUID] = [:]
-  private var delayTestTasks: [ProxyNodeKey: Task<Void, Never>] = [:]
-  private var delayTestTokens: [ProxyNodeKey: UUID] = [:]
-  private var delayStateCache: [ProxyNodeKey: ProxyDelayCacheEntry] = [:]
-  private var proxyDelayBatchTask: Task<Void, Never>?
-  private var proxyDelayBatchToken: UUID?
-  private var providerHealthCheckTasks: [ProxyProvider.ID: Task<Void, Never>] = [:]
-  private var providerHealthCheckTokens: [ProxyProvider.ID: UUID] = [:]
-  private var proxyProviderUpdateTasks: [ProxyProvider.ID: Task<Void, Never>] = [:]
-  private var proxyProviderUpdateTokens: [ProxyProvider.ID: UUID] = [:]
-  private var ruleProviderUpdateTasks: [RuleProvider.ID: Task<Void, Never>] = [:]
-  private var ruleProviderUpdateTokens: [RuleProvider.ID: UUID] = [:]
-  private var proxyProviderBatchUpdateTask: Task<Void, Never>?
-  private var proxyProviderBatchUpdateToken: UUID?
-  private var ruleProviderBatchUpdateTask: Task<Void, Never>?
-  private var ruleProviderBatchUpdateToken: UUID?
-  private var connectionCloseTasks: [ConnectionSnapshot.ID: Task<Void, Never>] = [:]
-  private var connectionCloseTokens: [ConnectionSnapshot.ID: UUID] = [:]
-  private var closeAllConnectionsTask: Task<Void, Never>?
-  private var closeAllConnectionsToken: UUID?
-  private var networkPolicyApplyTask: Task<Void, Never>?
-  private var networkPolicyApplyToken: UUID?
-  private var networkPolicyRestoreSnapshot: NetworkPolicyRestoreSnapshot?
-  private var networkEnvironmentTask: Task<Void, Never>?
-  private var networkEnvironmentDebounceTask: Task<Void, Never>?
-  private var outboundProxyEndpointLoadTask: Task<Void, Never>?
-  private var runtimeReloadTask: Task<Void, Never>?
-  private var runtimeReloadToken: UUID?
-  private var runtimeReloadPending = false
-  private var tunSettingsApplyTask: Task<Void, Never>?
-  private var tunSettingsApplyToken: UUID?
-  private var pendingTunSettingsApply: TunSettings?
-  private var tunDNSRepairTask: Task<Void, Never>?
-  private var tunDNSRepairToken: UUID?
-  private var tunRoutingRepairTask: Task<Void, Never>?
-  private var tunRoutingRepairToken: UUID?
-  private var streamTasks: [Task<Void, Never>] = []
-  private var runtimeStreamToken: UUID?
-  private var networkExtensionDiagnosticsTask: Task<Void, Never>?
-  private var tunDiagnosticsTask: Task<Void, Never>?
-  private var publishedNetworkExtensionDiagnosticEventIDs: Set<String> = []
-  private var storeCancellables: Set<AnyCancellable> = []
+  @ObservationIgnored private var didResumeInitialTunHelperPromptAfterUserOpen = false
+  @ObservationIgnored private var didWarmPreviewRuntimeOnLaunch = false
+  @ObservationIgnored private var modeUpdateTask: Task<Void, Never>?
+  @ObservationIgnored private var modeUpdateToken: UUID?
+  @ObservationIgnored private var ipv6UpdateTask: Task<Void, Never>?
+  @ObservationIgnored private var ipv6UpdateToken: UUID?
+  @ObservationIgnored private var runtimeSettingsApplyTask: Task<Void, Never>?
+  @ObservationIgnored private var runtimeSettingsApplyToken: UUID?
+  @ObservationIgnored private var pendingRuntimeSettingsApplyReason: String?
+  @ObservationIgnored private var proxySelectionTasks: [ProxyGroup.ID: Task<Void, Never>] = [:]
+  @ObservationIgnored private var proxySelectionTokens: [ProxyGroup.ID: UUID] = [:]
+  @ObservationIgnored private var delayTestTasks: [ProxyNodeKey: Task<Void, Never>] = [:]
+  @ObservationIgnored private var delayTestTokens: [ProxyNodeKey: UUID] = [:]
+  @ObservationIgnored private var delayStateCache: [ProxyNodeKey: ProxyDelayCacheEntry] = [:]
+  @ObservationIgnored private var proxyDelayBatchTask: Task<Void, Never>?
+  @ObservationIgnored private var proxyDelayBatchToken: UUID?
+  @ObservationIgnored private var providerHealthCheckTasks: [ProxyProvider.ID: Task<Void, Never>] = [:]
+  @ObservationIgnored private var providerHealthCheckTokens: [ProxyProvider.ID: UUID] = [:]
+  @ObservationIgnored private var proxyProviderUpdateTasks: [ProxyProvider.ID: Task<Void, Never>] = [:]
+  @ObservationIgnored private var proxyProviderUpdateTokens: [ProxyProvider.ID: UUID] = [:]
+  @ObservationIgnored private var ruleProviderUpdateTasks: [RuleProvider.ID: Task<Void, Never>] = [:]
+  @ObservationIgnored private var ruleProviderUpdateTokens: [RuleProvider.ID: UUID] = [:]
+  @ObservationIgnored private var proxyProviderBatchUpdateTask: Task<Void, Never>?
+  @ObservationIgnored private var proxyProviderBatchUpdateToken: UUID?
+  @ObservationIgnored private var ruleProviderBatchUpdateTask: Task<Void, Never>?
+  @ObservationIgnored private var ruleProviderBatchUpdateToken: UUID?
+  @ObservationIgnored private var connectionCloseTasks: [ConnectionSnapshot.ID: Task<Void, Never>] = [:]
+  @ObservationIgnored private var connectionCloseTokens: [ConnectionSnapshot.ID: UUID] = [:]
+  @ObservationIgnored private var closeAllConnectionsTask: Task<Void, Never>?
+  @ObservationIgnored private var closeAllConnectionsToken: UUID?
+  @ObservationIgnored private var networkPolicyApplyTask: Task<Void, Never>?
+  @ObservationIgnored private var networkPolicyApplyToken: UUID?
+  @ObservationIgnored private var networkPolicyRestoreSnapshot: NetworkPolicyRestoreSnapshot?
+  @ObservationIgnored private var networkEnvironmentTask: Task<Void, Never>?
+  @ObservationIgnored private var networkEnvironmentDebounceTask: Task<Void, Never>?
+  @ObservationIgnored private var outboundProxyEndpointLoadTask: Task<Void, Never>?
+  @ObservationIgnored private var runtimeReloadTask: Task<Void, Never>?
+  @ObservationIgnored private var runtimeReloadToken: UUID?
+  @ObservationIgnored private var runtimeReloadPending = false
+  @ObservationIgnored private var tunSettingsApplyTask: Task<Void, Never>?
+  @ObservationIgnored private var tunSettingsApplyToken: UUID?
+  @ObservationIgnored private var pendingTunSettingsApply: TunSettings?
+  @ObservationIgnored private var tunDNSRepairTask: Task<Void, Never>?
+  @ObservationIgnored private var tunDNSRepairToken: UUID?
+  @ObservationIgnored private var tunRoutingRepairTask: Task<Void, Never>?
+  @ObservationIgnored private var tunRoutingRepairToken: UUID?
+  @ObservationIgnored private var streamTasks: [Task<Void, Never>] = []
+  @ObservationIgnored private var runtimeStreamToken: UUID?
+  @ObservationIgnored private var networkExtensionDiagnosticsTask: Task<Void, Never>?
+  @ObservationIgnored private var tunDiagnosticsTask: Task<Void, Never>?
+  @ObservationIgnored private var publishedNetworkExtensionDiagnosticEventIDs: Set<String> = []
   private let externalDashboardSecretStore: any SecretStoring
   private let currentNetworkProvider: any CurrentNetworkProviding
   private let networkEnvironmentMonitor: (any NetworkEnvironmentMonitoring)?
   private let globalShortcutManager: GlobalShortcutManager
   private let backupRestoreService = BackupRestoreService()
-  private var providerSideLoadPreflightRunner: any ProviderSideLoadPreflightRunning = MihomoProviderSideLoadPreflightRunner()
+  @ObservationIgnored private var providerSideLoadPreflightRunner: any ProviderSideLoadPreflightRunning = MihomoProviderSideLoadPreflightRunner()
   private let bundledCoreURLProvider: () throws -> URL
   private let delayStateCacheTTL: TimeInterval
   static let publicIPRefreshInterval: TimeInterval = 300
@@ -878,7 +884,7 @@ final class AppModel: ObservableObject {
   private static let previewRuntimeControllerPort = 19_097
   private static let proxyDelayBatchConcurrencyLimit = 6
   private static let runtimeStreamReconnectDelayNanoseconds: UInt64 = 1_000_000_000
-  // Issue #11: batch delay results are coalesced before touching `@Published` state. A flush
+  // Issue #11: batch delay results are coalesced before touching observable state. A flush
   // happens once `proxyDelayBatchFlushCount` results have accumulated or once
   // `proxyDelayBatchFlushIntervalMs` has elapsed since the last flush, whichever comes first
   // (the very first result flushes immediately so results start appearing without delay).
@@ -1008,66 +1014,42 @@ final class AppModel: ObservableObject {
         self?.stop()
       }
     )
-    settings.objectWillChange
-      .sink { [weak self] _ in self?.objectWillChange.send() }
-      .store(in: &storeCancellables)
-    settings.$subscriptionFetchSettings
-      .dropFirst()
-      .sink { [weak self] _ in
-        self?.profileCoordinator.rescheduleSubscriptionAutoUpdates()
-      }
-      .store(in: &storeCancellables)
-    settings.$globalShortcutSettings
-      .sink { [weak self] settings in
-        self?.installGlobalShortcuts(settings)
-      }
-      .store(in: &storeCancellables)
-    profileCoordinator.objectWillChange
-      .sink { [weak self] _ in self?.objectWillChange.send() }
-      .store(in: &storeCancellables)
-    proxyPreview.objectWillChange
-      .sink { [weak self] _ in self?.objectWillChange.send() }
-      .store(in: &storeCancellables)
-    proxyPreview.$profilePreviewGroups
-      .sink { [weak self] groups in
-        self?.schedulePreviewRuntimeStartIfReady(profilePreviewGroups: groups)
-      }
-      .store(in: &storeCancellables)
-    self.profileStore.objectWillChange
-      .sink { [weak self] _ in self?.objectWillChange.send() }
-      .store(in: &storeCancellables)
-    self.profileStore.$profiles
-      .dropFirst()
-      .sink { [weak self] profiles in
-        Task { [weak self] in
-          await self?.pruneRuntimeSnippetProfileBindings(validProfileIDs: Set(profiles.map(\.id)))
-          await MainActor.run {
-            self?.providerAnalytics.prune(validProfileIDs: Set(profiles.map(\.id)))
-          }
+    // The five hooks below replace Combine pipelines. `didSet` fires *after* the property is
+    // updated, unlike @Published which published from `willSet` — see the priming calls and the
+    // subscriptionFetchSettings note below.
+    settings.onSubscriptionFetchSettingsChange = { [weak self] in
+      self?.profileCoordinator.rescheduleSubscriptionAutoUpdates()
+    }
+    settings.onGlobalShortcutSettingsChange = { [weak self] settings in
+      self?.installGlobalShortcuts(settings)
+    }
+    proxyPreview.onProfilePreviewGroupsChange = { [weak self] groups in
+      self?.schedulePreviewRuntimeStartIfReady(profilePreviewGroups: groups)
+    }
+    self.profileStore.onProfilesChange = { [weak self] profiles in
+      Task { [weak self] in
+        await self?.pruneRuntimeSnippetProfileBindings(validProfileIDs: Set(profiles.map(\.id)))
+        await MainActor.run {
+          self?.providerAnalytics.prune(validProfileIDs: Set(profiles.map(\.id)))
         }
       }
-      .store(in: &storeCancellables)
-    let providerAnalyticsStore = self.providerAnalytics
-    providerAnalyticsStore.objectWillChange
-      .sink { [weak self] _ in self?.objectWillChange.send() }
-      .store(in: &storeCancellables)
-    self.runtimeSnippetLibrary.objectWillChange
-      .sink { [weak self] _ in self?.objectWillChange.send() }
-      .store(in: &storeCancellables)
-    systemProxy.objectWillChange
-      .sink { [weak self] _ in self?.objectWillChange.send() }
-      .store(in: &storeCancellables)
-    coreController.objectWillChange
-      .sink { [weak self] _ in self?.objectWillChange.send() }
-      .store(in: &storeCancellables)
-    coreController.$status
-      .sink { [weak self] status in
-        self?.handleCoreStatusChange(status)
-      }
-      .store(in: &storeCancellables)
-    networkExtensionController.objectWillChange
-      .sink { [weak self] _ in self?.objectWillChange.send() }
-      .store(in: &storeCancellables)
+    }
+    coreController.onStatusChange = { [weak self] status in
+      self?.handleCoreStatusChange(status)
+    }
+
+    // @Published publishers emitted their current value on subscribe, so these three handlers each
+    // ran once during setup. `didSet` does not fire during init, so prime them explicitly.
+    // Only the first has an observable effect at init — it registers shortcuts restored from
+    // defaults, and dropping it means a user's configured shortcuts are dead until they edit one
+    // (pinned by testGlobalShortcutsAreRegisteredFromPersistedSettingsAtLaunch). The other two are
+    // no-ops here (status is .stopped, preview groups are empty) and are kept for symmetry so the
+    // set of primed handlers matches the set that was primed by subscription.
+    // `onSubscriptionFetchSettingsChange` and `onProfilesChange` replaced `.dropFirst()` pipelines
+    // and must NOT be primed.
+    installGlobalShortcuts(settings.globalShortcutSettings)
+    schedulePreviewRuntimeStartIfReady(profilePreviewGroups: proxyPreview.profilePreviewGroups)
+    handleCoreStatusChange(coreController.status)
     recoverDanglingSystemProxyIfNeeded()
     recoverDanglingManagedDNSIfNeeded()
     outboundProxyEndpointLoadTask = Task { @MainActor [weak self] in
@@ -7150,7 +7132,7 @@ final class AppModel: ObservableObject {
     applyDelayStates([nodeKey: state])
   }
 
-  /// Applies a batch of delay-state updates with at most one `@Published` write per affected
+  /// Applies a batch of delay-state updates with at most one observable write per affected
   /// collection.
   ///
   /// Issue #11: `startProxyDelayBatch` / `runProxyDelayBatch` previously called the single-node
@@ -7227,7 +7209,7 @@ final class AppModel: ObservableObject {
   }
 
   /// Applies the prepared indexes to one group collection in a single pass, returning whether any
-  /// node actually changed (so the caller can skip a redundant `@Published` write).
+  /// node actually changed (so the caller can skip a redundant observable write).
   private func applyDelayStates(
     exactByProvider: [String: ProxyDelayState],
     wildcardByName: [String: ProxyDelayState],

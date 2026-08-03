@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct LogsView: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
   @Environment(RuntimeDataStore.self) private var runtimeData
   @State private var levelFilter: LogLevelFilter = .all
 

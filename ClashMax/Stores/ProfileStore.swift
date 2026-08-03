@@ -227,22 +227,30 @@ struct MihomoSubscriptionProfilePreflightValidator: SubscriptionProfilePreflight
 }
 
 @MainActor
-final class ProfileStore: ObservableObject {
+@Observable
+final class ProfileStore {
   private struct ProviderOptionSecretSnapshot: Sendable {
     var headers: [UUID: String?]
     var runtimeMergeYAML: String?
   }
 
-  @Published private(set) var profiles: [Profile] = []
-  @Published private(set) var activeProfileID: Profile.ID?
-  @Published private(set) var subscriptionURLCache: [Profile.ID: String] = [:]
+  /// Fired after `profiles` changes. Assigned by `AppModel.init`.
+  @ObservationIgnored var onProfilesChange: (([Profile]) -> Void)?
+
+  private(set) var profiles: [Profile] = [] {
+    didSet {
+      onProfilesChange?(profiles)
+    }
+  }
+  private(set) var activeProfileID: Profile.ID?
+  private(set) var subscriptionURLCache: [Profile.ID: String] = [:]
 
   private let paths: RuntimePaths
   private let diskIO: any ProfileDiskStoring
   private let secretIO: ProfileSecretIO
   private let subscriptionFetcher = SubscriptionFetcher()
   private let mutationGate = ProfileMutationGate()
-  private var manifestLoadTask: Task<Void, Never>?
+  @ObservationIgnored private var manifestLoadTask: Task<Void, Never>?
 
   init(
     paths: RuntimePaths,

@@ -2,103 +2,113 @@ import Foundation
 import ServiceManagement
 
 @MainActor
-final class PersistedSettingsStore: ObservableObject {
-  @Published var overrides: RuntimeOverrides {
+@Observable
+final class PersistedSettingsStore {
+  var overrides: RuntimeOverrides {
     didSet {
       saveRuntimeSettings(overrides)
     }
   }
-  @Published var proxyRoutingMode: ProxyRoutingMode = .systemProxy {
+  var proxyRoutingMode: ProxyRoutingMode = .systemProxy {
     didSet {
       saveCodable(proxyRoutingMode, forKey: Self.proxyRoutingModeDefaultsKey)
     }
   }
-  @Published var systemProxySettings = SystemProxySettings.default {
+  var systemProxySettings = SystemProxySettings.default {
     didSet {
       saveCodable(systemProxySettings, forKey: Self.systemProxySettingsDefaultsKey)
     }
   }
-  @Published var ipv6Enabled = false {
+  var ipv6Enabled = false {
     didSet {
       overrides.ipv6Enabled = ipv6Enabled
       defaults.set(ipv6Enabled, forKey: Self.ipv6EnabledDefaultsKey)
     }
   }
-  @Published var tunSettings = TunSettings.default {
+  var tunSettings = TunSettings.default {
     didSet {
       overrides.tunSettings = tunSettings
       saveCodable(tunSettings, forKey: Self.tunSettingsDefaultsKey)
     }
   }
-  @Published var networkExtensionRoutingSettings = NetworkExtensionRoutingSettings.default {
+  var networkExtensionRoutingSettings = NetworkExtensionRoutingSettings.default {
     didSet {
       saveCodable(networkExtensionRoutingSettings, forKey: Self.networkExtensionRoutingSettingsDefaultsKey)
     }
   }
-  @Published var ruleOverlaySettings = RuleOverlaySettings.disabled {
+  var ruleOverlaySettings = RuleOverlaySettings.disabled {
     didSet {
       overrides.ruleOverlay = ruleOverlaySettings
       saveCodable(ruleOverlaySettings, forKey: Self.ruleOverlaySettingsDefaultsKey)
     }
   }
-  @Published var delayTestSettings = DelayTestSettings.default {
+  var delayTestSettings = DelayTestSettings.default {
     didSet {
       overrides.unifiedDelay = delayTestSettings.unifiedDelay
       saveCodable(delayTestSettings, forKey: Self.delayTestSettingsDefaultsKey)
     }
   }
-  @Published var subscriptionFetchSettings = SubscriptionFetchSettings.default {
+  var subscriptionFetchSettings = SubscriptionFetchSettings.default {
     didSet {
       saveCodable(subscriptionFetchSettings, forKey: Self.subscriptionFetchSettingsDefaultsKey)
+      onSubscriptionFetchSettingsChange?()
     }
   }
-  @Published var menuBarPinnedGroupSettings = MenuBarPinnedGroupSettings.default {
+  var menuBarPinnedGroupSettings = MenuBarPinnedGroupSettings.default {
     didSet {
       saveCodable(menuBarPinnedGroupSettings, forKey: Self.menuBarPinnedGroupSettingsDefaultsKey)
     }
   }
-  @Published var proxyPageSettings = ProxyPageSettings.default {
+  var proxyPageSettings = ProxyPageSettings.default {
     didSet {
       saveCodable(proxyPageSettings, forKey: Self.proxyPageSettingsDefaultsKey)
     }
   }
-  @Published var globalShortcutSettings = GlobalShortcutSettings.default {
+  var globalShortcutSettings = GlobalShortcutSettings.default {
     didSet {
       saveCodable(globalShortcutSettings, forKey: Self.globalShortcutSettingsDefaultsKey)
+      onGlobalShortcutSettingsChange?(globalShortcutSettings)
     }
   }
-  @Published var externalDashboardProfiles: [ExternalDashboardProfile] = [] {
+  var externalDashboardProfiles: [ExternalDashboardProfile] = [] {
     didSet {
       saveCodable(externalDashboardProfiles, forKey: Self.externalDashboardProfilesDefaultsKey)
     }
   }
-  @Published var networkPolicySettings = NetworkPolicySettings.default {
+  var networkPolicySettings = NetworkPolicySettings.default {
     didSet {
       saveCodable(networkPolicySettings, forKey: Self.networkPolicySettingsDefaultsKey)
     }
   }
-  @Published var appTheme = AppTheme.system {
+  var appTheme = AppTheme.system {
     didSet {
       saveCodable(appTheme, forKey: Self.appThemeDefaultsKey)
     }
   }
-  @Published var externalControllerSettings = ExternalControllerSettings.default {
+  var externalControllerSettings = ExternalControllerSettings.default {
     didSet {
       syncExternalControllerSettings()
       saveExternalControllerSettings(externalControllerSettings)
     }
   }
-  @Published private(set) var appliedRuntimeSettingsSnapshot: AppliedRuntimeSettingsSnapshot?
-  @Published private(set) var launchSettings = LaunchSettings.default
-  @Published private(set) var initialTunHelperPromptHandled: Bool
-  @Published var developerMode = false {
+  private(set) var appliedRuntimeSettingsSnapshot: AppliedRuntimeSettingsSnapshot?
+  private(set) var launchSettings = LaunchSettings.default
+  private(set) var initialTunHelperPromptHandled: Bool
+  var developerMode = false {
     didSet {
       defaults.set(developerMode, forKey: Self.developerModeDefaultsKey)
     }
   }
 
-  private let defaults: UserDefaults
-  private let loginItemService: any LoginItemManaging
+  @ObservationIgnored private let defaults: UserDefaults
+  @ObservationIgnored private let loginItemService: any LoginItemManaging
+
+  /// Fired after `subscriptionFetchSettings` changes. Assigned by `AppModel.init`.
+  /// Unlike the `@Published` publisher this replaces, this runs *after* the property is
+  /// updated, so a handler that re-reads the store observes the new value.
+  @ObservationIgnored var onSubscriptionFetchSettingsChange: (() -> Void)?
+  /// Fired after `globalShortcutSettings` changes. Assigned by `AppModel.init`.
+  @ObservationIgnored var onGlobalShortcutSettingsChange: ((GlobalShortcutSettings) -> Void)?
 
   static let silentStartDefaultsKey = "io.github.clashmax.silentStart"
   static let launchAtLoginDesiredDefaultsKey = "io.github.clashmax.launchAtLoginDesired"

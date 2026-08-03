@@ -1,15 +1,23 @@
 import Foundation
 
 @MainActor
-final class ProxyPreviewStore: ObservableObject {
-  @Published var profilePreviewGroups: [ProxyGroup] = []
-  @Published var previewRuntimeActive = false
-  @Published var previewSelections: [String: String] = [:]
+@Observable
+final class ProxyPreviewStore {
+  /// Fired after `profilePreviewGroups` changes. Assigned by `AppModel.init`.
+  @ObservationIgnored var onProfilePreviewGroupsChange: (([ProxyGroup]) -> Void)?
 
-  private let defaults: UserDefaults
-  private let previewMaterializer: ProfilePreviewMaterializer
-  private var refreshTask: Task<Void, Never>?
-  private var refreshGeneration = 0
+  var profilePreviewGroups: [ProxyGroup] = [] {
+    didSet {
+      onProfilePreviewGroupsChange?(profilePreviewGroups)
+    }
+  }
+  var previewRuntimeActive = false
+  var previewSelections: [String: String] = [:]
+
+  @ObservationIgnored private let defaults: UserDefaults
+  @ObservationIgnored private let previewMaterializer: ProfilePreviewMaterializer
+  @ObservationIgnored private var refreshTask: Task<Void, Never>?
+  @ObservationIgnored private var refreshGeneration = 0
   private static let previewSelectionsDefaultsKey = "io.github.clashmax.previewSelections"
 
   init(

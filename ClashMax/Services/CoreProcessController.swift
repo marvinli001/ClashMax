@@ -80,17 +80,27 @@ protocol RuntimePortChecking: Sendable {
 }
 
 @MainActor
-final class CoreProcessController: ObservableObject {
-  @Published private(set) var status: CoreStatus = .stopped
-  @Published private(set) var recentCoreLog: String = ""
-  @Published private(set) var startupDiagnostics: [String] = []
+@Observable
+final class CoreProcessController {
+  /// Fired after `status` changes. Assigned by `AppModel.init`.
+  @ObservationIgnored var onStatusChange: ((CoreStatus) -> Void)?
+
+  private(set) var status: CoreStatus = .stopped {
+    didSet {
+      onStatusChange?(status)
+    }
+  }
+  private(set) var recentCoreLog: String = ""
+  private(set) var startupDiagnostics: [String] = []
   private let launcher: CoreProcessLaunching
   private let validator: RuntimeConfigValidating
   private let readinessProbe: CoreReadinessProbing
   private let reaper: CoreProcessReaping
   private let portChecker: RuntimePortChecking
-  private var runningProcess: RunningCoreProcess?
-  private var stopWasRequested = false
+  /// Process handle, not view state.
+  @ObservationIgnored private var runningProcess: RunningCoreProcess?
+  /// Stop-request latch consumed by the termination handler, not view state.
+  @ObservationIgnored private var stopWasRequested = false
 
   init(
     launcher: CoreProcessLaunching = FoundationProcessLauncher(),

@@ -39,13 +39,14 @@ struct RuntimeSnippetLibraryDiskIO: RuntimeSnippetLibraryDiskIOProviding {
 }
 
 @MainActor
-final class RuntimeSnippetLibraryStore: ObservableObject {
-  @Published private(set) var snippets: [RuntimeSnippet] = []
-  @Published private(set) var loadError: String?
+@Observable
+final class RuntimeSnippetLibraryStore {
+  private(set) var snippets: [RuntimeSnippet] = []
+  private(set) var loadError: String?
 
   private let libraryURL: URL
   private let diskIO: any RuntimeSnippetLibraryDiskIOProviding
-  private var loadTask: Task<Void, Never>?
+  @ObservationIgnored private var loadTask: Task<Void, Never>?
 
   init(
     paths: RuntimePaths,

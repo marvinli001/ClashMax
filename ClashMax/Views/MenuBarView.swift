@@ -92,7 +92,7 @@ private struct MenuBarPanelWindowConfigurator: NSViewRepresentable {
 }
 
 struct MenuBarView: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
   @Environment(RuntimeDataStore.self) private var runtimeData
   @Environment(AppUpdateController.self) private var appUpdateController
 
@@ -449,7 +449,7 @@ enum MenuBarTrafficStatusLabel {
 /// behavior, and runtime config are unchanged. Internal (not private) so layout
 /// tests can render it directly.
 struct MenuBarProxyModeSelector: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
 
   var body: some View {
     MenuBarControlRow(
@@ -568,7 +568,7 @@ enum MenuBarNodeSelection {
 /// one click closer (Discussion #20). Node lists stay inside a native `Menu` so a
 /// group with hundreds of nodes still scrolls natively.
 private struct MenuBarGroupSelectionRow: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
   let group: ProxyGroup
   let systemImage: String
 
@@ -589,7 +589,7 @@ private struct MenuBarGroupSelectionRow: View {
 }
 
 private struct MenuBarGroupNodeButtons: View {
-  @EnvironmentObject private var appModel: AppModel
+  @Environment(AppModel.self) private var appModel
   let group: ProxyGroup
 
   var body: some View {

@@ -1,13 +1,14 @@
 import Foundation
 
 @MainActor
-final class SystemProxyCoordinator: ObservableObject {
-  @Published var enabled = false
+@Observable
+final class SystemProxyCoordinator {
+  var enabled = false
 
   let controller: SystemProxyController
 
   private let defaults: UserDefaults
-  private var guardTask: Task<Void, Never>?
+  @ObservationIgnored private var guardTask: Task<Void, Never>?
 
   static let managedDefaultsKey = "io.github.clashmax.systemProxyManaged"
 

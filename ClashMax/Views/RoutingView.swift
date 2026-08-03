@@ -80,9 +80,9 @@ final class RuleMatchSimulationDebouncer {
 }
 
 struct RoutingView: View {
-  @EnvironmentObject private var appModel: AppModel
-  @EnvironmentObject private var profileStore: ProfileStore
-  @EnvironmentObject private var snippetLibrary: RuntimeSnippetLibraryStore
+  @Environment(AppModel.self) private var appModel
+  @Environment(ProfileStore.self) private var profileStore
+  @Environment(RuntimeSnippetLibraryStore.self) private var snippetLibrary
   @Environment(RuntimeDataStore.self) private var runtimeData
   @State private var selectedSnippetID: RuntimeSnippet.ID?
   @State private var draftSnippet = RuntimeSnippet.defaultRuleSnippet

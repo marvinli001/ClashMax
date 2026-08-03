@@ -2,15 +2,16 @@ import AppKit
 import Foundation
 
 @MainActor
-final class ProfileCoordinator: ObservableObject {
-  @Published private(set) var isAddingSubscription = false
-  @Published private(set) var updatingProfileIDs: Set<Profile.ID> = []
-  @Published private(set) var message: String?
+@Observable
+final class ProfileCoordinator {
+  private(set) var isAddingSubscription = false
+  private(set) var updatingProfileIDs: Set<Profile.ID> = []
+  private(set) var message: String?
 
   private let profileStore: ProfileStore
   private let proxyPreview: ProxyPreviewStore
   private let subscriptionScheduler: SubscriptionAutoUpdateScheduler
-  private var hooks = ProfileCoordinatorHooks()
+  @ObservationIgnored private var hooks = ProfileCoordinatorHooks()
 
   init(
     profileStore: ProfileStore,
