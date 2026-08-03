@@ -6,7 +6,7 @@ struct RunningDashboardView: View {
   @Environment(RuntimeDataStore.self) private var runtimeData
   // Owned by AppModel so the Current Node card repaints from the retained
   // snapshot when the user returns to the dashboard tab (see ProxiesView).
-  @ObservedObject private var currentNodeCoordinator: ProxySearchCoordinator
+  private let currentNodeCoordinator: ProxySearchCoordinator
   @State private var selectedProxyGroupName: String?
   let state: DashboardRuntimeState
   let namespace: Namespace.ID

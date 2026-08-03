@@ -1,4 +1,3 @@
-import Combine
 import Foundation
 import os
 
@@ -10,7 +9,8 @@ import os
 /// and (3) applies the published snapshot — proven by the `category: "ProxySearch"` os_signpost
 /// interval and debug logs (query, source/result counts, durationMs, staleDropped).
 @MainActor
-final class ProxySearchCoordinator: ObservableObject {
+@Observable
+final class ProxySearchCoordinator {
   enum Reason: Sendable {
     /// First population / explicit refresh.
     case initial
@@ -22,9 +22,9 @@ final class ProxySearchCoordinator: ObservableObject {
     case data
   }
 
-  @Published private(set) var snapshot: ProxySearchSnapshot = .empty
+  private(set) var snapshot: ProxySearchSnapshot = .empty
   /// True while a request is scheduled or computing and has not yet published.
-  @Published private(set) var isComputing: Bool = false
+  private(set) var isComputing: Bool = false
 
   /// Total stale results dropped by the generation gate (newer query superseded them).
   private(set) var staleResultsDropped: Int = 0
@@ -35,13 +35,13 @@ final class ProxySearchCoordinator: ObservableObject {
   /// bursty delay-batch updates instead of recomputing per node.
   var dataDebounce: Duration = .milliseconds(40)
 
-  private let run: @Sendable (ProxySearchPipeline.Input) -> ProxySearchSnapshot
-  private let logger = Logger(subsystem: AppConstants.bundleIdentifier, category: "ProxySearch")
-  private let signposter: OSSignposter
-  private var gate = ProxySearchGenerationGate()
+  @ObservationIgnored private let run: @Sendable (ProxySearchPipeline.Input) -> ProxySearchSnapshot
+  @ObservationIgnored private let logger = Logger(subsystem: AppConstants.bundleIdentifier, category: "ProxySearch")
+  @ObservationIgnored private let signposter: OSSignposter
+  @ObservationIgnored private var gate = ProxySearchGenerationGate()
   /// Scheduled work keyed by generation token. Tasks remove themselves on completion so the map
   /// (and the large `Input` each task captures) never accumulates across a session.
-  private var pending: [Int: Task<Void, Never>] = [:]
+  @ObservationIgnored private var pending: [Int: Task<Void, Never>] = [:]
 
   init(run: @escaping @Sendable (ProxySearchPipeline.Input) -> ProxySearchSnapshot = { ProxySearchPipeline.run($0) }) {
     self.run = run

@@ -7,7 +7,7 @@ struct ProxiesView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   // Owned by AppModel so the resolved snapshot survives tab switches; a fresh
   // per-page instance made every return to this page repaint from empty.
-  @ObservedObject private var searchCoordinator: ProxySearchCoordinator
+  private let searchCoordinator: ProxySearchCoordinator
   @State private var searchText = ""
   @State private var expandedGroupIDs: Set<String>?
   @State private var selectedGroupID: ProxyGroup.ID?

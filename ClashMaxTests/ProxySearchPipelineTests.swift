@@ -1,4 +1,3 @@
-import Combine
 import XCTest
 
 @testable import ClashMax
@@ -276,23 +275,21 @@ final class ProxySearchPipelineTests: XCTestCase {
     coordinator.searchDebounce = .zero
     coordinator.dataDebounce = .zero
 
-    var snapshotEmissions = 0
-    let cancellable = coordinator.$snapshot.dropFirst().sink { _ in snapshotEmissions += 1 }
-    defer { cancellable.cancel() }
+    let counter = ObservationChangeCounter { _ = coordinator.snapshot }
 
     coordinator.submit(Fixture.input(searchText: "韩国"), reason: .searchText)
     await coordinator.settleForTesting()
-    XCTAssertEqual(snapshotEmissions, 1, "first result publishes once")
+    XCTAssertEqual(counter.count, 1, "first result publishes once")
 
     // Identical query + identical (value-equal) data → identical snapshot → must be skipped.
     coordinator.submit(Fixture.input(searchText: "韩国"), reason: .data)
     await coordinator.settleForTesting()
-    XCTAssertEqual(snapshotEmissions, 1, "identical snapshot must not emit a redundant objectWillChange")
+    XCTAssertEqual(counter.count, 1, "identical snapshot must not emit a redundant objectWillChange")
 
     // A genuinely different result must publish.
     coordinator.submit(Fixture.input(searchText: "美国"), reason: .searchText)
     await coordinator.settleForTesting()
-    XCTAssertEqual(snapshotEmissions, 2, "a changed result publishes")
+    XCTAssertEqual(counter.count, 2, "a changed result publishes")
   }
 
   /// Issue #11: while searching "韩国", a delay-batch data refresh that only changes a filtered-out
@@ -304,16 +301,14 @@ final class ProxySearchPipelineTests: XCTestCase {
     coordinator.dataDebounce = .zero
 
     let base = Fixture.make()
-    var snapshotEmissions = 0
-    let cancellable = coordinator.$snapshot.dropFirst().sink { _ in snapshotEmissions += 1 }
-    defer { cancellable.cancel() }
+    let counter = ObservationChangeCounter { _ = coordinator.snapshot }
 
     coordinator.submit(
       ProxySearchPipeline.Input(groups: base.groups, providers: base.providers, sortOrder: .profile, searchText: "韩国"),
       reason: .searchText
     )
     await coordinator.settleForTesting()
-    XCTAssertEqual(snapshotEmissions, 1, "first 韩国 result publishes once")
+    XCTAssertEqual(counter.count, 1, "first 韩国 result publishes once")
 
     var bumped = base.providers
     bumped[0].proxies = bumped[0].proxies.map { node in
@@ -332,7 +327,7 @@ final class ProxySearchPipelineTests: XCTestCase {
     )
     await coordinator.settleForTesting()
     XCTAssertEqual(
-      snapshotEmissions,
+      counter.count,
       1,
       "a delay change on a filtered-out 美国 node must not republish the 韩国 result during search"
     )
@@ -346,16 +341,14 @@ final class ProxySearchPipelineTests: XCTestCase {
     coordinator.dataDebounce = .zero
 
     let base = Fixture.make()
-    var snapshotEmissions = 0
-    let cancellable = coordinator.$snapshot.dropFirst().sink { _ in snapshotEmissions += 1 }
-    defer { cancellable.cancel() }
+    let counter = ObservationChangeCounter { _ = coordinator.snapshot }
 
     coordinator.submit(
       ProxySearchPipeline.Input(groups: base.groups, providers: base.providers, sortOrder: .profile, searchText: "韩国"),
       reason: .searchText
     )
     await coordinator.settleForTesting()
-    XCTAssertEqual(snapshotEmissions, 1)
+    XCTAssertEqual(counter.count, 1)
 
     var bumped = base.providers
     bumped[0].proxies = bumped[0].proxies.map { node in
@@ -373,7 +366,7 @@ final class ProxySearchPipelineTests: XCTestCase {
       reason: .data
     )
     await coordinator.settleForTesting()
-    XCTAssertEqual(snapshotEmissions, 2, "a delay change on a displayed 韩国 node must update the view")
+    XCTAssertEqual(counter.count, 2, "a delay change on a displayed 韩国 node must update the view")
   }
 
   /// Issue #11: while a search is active, a delay change on a node that's filtered *out* (only
