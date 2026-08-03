@@ -8273,6 +8273,35 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(model.shortcutRegistrationStatus?.errorMessage?.contains("OSStatus -9876") == true)
   }
 
+  func testGlobalShortcutsAreRegisteredFromPersistedSettingsAtLaunch() throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    let shortcut = try XCTUnwrap(KeyboardShortcutDescriptor(string: "cmd+shift+p"))
+
+    // Seed the suite the way a previous launch would have left it. Assigning through a throwaway
+    // store persists via its didSet, so this needs no knowledge of the defaults keys or encoding.
+    let seed = PersistedSettingsStore(defaults: defaults)
+    seed.developerMode = true
+    seed.globalShortcutSettings = GlobalShortcutSettings(bindings: [
+      GlobalShortcutBinding(action: .startStop, shortcut: shortcut, enabled: true)
+    ])
+
+    let registrar = RecordingAppGlobalShortcutRegistrar()
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: defaults,
+      globalShortcutRegistrar: registrar
+    )
+
+    // Nothing is assigned to model.globalShortcutSettings here on purpose. @Published emits its
+    // current value on subscribe, so installGlobalShortcuts runs once during setupBindings today.
+    // `didSet` does not fire during init, so after the migration setupBindings must prime this
+    // explicitly — otherwise shortcuts a user already configured are never registered at launch.
+    XCTAssertEqual(registrar.registrations.map(\.action), [.startStop])
+    XCTAssertEqual(model.shortcutRegistrationStatus?.registeredCount, 1)
+  }
+
   func testNetworkExtensionRefreshClearsPublishedApprovalErrorAfterApproval() async throws {
     let paths = try Self.makeRuntimePaths()
     let requester = StaticSystemExtensionRequester(activationState: .requiresApproval)
