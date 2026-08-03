@@ -250,14 +250,15 @@ struct TunnelHelperStatusDetail: Equatable, Sendable {
 }
 
 @MainActor
-final class TunnelHelperClient: ObservableObject {
-  @Published var statusMessage: String = "Not registered"
+@Observable
+final class TunnelHelperClient {
+  var statusMessage: String = "Not registered"
   private let transport: any HelperXPCTransport
   private let service: any HelperServiceManaging
   private let fingerprintProvider: any HelperFingerprintProviding
   private let registrationRecordStore: any HelperRegistrationRecordStoring
   private let bootstrapStatusTimeoutSeconds: TimeInterval
-  private var automaticBootstrapRepairFingerprint: String?
+  @ObservationIgnored private var automaticBootstrapRepairFingerprint: String?
 
   init(
     transport: any HelperXPCTransport = PrivilegedHelperXPCTransport(),
