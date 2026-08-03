@@ -2,7 +2,7 @@ import SwiftUI
 
 struct PublicIPInfoCard: View {
   @EnvironmentObject private var appModel: AppModel
-  @EnvironmentObject private var publicIP: PublicIPCoordinator
+  @Environment(PublicIPCoordinator.self) private var publicIP
   let availableWidth: CGFloat
   /// Provider-resolved current group/node supplied by `RunningDashboardView` so the proxy-effect
   /// check shares the same off-main resolution as the Current Node card (issue #13 / #14).

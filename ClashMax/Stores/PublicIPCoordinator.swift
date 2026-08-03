@@ -1,11 +1,12 @@
 import Foundation
 
 @MainActor
-final class PublicIPCoordinator: ObservableObject {
-  @Published private(set) var state: PublicIPInfoState = .idle
+@Observable
+final class PublicIPCoordinator {
+  private(set) var state: PublicIPInfoState = .idle
 
   private let client: any PublicIPInfoFetching
-  private var task: Task<Void, Never>?
+  @ObservationIgnored private var task: Task<Void, Never>?
   private let refreshInterval: TimeInterval
 
   init(

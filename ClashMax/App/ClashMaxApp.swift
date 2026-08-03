@@ -23,7 +23,7 @@ struct ClashMaxApp: App {
         .environmentObject(appModel.profileCoordinator)
         .environmentObject(appModel.systemProxy)
         .environment(appModel.runtimeData)
-        .environmentObject(appModel.publicIP)
+        .environment(appModel.publicIP)
         .environmentObject(appUpdateController)
         .appThemeAppearance(appModel.settings.appTheme)
         .frame(minWidth: 980, minHeight: 660)
@@ -127,7 +127,7 @@ struct ClashMaxApp: App {
         .environmentObject(appModel.profileCoordinator)
         .environmentObject(appModel.systemProxy)
         .environment(appModel.runtimeData)
-        .environmentObject(appModel.publicIP)
+        .environment(appModel.publicIP)
         .environmentObject(appUpdateController)
         .appThemeAppearance(appModel.settings.appTheme)
         .onAppear {
@@ -160,7 +160,7 @@ struct ClashMaxApp: App {
         .environmentObject(appModel.profileCoordinator)
         .environmentObject(appModel.systemProxy)
         .environment(appModel.runtimeData)
-        .environmentObject(appModel.publicIP)
+        .environment(appModel.publicIP)
         .environmentObject(appUpdateController)
         .appThemeAppearance(appModel.settings.appTheme)
         .onAppear {
