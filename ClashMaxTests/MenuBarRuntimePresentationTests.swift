@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import ClashMax
 
@@ -196,6 +197,83 @@ final class MenuBarTrafficStatusLabelTests: XCTestCase {
     )
 
     XCTAssertEqual(label, "↑0B/s\n↓0B/s")
+  }
+}
+
+final class MenuBarStatusItemImageTests: XCTestCase {
+  func testRenderCompositesLogoAndBothTrafficRowsIntoOneTemplateImage() {
+    let lines = MenuBarTrafficStatusLabel.Lines(upload: "↑48B/s", download: "↓22KB/s")
+
+    let image = MenuBarStatusItemImage.render(lines: lines, logo: solidLogo())
+
+    // MenuBarExtra only renders a single-Image label through the status item's
+    // native image slot, so everything must live in this one template image.
+    XCTAssertTrue(image.isTemplate)
+    XCTAssertEqual(image.size.height, MenuBarStatusItemImage.rowHeight * 2)
+    XCTAssertGreaterThan(
+      image.size.width,
+      MenuBarStatusItemImage.logoPointSize + MenuBarStatusItemImage.logoTextGap
+    )
+
+    guard let rep = image.representations.first as? NSBitmapImageRep else {
+      return XCTFail("Expected a pre-rasterized bitmap representation")
+    }
+    let logoRegionMaxX = Int(MenuBarStatusItemImage.logoPointSize * 2)
+    XCTAssertGreaterThan(
+      alphaPixels(in: rep, xRange: 0 ..< logoRegionMaxX),
+      0,
+      "Logo must be drawn into the composite image"
+    )
+    // Upload row occupies the top half, download row the bottom half. Both must
+    // carry real pixels — the empty-image / clipped-second-row regressions both
+    // fail here.
+    XCTAssertGreaterThan(
+      alphaPixels(in: rep, xRange: logoRegionMaxX ..< rep.pixelsWide, yRange: 0 ..< rep.pixelsHigh / 2),
+      0,
+      "Upload row must be drawn"
+    )
+    XCTAssertGreaterThan(
+      alphaPixels(in: rep, xRange: logoRegionMaxX ..< rep.pixelsWide, yRange: rep.pixelsHigh / 2 ..< rep.pixelsHigh),
+      0,
+      "Download row must be drawn"
+    )
+  }
+
+  func testRenderWithoutLogoStillDrawsBothRows() {
+    let lines = MenuBarTrafficStatusLabel.Lines(upload: "↑0B/s", download: "↓0B/s")
+
+    let image = MenuBarStatusItemImage.render(lines: lines, logo: nil)
+
+    XCTAssertTrue(image.isTemplate)
+    guard let rep = image.representations.first as? NSBitmapImageRep else {
+      return XCTFail("Expected a pre-rasterized bitmap representation")
+    }
+    XCTAssertGreaterThan(alphaPixels(in: rep, yRange: 0 ..< rep.pixelsHigh / 2), 0)
+    XCTAssertGreaterThan(alphaPixels(in: rep, yRange: rep.pixelsHigh / 2 ..< rep.pixelsHigh), 0)
+  }
+
+  private func solidLogo() -> NSImage {
+    NSImage(size: NSSize(width: 16, height: 16), flipped: false) { rect in
+      NSColor.black.setFill()
+      rect.fill()
+      return true
+    }
+  }
+
+  private func alphaPixels(
+    in rep: NSBitmapImageRep,
+    xRange: Range<Int>? = nil,
+    yRange: Range<Int>? = nil
+  ) -> Int {
+    var count = 0
+    for x in xRange ?? 0 ..< rep.pixelsWide {
+      for y in yRange ?? 0 ..< rep.pixelsHigh {
+        if let color = rep.colorAt(x: x, y: y), color.alphaComponent > 0.1 {
+          count += 1
+        }
+      }
+    }
+    return count
   }
 }
 

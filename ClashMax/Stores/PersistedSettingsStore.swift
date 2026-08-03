@@ -101,6 +101,7 @@ final class PersistedSettingsStore: ObservableObject {
   private let loginItemService: any LoginItemManaging
 
   static let silentStartDefaultsKey = "io.github.clashmax.silentStart"
+  static let launchAtLoginDesiredDefaultsKey = "io.github.clashmax.launchAtLoginDesired"
   static let initialTunHelperPromptHandledDefaultsKey = "io.github.clashmax.initialTunHelperPromptHandled"
   private static let proxyRoutingModeDefaultsKey = "io.github.clashmax.proxyRoutingMode"
   private static let developerModeDefaultsKey = "io.github.clashmax.developerMode"
@@ -236,15 +237,23 @@ final class PersistedSettingsStore: ObservableObject {
   }
 
   func refreshLaunchSettings() {
-    launchSettings = LaunchSettings(
+    let refreshed = LaunchSettings(
       launchAtLogin: Self.isLoginItemRegistered(loginItemService.status),
       silentStart: defaults.bool(forKey: Self.silentStartDefaultsKey),
       statusMessage: Self.loginItemStatusMessage(for: loginItemService.status)
     )
+    // Called from applicationDidBecomeActive, so skip the publish when nothing
+    // actually changed.
+    guard refreshed != launchSettings else { return }
+    launchSettings = refreshed
   }
 
   @discardableResult
   func updateLaunchAtLogin(_ enabled: Bool) async throws -> Bool {
+    // Intent is stored before talking to SMAppService so a failed registration
+    // still leaves a record of what the user asked for; the launch-time repair
+    // path retries from that intent once the underlying condition clears.
+    defaults.set(enabled, forKey: Self.launchAtLoginDesiredDefaultsKey)
     if enabled {
       try loginItemService.register()
     } else {
@@ -255,6 +264,22 @@ final class PersistedSettingsStore: ObservableObject {
       loginItemService.openSystemSettingsLoginItems()
     }
     return true
+  }
+
+  /// Re-asserts the login-item registration when the user previously enabled
+  /// launch-at-login but macOS no longer has an active registration for this
+  /// app — typically because the registered copy was moved, rebuilt, or
+  /// deleted, which strands the Background Task Management record. A pending
+  /// System Settings approval is deliberately left alone: register() cannot
+  /// override the user's decision there, and re-asserting would only churn the
+  /// BTM record.
+  func repairLaunchAtLoginRegistrationIfNeeded() {
+    guard LaunchAtLoginRepairPolicy.shouldAttemptRepair(
+      desired: defaults.bool(forKey: Self.launchAtLoginDesiredDefaultsKey),
+      status: loginItemService.status
+    ) else { return }
+    try? loginItemService.register()
+    refreshLaunchSettings()
   }
 
   func setSilentStart(_ enabled: Bool) {
@@ -412,10 +437,14 @@ final class PersistedSettingsStore: ObservableObject {
   }
 
   private static func isLoginItemRegistered(_ status: SMAppService.Status) -> Bool {
+    // .requiresApproval reads as OFF: macOS will not launch the app in that
+    // state (the user disabled it in System Settings or never approved it), so
+    // showing the toggle as on would misreport what happens at next login.
+    // The status message row carries the approval instructions.
     switch status {
-    case .enabled, .requiresApproval:
+    case .enabled:
       return true
-    case .notRegistered, .notFound:
+    case .requiresApproval, .notRegistered, .notFound:
       return false
     @unknown default:
       return false

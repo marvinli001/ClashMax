@@ -2650,6 +2650,117 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(reloaded.launchSettings.silentStart)
   }
 
+  func testLaunchAtLoginRequiresApprovalReportsToggleOffWithApprovalMessage() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      loginItemService: FakeLoginItemService(status: .requiresApproval),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    XCTAssertFalse(model.launchSettings.launchAtLogin)
+    XCTAssertEqual(
+      model.launchSettings.statusMessage,
+      String(localized: "Approve ClashMax in System Settings > General > Login Items & Extensions.")
+    )
+  }
+
+  func testUpdateLaunchAtLoginPersistsDesiredIntent() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      loginItemService: FakeLoginItemService(status: .notRegistered),
+      defaults: defaults
+    )
+
+    await model.updateLaunchAtLogin(true)
+    XCTAssertTrue(defaults.bool(forKey: AppModel.launchAtLoginDesiredDefaultsKey))
+
+    await model.updateLaunchAtLogin(false)
+    XCTAssertFalse(defaults.bool(forKey: AppModel.launchAtLoginDesiredDefaultsKey))
+  }
+
+  func testRepairLaunchAtLoginReregistersWhenDesiredAndNotRegistered() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    defaults.set(true, forKey: AppModel.launchAtLoginDesiredDefaultsKey)
+    let service = FakeLoginItemService(status: .notRegistered)
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      loginItemService: service,
+      defaults: defaults
+    )
+
+    model.repairLaunchAtLoginRegistrationOnLaunch()
+
+    XCTAssertEqual(service.registerCount, 1)
+    XCTAssertTrue(model.launchSettings.launchAtLogin)
+  }
+
+  func testRepairLaunchAtLoginSkipsWhenNotDesiredEnabledOrAwaitingApproval() async throws {
+    let paths = try Self.makeRuntimePaths()
+
+    // Not desired: never registers.
+    let notDesired = FakeLoginItemService(status: .notRegistered)
+    let notDesiredModel = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      loginItemService: notDesired,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    notDesiredModel.repairLaunchAtLoginRegistrationOnLaunch()
+    XCTAssertEqual(notDesired.registerCount, 0)
+
+    // Already enabled: nothing to repair.
+    let enabledDefaults = try Self.makeIsolatedDefaults()
+    enabledDefaults.set(true, forKey: AppModel.launchAtLoginDesiredDefaultsKey)
+    let enabled = FakeLoginItemService(status: .enabled)
+    let enabledModel = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      loginItemService: enabled,
+      defaults: enabledDefaults
+    )
+    enabledModel.repairLaunchAtLoginRegistrationOnLaunch()
+    XCTAssertEqual(enabled.registerCount, 0)
+
+    // Awaiting approval: the user must act in System Settings; re-registering cannot
+    // force it back on and would only churn the BTM record.
+    let approvalDefaults = try Self.makeIsolatedDefaults()
+    approvalDefaults.set(true, forKey: AppModel.launchAtLoginDesiredDefaultsKey)
+    let awaitingApproval = FakeLoginItemService(status: .requiresApproval)
+    let approvalModel = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      loginItemService: awaitingApproval,
+      defaults: approvalDefaults
+    )
+    approvalModel.repairLaunchAtLoginRegistrationOnLaunch()
+    XCTAssertEqual(awaitingApproval.registerCount, 0)
+  }
+
+  func testRepairLaunchAtLoginRunsOncePerProcess() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    defaults.set(true, forKey: AppModel.launchAtLoginDesiredDefaultsKey)
+    let service = FakeLoginItemService(status: .notRegistered, registerKeepsStatus: true)
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      loginItemService: service,
+      defaults: defaults
+    )
+
+    model.repairLaunchAtLoginRegistrationOnLaunch()
+    model.repairLaunchAtLoginRegistrationOnLaunch()
+
+    XCTAssertEqual(service.registerCount, 1)
+  }
+
   func testLaunchAtLoginToggleReportsRegistrationErrors() async throws {
     let paths = try Self.makeRuntimePaths()
     let service = FakeLoginItemService(
@@ -12170,14 +12281,21 @@ private final class FakeLoginItemService: LoginItemManaging {
   var status: SMAppService.Status
   private let registerError: Error?
   private let unregisterError: Error?
+  private let registerKeepsStatus: Bool
   private(set) var registerCount = 0
   private(set) var unregisterCount = 0
   private(set) var openSettingsCount = 0
 
-  init(status: SMAppService.Status, registerError: Error? = nil, unregisterError: Error? = nil) {
+  init(
+    status: SMAppService.Status,
+    registerError: Error? = nil,
+    unregisterError: Error? = nil,
+    registerKeepsStatus: Bool = false
+  ) {
     self.status = status
     self.registerError = registerError
     self.unregisterError = unregisterError
+    self.registerKeepsStatus = registerKeepsStatus
   }
 
   func register() throws {
@@ -12185,7 +12303,9 @@ private final class FakeLoginItemService: LoginItemManaging {
     if let registerError {
       throw registerError
     }
-    status = .enabled
+    if !registerKeepsStatus {
+      status = .enabled
+    }
   }
 
   func unregister() async throws {

@@ -88,7 +88,7 @@ struct ContentView: View {
     case .profiles:
       ProfilesView()
     case .proxies:
-      ProxiesView()
+      ProxiesView(searchCoordinator: appModel.proxiesSearchCoordinator)
     case .connections:
       ConnectionsView()
     case .routing:

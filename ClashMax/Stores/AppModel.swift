@@ -798,6 +798,18 @@ final class AppModel: ObservableObject {
   private var tunHelperPreparationTask: Task<Void, Never>?
   private var didWarmTunHelperRegistrationOnLaunch = false
   private var initialTunHelperPromptDeferredDuringSilentStart = false
+  private var launchAtLoginRepairAttempted = false
+
+  /// Long-lived search coordinators for the Proxies page and the dashboard's
+  /// Current Node card. The section switch in ContentView tears the page views
+  /// down on every tab change, so coordinators owned by the views (@StateObject)
+  /// lost their published snapshot each time and every return to the page
+  /// repainted from empty — the visible "page takes a beat to appear" delay.
+  /// Owning them here keeps the last snapshot alive across switches; the pages
+  /// still resubmit on entry, and the coordinator's equality gate turns a
+  /// no-change recompute into a no-op publish.
+  let proxiesSearchCoordinator = ProxySearchCoordinator()
+  let dashboardCurrentNodeCoordinator = ProxySearchCoordinator()
   private var didResumeInitialTunHelperPromptAfterUserOpen = false
   private var didWarmPreviewRuntimeOnLaunch = false
   private var modeUpdateTask: Task<Void, Never>?
@@ -860,6 +872,7 @@ final class AppModel: ObservableObject {
   private let delayStateCacheTTL: TimeInterval
   static let publicIPRefreshInterval: TimeInterval = 300
   static let silentStartDefaultsKey = PersistedSettingsStore.silentStartDefaultsKey
+  static let launchAtLoginDesiredDefaultsKey = PersistedSettingsStore.launchAtLoginDesiredDefaultsKey
   static let startWallClockSeconds: TimeInterval = 22
   private static let previewRuntimeMixedPort = 17_890
   private static let previewRuntimeControllerPort = 19_097
@@ -4640,6 +4653,15 @@ final class AppModel: ObservableObject {
     settings.openLoginItemsSettings()
   }
 
+  /// One-shot launch-time repair of the login-item registration. SwiftUI calls
+  /// the warmup block from every scene's onAppear, so the guard keeps repeated
+  /// appearances from re-querying SMAppService.
+  func repairLaunchAtLoginRegistrationOnLaunch() {
+    guard !launchAtLoginRepairAttempted else { return }
+    launchAtLoginRepairAttempted = true
+    settings.repairLaunchAtLoginRegistrationIfNeeded()
+  }
+
   func reloadRuntimeData(clearAfterConfirmation: Bool = false) {
     guard isCoreRunning, let apiClient else {
       runtimeReloadTask?.cancel()
@@ -7994,6 +8016,20 @@ protocol LoginItemManaging: AnyObject {
   func register() throws
   func unregister() async throws
   func openSystemSettingsLoginItems()
+}
+
+enum LaunchAtLoginRepairPolicy {
+  static func shouldAttemptRepair(desired: Bool, status: SMAppService.Status) -> Bool {
+    guard desired else { return false }
+    switch status {
+    case .notRegistered, .notFound:
+      return true
+    case .enabled, .requiresApproval:
+      return false
+    @unknown default:
+      return false
+    }
+  }
 }
 
 final class MainAppLoginItemService: LoginItemManaging {

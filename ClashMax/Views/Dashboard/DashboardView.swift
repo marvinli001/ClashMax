@@ -15,6 +15,7 @@ struct DashboardView: View {
           ScrollView {
             VStack(spacing: 16) {
               RunningDashboardView(
+                currentNodeCoordinator: appModel.dashboardCurrentNodeCoordinator,
                 state: state,
                 namespace: dashboardNamespace,
                 reduceMotion: reduceMotion,

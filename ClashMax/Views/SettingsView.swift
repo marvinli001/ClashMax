@@ -111,13 +111,13 @@ struct SettingsView: View {
 
           SettingsToggleRow(
             "Silent Start",
-            description: "Hide the main window when launched by the login item.",
+            description: "Start without showing the main window; ClashMax stays in the menu bar.",
             isOn: Binding(
               get: { settings.launchSettings.silentStart },
               set: { appModel.setSilentStart($0) }
             )
           )
-          .help("When enabled, ClashMax hides its main window during login-item startup. Open it from the menu bar when needed.")
+          .help("Applies to every launch, including login-item startup. Open the main window from the menu bar when needed.")
 
           SettingsControlRow("Login Item Status", description: settings.launchSettings.statusMessage) {
             Button {
@@ -2890,18 +2890,26 @@ private struct NumberStepperField: View {
   var step = 1
   var fieldWidth: CGFloat = 82
   @State private var draft = ""
+  @FocusState private var isFocused: Bool
 
   var body: some View {
     HStack(spacing: 8) {
+      // The draft commits on Return, focus loss, or the stepper — never per
+      // keystroke. Ports feed updateRuntimeOverridesForAutoApply, so a live
+      // commit would push transient values like "1789" (while typing "17890")
+      // into a running core.
       TextField("", text: $draft)
         .textFieldStyle(.roundedBorder)
         .multilineTextAlignment(.trailing)
         .monospacedDigit()
         .frame(width: fieldWidth)
         .accessibilityLabel(localizedSettingsText(accessibilityLabel))
+        .focused($isFocused)
         .onSubmit(commitDraft)
-        .onChange(of: draft) { _, newValue in
-          updateValueIfValid(newValue)
+        .onChange(of: isFocused) { _, focused in
+          if !focused {
+            commitDraft()
+          }
         }
         .onAppear(perform: syncDraft)
         .onChange(of: value) { _, _ in
@@ -2920,17 +2928,17 @@ private struct NumberStepperField: View {
     )
   }
 
-  private func updateValueIfValid(_ text: String) {
-    guard let parsed = Int(text), range.contains(parsed) else { return }
-    value = parsed
-  }
-
   private func commitDraft() {
     guard let parsed = Int(draft) else {
       syncDraft()
       return
     }
-    value = clamped(parsed)
+    let committed = clamped(parsed)
+    // Focus loss commits unconditionally, so skip the binding write when the
+    // number didn't change — port bindings re-apply runtime settings on set.
+    if committed != value {
+      value = committed
+    }
     syncDraft()
   }
 

@@ -8,6 +8,9 @@ struct ClashMaxApp: App {
   @StateObject private var appUpdateController = AppUpdateController()
   @Environment(\.openWindow) private var openWindow
   private let bundledCoreInfo = BundledCoreInfo()
+  // Read once at process start: launch behavior is a scene-construction decision,
+  // and the toggle only affects the NEXT launch anyway.
+  private let silentStartRequested = UserDefaults.standard.bool(forKey: AppModel.silentStartDefaultsKey)
 
   var body: some Scene {
     WindowGroup("ClashMax", id: "main") {
@@ -31,6 +34,9 @@ struct ClashMaxApp: App {
             appModel.startNetworkEnvironmentMonitoring()
             appModel.warmTunHelperRegistrationOnLaunch()
             appModel.warmPreviewRuntimeOnLaunch()
+            if LaunchAtLoginRepairLaunchGate.shouldRun {
+              appModel.repairLaunchAtLoginRegistrationOnLaunch()
+            }
           }
         }
         .onOpenURL { url in
@@ -39,7 +45,10 @@ struct ClashMaxApp: App {
         }
     }
     .defaultSize(width: 1180, height: 760)
-    .defaultLaunchBehavior(.presented)
+    // .suppressed keeps the window from ever being created during a silent
+    // launch, instead of racing to orderOut windows after AppKit presents them
+    // (the AppDelegate orderOut pass stays as a fallback for restored windows).
+    .defaultLaunchBehavior(silentStartRequested ? .suppressed : .presented)
     .commands {
       CommandGroup(after: .appInfo) {
         CheckForUpdatesButton(updateController: appUpdateController)
@@ -109,6 +118,7 @@ struct ClashMaxApp: App {
 
     MenuBarExtra {
       MenuBarView()
+        .menuBarPanelChrome()
         .environmentObject(appModel)
         .environmentObject(appModel.settings)
         .environmentObject(appModel.profileStore)
@@ -127,6 +137,9 @@ struct ClashMaxApp: App {
             appModel.startNetworkEnvironmentMonitoring()
             appModel.warmTunHelperRegistrationOnLaunch()
             appModel.warmPreviewRuntimeOnLaunch()
+            if LaunchAtLoginRepairLaunchGate.shouldRun {
+              appModel.repairLaunchAtLoginRegistrationOnLaunch()
+            }
           }
         }
     } label: {
@@ -157,6 +170,9 @@ struct ClashMaxApp: App {
             appModel.startNetworkEnvironmentMonitoring()
             appModel.warmTunHelperRegistrationOnLaunch()
             appModel.warmPreviewRuntimeOnLaunch()
+            if LaunchAtLoginRepairLaunchGate.shouldRun {
+              appModel.repairLaunchAtLoginRegistrationOnLaunch()
+            }
           }
         }
     }
@@ -184,16 +200,19 @@ private struct MenuBarStatusLabel: View {
       sample: runtimeData.trafficSample
     )
 
-    HStack(spacing: 4) {
-      Image("ClashMaxMenuBarLogo")
-        .renderingMode(.template)
-        .resizable()
-        .scaledToFit()
-        .frame(width: 16, height: 16)
-        .foregroundStyle(runtime.tint)
-
+    Group {
       if let trafficLines {
-        MenuBarTrafficStatusLines(lines: trafficLines)
+        Image(nsImage: MenuBarStatusItemImage.render(
+          lines: trafficLines,
+          logo: NSImage(named: "ClashMaxMenuBarLogo")
+        ))
+      } else {
+        Image("ClashMaxMenuBarLogo")
+          .renderingMode(.template)
+          .resizable()
+          .scaledToFit()
+          .frame(width: 16, height: 16)
+          .foregroundStyle(runtime.tint)
       }
     }
     .accessibilityLabel(Text("ClashMax \(runtime.title)"))
@@ -201,38 +220,73 @@ private struct MenuBarStatusLabel: View {
   }
 }
 
-// MenuBarExtra clamps a SwiftUI label to one text line, so a VStack of two Texts
-// gets bottom-clipped in the status bar (only the upload row survived). Drawing
-// both rows into a template NSImage sidesteps that limit — status items render
-// images at full menu-bar height and tint templates for light/dark automatically.
-private struct MenuBarTrafficStatusLines: View {
-  let lines: MenuBarTrafficStatusLabel.Lines
+// MenuBarExtra renders its label through two different paths: a label that
+// resolves to a single Image reaches the status item's native image slot, where
+// any NSImage renders at full menu-bar height and templates tint automatically.
+// A composite label (e.g. HStack of logo + traffic) instead goes through a
+// flattening pass that silently DROPS dynamically created Image(nsImage:) and
+// Canvas content and clamps Text to a single line. So the logo and both traffic
+// rows must be composited into one template NSImage and returned as the label's
+// only view. (Verified on macOS 26.5 with a status-bar window probe, 2026-08-03.)
+enum MenuBarStatusItemImage {
+  static var textFont: NSFont { .monospacedDigitSystemFont(ofSize: 8.5, weight: .medium) }
+  static let rowHeight: CGFloat = 9
+  static let logoPointSize: CGFloat = 16
+  static let logoTextGap: CGFloat = 4
 
-  var body: some View {
-    Image(nsImage: Self.render(lines))
-  }
-
-  private static func render(_ lines: MenuBarTrafficStatusLabel.Lines) -> NSImage {
-    let font = NSFont.monospacedDigitSystemFont(ofSize: 8.5, weight: .medium)
+  static func render(lines: MenuBarTrafficStatusLabel.Lines, logo: NSImage?) -> NSImage {
     let attributes: [NSAttributedString.Key: Any] = [
-      .font: font,
+      .font: textFont,
+      // Template images only use the alpha channel; black keeps full coverage.
       .foregroundColor: NSColor.black,
     ]
     let upload = NSAttributedString(string: lines.upload, attributes: attributes)
     let download = NSAttributedString(string: lines.download, attributes: attributes)
     let uploadSize = upload.size()
     let downloadSize = download.size()
-    let width = ceil(max(uploadSize.width, downloadSize.width))
+    let textWidth = ceil(max(uploadSize.width, downloadSize.width))
     // Two 9pt rows keep the image inside the 22pt status-item height.
-    let rowHeight: CGFloat = 9
-    let size = NSSize(width: width, height: rowHeight * 2)
+    let height = rowHeight * 2
+    let logoWidth = logo == nil ? 0 : logoPointSize
+    let gap = logo == nil ? 0 : logoTextGap
+    let width = logoWidth + gap + textWidth
+    let textMinX = logoWidth + gap
+    let size = NSSize(width: width, height: height)
 
-    let image = NSImage(size: size, flipped: false) { _ in
-      // Right-aligned rows keep the units flush while the digit widths vary.
-      download.draw(at: NSPoint(x: width - downloadSize.width, y: 0))
-      upload.draw(at: NSPoint(x: width - uploadSize.width, y: rowHeight))
-      return true
+    // Pre-rasterized at 2x rather than handler-backed so the status item always
+    // has concrete bitmap content to composite and template-mask.
+    let scale: CGFloat = 2
+    guard let rep = NSBitmapImageRep(
+      bitmapDataPlanes: nil,
+      pixelsWide: Int(width * scale),
+      pixelsHigh: Int(height * scale),
+      bitsPerSample: 8,
+      samplesPerPixel: 4,
+      hasAlpha: true,
+      isPlanar: false,
+      colorSpaceName: .deviceRGB,
+      bytesPerRow: 0,
+      bitsPerPixel: 0
+    ) else {
+      return NSImage(size: size)
     }
+    rep.size = size
+
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+    logo?.draw(in: NSRect(
+      x: 0,
+      y: (height - logoPointSize) / 2,
+      width: logoPointSize,
+      height: logoPointSize
+    ))
+    // Right-aligned rows keep the units flush while the digit widths vary.
+    download.draw(at: NSPoint(x: textMinX + textWidth - downloadSize.width, y: 0))
+    upload.draw(at: NSPoint(x: textMinX + textWidth - uploadSize.width, y: rowHeight))
+    NSGraphicsContext.restoreGraphicsState()
+
+    let image = NSImage(size: size)
+    image.addRepresentation(rep)
     image.isTemplate = true
     return image
   }
@@ -352,6 +406,21 @@ enum AppActivationPolicyResolver {
   }
 }
 
+/// Debug builds usually run from DerivedData, and auto-registering those paths
+/// as the login item is exactly how stale BTM records get created (the record
+/// then points at a build product that the next clean deletes). The silent
+/// launch-time repair therefore only ships in Release builds; the settings
+/// toggle still registers explicitly in every configuration.
+enum LaunchAtLoginRepairLaunchGate {
+  static var shouldRun: Bool {
+    #if DEBUG
+    false
+    #else
+    true
+    #endif
+  }
+}
+
 enum AppLaunchWarmupPolicy {
   static var shouldRunForCurrentProcess: Bool {
     shouldRun(
@@ -449,6 +518,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   @objc func applicationDidBecomeActive(_ notification: Notification) {
     appModel?.handleNetworkEnvironmentMayHaveChanged(reason: "activation")
+    // Login-item state can change behind the app's back in System Settings;
+    // re-read it whenever the user comes back so the toggle stays honest.
+    appModel?.refreshLaunchSettings()
   }
 
   @objc private func windowWillClose(_ notification: Notification) {

@@ -5,11 +5,17 @@ struct ProxiesView: View {
   @EnvironmentObject private var appModel: AppModel
   @Environment(RuntimeDataStore.self) private var runtimeData
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @StateObject private var searchCoordinator = ProxySearchCoordinator()
+  // Owned by AppModel so the resolved snapshot survives tab switches; a fresh
+  // per-page instance made every return to this page repaint from empty.
+  @ObservedObject private var searchCoordinator: ProxySearchCoordinator
   @State private var searchText = ""
   @State private var expandedGroupIDs: Set<String>?
   @State private var selectedGroupID: ProxyGroup.ID?
   @State private var showsBatchFailureDetails = false
+
+  init(searchCoordinator: ProxySearchCoordinator) {
+    self.searchCoordinator = searchCoordinator
+  }
 
   var body: some View {
     let pageSettings = appModel.proxyPageSettings
@@ -89,8 +95,16 @@ struct ProxiesView: View {
     .searchable(text: $searchText, placement: .toolbar, prompt: Text("Search"))
     .animation(.easeInOut(duration: 0.15), value: searchCoordinator.isComputing)
     .task {
+      // Returning to the page: the coordinator outlives the view, so restore the
+      // search field from the retained snapshot instead of showing a filtered
+      // list under an empty field.
+      let retainedSearchText = searchCoordinator.snapshot.searchText
+      if searchText.isEmpty, !retainedSearchText.isEmpty {
+        searchText = retainedSearchText
+      }
       // First population: build the snapshot off-main so the initial paint of a large config
-      // doesn't block the main thread.
+      // doesn't block the main thread. On re-entry this recomputes with the same input and
+      // the coordinator's equality gate publishes nothing, so the retained snapshot stays up.
       searchCoordinator.submit(makeSearchInput(searchText: searchText), reason: .initial)
     }
     .onAppear {

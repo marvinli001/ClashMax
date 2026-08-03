@@ -4,12 +4,28 @@ import SwiftUI
 struct RunningDashboardView: View {
   @EnvironmentObject private var appModel: AppModel
   @Environment(RuntimeDataStore.self) private var runtimeData
-  @StateObject private var currentNodeCoordinator = ProxySearchCoordinator()
+  // Owned by AppModel so the Current Node card repaints from the retained
+  // snapshot when the user returns to the dashboard tab (see ProxiesView).
+  @ObservedObject private var currentNodeCoordinator: ProxySearchCoordinator
   @State private var selectedProxyGroupName: String?
   let state: DashboardRuntimeState
   let namespace: Namespace.ID
   let reduceMotion: Bool
   let availableWidth: CGFloat
+
+  init(
+    currentNodeCoordinator: ProxySearchCoordinator,
+    state: DashboardRuntimeState,
+    namespace: Namespace.ID,
+    reduceMotion: Bool,
+    availableWidth: CGFloat
+  ) {
+    self.currentNodeCoordinator = currentNodeCoordinator
+    self.state = state
+    self.namespace = namespace
+    self.reduceMotion = reduceMotion
+    self.availableWidth = availableWidth
+  }
 
   var body: some View {
     let selection = resolvedCurrentSelection

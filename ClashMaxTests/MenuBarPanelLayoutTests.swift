@@ -10,9 +10,20 @@ final class MenuBarPanelLayoutTests: XCTestCase {
 
   func testPanelWidthStaysInsidePlannedRichPanelRange() {
     XCTAssertTrue(MenuBarPanelLayout.plannedWidthRange.contains(MenuBarPanelLayout.width))
-    XCTAssertEqual(MenuBarPanelLayout.width, 312)
+    // Control Center's 320pt panel width is the native reference for a rich
+    // menu bar panel.
+    XCTAssertEqual(MenuBarPanelLayout.width, 320)
     XCTAssertEqual(MenuBarPanelLayout.controlWidth, 108)
     XCTAssertEqual(MenuBarPanelLayout.trafficChartHeight, 52)
+  }
+
+  func testPanelChromeMatchesFloatingSystemPanelMetrics() {
+    // The card must stay a floating rounded panel: generous continuous corners,
+    // transparent margins for the window shadow, and a visible gap below the
+    // menu bar like the system's own panels.
+    XCTAssertEqual(MenuBarPanelChrome.cornerRadius, 24)
+    XCTAssertEqual(MenuBarPanelChrome.outerMargin, 10)
+    XCTAssertEqual(MenuBarPanelChrome.topGap, 6)
   }
 
   func testFullPanelFitsPlannedWidthWithoutProfile() async throws {
