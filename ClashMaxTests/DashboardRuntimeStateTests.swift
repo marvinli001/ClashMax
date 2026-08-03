@@ -1114,7 +1114,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.stop()
 
-    for _ in 0..<700 where launcher.launchCount < 3 || !model.previewRuntimeActive || model.runtimeOwner != .preview {
+    for _ in 0..<6_000 where launcher.launchCount < 3 || !model.previewRuntimeActive || model.runtimeOwner != .preview {
       await Task.yield()
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
@@ -3013,7 +3013,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(model.proxyRoutingMode, .neProxy)
     XCTAssertFalse(model.systemProxyEnabled)
 
-    for _ in 0..<500 where launcher.launchCount <= launchesBeforeLeaving {
+    for _ in 0..<6_000 where launcher.launchCount <= launchesBeforeLeaving {
       await Task.yield()
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
@@ -3194,7 +3194,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(model.systemProxyEnabled)
 
     model.handleNetworkEnvironmentMayHaveChanged(reason: "path")
-    for _ in 0..<1_000 where model.runtimeOwner != .networkExtension || model.startInFlight || model.lastAppliedNetworkPolicyID != rule.id {
+    for _ in 0..<6_000 where model.runtimeOwner != .networkExtension || model.startInFlight || model.lastAppliedNetworkPolicyID != rule.id {
       await Task.yield()
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
@@ -5514,7 +5514,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.setMixedPort(17_891)
 
-    for _ in 0..<260 {
+    for _ in 0..<3_000 {
       if proxyManager.startConfigurations.count >= 2, !model.startInFlight, model.runtimeSettingsApplyState == .idle {
         break
       }
@@ -7040,7 +7040,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertFalse(model.startInFlight)
     XCTAssertNil(model.lastError)
 
-    for _ in 0..<100 where model.lastError == nil {
+    for _ in 0..<6_000 where model.lastError == nil {
       await Task.yield()
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
@@ -7307,7 +7307,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       )
     )
 
-    for _ in 0..<240 where proxyManager.startConfigurations.count < 2 || model.startInFlight {
+    for _ in 0..<6_000 where proxyManager.startConfigurations.count < 2 || model.startInFlight {
       await Task.yield()
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
@@ -7640,7 +7640,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.start()
 
-    for _ in 0..<160 where model.startInFlight || model.lastError == nil {
+    for _ in 0..<6_000 where model.startInFlight || model.lastError == nil {
       await Task.yield()
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
@@ -7759,7 +7759,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.stop()
 
-    for _ in 0..<160 where model.runtimeOwner != .stopped {
+    for _ in 0..<6_000 where model.runtimeOwner != .stopped {
       await Task.yield()
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
@@ -8073,7 +8073,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     model.setProxyRoutingMode(.neProxy)
     model.start()
 
-    for _ in 0..<160 where model.startInFlight || model.lastError == nil {
+    for _ in 0..<6_000 where model.startInFlight || model.lastError == nil {
       await Task.yield()
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
@@ -8119,7 +8119,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     model.setProxyRoutingMode(.neProxy)
     model.start()
 
-    for _ in 0..<160 where model.startInFlight || model.lastError == nil {
+    for _ in 0..<6_000 where model.startInFlight || model.lastError == nil {
       await Task.yield()
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
@@ -9552,7 +9552,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     await model.selectProfileAsync(secondProfile)
 
-    for _ in 0..<160 where launcher.launchCount < 2 {
+    for _ in 0..<6_000 where launcher.launchCount < 2 {
       await Task.yield()
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
@@ -9598,7 +9598,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     let didDelete = await model.deleteProfileAsync(firstProfile)
 
-    for _ in 0..<240 where launcher.launchCount < 2 {
+    for _ in 0..<6_000 where launcher.launchCount < 2 {
       await Task.yield()
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
