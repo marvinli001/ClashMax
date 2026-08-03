@@ -23,7 +23,7 @@ struct ConnectionsView: View {
   @State private var mode = ConnectionViewMode.active
   @State private var groupsByApp = false
   @State private var selectedConnectionIDs = Set<ConnectionSnapshot.ID>()
-  @StateObject private var appIconCache = ConnectionAppIconCache()
+  @State private var appIconCache = ConnectionAppIconCache()
 
   var body: some View {
     AdaptivePage(title: "Connections") {
@@ -417,7 +417,7 @@ private struct ConnectionSearchQuery {
 }
 
 @MainActor
-final class ConnectionAppIconCache: ObservableObject {
+final class ConnectionAppIconCache {
   private let maximumCount: Int
   private let loader: (String) -> NSImage?
   private var images: [String: NSImage] = [:]
@@ -478,7 +478,7 @@ final class ConnectionAppIconCache: ObservableObject {
 
 private struct ConnectionAppLabel: View {
   let connection: ConnectionSnapshot
-  @ObservedObject var iconCache: ConnectionAppIconCache
+  let iconCache: ConnectionAppIconCache
 
   var body: some View {
     HStack(spacing: 6) {
@@ -500,7 +500,7 @@ private struct ConnectionAppLabel: View {
 
 private struct ConnectionRow: View {
   let connection: ConnectionSnapshot
-  @ObservedObject var iconCache: ConnectionAppIconCache
+  let iconCache: ConnectionAppIconCache
   let isSelected: Bool
   let isClosing: Bool
   let canClose: Bool
