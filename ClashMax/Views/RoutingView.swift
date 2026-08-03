@@ -44,7 +44,7 @@ enum RoutingWorkspaceLayout {
 }
 
 @MainActor
-final class RuleMatchSimulationDebouncer: ObservableObject {
+final class RuleMatchSimulationDebouncer {
   private let delayNanoseconds: UInt64
   private var task: Task<Void, Never>?
 
@@ -97,7 +97,7 @@ struct RoutingView: View {
   @State private var simulationTrace: RuleMatchSimulationTrace = .noMatch
   @State private var explanationContext: RuleExplanation?
   @State private var effectiveConfigTab: EffectiveConfigInspectorTab = .layers
-  @StateObject private var simulationDebouncer = RuleMatchSimulationDebouncer()
+  @State private var simulationDebouncer = RuleMatchSimulationDebouncer()
 
   var body: some View {
     AdaptivePage(title: "Routing") {
