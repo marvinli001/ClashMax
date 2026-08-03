@@ -285,7 +285,7 @@ final class MenuBarPanelLayoutTests: XCTestCase {
 
   private func fullPanelView(model: AppModel, localeIdentifier: String) -> some View {
     MenuBarView()
-      .environmentObject(model)
+      .environment(model)
       .environment(model.runtimeData)
       .environment(AppUpdateController())
       .environment(\.locale, Locale(identifier: localeIdentifier))

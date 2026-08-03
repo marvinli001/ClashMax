@@ -1,5 +1,4 @@
 import AppKit
-import Combine
 import Observation
 import ServiceManagement
 import SwiftUI
@@ -6111,16 +6110,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
     }
     await Task.yield()
 
-    var progressPublishes = 0
-    var cancellables = Set<AnyCancellable>()
-    // RuntimeDataStore is @Observable now, so count proxyGroups mutations through
-    // Observation instead of a Combine publisher. The counter re-arms synchronously,
-    // so every coalesced publish is tallied (a per-node regression would still spike).
+    // RuntimeDataStore and AppModel are @Observable now, so count proxyGroups and
+    // proxyDelayBatchProgress mutations through Observation instead of Combine publishers.
+    // Both counters re-arm synchronously, so every coalesced publish is tallied (a
+    // per-node regression would still spike).
     let proxyGroupCounter = ObservationChangeCounter { _ = model.runtimeData.proxyGroups }
-    model.$proxyDelayBatchProgress
-      .sink { _ in progressPublishes += 1 }
-      .store(in: &cancellables)
-    defer { cancellables.forEach { $0.cancel() } }
+    let progressCounter = ObservationChangeCounter { _ = model.proxyDelayBatchProgress }
 
     model.testDelayForAllProxyGroups()
     try await waitForBatchProgress(model) { !$0.isRunning && $0.completed == nodeCount }
@@ -6146,9 +6141,9 @@ final class DashboardRuntimeStateTests: XCTestCase {
       "proxyGroups must not publish per-node during a large batch (got \(proxyGroupCounter.count))"
     )
     XCTAssertLessThan(
-      progressPublishes,
+      progressCounter.count,
       30,
-      "batch progress must be coalesced, not published per-node (got \(progressPublishes))"
+      "batch progress must be coalesced, not published per-node (got \(progressCounter.count))"
     )
   }
 
@@ -8294,12 +8289,34 @@ final class DashboardRuntimeStateTests: XCTestCase {
       globalShortcutRegistrar: registrar
     )
 
-    // Nothing is assigned to model.globalShortcutSettings here on purpose. @Published emits its
-    // current value on subscribe, so installGlobalShortcuts runs once during setupBindings today.
-    // `didSet` does not fire during init, so after the migration setupBindings must prime this
-    // explicitly — otherwise shortcuts a user already configured are never registered at launch.
+    // Nothing is assigned to model.globalShortcutSettings here on purpose. Under the old
+    // @Published pipeline, subscribing emitted the current value once, so installGlobalShortcuts
+    // ran for free during setupBindings. `didSet` does not fire during init, so setupBindings now
+    // primes this explicitly (installGlobalShortcuts(settings.globalShortcutSettings)) —
+    // otherwise shortcuts a user already configured would never register at launch.
     XCTAssertEqual(registrar.registrations.map(\.action), [.startStop])
     XCTAssertEqual(model.shortcutRegistrationStatus?.registeredCount, 1)
+  }
+
+  func testSubscriptionFetchSettingsHookObservesTheNewValue() throws {
+    let store = PersistedSettingsStore(defaults: try Self.makeIsolatedDefaults())
+
+    // The real handler takes no parameter and re-reads the store, exactly like
+    // ProfileCoordinator.rescheduleSubscriptionAutoUpdates does.
+    var observed: SubscriptionFetchSettings?
+    store.onSubscriptionFetchSettingsChange = { [weak store] in
+      observed = store?.subscriptionFetchSettings
+    }
+
+    var updated = store.subscriptionFetchSettings
+    updated.automaticUpdatesEnabled = true
+    updated.defaultUpdateIntervalMinutes = 90
+    store.subscriptionFetchSettings = updated
+
+    // @Published published from willSet, so this read returned the OLD interval and subscription
+    // auto-updates were rescheduled against stale settings. didSet fires after the write.
+    XCTAssertEqual(observed?.defaultUpdateIntervalMinutes, 90)
+    XCTAssertEqual(observed?.automaticUpdatesEnabled, true)
   }
 
   func testNetworkExtensionRefreshClearsPublishedApprovalErrorAfterApproval() async throws {
@@ -9690,13 +9707,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       defaults: try Self.makeIsolatedDefaults()
     )
-    var changeCount = 0
-    let cancellable = model.objectWillChange.sink { changeCount += 1 }
-    defer { cancellable.cancel() }
+    let counter = ObservationChangeCounter { _ = model.overrides }
 
     model.setMode(model.overrides.mode)
 
-    XCTAssertEqual(changeCount, 0)
+    XCTAssertEqual(counter.count, 0, "setting the current mode to its existing value must not invalidate `overrides`")
   }
 
   func testRequestingModeDefersPublishedChangesUntilNextActorTurn() async throws {
@@ -9706,21 +9721,19 @@ final class DashboardRuntimeStateTests: XCTestCase {
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       defaults: try Self.makeIsolatedDefaults()
     )
-    var changeCount = 0
-    let cancellable = model.objectWillChange.sink { changeCount += 1 }
-    defer { cancellable.cancel() }
+    let counter = ObservationChangeCounter { _ = model.overrides }
 
     model.requestMode(.global)
 
     XCTAssertEqual(model.overrides.mode, .rule)
-    XCTAssertEqual(changeCount, 0)
+    XCTAssertEqual(counter.count, 0)
 
     for _ in 0..<20 where model.overrides.mode != .global {
       await Task.yield()
     }
 
     XCTAssertEqual(model.overrides.mode, .global)
-    XCTAssertGreaterThan(changeCount, 0)
+    XCTAssertGreaterThan(counter.count, 0)
   }
 
   func testRequestingProxyRoutingModeDefersPublishedChangesUntilNextActorTurn() async throws {
@@ -9729,21 +9742,19 @@ final class DashboardRuntimeStateTests: XCTestCase {
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore())
     )
-    var changeCount = 0
-    let cancellable = model.objectWillChange.sink { changeCount += 1 }
-    defer { cancellable.cancel() }
+    let counter = ObservationChangeCounter { _ = model.proxyRoutingMode }
 
     model.requestProxyRoutingMode(.tun)
 
     XCTAssertEqual(model.proxyRoutingMode, .systemProxy)
-    XCTAssertEqual(changeCount, 0)
+    XCTAssertEqual(counter.count, 0)
 
     for _ in 0..<20 where model.proxyRoutingMode != .tun {
       await Task.yield()
     }
 
     XCTAssertEqual(model.proxyRoutingMode, .tun)
-    XCTAssertGreaterThan(changeCount, 0)
+    XCTAssertGreaterThan(counter.count, 0)
   }
 
   func testCoreControllerStatusChangesPublishAppModelChanges() async throws {
@@ -9761,9 +9772,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       coreController: controller
     )
-    var changeCount = 0
-    let cancellable = model.objectWillChange.sink { changeCount += 1 }
-    defer { cancellable.cancel() }
+    let counter = ObservationChangeCounter { _ = model.statusSummary }
 
     try await controller.startUserMode(
       coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
@@ -9771,16 +9780,16 @@ final class DashboardRuntimeStateTests: XCTestCase {
       workDirectory: URL(fileURLWithPath: "/tmp"),
       api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
     )
-    changeCount = 0
+    let baseline = counter.count
 
     launcher.process.finish(exitCode: 2)
 
-    for _ in 0..<20 where changeCount == 0 {
+    for _ in 0..<20 where counter.count == baseline {
       await Task.yield()
     }
 
     XCTAssertEqual(model.statusSummary, "Crashed: mihomo exited with code 2")
-    XCTAssertGreaterThan(changeCount, 0)
+    XCTAssertGreaterThan(counter.count, baseline)
   }
 
   func testSelectingTunPreparesHelperAndBlocksStartDuringApproval() async throws {

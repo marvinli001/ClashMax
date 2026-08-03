@@ -284,7 +284,7 @@ final class ProxySearchPipelineTests: XCTestCase {
     // Identical query + identical (value-equal) data → identical snapshot → must be skipped.
     coordinator.submit(Fixture.input(searchText: "韩国"), reason: .data)
     await coordinator.settleForTesting()
-    XCTAssertEqual(counter.count, 1, "identical snapshot must not emit a redundant objectWillChange")
+    XCTAssertEqual(counter.count, 1, "identical snapshot must not republish")
 
     // A genuinely different result must publish.
     coordinator.submit(Fixture.input(searchText: "美国"), reason: .searchText)

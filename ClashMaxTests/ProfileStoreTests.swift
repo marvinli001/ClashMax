@@ -1,5 +1,4 @@
 import Foundation
-import Combine
 import XCTest
 @testable import ClashMax
 
@@ -147,13 +146,14 @@ final class ProfileStoreTests: XCTestCase {
     let fixture = try TemporaryProfileFixture()
     let store = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
     let profile = try await store.importLocalConfig(from: fixture.configURL)
-    var changeCount = 0
-    let cancellable = store.objectWillChange.sink { changeCount += 1 }
-    defer { cancellable.cancel() }
+    let counter = ObservationChangeCounter {
+      _ = store.activeProfileID
+      _ = store.profiles
+    }
 
     try await store.select(profile)
 
-    XCTAssertEqual(changeCount, 0)
+    XCTAssertEqual(counter.count, 0, "re-selecting the already-active profile must not invalidate activeProfileID or profiles")
   }
 
   func testProfileDecodesDefaultSubscriptionProviderOptionsFromOldManifest() throws {
