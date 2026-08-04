@@ -227,13 +227,20 @@ final class RecordingCommandRunner: CommandRunning, @unchecked Sendable {
   let outputs: [String: String]
   private let queue = DispatchQueue(label: "io.github.clashmax.tests.RecordingCommandRunner")
   private var _commands: [String] = []
+  private var _displayCommands: [String] = []
 
   init(outputs: [String: String]) {
     self.outputs = outputs
   }
 
+  /// The real executable and arguments, secrets included.
   var commands: [String] {
     queue.sync { _commands }
+  }
+
+  /// What a human would have been shown for each command.
+  var displayCommands: [String] {
+    queue.sync { _displayCommands }
   }
 
   func run(_ executable: String, _ arguments: [String]) async throws -> String {
@@ -242,6 +249,13 @@ final class RecordingCommandRunner: CommandRunning, @unchecked Sendable {
       _commands.append(command)
     }
     return outputs[command] ?? ""
+  }
+
+  func run(_ invocation: CommandInvocation) async throws -> String {
+    queue.sync {
+      _displayCommands.append(invocation.displayDescription)
+    }
+    return try await run(invocation.executable, invocation.arguments)
   }
 }
 

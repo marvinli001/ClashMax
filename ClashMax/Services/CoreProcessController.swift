@@ -14,6 +14,32 @@ protocol RunningCoreProcess: AnyObject {
 @MainActor
 protocol CoreProcessLaunching {
   func launch(executable: URL, arguments: [String], environment: [String: String], workDirectory: URL) throws -> RunningCoreProcess
+  func launch(
+    executable: URL,
+    arguments: [String],
+    environment: [String: String],
+    workDirectory: URL,
+    onOutput: @escaping @Sendable (ProcessOutputLine) -> Void
+  ) throws -> RunningCoreProcess
+}
+
+extension CoreProcessLaunching {
+  /// Launchers that produce no live output — every existing test double — inherit this
+  /// and simply never call the callback.
+  func launch(
+    executable: URL,
+    arguments: [String],
+    environment: [String: String],
+    workDirectory: URL,
+    onOutput: @escaping @Sendable (ProcessOutputLine) -> Void
+  ) throws -> RunningCoreProcess {
+    try launch(
+      executable: executable,
+      arguments: arguments,
+      environment: environment,
+      workDirectory: workDirectory
+    )
+  }
 }
 
 @MainActor
@@ -957,6 +983,22 @@ struct MihomoCoreReadinessProbe: CoreReadinessProbing {
 @MainActor
 final class FoundationProcessLauncher: CoreProcessLaunching {
   func launch(executable: URL, arguments: [String], environment: [String: String], workDirectory: URL) throws -> RunningCoreProcess {
+    try launch(
+      executable: executable,
+      arguments: arguments,
+      environment: environment,
+      workDirectory: workDirectory,
+      onOutput: { _ in }
+    )
+  }
+
+  func launch(
+    executable: URL,
+    arguments: [String],
+    environment: [String: String],
+    workDirectory: URL,
+    onOutput: @escaping @Sendable (ProcessOutputLine) -> Void
+  ) throws -> RunningCoreProcess {
     let process = Process()
     let stdoutPipe = Pipe()
     let stderrPipe = Pipe()
@@ -967,9 +1009,11 @@ final class FoundationProcessLauncher: CoreProcessLaunching {
     process.standardOutput = stdoutPipe
     process.standardError = stderrPipe
 
-    let drain = LiveOutputDrain()
-    drain.attach(stdoutPipe.fileHandleForReading)
-    drain.attach(stderrPipe.fileHandleForReading)
+    // The core's output is only ever read by a human, so it is redacted line by line
+    // before anything retains it.
+    let drain = LiveOutputDrain(sanitized: true, onOutput: onOutput)
+    drain.attach(stdoutPipe.fileHandleForReading, stream: .stdout)
+    drain.attach(stderrPipe.fileHandleForReading, stream: .stderr)
 
     let wrapper = FoundationRunningProcess(process: process, drain: drain)
     process.terminationHandler = { [weak wrapper] process in
@@ -1051,69 +1095,218 @@ final class FoundationRunningProcess: RunningCoreProcess {
   }
 }
 
+enum ProcessOutputStream: String, CaseIterable, Sendable {
+  case stdout
+  case stderr
+}
+
+struct ProcessOutputLine: Equatable, Sendable {
+  var timestamp: Date
+  var stream: ProcessOutputStream
+  var text: String
+}
+
+/// Retains a bounded amount of a child process's output for later display.
+///
+/// It has two modes, because its two callers need opposite things from it:
+///
+/// - **raw** (`sanitized: false`) — `flush()` is the *return value* of
+///   `ProcessCommandRunner.run`, which callers parse. Rewriting those bytes would corrupt
+///   data, not just logs, so raw output is kept verbatim and only the command's display
+///   description is redacted.
+/// - **sanitized** (`sanitized: true`) — the core's stdout and stderr are only ever shown
+///   to a human, so every completed line goes through `SanitizedLineAccumulator` *before*
+///   it is retained, and keeps the stream it arrived on. Because the accumulator joins a
+///   line before redacting it, a secret split across two reads cannot slip past on a
+///   chunk boundary.
 final class LiveOutputDrain: @unchecked Sendable {
   private let lock = NSLock()
-  private var buffer = Data()
   private let maxRetainedBytes: Int?
+  private let onOutput: (@Sendable (ProcessOutputLine) -> Void)?
   private var attached: [FileHandle] = []
 
-  init(maxRetainedBytes: Int? = 65_536) {
+  // Raw mode.
+  private var buffer = Data()
+
+  // Sanitized mode.
+  private let isSanitized: Bool
+  private var accumulators: [ProcessOutputStream: SanitizedLineAccumulator] = [:]
+  private var lines: [ProcessOutputLine] = []
+  private var retainedByteCount = 0
+
+  init(
+    maxRetainedBytes: Int? = 65_536,
+    sanitized: Bool = false,
+    maximumLineBytes: Int = 16_384,
+    homeDirectory: String? = nil,
+    onOutput: (@Sendable (ProcessOutputLine) -> Void)? = nil
+  ) {
     self.maxRetainedBytes = maxRetainedBytes
+    self.isSanitized = sanitized
+    self.onOutput = onOutput
+    guard sanitized else { return }
+    let home = homeDirectory ?? NSHomeDirectory()
+    for stream in ProcessOutputStream.allCases {
+      accumulators[stream] = SanitizedLineAccumulator(
+        maximumLineBytes: maximumLineBytes,
+        homeDirectory: home
+      )
+    }
   }
 
-  func attach(_ handle: FileHandle) {
+  /// Lines cut short because they exceeded the per-line cap.
+  var truncatedLineCount: Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return accumulators.values.reduce(0) { $0 + $1.truncatedLineCount }
+  }
+
+  func attach(_ handle: FileHandle, stream: ProcessOutputStream = .stdout) {
     handle.readabilityHandler = { [weak self] handle in
       let chunk = handle.availableData
       guard !chunk.isEmpty else {
         handle.readabilityHandler = nil
         return
       }
-      self?.append(chunk)
+      self?.append(chunk, stream: stream)
     }
     lock.lock()
     attached.append(handle)
     lock.unlock()
   }
 
-  private func append(_ data: Data) {
-    lock.lock()
-    buffer.append(data)
-    if let maxRetainedBytes, buffer.count > maxRetainedBytes {
-      buffer.removeFirst(buffer.count - maxRetainedBytes)
+  func append(_ data: Data, stream: ProcessOutputStream = .stdout) {
+    guard isSanitized else {
+      lock.lock()
+      buffer.append(data)
+      if let maxRetainedBytes, buffer.count > maxRetainedBytes {
+        buffer.removeFirst(buffer.count - maxRetainedBytes)
+      }
+      lock.unlock()
+      return
     }
+
+    lock.lock()
+    var accumulator = accumulators[stream] ?? SanitizedLineAccumulator()
+    let texts = accumulator.append(data)
+    accumulators[stream] = accumulator
+    let emitted = retainLocked(texts, stream: stream)
     lock.unlock()
+
+    notify(emitted)
   }
 
   func flush(trimmed: Bool = true) -> String {
     lock.lock()
-    let data = buffer
-    buffer.removeAll(keepingCapacity: false)
+    let text: String
+    if isSanitized {
+      var texts = lines.map(\.text)
+      lines.removeAll(keepingCapacity: false)
+      retainedByteCount = 0
+      for stream in ProcessOutputStream.allCases {
+        guard var accumulator = accumulators[stream] else { continue }
+        texts.append(contentsOf: accumulator.finish())
+        accumulators[stream] = accumulator
+      }
+      text = texts.joined(separator: "\n")
+    } else {
+      let data = buffer
+      buffer.removeAll(keepingCapacity: false)
+      text = String(data: data, encoding: .utf8) ?? ""
+    }
     lock.unlock()
-    let text = String(data: data, encoding: .utf8) ?? ""
     return trimmed ? text.trimmingCharacters(in: .whitespacesAndNewlines) : text
   }
 
   func tail(maxBytes: Int) -> String {
     lock.lock()
-    let snapshot = buffer
+    let bytes: [UInt8]
+    if isSanitized {
+      var texts = lines.map(\.text)
+      // A core that dies mid-line leaves its most useful bytes in the pending buffer, so
+      // the tail includes them. The accumulator is a struct, which makes reading them
+      // without consuming them a plain copy.
+      for stream in ProcessOutputStream.allCases {
+        guard var pending = accumulators[stream] else { continue }
+        texts.append(contentsOf: pending.finish())
+      }
+      bytes = Array(texts.joined(separator: "\n").utf8)
+    } else {
+      bytes = Array(buffer)
+    }
     lock.unlock()
-    let trimmed = snapshot.suffix(maxBytes)
-    return String(data: trimmed, encoding: .utf8)?
-      .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+    let clipped = bytes.count > maxBytes ? Array(bytes.suffix(maxBytes)) : bytes
+    return String(decoding: clipped, as: UTF8.self)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  /// The retained sanitized lines, newest last. Empty in raw mode.
+  func retainedLines() -> [ProcessOutputLine] {
+    lock.lock()
+    defer { lock.unlock() }
+    return lines
   }
 
   func detachAll() {
     lock.lock()
     let handles = attached
     attached.removeAll()
+    // Retain the trailing fragment of each stream, so a core that died without a final
+    // newline still leaves its last words behind.
+    var emitted: [ProcessOutputLine] = []
+    if isSanitized {
+      for stream in ProcessOutputStream.allCases {
+        guard var accumulator = accumulators[stream] else { continue }
+        let texts = accumulator.finish()
+        accumulators[stream] = accumulator
+        emitted.append(contentsOf: retainLocked(texts, stream: stream))
+      }
+    }
     lock.unlock()
 
     for handle in handles {
       handle.readabilityHandler = nil
     }
+    notify(emitted)
   }
 
   deinit {
     detachAll()
+  }
+
+  // MARK: - Retention
+
+  /// Appends `texts` to the bounded retention window. Caller holds the lock.
+  private func retainLocked(
+    _ texts: [String],
+    stream: ProcessOutputStream
+  ) -> [ProcessOutputLine] {
+    guard !texts.isEmpty else { return [] }
+    let now = Date()
+    var emitted: [ProcessOutputLine] = []
+    emitted.reserveCapacity(texts.count)
+    for text in texts {
+      let line = ProcessOutputLine(timestamp: now, stream: stream, text: text)
+      emitted.append(line)
+      lines.append(line)
+      retainedByteCount += text.utf8.count
+    }
+    if let maxRetainedBytes {
+      var dropped = 0
+      while retainedByteCount > maxRetainedBytes, dropped < lines.count {
+        retainedByteCount -= lines[dropped].text.utf8.count
+        dropped += 1
+      }
+      if dropped > 0 { lines.removeFirst(dropped) }
+    }
+    return emitted
+  }
+
+  private func notify(_ emitted: [ProcessOutputLine]) {
+    guard let onOutput, !emitted.isEmpty else { return }
+    for line in emitted {
+      onOutput(line)
+    }
   }
 }

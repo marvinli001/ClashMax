@@ -413,6 +413,92 @@ final class CoreProcessControllerTests: XCTestCase {
     XCTAssertNil(pipe.fileHandleForReading.readabilityHandler)
   }
 
+  func testSanitizedDrainRedactsSecretsThatStraddleChunkBoundaries() {
+    let drain = LiveOutputDrain(sanitized: true, homeDirectory: "/Users/tester")
+
+    drain.append(Data("level=info msg=\"loading sub".utf8), stream: .stdout)
+    drain.append(Data("scription https://feed.example.com/link?token=abc123\"\n".utf8), stream: .stdout)
+
+    let tail = drain.tail(maxBytes: 4_096)
+    XCTAssertFalse(tail.contains("abc123"), tail)
+    XCTAssertFalse(tail.contains("/link"), tail)
+    XCTAssertTrue(tail.contains("https://feed.example.com"), tail)
+    XCTAssertTrue(tail.contains("loading subscription"), tail)
+  }
+
+  func testSanitizedDrainKeepsStdoutAndStderrLinesDistinctAndInOrder() {
+    let recorder = OutputLineRecorder()
+    let drain = LiveOutputDrain(sanitized: true) { [recorder] line in
+      recorder.record(line)
+    }
+
+    drain.append(Data("starting core\n".utf8), stream: .stdout)
+    drain.append(Data("bind failed\n".utf8), stream: .stderr)
+
+    let snapshot = recorder.lines
+    XCTAssertEqual(snapshot.map(\.stream), [.stdout, .stderr])
+    XCTAssertEqual(snapshot.map(\.text), ["starting core", "bind failed"])
+    XCTAssertEqual(drain.retainedLines().map(\.stream), [.stdout, .stderr])
+  }
+
+  func testSanitizedDrainRedactsHomePathsAndProfileNamesBeforeRetention() {
+    let drain = LiveOutputDrain(sanitized: true, homeDirectory: "/Users/tester")
+
+    drain.append(
+      Data("cfg /Users/tester/Library/Application Support/ClashMax/my-subscription.yaml\n".utf8),
+      stream: .stderr
+    )
+
+    let tail = drain.tail(maxBytes: 4_096)
+    XCTAssertFalse(tail.contains("/Users/tester"), tail)
+    XCTAssertFalse(tail.contains("my-subscription"), tail)
+    XCTAssertTrue(tail.contains("~/Library/Application Support/ClashMax/<redacted>.yaml"), tail)
+  }
+
+  func testSanitizedDrainTruncatesAnEndlessLineAndCountsIt() {
+    let drain = LiveOutputDrain(sanitized: true, maximumLineBytes: 4_096)
+
+    drain.append(Data(String(repeating: "a", count: 32_768).utf8), stream: .stdout)
+
+    XCTAssertEqual(drain.truncatedLineCount, 1)
+    let tail = drain.tail(maxBytes: 65_536)
+    XCTAssertTrue(tail.hasSuffix(SanitizedLineAccumulator.truncationMarker), String(tail.suffix(40)))
+    XCTAssertLessThanOrEqual(
+      tail.utf8.count,
+      4_096 + SanitizedLineAccumulator.truncationMarker.utf8.count
+    )
+  }
+
+  func testSanitizedDrainTailIncludesThePendingLineWithoutConsumingIt() {
+    let drain = LiveOutputDrain(sanitized: true)
+
+    drain.append(Data("first\nfatal: no route".utf8), stream: .stdout)
+
+    XCTAssertTrue(drain.tail(maxBytes: 4_096).contains("fatal: no route"))
+    XCTAssertTrue(drain.tail(maxBytes: 4_096).contains("fatal: no route"))
+  }
+
+  func testSanitizedDrainDropsOldestLinesWhenTheRetentionBudgetIsExceeded() {
+    let drain = LiveOutputDrain(maxRetainedBytes: 24, sanitized: true)
+
+    for index in 0..<20 {
+      drain.append(Data("line-\(index)\n".utf8), stream: .stdout)
+    }
+
+    let retained = drain.retainedLines()
+    XCTAssertLessThanOrEqual(retained.reduce(0) { $0 + $1.text.utf8.count }, 24)
+    XCTAssertEqual(retained.last?.text, "line-19")
+    XCTAssertFalse(drain.tail(maxBytes: 4_096).contains("line-0\n"))
+  }
+
+  func testRawDrainStillReturnsProcessOutputByteForByte() {
+    let drain = LiveOutputDrain(maxRetainedBytes: nil)
+
+    drain.append(Data("token=abc123 /Users/tester/profile.yaml\n".utf8), stream: .stdout)
+
+    XCTAssertEqual(drain.flush(trimmed: false), "token=abc123 /Users/tester/profile.yaml\n")
+  }
+
   private func orphanReaperFixture(pid: Int32) -> (
     pid: Int32,
     coreURL: URL,
@@ -425,6 +511,23 @@ final class CoreProcessControllerTests: XCTestCase {
     let workDirectory = URL(fileURLWithPath: "/Users/test/Library/Application Support/ClashMax/Runtime")
     let command = "\(coreURL.path) -f \(configURL.path) -d \(workDirectory.path)"
     return (pid, coreURL, configURL, workDirectory, command)
+  }
+}
+
+private final class OutputLineRecorder: @unchecked Sendable {
+  private let lock = NSLock()
+  private var storage: [ProcessOutputLine] = []
+
+  var lines: [ProcessOutputLine] {
+    lock.lock()
+    defer { lock.unlock() }
+    return storage
+  }
+
+  func record(_ line: ProcessOutputLine) {
+    lock.lock()
+    storage.append(line)
+    lock.unlock()
   }
 }
 

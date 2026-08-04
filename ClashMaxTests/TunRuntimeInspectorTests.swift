@@ -109,6 +109,26 @@ final class TunRuntimeInspectorTests: XCTestCase {
     XCTAssertTrue(runner.commands.contains("/usr/bin/curl -fsS --max-time 2 -H Authorization: Bearer secret http://127.0.0.1:9097/version"))
   }
 
+  func testControllerProbeKeepsTheSecretOutOfItsDisplayDescription() async {
+    let runner = RecordingCommandRunner(outputs: [
+      "/usr/bin/curl -fsS --max-time 2 -H Authorization: Bearer secret http://127.0.0.1:9097/version": #"{"version":"v1.19.24"}"#,
+    ])
+    let inspector = TunRuntimeInspector(commandRunner: runner)
+
+    _ = await inspector.inspect(configuration(includeExternal: false))
+
+    XCTAssertTrue(
+      runner.displayCommands.contains(
+        "/usr/bin/curl -fsS --max-time 2 -H Authorization: Bearer <redacted> http://127.0.0.1:9097/version"
+      ),
+      runner.displayCommands.joined(separator: "\n")
+    )
+    XCTAssertFalse(
+      runner.displayCommands.contains { $0.contains("Bearer secret") },
+      "the controller probe's display description still carries the API secret"
+    )
+  }
+
   func testRouteExcludeOnlyMatchesDestinationColumnAndPrefix() async {
     let runner = RecordingCommandRunner(outputs: [
       "/usr/bin/curl -fsS --max-time 2 -H Authorization: Bearer secret http://127.0.0.1:9097/version": #"{"version":"v1.19.24"}"#,

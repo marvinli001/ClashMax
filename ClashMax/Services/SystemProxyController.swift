@@ -1,8 +1,39 @@
 import Darwin
 import Foundation
 
+/// A command to execute, plus the text a human is allowed to see.
+///
+/// The two are deliberately separate: an argument can carry a secret that the description
+/// must never repeat. The controller probe, for example, sends a real
+/// `Authorization: Bearer <api secret>` header but describes itself as
+/// `Authorization: Bearer <redacted>`, so a timeout message can quote the command without
+/// publishing the secret into an error string, a diagnostics report, or a bug report.
+struct CommandInvocation: Sendable {
+  var executable: String
+  var arguments: [String]
+  var displayDescription: String
+
+  /// Without an explicit description the arguments are assumed to be safe and are joined
+  /// as-is; callers that pass a credential must supply one.
+  init(executable: String, arguments: [String], displayDescription: String? = nil) {
+    self.executable = executable
+    self.arguments = arguments
+    self.displayDescription = displayDescription
+      ?? ([executable] + arguments).joined(separator: " ")
+  }
+}
+
 protocol CommandRunning: Sendable {
   func run(_ executable: String, _ arguments: [String]) async throws -> String
+  func run(_ invocation: CommandInvocation) async throws -> String
+}
+
+extension CommandRunning {
+  /// Every command runner that has no secrets to hide — including all existing test
+  /// doubles — inherits this and keeps behaving exactly as before.
+  func run(_ invocation: CommandInvocation) async throws -> String {
+    try await run(invocation.executable, invocation.arguments)
+  }
 }
 
 protocol PingTesting: Sendable {
@@ -950,18 +981,26 @@ struct ProcessCommandRunner: CommandRunning {
   }
 
   func run(_ executable: String, _ arguments: [String]) async throws -> String {
-    try Self.assertCommandIsSafeForCurrentProcess(executable: executable, arguments: arguments)
+    try await run(CommandInvocation(executable: executable, arguments: arguments))
+  }
+
+  func run(_ invocation: CommandInvocation) async throws -> String {
+    try Self.assertCommandIsSafeForCurrentProcess(invocation)
 
     let process = Process()
     let pipe = Pipe()
-    process.executableURL = URL(fileURLWithPath: executable)
-    process.arguments = arguments
+    process.executableURL = URL(fileURLWithPath: invocation.executable)
+    process.arguments = invocation.arguments
     process.standardOutput = pipe
     process.standardError = pipe
 
+    // The drain stays raw here on purpose: `flush()` is this function's *return value*
+    // and callers parse it (curl bodies, `route -n get` tables, `networksetup` output).
+    // Rewriting those bytes would corrupt data, not just logs — so only the description
+    // that ends up in human-readable errors is redacted.
     let drain = LiveOutputDrain(maxRetainedBytes: nil)
     drain.attach(pipe.fileHandleForReading)
-    let command = ([executable] + arguments).joined(separator: " ")
+    let command = StructuredLogRedactor.redactCredentials(in: invocation.displayDescription)
     let result = try await CancellableProcessExecution(
       process: process,
       timeout: timeout,
@@ -992,12 +1031,12 @@ struct ProcessCommandRunner: CommandRunning {
     return result.output
   }
 
-  private static func assertCommandIsSafeForCurrentProcess(executable: String, arguments: [String]) throws {
+  private static func assertCommandIsSafeForCurrentProcess(_ invocation: CommandInvocation) throws {
     guard isRunningUnderXCTest else { return }
-    guard URL(fileURLWithPath: executable).lastPathComponent == "networksetup" else { return }
-    guard arguments.contains(where: { $0.hasPrefix("-set") }) else { return }
+    guard URL(fileURLWithPath: invocation.executable).lastPathComponent == "networksetup" else { return }
+    guard invocation.arguments.contains(where: { $0.hasPrefix("-set") }) else { return }
 
-    let command = ([executable] + arguments).joined(separator: " ")
+    let command = StructuredLogRedactor.redactCredentials(in: invocation.displayDescription)
     throw NSError(
       domain: "ClashMax.CommandRunner",
       code: Int(EPERM),

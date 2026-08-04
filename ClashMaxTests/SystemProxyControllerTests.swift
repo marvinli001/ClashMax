@@ -307,6 +307,79 @@ final class SystemProxyControllerTests: XCTestCase {
     XCTAssertTrue(didExit)
   }
 
+  func testProcessCommandRunnerTimeoutErrorUsesDisplayDescriptionInsteadOfRealArguments() async throws {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxCommandRunnerRedaction-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let scriptURL = directory.appendingPathComponent("hang.sh")
+    let pidURL = directory.appendingPathComponent("pid.txt")
+    try """
+    #!/bin/sh
+    printf "%s\\n" "$$" > "$1"
+    exec sleep 30
+    """.write(to: scriptURL, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+
+    let sentinel = "s3cr3t-\(UUID().uuidString)"
+    let invocation = CommandInvocation(
+      executable: scriptURL.path,
+      arguments: [pidURL.path, "Authorization: Bearer \(sentinel)"],
+      displayDescription: "\(scriptURL.path) \(pidURL.path) Authorization: Bearer <redacted>"
+    )
+
+    let runner = ProcessCommandRunner(timeout: 1)
+    let task = Task {
+      try await runner.run(invocation)
+    }
+    let pid = try await waitForRecordedPID(at: pidURL)
+    defer { terminateTestProcessIfNeeded(pid) }
+
+    do {
+      _ = try await task.value
+      XCTFail("Expected timeout error")
+    } catch {
+      let message = error.localizedDescription
+      XCTAssertTrue(message.contains("timed out"), message)
+      XCTAssertFalse(message.contains(sentinel), "timeout error leaked the real argument")
+      XCTAssertTrue(message.contains("<redacted>"), message)
+    }
+  }
+
+  func testProcessCommandRunnerRedactsDerivedDisplayDescriptionForLegacyCallers() async throws {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxCommandRunnerLegacyRedaction-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let scriptURL = directory.appendingPathComponent("hang.sh")
+    let pidURL = directory.appendingPathComponent("pid.txt")
+    try """
+    #!/bin/sh
+    printf "%s\\n" "$$" > "$1"
+    exec sleep 30
+    """.write(to: scriptURL, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+
+    let sentinel = "s3cr3t-\(UUID().uuidString)"
+    let runner = ProcessCommandRunner(timeout: 1)
+    let task = Task {
+      try await runner.run(scriptURL.path, [pidURL.path, "--token=\(sentinel)"])
+    }
+    let pid = try await waitForRecordedPID(at: pidURL)
+    defer { terminateTestProcessIfNeeded(pid) }
+
+    do {
+      _ = try await task.value
+      XCTFail("Expected timeout error")
+    } catch {
+      let message = error.localizedDescription
+      XCTAssertTrue(message.contains("timed out"), message)
+      XCTAssertFalse(message.contains(sentinel), "timeout error leaked the real argument")
+    }
+  }
+
   func testProcessCommandRunnerDrainsLargeOutputWithoutTimingOut() async throws {
     let runner = ProcessCommandRunner(timeout: 2)
     let startedAt = Date()

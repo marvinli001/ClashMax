@@ -177,16 +177,31 @@ struct TunRuntimeInspector: TunRuntimeInspecting {
     }
 
     do {
+      // The secret travels in `arguments` only. Everything a human can end up reading —
+      // a timeout message, a diagnostics report, a copied bug report — sees the
+      // description, which spells the header out with the placeholder already in it.
+      let authorizationHeader = "Authorization: Bearer "
       let output = try await commandRunner.run(
-        Command.curl,
-        [
-          "-fsS",
-          "--max-time",
-          "2",
-          "-H",
-          "Authorization: Bearer \(configuration.api.secret)",
-          versionURL.absoluteString
-        ]
+        CommandInvocation(
+          executable: Command.curl,
+          arguments: [
+            "-fsS",
+            "--max-time",
+            "2",
+            "-H",
+            authorizationHeader + configuration.api.secret,
+            versionURL.absoluteString
+          ],
+          displayDescription: [
+            Command.curl,
+            "-fsS",
+            "--max-time",
+            "2",
+            "-H",
+            authorizationHeader + StructuredLogRedactor.placeholder,
+            versionURL.absoluteString
+          ].joined(separator: " ")
+        )
       )
       guard let version = controllerVersion(from: output) else {
         return TunDiagnosticCheck(
