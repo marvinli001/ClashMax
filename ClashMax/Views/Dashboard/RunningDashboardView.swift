@@ -1961,7 +1961,10 @@ private struct RecentLogsRuntimeCard: View {
   @Environment(RuntimeDataStore.self) private var runtimeData
 
   var body: some View {
-    let visibleLogs = runtimeData.visibleLogs(developerMode: appModel.developerMode)
+    let visibleLogs = runtimeData.visibleLogs(
+      developerMode: appModel.developerMode,
+      logLevel: appModel.selectedLogLevel
+    )
 
     VStack(alignment: .leading, spacing: 12) {
       DashboardSectionHeader(title: "Recent Logs", symbolName: "terminal", trailing: "\(visibleLogs.count)")

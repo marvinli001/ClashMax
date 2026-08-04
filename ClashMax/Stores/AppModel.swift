@@ -335,14 +335,20 @@ struct RuntimeDiagnosticsReport: Equatable, Sendable {
     }
     if !helperLogs.isEmpty {
       lines.append("Helper Logs:")
-      lines.append(contentsOf: helperLogs.suffix(8).map { "- \($0)" })
+      lines.append(contentsOf: helperLogs.suffix(Self.reportedHelperLogLimit).map { "- \($0)" })
     }
     if !recentLogs.isEmpty {
       lines.append("Runtime Logs:")
-      lines.append(contentsOf: recentLogs.suffix(12).map { "- \($0)" })
+      lines.append(contentsOf: recentLogs.suffix(Self.reportedRuntimeLogLimit).map { "- \($0)" })
     }
     return lines
   }
+
+  // A report that carries 12 runtime lines cannot explain a failure that took
+  // longer than a few seconds to develop, which is what made ClashMax issues
+  // unactionable (discussion #25). These are still small enough to paste.
+  static let reportedRuntimeLogLimit = 200
+  static let reportedHelperLogLimit = 40
 
   private func proxyEffectReportLines() -> [String] {
     var lines = [
@@ -616,6 +622,13 @@ final class AppModel {
     get { settings.developerMode }
     set { setDeveloperMode(newValue) }
   }
+  /// Log level the user currently has selected in Settings. Log views and the
+  /// diagnostics report key their visibility off this so that choosing Debug
+  /// actually surfaces debug entries instead of requiring Developer Mode too.
+  var selectedLogLevel: String { overrides.logLevel }
+  /// True while the selected log level asks for verbose output. Views use it to
+  /// explain an empty Debug filter rather than showing a bare "no logs".
+  var isVerboseLogLevelSelected: Bool { LogVisibility.isVerbose(logLevel: selectedLogLevel) }
   private(set) var runtimeOwner: RuntimeOwner = .stopped
   var systemProxyEnabled: Bool {
     get { systemProxy.enabled }
@@ -1618,8 +1631,14 @@ final class AppModel {
     !isCoreRunning && profileStore.activeProfile != nil && !profilePreviewGroups.isEmpty
   }
 
+  /// Retained log entries the user can actually see, under both the Developer
+  /// Mode switch and the selected runtime log level.
   var userVisibleLogs: [LogEntry] {
-    LogVisibility.visibleEntries(in: logs, developerMode: developerMode)
+    LogVisibility.visibleEntries(
+      in: logs,
+      developerMode: developerMode,
+      logLevel: selectedLogLevel
+    )
   }
 
   /// The GeoIP host whose routing is simulated to detect an IP-check target that is sent to DIRECT.
@@ -1699,6 +1718,10 @@ final class AppModel {
       networkExtensionDiagnostics: networkExtensionController.diagnostics,
       readinessIssue: readinessIssue,
       lastError: lastError,
+      // Now level-aware: debug entries used to be dropped from the report unless
+      // Developer Mode happened to be on, so the diagnostics people attach to
+      // bug reports never contained the output they had turned on (discussion
+      // #25).
       recentLogs: userVisibleLogs.map { entry in
         "\(entry.date.formatted(date: .omitted, time: .standard)) [\(entry.level)] \(entry.message)"
       },
@@ -1710,10 +1733,25 @@ final class AppModel {
   }
 
   func copyRuntimeDiagnostics() {
-    let report = runtimeDiagnosticsReport()
-    NSPasteboard.general.clearContents()
-    NSPasteboard.general.setString(report.plainText, forType: .string)
-    appNotice = AppNotice(message: String(localized: "Diagnostics copied."), tone: .success)
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      // The helper holds the core's own stdout/stderr in TUN mode, and until now
+      // it only reached the report if someone had pressed the Developer Mode
+      // "Logs" button first. Refresh it here so a copied report is complete for
+      // the people who actually file the issue (discussion #25).
+      await refreshHelperLogsForDiagnostics()
+      let report = runtimeDiagnosticsReport()
+      NSPasteboard.general.clearContents()
+      NSPasteboard.general.setString(report.plainText, forType: .string)
+      appNotice = AppNotice(message: String(localized: "Diagnostics copied."), tone: .success)
+    }
+  }
+
+  private func refreshHelperLogsForDiagnostics() async {
+    guard helperMayHoldCoreOutput || tunHelperStatusDetail.running else { return }
+    let lines = await helperCoreOutputForStartFailure()
+    guard !lines.isEmpty else { return }
+    helperLogs = lines
   }
 
   func refreshEffectiveRuntimeConfigPreview(draftSnippet: RuntimeSnippet? = nil) async {
@@ -3128,14 +3166,82 @@ final class AppModel {
     } catch let error as OperationTimedOutError {
       guard startTaskID == taskID, !lifecycleStopInFlight else { return }
       publishStartupDiagnostics(level: "error")
-      let diagnostics = startupDiagnosticsSummary()
+      let helperOwnedCore = helperMayHoldCoreOutput
       handleStopResult(await stopRuntimeCoordinated())
+      let diagnostics = await startFailureDiagnostics(helperOwnedCore: helperOwnedCore)
       lastError = "ClashMax could not start within \(Int(error.seconds))s.\(diagnostics.isEmpty ? "" : "\n\(diagnostics)")"
     } catch {
       guard startTaskID == taskID, !lifecycleStopInFlight else { return }
       publishStartupDiagnostics(level: "error")
+      let helperOwnedCore = helperMayHoldCoreOutput
       handleStopResult(await stopRuntimeCoordinated())
-      lastError = UserFacingError.message(for: error)
+      let message = UserFacingError.message(for: error)
+      let diagnostics = await startFailureDiagnostics(
+        helperOwnedCore: helperOwnedCore,
+        includeCoreSummary: false
+      )
+      lastError = diagnostics.isEmpty ? message : "\(message)\n\(diagnostics)"
+    }
+  }
+
+  /// True while the privileged helper could be holding the core's stdout/stderr.
+  /// Read *before* the failure stop, because stopping clears the TUN ownership
+  /// flags this depends on.
+  private var helperMayHoldCoreOutput: Bool {
+    proxyRoutingMode == .tun
+      || runtimeOwner == .tunnel
+      || tunEnabled
+      || tunnelCoreRunning
+      || tunLaunchInFlight
+      || tunStartAwaitingHelperReply
+      || tunHelperPID != nil
+  }
+
+  /// Everything the app knows about why a start failed, as one block appended to
+  /// `lastError`.
+  ///
+  /// In TUN mode the core is launched by the helper, so `CoreProcessController`
+  /// never sees it and `startupDiagnostics` is empty — which is why a failed TUN
+  /// start used to surface nothing but "could not start within Ns" (discussion
+  /// #25 — "永远只报超时"). The helper does capture the core's own stdout/stderr,
+  /// so pull that buffer here instead of leaving the user with a bare timeout.
+  /// Runs after the failure stop so the helper's `mihomo exited with code N`
+  /// line is already in the buffer.
+  private func startFailureDiagnostics(
+    helperOwnedCore: Bool,
+    includeCoreSummary: Bool = true
+  ) async -> String {
+    var sections: [String] = []
+    if includeCoreSummary {
+      let coreSummary = startupDiagnosticsSummary()
+      if !coreSummary.isEmpty {
+        sections.append(coreSummary)
+      }
+    }
+    guard helperOwnedCore else { return sections.joined(separator: "\n") }
+    let lines = await helperCoreOutputForStartFailure()
+    guard !lines.isEmpty else { return sections.joined(separator: "\n") }
+    helperLogs = lines
+    let tail = Array(lines.suffix(Self.startFailureHelperLogLineLimit))
+    for line in tail {
+      appendAppLog(level: "error", message: "Helper core output: \(line)")
+    }
+    sections.append("Helper core output:\n\(tail.joined(separator: "\n"))")
+    return sections.joined(separator: "\n")
+  }
+
+  private static let startFailureHelperLogLineLimit = 20
+
+  /// Best-effort, bounded read of the helper's captured core output. A start has
+  /// already failed here, so a helper that is itself unreachable must not add
+  /// another stall or replace the real error.
+  private func helperCoreOutputForStartFailure() async -> [String] {
+    do {
+      return try await withTimeout(seconds: 3) { @Sendable [helperClient] in
+        try await helperClient.recentLogs()
+      }
+    } catch {
+      return []
     }
   }
 

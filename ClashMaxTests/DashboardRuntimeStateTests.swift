@@ -4045,6 +4045,131 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(developerMessages, entries.map(\.message))
   }
 
+  /// Discussion #25: picking Debug reconfigured the core and resubscribed the
+  /// `/logs` socket at `level=debug`, then filtered every arriving debug entry
+  /// back out unless Developer Mode happened to be on. The selected level is now
+  /// the authority.
+  func testVerboseLogLevelShowsDebugEntriesWithoutDeveloperMode() {
+    let entries = [
+      LogEntry(level: "info", message: "Core ready"),
+      LogEntry(level: "debug", message: "controller request body"),
+      LogEntry(level: "trace", message: "raw stream frame")
+    ]
+
+    let quietMessages = LogVisibility
+      .visibleEntries(in: entries, developerMode: false, logLevel: "info")
+      .map(\.message)
+    XCTAssertEqual(quietMessages, ["Core ready"])
+
+    let debugMessages = LogVisibility
+      .visibleEntries(in: entries, developerMode: false, logLevel: "debug")
+      .map(\.message)
+    XCTAssertEqual(debugMessages, entries.map(\.message))
+
+    let traceMessages = LogVisibility
+      .visibleEntries(in: entries, developerMode: false, logLevel: " TRACE ")
+      .map(\.message)
+    XCTAssertEqual(traceMessages, entries.map(\.message))
+  }
+
+  func testLogVisibilityTreatsOnlyDebugAndTraceAsVerbose() {
+    XCTAssertTrue(LogVisibility.isVerbose(logLevel: "debug"))
+    XCTAssertTrue(LogVisibility.isVerbose(logLevel: "Debug"))
+    XCTAssertTrue(LogVisibility.isVerbose(logLevel: " trace\n"))
+    XCTAssertFalse(LogVisibility.isVerbose(logLevel: "info"))
+    XCTAssertFalse(LogVisibility.isVerbose(logLevel: "warning"))
+    XCTAssertFalse(LogVisibility.isVerbose(logLevel: ""))
+    XCTAssertFalse(LogVisibility.isVerbose(logLevel: nil))
+  }
+
+  func testUserVisibleLogsFollowSelectedLogLevel() throws {
+    let paths = try Self.makeRuntimePaths()
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.overrides.logLevel = "info"
+    model.runtimeData.appendLog(level: "info", message: "Core ready")
+    model.runtimeData.appendLog(level: "debug", message: "controller request body")
+    model.runtimeData.flushPendingLogs()
+
+    XCTAssertFalse(model.isVerboseLogLevelSelected)
+    XCTAssertEqual(model.userVisibleLogs.map(\.message), ["Core ready"])
+
+    model.overrides.logLevel = "debug"
+    XCTAssertTrue(model.isVerboseLogLevelSelected)
+    XCTAssertEqual(
+      model.userVisibleLogs.map(\.message),
+      ["Core ready", "controller request body"]
+    )
+  }
+
+  /// The copied report is what people attach to issues, so the debug output they
+  /// deliberately turned on has to be in it (discussion #25).
+  func testRuntimeDiagnosticsReportIncludesDebugLogsAtDebugLevel() throws {
+    let paths = try Self.makeRuntimePaths()
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.overrides.logLevel = "debug"
+    model.runtimeData.appendLog(level: "debug", message: "dns resolve example.com")
+    model.runtimeData.flushPendingLogs()
+
+    let text = model.runtimeDiagnosticsReport(now: Date(timeIntervalSince1970: 1_700_000_000)).plainText
+    XCTAssertTrue(text.contains("dns resolve example.com"))
+
+    model.overrides.logLevel = "info"
+    let quietText = model.runtimeDiagnosticsReport(now: Date(timeIntervalSince1970: 1_700_000_000)).plainText
+    XCTAssertFalse(quietText.contains("dns resolve example.com"))
+  }
+
+  /// A report capped at a dozen lines cannot explain a failure that took seconds
+  /// to develop, which is what made ClashMax issues unactionable.
+  func testRuntimeDiagnosticsReportRetainsEnoughLogLinesToDiagnose() {
+    let runtimeLines = (1...400).map { "line \($0)" }
+    let helperLines = (1...100).map { "helper \($0)" }
+    let report = RuntimeDiagnosticsReport(
+      generatedAt: Date(timeIntervalSince1970: 1_700_000_000),
+      statusSummary: "Stopped",
+      profileName: "No Profile",
+      runtimeOwner: .stopped,
+      routingMode: .systemProxy,
+      runMode: .rule,
+      controllerHost: "127.0.0.1",
+      controllerPort: 9097,
+      controllerSecret: "secret",
+      coreStatus: "Stopped",
+      systemProxyEnabled: false,
+      tunEnabled: false,
+      networkExtensionEnabled: false,
+      tunSystemDNS: "Off",
+      networkExtensionSystemDNS: "Off",
+      tunDNSMode: "profile",
+      ruleOverlaySummary: "Disabled",
+      helperDetail: .unknown,
+      tunDiagnostics: .empty,
+      networkExtensionDiagnostics: .empty,
+      readinessIssue: nil,
+      lastError: nil,
+      recentLogs: runtimeLines,
+      helperLogs: helperLines
+    )
+    let lines = report.plainText.components(separatedBy: "\n")
+
+    XCTAssertGreaterThanOrEqual(RuntimeDiagnosticsReport.reportedRuntimeLogLimit, 200)
+    XCTAssertGreaterThanOrEqual(RuntimeDiagnosticsReport.reportedHelperLogLimit, 40)
+    // Newest entries are the tail, so the cap has to keep the *end* of the list.
+    XCTAssertTrue(lines.contains("- line 400"))
+    XCTAssertTrue(lines.contains("- line 201"))
+    XCTAssertFalse(lines.contains("- line 200"))
+    XCTAssertTrue(lines.contains("- helper 100"))
+    XCTAssertTrue(lines.contains("- helper 61"))
+    XCTAssertFalse(lines.contains("- helper 60"))
+  }
+
   func testProxyGroupExpansionDefaultsToSelectedGroup() {
     let groups = [
       ProxyGroup(name: "General", type: "select", selected: nil, nodes: []),

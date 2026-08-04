@@ -1680,6 +1680,23 @@
         }
       }
     },
+    "Set Log Level to Debug in Settings to capture debug output from the core." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Set Log Level to Debug in Settings to capture debug output from the core."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在设置中把日志级别设为 Debug，才能采集内核的调试输出。"
+          }
+        }
+      }
+    },
     "Show in Finder" : {
       "localizations" : {
         "base" : {
@@ -3376,6 +3393,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "调试"
+          }
+        }
+      }
+    },
+    "Debug logging is off" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Debug logging is off"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "调试日志未开启"
           }
         }
       }

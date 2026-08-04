@@ -37,12 +37,11 @@ final class RuntimeDataStore {
   @ObservationIgnored
   private var connectionStateGeneration: UInt64 = 0
 
-  var userVisibleLogs: [LogEntry] {
-    LogVisibility.visibleEntries(in: logs, developerMode: false)
-  }
-
-  func visibleLogs(developerMode: Bool) -> [LogEntry] {
-    LogVisibility.visibleEntries(in: logs, developerMode: developerMode)
+  /// `logLevel` is the runtime log level the user selected. At `debug`/`trace`
+  /// it suppresses every visibility filter, so the Log Level setting actually
+  /// governs what the Logs page shows instead of Developer Mode overriding it.
+  func visibleLogs(developerMode: Bool, logLevel: String? = nil) -> [LogEntry] {
+    LogVisibility.visibleEntries(in: logs, developerMode: developerMode, logLevel: logLevel)
   }
 
   func setProvider(_ id: ProxyProvider.ID, healthCheckInFlight isRunning: Bool) {

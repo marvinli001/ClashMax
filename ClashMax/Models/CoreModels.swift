@@ -6014,8 +6014,28 @@ struct LogEntry: Identifiable, Codable, Equatable, Sendable {
 }
 
 enum LogVisibility {
-  static func visibleEntries(in entries: [LogEntry], developerMode: Bool) -> [LogEntry] {
-    guard !developerMode else { return entries }
+  /// Log levels at which the user has explicitly asked for verbose output, so
+  /// nothing may be hidden from them.
+  ///
+  /// Debug entries used to be visible only under Developer Mode, which silently
+  /// defeated the Log Level setting: picking Debug reconfigured the core and
+  /// resubscribed the `/logs` socket at `level=debug`, and then every arriving
+  /// entry was filtered out again before it reached the Logs page (discussion
+  /// #25 — "打开了 Debug 级的日志，但是这个等级完全没有输出"). The selected log
+  /// level is now the authority; Developer Mode only widens what a *quiet* level
+  /// shows.
+  static func isVerbose(logLevel: String?) -> Bool {
+    guard let logLevel else { return false }
+    let normalized = logLevel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    return normalized == "debug" || normalized == "trace"
+  }
+
+  static func visibleEntries(
+    in entries: [LogEntry],
+    developerMode: Bool,
+    logLevel: String? = nil
+  ) -> [LogEntry] {
+    guard !developerMode, !isVerbose(logLevel: logLevel) else { return entries }
     return entries.filter { !isDeveloperOnly($0) }
   }
 

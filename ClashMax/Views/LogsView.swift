@@ -6,7 +6,10 @@ struct LogsView: View {
   @State private var levelFilter: LogLevelFilter = .all
 
   var body: some View {
-    let retainedLogs = runtimeData.visibleLogs(developerMode: appModel.developerMode)
+    let retainedLogs = runtimeData.visibleLogs(
+      developerMode: appModel.developerMode,
+      logLevel: appModel.selectedLogLevel
+    )
     let visibleLogs = filteredLogs(from: retainedLogs)
 
     AdaptivePage(title: "Logs") {
@@ -22,11 +25,9 @@ struct LogsView: View {
         ClashMaxSkeletonTable(rows: 8)
       } else if visibleLogs.isEmpty {
         CenteredUnavailableState(
-          title: runtimeData.logs.isEmpty ? "No logs yet" : "No matching logs",
+          title: emptyStateTitle,
           systemImage: "text.alignleft",
-          message: runtimeData.logs.isEmpty
-            ? "Runtime and helper messages will be listed here."
-            : "No retained logs match the selected level."
+          message: emptyStateMessage
         )
       } else {
         VStack(spacing: 8) {
@@ -62,6 +63,29 @@ struct LogsView: View {
     retainedLogs.isEmpty
       && appModel.profileStore.activeProfile != nil
       && (appModel.runtimeDataLoading || appModel.dashboardRuntimeState.isStarting)
+  }
+
+  /// The Debug filter is only ever populated when the runtime log level is
+  /// Debug, so an empty Debug view must say that instead of implying the core
+  /// produced nothing (discussion #25).
+  private var debugFilterNeedsVerboseLevel: Bool {
+    levelFilter == .debug && !appModel.isVerboseLogLevelSelected
+  }
+
+  private var emptyStateTitle: String {
+    if debugFilterNeedsVerboseLevel {
+      return "Debug logging is off"
+    }
+    return runtimeData.logs.isEmpty ? "No logs yet" : "No matching logs"
+  }
+
+  private var emptyStateMessage: String {
+    if debugFilterNeedsVerboseLevel {
+      return "Set Log Level to Debug in Settings to capture debug output from the core."
+    }
+    return runtimeData.logs.isEmpty
+      ? "Runtime and helper messages will be listed here."
+      : "No retained logs match the selected level."
   }
 
   private func filteredLogs(from entries: [LogEntry]) -> [LogEntry] {

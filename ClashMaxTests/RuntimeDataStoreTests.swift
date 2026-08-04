@@ -360,4 +360,28 @@ final class RuntimeDataStoreTests: XCTestCase {
     XCTAssertEqual(store.connectionRecords.first?.id, "idle-just-ended", "most-recently-ended record must sort first")
     XCTAssertFalse(retainedIDs.contains("conn-0"), "the oldest-ended filler must be the trimmed record")
   }
+
+  // MARK: - Log visibility
+
+  /// Discussion #25: the Logs page filtered debug entries back out unless
+  /// Developer Mode was on, so selecting Debug produced an empty page.
+  func testVisibleLogsHonorSelectedLogLevelWithoutDeveloperMode() {
+    let store = RuntimeDataStore()
+    store.appendLog(level: "info", message: "Core ready")
+    store.appendLog(level: "debug", message: "controller request body")
+    store.flushPendingLogs()
+
+    XCTAssertEqual(
+      store.visibleLogs(developerMode: false, logLevel: "info").map(\.message),
+      ["Core ready"]
+    )
+    XCTAssertEqual(
+      store.visibleLogs(developerMode: false, logLevel: "debug").map(\.message),
+      ["Core ready", "controller request body"]
+    )
+    XCTAssertEqual(
+      store.visibleLogs(developerMode: true, logLevel: "info").map(\.message),
+      ["Core ready", "controller request body"]
+    )
+  }
 }
