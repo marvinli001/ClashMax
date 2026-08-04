@@ -7066,7 +7066,17 @@ final class AppModel {
     }
     tunHelperPID = nil
     tunnelCoreRunning = false
-    await updateTunHelperStatusDetail()
+    if mustStopTunnelHelper {
+      // Only verify helper state when the helper could actually own a process.
+      // `mustStopTunnelHelper` already covers every case the probe can change
+      // (tunHelperStopUnconfirmed, a known helper PID, TUN ownership, an
+      // in-flight launch). On a System Proxy or NE stop the helper was never
+      // involved, and probing it costs a full `bootstrapStatusTimeoutSeconds`
+      // XPC round-trip whenever SMAppService reports the daemon `.enabled` but
+      // launchd cannot reach it — a stall on every stop, and on the failure
+      // cleanup that publishes a start error.
+      await updateTunHelperStatusDetail()
+    }
     sessionStartedAt = nil
     previewRuntimeActive = false
     previewRuntimeOverrides = nil

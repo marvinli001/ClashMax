@@ -7165,6 +7165,70 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
   }
 
+  func testFailedStartCleanupSkipsHelperStatusProbeWhenHelperWasNotInvolved() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try """
+    proxies:
+      - name: DIRECT
+        type: direct
+    """.write(to: configURL, atomically: true, encoding: .utf8)
+
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    let profile = try await store.importLocalConfig(from: configURL)
+    try "mixed-port: 7890\nrules: []\n"
+      .write(to: URL(fileURLWithPath: profile.originalConfigPath), atomically: true, encoding: .utf8)
+
+    let helperTransport = ReadyTunnelHelperTransport()
+    let helper = TunnelHelperClient(
+      transport: helperTransport,
+      service: StaticHelperService(status: .enabled),
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      helperClient: helper,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+
+    model.start()
+
+    for _ in 0..<6_000 where model.lastError == nil {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(
+      model.lastError,
+      String(localized: "Profile must include at least one proxy or proxy provider.")
+    )
+    // A System Proxy start never touches the privileged helper, so the failure
+    // cleanup must not probe it. Against a helper that SMAppService reports
+    // `.enabled` but launchd cannot reach, that probe blocks for the client's
+    // full bootstrapStatusTimeoutSeconds before the error reaches the user.
+    let statusCount = await helperTransport.statusCount()
+    XCTAssertEqual(statusCount, 0)
+  }
+
+  func testTunStopStillRefreshesHelperStatusDetail() async throws {
+    let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
+    let helperTransport = ReadyTunnelHelperTransport()
+    let model = try await makeRunningTunnelModel(client: client, helperTransport: helperTransport)
+    XCTAssertFalse(model.tunHelperStatusDetail.xpcReachable)
+
+    model.stop()
+    for _ in 0..<600 where !model.tunHelperStatusDetail.xpcReachable {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    // The skip above must stay scoped to stops the helper had no part in: a TUN
+    // stop still needs the authoritative reply to settle tunHelperStopUnconfirmed.
+    XCTAssertTrue(model.tunHelperStatusDetail.xpcReachable)
+  }
+
   func testStartAppliesSelectedSystemProxyRoutingMode() async throws {
     let paths = try Self.makeRuntimePaths()
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
@@ -12226,9 +12290,11 @@ private actor ReadyTunnelHelperTransport: HelperXPCTransport {
   private var starts = 0
   private var stops = 0
   private var restarts = 0
+  private var statuses = 0
 
   func status() async throws -> HelperClientResponse {
-    HelperClientResponse(payload: HelperXPCPayload.response(ok: true, running: starts > stops, pid: starts > stops ? 99 : 0))
+    statuses += 1
+    return HelperClientResponse(payload: HelperXPCPayload.response(ok: true, running: starts > stops, pid: starts > stops ? 99 : 0))
   }
 
   func startTunnel(coreURL: URL, configURL: URL, workDirectory: URL, secret: String) async throws -> HelperClientResponse {
@@ -12254,6 +12320,7 @@ private actor ReadyTunnelHelperTransport: HelperXPCTransport {
   func startCount() -> Int { starts }
   func stopCount() -> Int { stops }
   func restartCount() -> Int { restarts }
+  func statusCount() -> Int { statuses }
 }
 
 private actor StopStillRunningTunnelHelperTransport: HelperXPCTransport {
