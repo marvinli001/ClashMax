@@ -260,6 +260,9 @@ targets:
     sources:
       - path: Shared/Socks5ConnectRequest.swift
       - path: Shared/NetworkExtensionRuntimeConstants.swift
+      - path: Shared/StructuredLogProducer.swift
+      - path: Shared/StructuredLogPrivacy.swift
+      - path: Shared/SanitizedLineAccumulator.swift
       - path: ClashMaxNetworkExtension
     info:
       path: Config/ClashMaxNetworkExtension-Info.plist

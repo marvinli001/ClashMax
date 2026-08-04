@@ -1,0 +1,41 @@
+# Exact target<TAB>repository-relative-path tuples for every new Swift source and
+# test file introduced by docs/superpowers/plans/2026-07-28-structured-logging.md.
+#
+# guarded_xcodebuild.sh accepts a regenerated project only when its new target/source
+# tuples are a subset of this list and no existing tuple disappeared. Modified files,
+# scripts, resources, Config files, and wildcards are deliberately absent: this list
+# authorizes *additions to target membership*, nothing else.
+ClashMax	Shared/StructuredLogProducer.swift
+ClashMax	Shared/StructuredLogPrivacy.swift
+ClashMax	Shared/SanitizedLineAccumulator.swift
+ClashMaxHelper	Shared/StructuredLogProducer.swift
+ClashMaxHelper	Shared/StructuredLogPrivacy.swift
+ClashMaxHelper	Shared/SanitizedLineAccumulator.swift
+ClashMaxNetworkExtension	Shared/StructuredLogProducer.swift
+ClashMaxNetworkExtension	Shared/StructuredLogPrivacy.swift
+ClashMaxNetworkExtension	Shared/SanitizedLineAccumulator.swift
+ClashMax	ClashMax/Models/StructuredLogEvent.swift
+ClashMax	ClashMax/Models/LogPresentation.swift
+ClashMax	ClashMax/Services/StructuredLogProjection.swift
+ClashMax	ClashMax/Services/StructuredLogPersistence.swift
+ClashMax	ClashMax/Services/StructuredLogSampler.swift
+ClashMax	ClashMax/Services/StructuredLogRecorder.swift
+ClashMax	ClashMax/Services/StructuredLogExport.swift
+ClashMax	ClashMax/Services/TunDiagnosticsEventDiffer.swift
+ClashMax	ClashMax/Stores/LogChannelStore.swift
+ClashMax	ClashMax/Stores/LogNavigationState.swift
+ClashMax	ClashMax/Views/Logs/LogChannelPane.swift
+ClashMax	ClashMax/Views/Logs/StructuredLogRow.swift
+ClashMax	ClashMax/Views/Dashboard/RecentRuntimeLogsCard.swift
+ClashMaxTests	ClashMaxTests/StructuredLogProducerTests.swift
+ClashMaxTests	ClashMaxTests/StructuredLogEventTests.swift
+ClashMaxTests	ClashMaxTests/StructuredLogProjectionTests.swift
+ClashMaxTests	ClashMaxTests/StructuredLogPersistenceTests.swift
+ClashMaxTests	ClashMaxTests/StructuredLogSamplerTests.swift
+ClashMaxTests	ClashMaxTests/LogChannelStoreTests.swift
+ClashMaxTests	ClashMaxTests/StructuredLogRecorderTests.swift
+ClashMaxTests	ClashMaxTests/StructuredApplicationEventCoverageTests.swift
+ClashMaxTests	ClashMaxTests/LogPresentationTests.swift
+ClashMaxTests	ClashMaxTests/StructuredLogExportTests.swift
+ClashMaxTests	ClashMaxTests/AppTerminationLoggingTests.swift
+ClashMaxTests	ClashMaxTests/LogsViewLayoutTests.swift
