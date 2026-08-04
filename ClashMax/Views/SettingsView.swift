@@ -365,7 +365,7 @@ struct SettingsView: View {
             .popover(isPresented: $isNetworkPoliciesPresented, arrowEdge: .bottom) {
               NetworkPolicySettingsPopover(
                 settings: $settings.networkPolicySettings,
-                currentSSID: appModel.currentNetworkSSID,
+                currentNetwork: appModel.currentNetwork,
                 statusMessage: appModel.networkPolicyStatusMessage,
                 lastAppliedPolicyID: appModel.lastAppliedNetworkPolicyID,
                 onRefresh: {
@@ -376,6 +376,9 @@ struct SettingsView: View {
                 },
                 onApplyRule: { rule in
                   appModel.applyNetworkPolicy(rule)
+                },
+                onResolveSSIDAvailability: {
+                  appModel.resolveCurrentNetworkSSIDAvailability()
                 }
               )
                 .frame(width: 560)
@@ -1024,12 +1027,13 @@ private struct GlobalShortcutBindingRow: View {
 
 private struct NetworkPolicySettingsPopover: View {
   @Binding var settings: NetworkPolicySettings
-  let currentSSID: String?
+  let currentNetwork: WiFiNetworkSnapshot
   let statusMessage: String?
   let lastAppliedPolicyID: NetworkPolicyRule.ID?
   let onRefresh: () -> Void
   let onApplyCurrent: () -> Void
   let onApplyRule: (NetworkPolicyRule) -> Void
+  let onResolveSSIDAvailability: () -> Void
   @State private var name = ""
   @State private var ssid = ""
   @State private var proxyRoutingMode = ProxyRoutingMode.systemProxy
@@ -1055,11 +1059,21 @@ private struct NetworkPolicySettingsPopover: View {
         .fixedSize(horizontal: false, vertical: true)
 
       HStack(spacing: 10) {
-        Label(statusMessage ?? String(localized: "Current network not checked."), systemImage: currentSSID == nil ? "wifi.slash" : "wifi")
+        Label(
+          statusMessage ?? String(localized: "Current network not checked."),
+          systemImage: currentNetwork.statusSymbolName
+        )
           .font(.caption)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(currentNetwork.isBlockedByLocationAuthorization ? .orange : .secondary)
           .lineLimit(2)
+          .fixedSize(horizontal: false, vertical: true)
         Spacer()
+        if let recoveryTitle = NetworkPolicyStatusPresenter.recoveryActionTitle(for: currentNetwork) {
+          Button(recoveryTitle) {
+            onResolveSSIDAvailability()
+          }
+          .help("macOS only reveals Wi-Fi network names to apps with Location Services access.")
+        }
         Button {
           onRefresh()
         } label: {

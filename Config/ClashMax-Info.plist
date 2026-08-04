@@ -41,6 +41,10 @@
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>GPL-3.0</string>
+	<key>NSLocationUsageDescription</key>
+	<string>ClashMax reads the name of the Wi-Fi network you are on so saved network policies can switch routing automatically. Your location is never collected, stored, or sent anywhere.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>ClashMax reads the name of the Wi-Fi network you are on so saved network policies can switch routing automatically. Your location is never collected, stored, or sent anywhere.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>NSSystemExtensionUsageDescription</key>

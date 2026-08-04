@@ -12,5 +12,7 @@
 	<array>
 		<string>group.678WA95W4U.io.github.clashmax.ClashMax.network-extension</string>
 	</array>
+	<key>com.apple.security.personal-information.location</key>
+	<true/>
 </dict>
 </plist>

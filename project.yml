@@ -75,6 +75,11 @@ targets:
         NSPrincipalClass: NSApplication
         NSHumanReadableCopyright: GPL-3.0
         NSSystemExtensionUsageDescription: ClashMax uses NE Proxy to route TCP and UDP traffic through its local Mihomo proxy without enabling System Proxy or the privileged TUN helper.
+        # macOS 14+ only reveals the current Wi-Fi SSID (CWInterface.ssid()) to apps with Location
+        # Services access. Without these keys the prompt can never appear and network policies can
+        # never match a network (issue #26). ClashMax asks for the authorization, never a location fix.
+        NSLocationUsageDescription: ClashMax reads the name of the Wi-Fi network you are on so saved network policies can switch routing automatically. Your location is never collected, stored, or sent anywhere.
+        NSLocationWhenInUseUsageDescription: ClashMax reads the name of the Wi-Fi network you are on so saved network policies can switch routing automatically. Your location is never collected, stored, or sent anywhere.
         SUFeedURL: https://marvinli001.github.io/ClashMax/appcast.xml
         SUPublicEDKey: "Gh5U2F2/392N+X0I2t1ojmM3uHPYKR2Ceww618dTaLc="
         SUEnableAutomaticChecks: true
@@ -110,6 +115,9 @@ targets:
         com.apple.developer.networking.networkextension:
           - app-proxy-provider-systemextension
         com.apple.developer.system-extension.install: true
+        # Hardened Runtime resource access: required to read the current Wi-Fi SSID via CoreWLAN,
+        # which macOS 14+ gates behind Location Services (issue #26).
+        com.apple.security.personal-information.location: true
         com.apple.security.application-groups:
           - group.678WA95W4U.io.github.clashmax.ClashMax.network-extension
     postCompileScripts:

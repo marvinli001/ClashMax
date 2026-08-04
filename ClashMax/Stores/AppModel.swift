@@ -1,25 +1,8 @@
 import AppKit
-import CoreWLAN
 import Foundation
 @preconcurrency import UserNotifications
 import ServiceManagement
 import UniformTypeIdentifiers
-
-protocol CurrentNetworkProviding {
-  func currentSSID() -> String?
-}
-
-struct CoreWLANCurrentNetworkProvider: CurrentNetworkProviding {
-  func currentSSID() -> String? {
-    CWWiFiClient.shared().interface()?.ssid()?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmptyString
-  }
-}
-
-private extension String {
-  var nonEmptyString: String? {
-    isEmpty ? nil : self
-  }
-}
 
 private enum AppStartupAbort: Error {
   case waitingForTunHelper
@@ -724,7 +707,8 @@ final class AppModel {
     appNotice = AppNotice(message: message, tone: .warning)
     appendAppLog(level: "warn", message: logMessage ?? message)
   }
-  private(set) var currentNetworkSSID: String?
+  private(set) var currentNetwork: WiFiNetworkSnapshot = .notChecked
+  var currentNetworkSSID: String? { currentNetwork.ssid }
   private(set) var networkPolicyStatusMessage: String?
   private(set) var lastAppliedNetworkPolicyID: NetworkPolicyRule.ID?
   private(set) var backupRestoreStatusMessage: String?
@@ -871,6 +855,8 @@ final class AppModel {
   private let externalDashboardSecretStore: any SecretStoring
   private let currentNetworkProvider: any CurrentNetworkProviding
   private let networkEnvironmentMonitor: (any NetworkEnvironmentMonitoring)?
+  /// `nil` in tests, where no `CLLocationManager` should be created.
+  @ObservationIgnored private let wiFiLocationAuthorization: WiFiLocationAuthorization?
   private let globalShortcutManager: GlobalShortcutManager
   private let backupRestoreService = BackupRestoreService()
   @ObservationIgnored private var providerSideLoadPreflightRunner: any ProviderSideLoadPreflightRunning = MihomoProviderSideLoadPreflightRunner()
@@ -897,7 +883,7 @@ final class AppModel {
   static func bootstrap() -> AppModel {
     do {
       let paths = try RuntimePaths.live()
-      return AppModel(paths: paths)
+      return AppModel(paths: paths, wiFiLocationAuthorization: WiFiLocationAuthorization())
     } catch {
       let fallback = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("ClashMax", isDirectory: true)
       let paths = RuntimePaths(
@@ -908,7 +894,7 @@ final class AppModel {
         logs: fallback.appendingPathComponent("Logs", isDirectory: true)
       )
       try? paths.prepareDirectories()
-      let model = AppModel(paths: paths)
+      let model = AppModel(paths: paths, wiFiLocationAuthorization: WiFiLocationAuthorization())
       model.lastError = UserFacingError.message(for: error)
       return model
     }
@@ -936,6 +922,7 @@ final class AppModel {
     providerAnalytics: ProviderAnalyticsStore? = nil,
     currentNetworkProvider: any CurrentNetworkProviding = CoreWLANCurrentNetworkProvider(),
     networkEnvironmentMonitor: (any NetworkEnvironmentMonitoring)? = nil,
+    wiFiLocationAuthorization: WiFiLocationAuthorization? = nil,
     globalShortcutRegistrar: (any GlobalShortcutRegistering)? = nil,
     bundledCoreURLProvider: (() throws -> URL)? = nil,
     providerSideLoadPreflightRunner: any ProviderSideLoadPreflightRunning = MihomoProviderSideLoadPreflightRunner()
@@ -945,6 +932,7 @@ final class AppModel {
     self.externalDashboardSecretStore = externalDashboardSecretStore
     self.currentNetworkProvider = currentNetworkProvider
     self.networkEnvironmentMonitor = networkEnvironmentMonitor ?? NetworkEnvironmentMonitor(currentNetworkProvider: currentNetworkProvider)
+    self.wiFiLocationAuthorization = wiFiLocationAuthorization
     self.globalShortcutManager = GlobalShortcutManager(registrar: globalShortcutRegistrar ?? CarbonGlobalShortcutRegistrar())
     self.providerSideLoadPreflightRunner = providerSideLoadPreflightRunner
     self.bundledCoreURLProvider = bundledCoreURLProvider ?? Self.resolveBundledCoreURL
@@ -1050,6 +1038,11 @@ final class AppModel {
     installGlobalShortcuts(settings.globalShortcutSettings)
     schedulePreviewRuntimeStartIfReady(profilePreviewGroups: proxyPreview.profilePreviewGroups)
     handleCoreStatusChange(coreController.status)
+    // Granting Location access is what makes CWInterface.ssid() readable, so the SSID has to be
+    // re-read the moment authorization flips rather than on the next network change (issue #26).
+    wiFiLocationAuthorization?.onStatusChange = { [weak self] _ in
+      self?.handleWiFiLocationAuthorizationChange()
+    }
     recoverDanglingSystemProxyIfNeeded()
     recoverDanglingManagedDNSIfNeeded()
     outboundProxyEndpointLoadTask = Task { @MainActor [weak self] in
@@ -3930,24 +3923,43 @@ final class AppModel {
   }
 
   func refreshCurrentNetworkPolicyState() {
-    let ssid = currentNetworkProvider.currentSSID()
-    currentNetworkSSID = ssid
-    guard let ssid else {
-      networkPolicyStatusMessage = String(localized: "No Wi-Fi SSID detected.")
-      return
+    wiFiLocationAuthorization?.refresh()
+    let snapshot = currentNetworkProvider.currentNetwork()
+    currentNetwork = snapshot
+    networkPolicyStatusMessage = NetworkPolicyStatusPresenter.message(
+      for: snapshot,
+      matchedRule: snapshot.ssid.flatMap(networkPolicySettings.matchingRule(ssid:))
+    )
+  }
+
+  /// Runs the recovery action the Network Policies panel is currently offering.
+  ///
+  /// Raises the macOS location prompt when it can still appear, and otherwise deep-links into
+  /// Privacy & Security → Location Services.
+  func resolveCurrentNetworkSSIDAvailability() {
+    guard let wiFiLocationAuthorization else { return }
+    switch currentNetwork.recoveryAction {
+    case .requestLocationAuthorization:
+      if !wiFiLocationAuthorization.requestAuthorizationIfPossible() {
+        wiFiLocationAuthorization.openLocationSettings()
+      }
+      appendAppLog(level: "info", message: "Requested Location Services access to read the Wi-Fi SSID.")
+    case .openLocationSettings:
+      wiFiLocationAuthorization.openLocationSettings()
+    case .none:
+      refreshCurrentNetworkPolicyState()
     }
-    if let rule = networkPolicySettings.matchingRule(ssid: ssid) {
-      networkPolicyStatusMessage = String(
-        format: String(localized: "Current network %@ matches %@."),
-        ssid,
-        rule.name
-      )
-    } else {
-      networkPolicyStatusMessage = String(
-        format: String(localized: "No saved policy matches %@."),
-        ssid
-      )
-    }
+  }
+
+  private func handleWiFiLocationAuthorizationChange() {
+    let previous = currentNetwork
+    refreshCurrentNetworkPolicyState()
+    guard previous.isBlockedByLocationAuthorization, currentNetwork.ssid != nil else { return }
+    appendAppLog(
+      level: "info",
+      message: "Location Services access granted; Wi-Fi SSID is now readable."
+    )
+    handleNetworkEnvironmentMayHaveChanged(reason: "location-authorization")
   }
 
   func applyMatchingNetworkPolicyForCurrentNetwork() {
@@ -3965,14 +3977,21 @@ final class AppModel {
 
   func startNetworkEnvironmentMonitoring() {
     guard networkEnvironmentTask == nil, let networkEnvironmentMonitor else { return }
+    // Saved policies are keyed by SSID, so auto-apply is dead without Location access. Prompt only
+    // when there is actually a policy to match, so users who never configured one are never asked.
+    if networkPolicySettings.autoApplyEnabled, !networkPolicySettings.rules.isEmpty {
+      wiFiLocationAuthorization?.requestAuthorizationIfPossible()
+    }
     networkEnvironmentMonitor.start()
     networkEnvironmentTask = Task { @MainActor [weak self, networkEnvironmentMonitor] in
       for await event in networkEnvironmentMonitor.events {
         guard let self, !Task.isCancelled else { return }
-        currentNetworkSSID = event.ssid ?? currentNetworkProvider.currentSSID()
+        currentNetwork = event.network.ssid == nil && event.network.unavailableReason == nil
+          ? currentNetworkProvider.currentNetwork()
+          : event.network
         appendAppLog(
           level: "info",
-          message: "Network environment changed via \(event.reason): path=\(event.pathStatus), ssid=\(event.ssid ?? "none")"
+          message: "Network environment changed via \(event.reason): path=\(event.pathStatus), ssid=\(currentNetwork.ssid ?? currentNetwork.unavailableReason?.rawValue ?? "none")"
         )
         handleNetworkEnvironmentMayHaveChanged(reason: event.reason)
       }
@@ -3993,11 +4012,23 @@ final class AppModel {
   }
 
   private func applyMatchingNetworkPolicyForCurrentNetwork(trigger: String) {
-    let ssid = currentNetworkProvider.currentSSID()
-    currentNetworkSSID = ssid
-    guard let ssid else {
-      let message = String(localized: "No Wi-Fi SSID detected.")
+    let snapshot = currentNetworkProvider.currentNetwork()
+    currentNetwork = snapshot
+    guard let ssid = snapshot.ssid else {
+      let message = NetworkPolicyStatusPresenter.unavailableMessage(snapshot.unavailableReason)
       networkPolicyStatusMessage = message
+      // A permission gap means the network is *unknown*, not that the user left the previous one.
+      // Restoring here would silently undo the routing the last matched policy set up (issue #26).
+      guard !snapshot.isBlockedByLocationAuthorization else {
+        appendAppLog(
+          level: "warn",
+          message: "Skipped network policy matching via \(trigger): \(snapshot.unavailableReason?.rawValue ?? "unknown")."
+        )
+        if trigger == "manual" {
+          publishWarningNotice(message)
+        }
+        return
+      }
       let didScheduleRestore = restoreNetworkPolicyStateIfNeeded(reason: message)
       if trigger == "manual", !didScheduleRestore {
         appNotice = AppNotice(message: message, tone: .info)

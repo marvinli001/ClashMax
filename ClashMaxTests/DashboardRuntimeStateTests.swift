@@ -2932,6 +2932,124 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(model.networkPolicyStatusMessage?.localizedCaseInsensitiveContains("corpnet") == true)
   }
 
+  /// Issue #26: losing the SSID because macOS withheld it is not the same as leaving the network.
+  /// Restoring on a permission gap silently undoes the routing the matched policy set up.
+  func testNetworkPolicyKeepsAppliedStateWhenSSIDIsHiddenByLocationAuthorization() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    let provider = MutableCurrentNetworkProvider(ssid: "corpnet")
+    let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+    let controller = SystemProxyController(commandRunner: commandRunner)
+    let rule = NetworkPolicyRule(
+      name: "Office Wi-Fi",
+      ssid: "CorpNet",
+      proxyRoutingMode: .systemProxy,
+      enableSystemProxy: true
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      systemProxyController: controller,
+      defaults: defaults,
+      currentNetworkProvider: provider
+    )
+    model.setProxyRoutingMode(.neProxy)
+    model.networkPolicySettings = NetworkPolicySettings(rules: [rule], autoApplyEnabled: true)
+
+    model.handleNetworkEnvironmentMayHaveChanged(reason: "path")
+    for _ in 0..<120 where !model.systemProxyEnabled {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+    XCTAssertEqual(model.lastAppliedNetworkPolicyID, rule.id)
+    XCTAssertTrue(model.systemProxyEnabled)
+
+    provider.network = .unavailable(.locationAuthorizationDenied)
+    model.handleNetworkEnvironmentMayHaveChanged(reason: "path")
+    // The apply is debounced by 650ms, so the window has to outlast it.
+    for _ in 0..<200 {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 10_000_000)
+      if model.currentNetwork.unavailableReason == .locationAuthorizationDenied { break }
+    }
+
+    XCTAssertEqual(model.currentNetwork.unavailableReason, .locationAuthorizationDenied)
+    XCTAssertTrue(model.currentNetwork.isBlockedByLocationAuthorization)
+    XCTAssertEqual(model.lastAppliedNetworkPolicyID, rule.id, "policy must survive a permission gap")
+    XCTAssertEqual(model.proxyRoutingMode, .systemProxy)
+    XCTAssertTrue(model.systemProxyEnabled)
+    XCTAssertEqual(
+      model.networkPolicyStatusMessage,
+      NetworkPolicyStatusPresenter.unavailableMessage(.locationAuthorizationDenied)
+    )
+  }
+
+  /// The bug as reported: connected to Wi-Fi, but Settings only ever said "No Wi-Fi SSID detected."
+  func testRefreshReportsLocationAuthorizationInsteadOfBareNoSSIDMessage() throws {
+    let paths = try Self.makeRuntimePaths()
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: try Self.makeIsolatedDefaults(),
+      currentNetworkProvider: StaticCurrentNetworkProvider(unavailable: .locationAuthorizationNotDetermined)
+    )
+
+    model.refreshCurrentNetworkPolicyState()
+
+    XCTAssertNil(model.currentNetworkSSID)
+    XCTAssertEqual(model.currentNetwork.recoveryAction, .requestLocationAuthorization)
+    // The dead-end message is what the reporter saw; anything naming the permission is the fix.
+    XCTAssertNotEqual(
+      model.networkPolicyStatusMessage,
+      NetworkPolicyStatusPresenter.unavailableMessage(nil)
+    )
+    XCTAssertEqual(
+      model.networkPolicyStatusMessage,
+      NetworkPolicyStatusPresenter.unavailableMessage(.locationAuthorizationNotDetermined)
+    )
+    XCTAssertNotNil(NetworkPolicyStatusPresenter.recoveryActionTitle(for: model.currentNetwork))
+  }
+
+  /// Genuinely leaving Wi-Fi must still restore, i.e. the fix above did not disable the feature.
+  func testNetworkPolicyStillRestoresWhenWiFiIsSimplyOff() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let provider = MutableCurrentNetworkProvider(ssid: "corpnet")
+    let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+    let rule = NetworkPolicyRule(
+      name: "Office Wi-Fi",
+      ssid: "CorpNet",
+      proxyRoutingMode: .systemProxy,
+      enableSystemProxy: true
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      systemProxyController: SystemProxyController(commandRunner: commandRunner),
+      defaults: try Self.makeIsolatedDefaults(),
+      currentNetworkProvider: provider
+    )
+    model.setProxyRoutingMode(.neProxy)
+    model.networkPolicySettings = NetworkPolicySettings(rules: [rule], autoApplyEnabled: true)
+
+    model.handleNetworkEnvironmentMayHaveChanged(reason: "path")
+    for _ in 0..<120 where !model.systemProxyEnabled {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+    XCTAssertEqual(model.lastAppliedNetworkPolicyID, rule.id)
+
+    provider.network = .unavailable(.wiFiPoweredOff)
+    model.handleNetworkEnvironmentMayHaveChanged(reason: "path")
+    for _ in 0..<120 where model.systemProxyEnabled || model.proxyRoutingMode != .neProxy {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+
+    XCTAssertNil(model.lastAppliedNetworkPolicyID)
+    XCTAssertEqual(model.proxyRoutingMode, .neProxy)
+    XCTAssertFalse(model.systemProxyEnabled)
+  }
+
   @MainActor
   func testLeavingRunningSystemProxySerializesRestoreBeforeRuntimeRestart() async throws {
     // Regression for issue #19: leaving an enabled System Proxy must finish the
@@ -12741,18 +12859,26 @@ private final class ManualNetworkEnvironmentMonitor: NetworkEnvironmentMonitorin
 }
 
 private struct StaticCurrentNetworkProvider: CurrentNetworkProviding {
-  let ssid: String?
+  let network: WiFiNetworkSnapshot
 
-  func currentSSID() -> String? {
-    ssid
+  init(ssid: String?) {
+    network = ssid.map(WiFiNetworkSnapshot.joined) ?? .unavailable(.notAssociated)
+  }
+
+  init(unavailable reason: WiFiSSIDUnavailableReason) {
+    network = .unavailable(reason)
+  }
+
+  func currentNetwork() -> WiFiNetworkSnapshot {
+    network
   }
 }
 
 private final class MutableCurrentNetworkProvider: CurrentNetworkProviding, @unchecked Sendable {
   private let lock = NSLock()
-  private var value: String?
+  private var value: WiFiNetworkSnapshot
 
-  var ssid: String? {
+  var network: WiFiNetworkSnapshot {
     get {
       lock.lock()
       defer { lock.unlock() }
@@ -12765,12 +12891,21 @@ private final class MutableCurrentNetworkProvider: CurrentNetworkProviding, @unc
     }
   }
 
-  init(ssid: String?) {
-    value = ssid
+  var ssid: String? {
+    get { network.ssid }
+    set { network = newValue.map(WiFiNetworkSnapshot.joined) ?? .unavailable(.notAssociated) }
   }
 
-  func currentSSID() -> String? {
-    ssid
+  init(ssid: String?) {
+    value = ssid.map(WiFiNetworkSnapshot.joined) ?? .unavailable(.notAssociated)
+  }
+
+  init(unavailable reason: WiFiSSIDUnavailableReason) {
+    value = .unavailable(reason)
+  }
+
+  func currentNetwork() -> WiFiNetworkSnapshot {
+    network
   }
 }
 
