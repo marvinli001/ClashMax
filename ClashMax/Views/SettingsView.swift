@@ -114,13 +114,13 @@ struct SettingsView: View {
 
           SettingsToggleRow(
             "Silent Start",
-            description: "Start without showing the main window; ClashMax stays in the menu bar.",
+            description: "Start at login without showing the main window; ClashMax stays in the menu bar.",
             isOn: Binding(
               get: { settings.launchSettings.silentStart },
               set: { appModel.setSilentStart($0) }
             )
           )
-          .help("Applies to every launch, including login-item startup. Open the main window from the menu bar when needed.")
+          .help("Applies to login-item startup only. Opening ClashMax yourself always shows the main window.")
 
           SettingsControlRow("Login Item Status", description: settings.launchSettings.statusMessage) {
             Button {

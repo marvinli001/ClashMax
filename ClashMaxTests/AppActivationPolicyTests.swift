@@ -184,4 +184,91 @@ final class AppActivationPolicyTests: XCTestCase {
 
     XCTAssertTrue(AppActivationPolicyResolver.shouldOpenMainWindow(for: windows))
   }
+
+  func testLaunchPresentsMainWindowWithoutSilentStart() {
+    XCTAssertTrue(
+      MainWindowLaunchPolicy.shouldPresentMainWindowOnLaunch(
+        silentStartEnabled: false,
+        isLoginItemLaunch: false
+      )
+    )
+    XCTAssertTrue(
+      MainWindowLaunchPolicy.shouldPresentMainWindowOnLaunch(
+        silentStartEnabled: false,
+        isLoginItemLaunch: true
+      )
+    )
+  }
+
+  func testSilentStartOnlySuppressesLoginItemLaunches() {
+    XCTAssertFalse(
+      MainWindowLaunchPolicy.shouldPresentMainWindowOnLaunch(
+        silentStartEnabled: true,
+        isLoginItemLaunch: true
+      )
+    )
+  }
+
+  func testSilentStartStillPresentsMainWindowForManualLaunch() {
+    XCTAssertTrue(
+      MainWindowLaunchPolicy.shouldPresentMainWindowOnLaunch(
+        silentStartEnabled: true,
+        isLoginItemLaunch: false
+      )
+    )
+  }
+
+  func testMissingLaunchEventIsNotALoginItemLaunch() {
+    XCTAssertFalse(AppLaunchSource.isLoginItemLaunch(nil))
+  }
+
+  func testManualOpenEventIsNotALoginItemLaunch() {
+    // What Finder, Spotlight, the Dock and `open` actually send: 'aevt'/'oapp'
+    // with no property data.
+    XCTAssertFalse(AppLaunchSource.isLoginItemLaunch(Self.launchEvent()))
+  }
+
+  func testLoginItemLaunchEventIsDetected() {
+    let event = Self.launchEvent()
+    event.setParam(
+      NSAppleEventDescriptor(enumCode: OSType(keyAELaunchedAsLogInItem)),
+      forKeyword: OSType(keyAEPropData)
+    )
+
+    XCTAssertTrue(AppLaunchSource.isLoginItemLaunch(event))
+  }
+
+  func testOtherLaunchPropertyIsNotALoginItemLaunch() {
+    let event = Self.launchEvent()
+    // 'othr': any launch property that is not the login-item marker.
+    event.setParam(
+      NSAppleEventDescriptor(enumCode: OSType(0x6F74_6872)),
+      forKeyword: OSType(keyAEPropData)
+    )
+
+    XCTAssertFalse(AppLaunchSource.isLoginItemLaunch(event))
+  }
+
+  func testReopenEventIsNotALoginItemLaunch() {
+    let event = Self.launchEvent(eventID: AEEventID(kAEReopenApplication))
+    event.setParam(
+      NSAppleEventDescriptor(enumCode: OSType(keyAELaunchedAsLogInItem)),
+      forKeyword: OSType(keyAEPropData)
+    )
+
+    XCTAssertFalse(AppLaunchSource.isLoginItemLaunch(event))
+  }
+
+  private static func launchEvent(
+    eventClass: AEEventClass = AEEventClass(kCoreEventClass),
+    eventID: AEEventID = AEEventID(kAEOpenApplication)
+  ) -> NSAppleEventDescriptor {
+    NSAppleEventDescriptor.appleEvent(
+      withEventClass: eventClass,
+      eventID: eventID,
+      targetDescriptor: nil,
+      returnID: AEReturnID(kAutoGenerateReturnID),
+      transactionID: AETransactionID(kAnyTransactionID)
+    )
+  }
 }

@@ -13,6 +13,17 @@ struct ClashMaxApp: App {
   private let silentStartRequested = UserDefaults.standard.bool(forKey: AppModel.silentStartDefaultsKey)
 
   var body: some Scene {
+    // Hand the delegate a window opener while the scene graph is built, i.e.
+    // before applicationDidFinishLaunching. Scene `onAppear` cannot do this job:
+    // the main window, the menu bar panel and Settings all appear only once
+    // something is already on screen, so a launch that presents nothing would
+    // leave the delegate with no way to open the main window at all — which is
+    // exactly how ClashMax used to end up running in the menu bar with no
+    // window after a launch SwiftUI decided not to present. Only the opener is
+    // wired here; `appModel` keeps being attached from `onAppear` so that the
+    // launch path gains no extra work.
+    let _ = appDelegate.setMainWindowOpener { openWindow(id: "main") }
+
     WindowGroup("ClashMax", id: "main") {
       ContentView()
         .environment(appModel)
@@ -29,7 +40,6 @@ struct ClashMaxApp: App {
         .frame(minWidth: 980, minHeight: 660)
         .onAppear {
           appDelegate.appModel = appModel
-          appDelegate.setMainWindowOpener { openWindow(id: "main") }
           if AppLaunchWarmupPolicy.shouldRunForCurrentProcess {
             appModel.startNetworkEnvironmentMonitoring()
             appModel.warmTunHelperRegistrationOnLaunch()
@@ -48,6 +58,10 @@ struct ClashMaxApp: App {
     // .suppressed keeps the window from ever being created during a silent
     // launch, instead of racing to orderOut windows after AppKit presents them
     // (the AppDelegate orderOut pass stays as a fallback for restored windows).
+    // Whether the launch is actually silent can only be decided later, once the
+    // launch Apple event says who started the app, so this suppresses the
+    // *implicit* presentation and AppDelegate opens the window explicitly
+    // whenever MainWindowLaunchPolicy says it should be shown.
     .defaultLaunchBehavior(silentStartRequested ? .suppressed : .presented)
     .commands {
       CommandGroup(after: .appInfo) {
@@ -132,7 +146,6 @@ struct ClashMaxApp: App {
         .appThemeAppearance(appModel.settings.appTheme)
         .onAppear {
           appDelegate.appModel = appModel
-          appDelegate.setMainWindowOpener { openWindow(id: "main") }
           if AppLaunchWarmupPolicy.shouldRunForCurrentProcess {
             appModel.startNetworkEnvironmentMonitoring()
             appModel.warmTunHelperRegistrationOnLaunch()
@@ -165,7 +178,6 @@ struct ClashMaxApp: App {
         .appThemeAppearance(appModel.settings.appTheme)
         .onAppear {
           appDelegate.appModel = appModel
-          appDelegate.setMainWindowOpener { openWindow(id: "main") }
           if AppLaunchWarmupPolicy.shouldRunForCurrentProcess {
             appModel.startNetworkEnvironmentMonitoring()
             appModel.warmTunHelperRegistrationOnLaunch()
@@ -419,6 +431,38 @@ enum LaunchAtLoginRepairLaunchGate {
   }
 }
 
+/// Where the current process came from, as far as the launch Apple event says.
+enum AppLaunchSource {
+  /// `true` only when launchd started ClashMax as a login item. Finder,
+  /// Spotlight, the Dock and `open` all send the same `oapp` event *without*
+  /// the login-item property, so they read as a deliberate user launch.
+  static var isLoginItemLaunch: Bool {
+    isLoginItemLaunch(NSAppleEventManager.shared().currentAppleEvent)
+  }
+
+  static func isLoginItemLaunch(_ event: NSAppleEventDescriptor?) -> Bool {
+    guard
+      let event,
+      event.eventClass == OSType(kCoreEventClass),
+      event.eventID == OSType(kAEOpenApplication)
+    else { return false }
+    return event.paramDescriptor(forKeyword: OSType(keyAEPropData))?.enumCodeValue
+      == OSType(keyAELaunchedAsLogInItem)
+  }
+}
+
+/// Silent Start is scoped to login-item launches: double-clicking ClashMax is
+/// itself a request to see it, so a manual launch always presents the main
+/// window. Only the automatic startup at login stays in the menu bar.
+enum MainWindowLaunchPolicy {
+  static func shouldPresentMainWindowOnLaunch(
+    silentStartEnabled: Bool,
+    isLoginItemLaunch: Bool
+  ) -> Bool {
+    !(silentStartEnabled && isLoginItemLaunch)
+  }
+}
+
 enum AppLaunchWarmupPolicy {
   static var shouldRunForCurrentProcess: Bool {
     shouldRun(
@@ -447,6 +491,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   weak var appModel: AppModel?
   private var terminationCleanupInFlight = false
   private var openMainWindow: (() -> Void)?
+  /// Set when a main-window open was requested before SwiftUI handed over an
+  /// opener; replayed as soon as one arrives so the request is never dropped.
+  private var pendingMainWindowOpen = false
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     Self.sharedDelegate = self
@@ -474,16 +521,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       name: NSWindow.didBecomeMainNotification,
       object: nil
     )
-    if UserDefaults.standard.bool(forKey: AppModel.silentStartDefaultsKey) {
+    // The launch Apple event is only readable while it is being dispatched, i.e.
+    // right here — not during scene construction, which already ran.
+    let presentsMainWindow = MainWindowLaunchPolicy.shouldPresentMainWindowOnLaunch(
+      silentStartEnabled: UserDefaults.standard.bool(forKey: AppModel.silentStartDefaultsKey),
+      isLoginItemLaunch: AppLaunchSource.isLoginItemLaunch
+    )
+    if presentsMainWindow {
+      Self.showMainWindow()
+    } else {
       // Intentionally deferred to the next main runloop: WindowGroup windows are
       // not all instantiated synchronously during launch, so order them out only
-      // after AppKit/SwiftUI has finished creating them.
+      // after AppKit/SwiftUI has finished creating them. Restricted to regular
+      // app windows so the status item's own window is never ordered out.
       DispatchQueue.main.async {
-        NSApp.windows.forEach { $0.orderOut(nil) }
+        for window in NSApp.windows
+        where AppActivationPolicyWindowSnapshot(window: window).isRegularAppWindow {
+          window.orderOut(nil)
+        }
         Self.refreshActivationPolicyForCurrentWindows()
       }
-    } else {
-      Self.showMainWindow()
     }
   }
 
@@ -492,8 +549,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     NotificationCenter.default.removeObserver(self)
   }
 
+  /// Called from `ClashMaxApp.body`, so the delegate can open the main window
+  /// from `applicationDidFinishLaunching` onwards even if no scene ever appears.
   func setMainWindowOpener(_ opener: @escaping () -> Void) {
     openMainWindow = opener
+    guard pendingMainWindowOpen else { return }
+    pendingMainWindowOpen = false
+    // Intentionally deferred to the next main runloop: this can run while the
+    // scene graph is being built, and opening a window re-enters SwiftUI.
+    DispatchQueue.main.async {
+      Self.showMainWindow()
+    }
+  }
+
+  /// Finder, Spotlight, Dock and `open` all reopen an already-running ClashMax
+  /// through this hook. Menu-bar-only means no windows and an `.accessory`
+  /// policy, so without an explicit handler the reopen is silently swallowed.
+  /// Returns `false` because the window is opened here — answering `true` makes
+  /// AppKit create or restore one as well, leaving two main windows behind.
+  func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+    Self.showMainWindow()
+    return false
   }
 
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -542,7 +618,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       for: NSApp.windows.map(AppActivationPolicyWindowSnapshot.init(window:))
     )
     if shouldOpenWindow {
-      sharedDelegate?.openMainWindow?()
+      if let openMainWindow = sharedDelegate?.openMainWindow {
+        openMainWindow()
+      } else {
+        sharedDelegate?.pendingMainWindowOpen = true
+      }
     }
     sharedDelegate?.appModel?.resumeDeferredInitialTunHelperPromptAfterUserOpen()
     activateRegularWindows()
