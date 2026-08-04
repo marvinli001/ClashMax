@@ -10080,6 +10080,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       helperClient: helper,
       defaults: try Self.makeIsolatedDefaults()
     )
+    model.proxyRoutingMode = .tun
 
     model.warmTunHelperRegistrationOnLaunch()
 
@@ -10088,6 +10089,37 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertFalse(model.settings.initialTunHelperPromptHandled)
     XCTAssertEqual(service.registerCount, 0)
     XCTAssertEqual(service.openSettingsCount, 0)
+  }
+
+  func testLaunchWarmupSkipsHelperPromptAndRegistrationOutsideTunMode() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let service = StaticHelperService(status: .notRegistered, statusAfterRegister: .requiresApproval)
+    let helper = TunnelHelperClient(
+      transport: ReadyTunnelHelperTransport(),
+      service: service,
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      helperClient: helper,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    XCTAssertEqual(model.proxyRoutingMode, .systemProxy)
+
+    model.warmTunHelperRegistrationOnLaunch()
+    model.evaluateInitialTunHelperPromptOnLaunch()
+    for _ in 0..<20 {
+      await Task.yield()
+    }
+
+    // A System Proxy user never needs the helper, so launch must neither nag
+    // them nor quietly install a privileged daemon on their behalf.
+    XCTAssertNil(model.initialTunHelperPrompt)
+    XCTAssertEqual(service.registerCount, 0)
+    XCTAssertEqual(service.openSettingsCount, 0)
+    XCTAssertFalse(model.settings.initialTunHelperPromptHandled)
   }
 
   func testSilentStartDefersInitialHelperPromptWithoutRegistering() throws {
@@ -10107,6 +10139,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       helperClient: helper,
       defaults: defaults
     )
+    model.proxyRoutingMode = .tun
 
     model.warmTunHelperRegistrationOnLaunch()
     model.evaluateInitialTunHelperPromptOnLaunch()
@@ -10134,6 +10167,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       helperClient: helper,
       defaults: defaults
     )
+    model.proxyRoutingMode = .tun
 
     model.warmTunHelperRegistrationOnLaunch()
     model.resumeDeferredInitialTunHelperPromptAfterUserOpen()
@@ -10171,13 +10205,16 @@ final class DashboardRuntimeStateTests: XCTestCase {
     }
 
     XCTAssertEqual(model.proxyRoutingMode, .tun)
-    XCTAssertNil(model.initialTunHelperPrompt)
     XCTAssertEqual(service.registerCount, 1)
     XCTAssertEqual(service.openSettingsCount, 1)
     XCTAssertEqual(
       model.tunHelperPreparationState,
       .requiresApproval(TunnelHelperClient.statusMessage(for: .requiresApproval))
     )
+    // Asking for TUN is the moment the helper stops being optional, so the setup
+    // sheet comes back and follows the preparation path onto the approval step.
+    XCTAssertEqual(model.initialTunHelperPrompt?.primaryAction, .openSettings)
+    XCTAssertEqual(model.initialTunHelperPrompt?.isWaitingOnSystemSettings, true)
   }
 
   func testInitialHelperInstallRegistersAndShowsApprovalPrompt() async throws {
@@ -10195,6 +10232,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       helperClient: helper,
       defaults: try Self.makeIsolatedDefaults()
     )
+    model.proxyRoutingMode = .tun
 
     model.warmTunHelperRegistrationOnLaunch()
     model.installInitialTunHelper()
@@ -10211,7 +10249,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertNil(model.lastError)
   }
 
-  func testDismissingInitialHelperPromptMarksHandledButTunFlowStillRegisters() async throws {
+  func testDismissingInitialHelperPromptStillRegistersAndReopensOnTunSelection() async throws {
     let paths = try Self.makeRuntimePaths()
     let service = StaticHelperService(status: .notRegistered, statusAfterRegister: .requiresApproval)
     let helper = TunnelHelperClient(
@@ -10245,6 +10283,9 @@ final class DashboardRuntimeStateTests: XCTestCase {
       model.tunHelperPreparationState,
       .requiresApproval(TunnelHelperClient.statusMessage(for: .requiresApproval))
     )
+    // "Later" silences the launch nag, it does not disable the flow: the sheet
+    // returns the moment the helper stops being optional.
+    XCTAssertEqual(model.initialTunHelperPrompt?.primaryAction, .openSettings)
   }
 
   func testLaunchWarmupSkipsInitialPromptAndMarksHandledWhenHelperEnabled() throws {
@@ -10268,6 +10309,161 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertNil(model.initialTunHelperPrompt)
     XCTAssertTrue(model.settings.initialTunHelperPromptHandled)
     XCTAssertEqual(service.registerCount, 0)
+  }
+
+  func testReturningFromSystemSettingsClearsHelperPromptWithoutAButtonPress() throws {
+    let paths = try Self.makeRuntimePaths()
+    let service = StaticHelperService(status: .requiresApproval)
+    let helper = TunnelHelperClient(
+      transport: ReadyTunnelHelperTransport(),
+      service: service,
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      helperClient: helper,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.proxyRoutingMode = .tun
+
+    model.warmTunHelperRegistrationOnLaunch()
+
+    XCTAssertEqual(model.initialTunHelperPrompt?.isWaitingOnSystemSettings, true)
+
+    // The user flips "Allow in the Background"; macOS tells the app nothing, so
+    // coming back to ClashMax has to be enough on its own.
+    service.status = .enabled
+    model.refreshInitialTunHelperPromptOnActivation()
+
+    XCTAssertNil(model.initialTunHelperPrompt)
+    XCTAssertTrue(model.settings.initialTunHelperPromptHandled)
+    XCTAssertEqual(service.registerCount, 0)
+  }
+
+  func testHelperPromptClearsItselfWhileWaitingOnSystemSettings() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let service = StaticHelperService(status: .requiresApproval)
+    let helper = TunnelHelperClient(
+      transport: ReadyTunnelHelperTransport(),
+      service: service,
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      helperClient: helper,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.proxyRoutingMode = .tun
+
+    model.warmTunHelperRegistrationOnLaunch()
+    XCTAssertEqual(model.initialTunHelperPrompt?.isWaitingOnSystemSettings, true)
+
+    // Approval granted with ClashMax still in the background: the poll is the
+    // only thing that can notice, and it must not need the user to come back
+    // and press anything.
+    service.status = .enabled
+    for _ in 0..<60 where model.initialTunHelperPrompt != nil {
+      try await Task.sleep(nanoseconds: 100_000_000)
+    }
+
+    XCTAssertNil(model.initialTunHelperPrompt)
+    XCTAssertTrue(model.settings.initialTunHelperPromptHandled)
+  }
+
+  func testBadInstallLocationBlocksHelperInstallUntilAppIsMoved() throws {
+    let paths = try Self.makeRuntimePaths()
+    let service = StaticHelperService(status: .notRegistered, statusAfterRegister: .requiresApproval)
+    let helper = TunnelHelperClient(
+      transport: ReadyTunnelHelperTransport(),
+      service: service,
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      helperClient: helper,
+      installLocationInspector: StubInstallLocationInspector(issue: .outsideApplications(folderName: "Downloads")),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.proxyRoutingMode = .tun
+
+    model.warmTunHelperRegistrationOnLaunch()
+
+    // Registering from here fails with an error macOS never explains, so the
+    // sheet asks for the move first instead of letting the user hit that wall.
+    XCTAssertEqual(model.initialTunHelperPrompt?.stage, .relocate(.outsideApplications(folderName: "Downloads")))
+    XCTAssertEqual(model.initialTunHelperPrompt?.primaryAction, .relocate)
+    XCTAssertEqual(service.registerCount, 0)
+  }
+
+  func testEnabledHelperIsNeverAskedToMoveOutOfADisallowedFolder() throws {
+    let paths = try Self.makeRuntimePaths()
+    let service = StaticHelperService(status: .enabled)
+    let helper = TunnelHelperClient(
+      transport: ReadyTunnelHelperTransport(),
+      service: service,
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      helperClient: helper,
+      installLocationInspector: StubInstallLocationInspector(issue: .translocated),
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.proxyRoutingMode = .tun
+
+    model.warmTunHelperRegistrationOnLaunch()
+
+    XCTAssertNil(model.initialTunHelperPrompt)
+    XCTAssertTrue(model.settings.initialTunHelperPromptHandled)
+  }
+
+  func testHelperPromptLeavesTheErrorStepOnceRegistrationGetsThrough() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let service = FailingThenApprovingHelperService()
+    let helper = TunnelHelperClient(
+      transport: ReadyTunnelHelperTransport(),
+      service: service,
+      fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
+      registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
+    )
+    let model = AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      helperClient: helper,
+      defaults: try Self.makeIsolatedDefaults()
+    )
+    model.proxyRoutingMode = .tun
+
+    model.warmTunHelperRegistrationOnLaunch()
+    model.installInitialTunHelper()
+    for _ in 0..<40 where model.initialTunHelperPromptActionInFlight {
+      await Task.yield()
+    }
+
+    guard case .failed = model.initialTunHelperPrompt?.stage else {
+      return XCTFail("expected the failed step, got \(String(describing: model.initialTunHelperPrompt?.stage))")
+    }
+    XCTAssertEqual(model.initialTunHelperPrompt?.primaryAction, .install)
+    XCTAssertNotNil(model.initialTunHelperPromptFailure)
+
+    model.installInitialTunHelper()
+    for _ in 0..<40 where model.initialTunHelperPromptActionInFlight {
+      await Task.yield()
+    }
+
+    // The retry succeeded, so the sheet has to move on instead of staying on an
+    // error the user already got past.
+    XCTAssertEqual(model.initialTunHelperPrompt?.stage, .approve)
+    XCTAssertEqual(model.initialTunHelperPrompt?.isWaitingOnSystemSettings, true)
+    XCTAssertNil(model.initialTunHelperPromptFailure)
   }
 
   func testLaunchWarmupSkipsInitialPromptWhenHelperIsMissing() throws {
@@ -12497,6 +12693,41 @@ private final class StaticHelperService: HelperServiceManaging {
 
   func openSystemSettingsLoginItems() {
     openSettingsCount += 1
+  }
+}
+
+/// Fails the first registration the way a stale BTM record does, then behaves
+/// normally — the shape of the retry the setup sheet has to survive.
+private final class FailingThenApprovingHelperService: HelperServiceManaging {
+  static let message = "Operation not permitted"
+
+  var status: SMAppService.Status = .notRegistered
+  private(set) var registerCount = 0
+
+  func register() throws {
+    registerCount += 1
+    guard registerCount > 1 else {
+      throw NSError(
+        domain: "TestHelperServiceErrorDomain",
+        code: 42,
+        userInfo: [NSLocalizedDescriptionKey: Self.message]
+      )
+    }
+    status = .requiresApproval
+  }
+
+  func unregister() async throws {
+    status = .notRegistered
+  }
+
+  func openSystemSettingsLoginItems() {}
+}
+
+private final class StubInstallLocationInspector: AppInstallLocationInspecting {
+  var locationIssue: AppInstallLocationIssue?
+
+  init(issue: AppInstallLocationIssue?) {
+    locationIssue = issue
   }
 }
 

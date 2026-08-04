@@ -594,6 +594,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // Login-item state can change behind the app's back in System Settings;
     // re-read it whenever the user comes back so the toggle stays honest.
     appModel?.refreshLaunchSettings()
+    // Same for the helper's own approval toggle, which lives in the very pane
+    // the setup sheet just sent the user to.
+    appModel?.refreshInitialTunHelperPromptOnActivation()
   }
 
   @objc private func windowWillClose(_ notification: Notification) {

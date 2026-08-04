@@ -106,42 +106,53 @@ struct ContentView: View {
   }
 }
 
+/// Guided setup for the privileged TUN helper.
+///
+/// Written as an explicit checklist because the middle step happens outside the
+/// app: macOS sends the user to System Settings and reports nothing back, so
+/// without visible "done / doing / next" state people cannot tell whether the
+/// toggle they just flipped registered. ClashMax watches for the approval
+/// itself, so no step ever asks the user to come back and press refresh.
 private struct InitialTunHelperPromptSheet: View {
   let prompt: InitialTunHelperPrompt
   let actionInFlight: Bool
   let onPrimaryAction: () -> Void
   let onLater: () -> Void
 
+  private enum StepState {
+    case done
+    case current
+    case upcoming
+  }
+
   var body: some View {
     VStack(alignment: .leading, spacing: 18) {
-      HStack(alignment: .top, spacing: 14) {
-        Image(systemName: "checkmark.shield")
-          .font(.system(size: 36, weight: .semibold))
-          .foregroundStyle(.blue)
-          .frame(width: 44, height: 44)
+      header
 
-        VStack(alignment: .leading, spacing: 8) {
-          Text("Install ClashMax Helper")
-            .font(.title3.weight(.semibold))
-          Text("ClashMax uses a privileged helper to enable TUN routing.")
-            .foregroundStyle(.primary)
-          Text("macOS will ask you to approve ClashMax in System Settings > General > Login Items & Extensions before TUN routing can start.")
-            .foregroundStyle(.secondary)
-          Text("System Proxy and Network Extension routing continue to work without this helper.")
-            .foregroundStyle(.secondary)
-          if prompt.primaryAction == .openSettings {
-            Text("Helper approval is pending.")
-              .font(.callout.weight(.medium))
-              .foregroundStyle(.orange)
-          }
+      VStack(alignment: .leading, spacing: 12) {
+        if case let .relocate(issue) = prompt.stage {
+          step(
+            number: 1,
+            title: String(localized: "Move ClashMax to the Applications folder"),
+            detail: issue.explanation,
+            state: .current
+          )
         }
-        .fixedSize(horizontal: false, vertical: true)
+        step(
+          number: relocateStepShown ? 2 : 1,
+          title: String(localized: "Install the helper"),
+          detail: String(localized: "ClashMax registers a background service that opens the TUN interface."),
+          state: installStepState
+        )
+        step(
+          number: relocateStepShown ? 3 : 2,
+          title: String(localized: "Approve it in System Settings"),
+          detail: String(localized: "General ▸ Login Items & Extensions ▸ Allow in the Background — turn on ClashMax."),
+          state: approveStepState
+        )
       }
 
-      Text(prompt.statusMessage)
-        .font(.callout)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
+      statusLine
 
       HStack {
         Spacer()
@@ -164,6 +175,101 @@ private struct InitialTunHelperPromptSheet: View {
     }
     .padding(24)
     .frame(width: 520, alignment: .topLeading)
+  }
+
+  private var header: some View {
+    HStack(alignment: .top, spacing: 14) {
+      Image(systemName: "checkmark.shield")
+        .font(.system(size: 36, weight: .semibold))
+        .foregroundStyle(.blue)
+        .frame(width: 44, height: 44)
+
+      VStack(alignment: .leading, spacing: 6) {
+        Text("Set Up TUN Routing")
+          .font(.title3.weight(.semibold))
+        Text("TUN mode needs a privileged helper. This is a one-time setup.")
+        Text("System Proxy and Network Extension routing keep working without it.")
+          .font(.callout)
+          .foregroundStyle(.secondary)
+      }
+      .fixedSize(horizontal: false, vertical: true)
+    }
+  }
+
+  @ViewBuilder
+  private var statusLine: some View {
+    HStack(alignment: .firstTextBaseline, spacing: 8) {
+      if prompt.isWaitingOnSystemSettings {
+        ProgressView()
+          .controlSize(.small)
+      }
+      Text(prompt.statusMessage)
+        .font(.callout)
+        .foregroundStyle(isFailed ? Color.orange : Color.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+  }
+
+  private func step(number: Int, title: String, detail: String, state: StepState) -> some View {
+    HStack(alignment: .top, spacing: 10) {
+      Group {
+        switch state {
+        case .done:
+          Image(systemName: "checkmark.circle.fill")
+            .foregroundStyle(.green)
+        case .current:
+          Image(systemName: "\(number).circle.fill")
+            .foregroundStyle(.blue)
+        case .upcoming:
+          Image(systemName: "\(number).circle")
+            .foregroundStyle(.secondary)
+        }
+      }
+      .font(.title3)
+      .frame(width: 22)
+
+      VStack(alignment: .leading, spacing: 2) {
+        Text(title)
+          .font(.callout.weight(state == .current ? .semibold : .regular))
+        Text(detail)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .opacity(state == .upcoming ? 0.55 : 1)
+  }
+
+  private var relocateStepShown: Bool {
+    if case .relocate = prompt.stage { return true }
+    return false
+  }
+
+  private var isFailed: Bool {
+    if case .failed = prompt.stage { return true }
+    return false
+  }
+
+  private var installStepState: StepState {
+    switch prompt.stage {
+    case .relocate:
+      return .upcoming
+    case .install, .failed:
+      return .current
+    case .approve, .ready:
+      return .done
+    }
+  }
+
+  private var approveStepState: StepState {
+    switch prompt.stage {
+    case .approve:
+      return .current
+    case .ready:
+      return .done
+    case .relocate, .install, .failed:
+      return .upcoming
+    }
   }
 }
 

@@ -288,14 +288,36 @@ final class TunnelHelperClient {
       registrationRecordStore.setHelperFingerprint(fingerprint)
       openApprovalSettings()
     case .notRegistered, .notFound:
-      try service.register()
+      try await registerRecoveringStaleRecord()
       registrationRecordStore.setHelperFingerprint(fingerprint)
       try await updateStatusAfterRegistration()
     @unknown default:
-      try service.register()
+      try await registerRecoveringStaleRecord()
       registrationRecordStore.setHelperFingerprint(fingerprint)
       try await updateStatusAfterRegistration()
     }
+  }
+
+  /// `SMAppService` rejects registration with `Operation not permitted`
+  /// (`SMAppServiceErrorDomain` code 1) when the Background Task Management
+  /// database still holds a record for an older copy of this bundle — a
+  /// different path, or a signature from before an update. The record is
+  /// invisible to the app and nothing the user does in System Settings clears
+  /// it, but unregistering drops it, so one unregister/register cycle recovers
+  /// the common case instead of dead-ending the user on an error they cannot
+  /// act on.
+  private func registerRecoveringStaleRecord() async throws {
+    do {
+      try service.register()
+    } catch let error where Self.isStaleBackgroundRegistrationError(error) {
+      try? await service.unregister()
+      try service.register()
+    }
+  }
+
+  static func isStaleBackgroundRegistrationError(_ error: Error) -> Bool {
+    let nsError = error as NSError
+    return nsError.domain == "SMAppServiceErrorDomain" && nsError.code == 1
   }
 
   func prepareForTunnelStart(openSystemSettingsWhenApprovalRequired: Bool = true) async -> TunHelperPreparationState {
@@ -328,7 +350,7 @@ final class TunnelHelperClient {
         statusMessage = message
         return .requiresApproval(message)
       case .notRegistered:
-        try service.register()
+        try await registerRecoveringStaleRecord()
         registrationRecordStore.setHelperFingerprint(fingerprint)
         return warmPreparationStateAfterRegistration()
       case .notFound:
@@ -484,7 +506,7 @@ final class TunnelHelperClient {
     case .enabled:
       return String(localized: "Helper registered. Verifying helper connection.")
     case .requiresApproval:
-      return String(localized: "Helper registered. Approve ClashMax in System Settings > General > Login Items & Extensions, then click Status.")
+      return String(localized: "Waiting for approval. Turn ClashMax on in System Settings > General > Login Items & Extensions — ClashMax picks it up on its own.")
     case .notFound:
       return String(localized: "Helper not found in the app bundle. Clean build and run ClashMax again.")
     @unknown default:
@@ -571,7 +593,7 @@ final class TunnelHelperClient {
       registrationRecordStore.setHelperFingerprint(fingerprint)
       return approvalRequiredState(openSystemSettings: openSystemSettingsWhenApprovalRequired)
     case .notRegistered:
-      try service.register()
+      try await registerRecoveringStaleRecord()
       registrationRecordStore.setHelperFingerprint(fingerprint)
       return await preparationStateAfterRegistration(
         openSystemSettingsWhenApprovalRequired: openSystemSettingsWhenApprovalRequired
@@ -581,7 +603,7 @@ final class TunnelHelperClient {
       statusMessage = message
       return .failed(message)
     @unknown default:
-      try service.register()
+      try await registerRecoveringStaleRecord()
       registrationRecordStore.setHelperFingerprint(fingerprint)
       return await preparationStateAfterRegistration(
         openSystemSettingsWhenApprovalRequired: openSystemSettingsWhenApprovalRequired

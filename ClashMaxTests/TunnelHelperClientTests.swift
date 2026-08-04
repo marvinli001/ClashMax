@@ -756,7 +756,7 @@ final class TunnelHelperClientTests: XCTestCase {
     )
     XCTAssertEqual(
       TunnelHelperClient.statusMessage(for: .requiresApproval),
-      String(localized: "Helper registered. Approve ClashMax in System Settings > General > Login Items & Extensions, then click Status.")
+      String(localized: "Waiting for approval. Turn ClashMax on in System Settings > General > Login Items & Extensions — ClashMax picks it up on its own.")
     )
     XCTAssertEqual(
       TunnelHelperClient.statusMessage(for: .notFound),

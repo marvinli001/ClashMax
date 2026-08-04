@@ -217,18 +217,44 @@ struct InitialTunHelperPrompt: Equatable {
   enum PrimaryAction: Equatable {
     case install
     case openSettings
+    case relocate
   }
 
-  var primaryAction: PrimaryAction
+  /// The step the flow is waiting on. `primaryAction` and the sheet's step list
+  /// are both derived from this so the button can never disagree with the
+  /// progress the user sees.
+  var stage: HelperSetupStage
   var statusMessage: String
 
-  var primaryButtonTitle: String {
-    switch primaryAction {
-    case .install:
-      return String(localized: "Install Helper")
-    case .openSettings:
-      return String(localized: "Open Settings")
+  var primaryAction: PrimaryAction {
+    switch stage {
+    case .relocate:
+      return .relocate
+    case .approve:
+      return .openSettings
+    case .install, .ready, .failed:
+      return .install
     }
+  }
+
+  var primaryButtonTitle: String {
+    switch stage {
+    case .relocate(let issue):
+      return issue.allowsAutomaticRelocation
+        ? String(localized: "Move to Applications")
+        : String(localized: "Show in Finder")
+    case .approve:
+      return String(localized: "Open Login Items")
+    case .failed:
+      return String(localized: "Try Again")
+    case .install, .ready:
+      return String(localized: "Install Helper")
+    }
+  }
+
+  /// True while macOS owns the next move and ClashMax is only watching for it.
+  var isWaitingOnSystemSettings: Bool {
+    stage == .approve
   }
 }
 
@@ -656,6 +682,7 @@ final class AppModel {
   var helperLogs: [String] = []
   private(set) var initialTunHelperPrompt: InitialTunHelperPrompt?
   private(set) var initialTunHelperPromptActionInFlight = false
+  private(set) var initialTunHelperPromptFailure: String?
   private(set) var shortcutRegistrationStatus: GlobalShortcutRegistrationStatus?
   var trafficSample: TrafficSample {
     get { runtimeData.trafficSample }
@@ -752,6 +779,7 @@ final class AppModel {
   let coreController: CoreProcessController
   var systemProxyController: SystemProxyController { systemProxy.controller }
   let helperClient: TunnelHelperClient
+  let installLocationInspector: any AppInstallLocationInspecting
   let networkExtensionController: NetworkExtensionController
   let runtimeSnippetLibrary: RuntimeSnippetLibraryStore
   private let tunnelReadinessProbe: CoreReadinessProbing
@@ -789,6 +817,8 @@ final class AppModel {
   @ObservationIgnored private var tunHelperPreparationTask: Task<Void, Never>?
   @ObservationIgnored private var didWarmTunHelperRegistrationOnLaunch = false
   @ObservationIgnored private var initialTunHelperPromptDeferredDuringSilentStart = false
+  @ObservationIgnored private var initialTunHelperApprovalWatchTask: Task<Void, Never>?
+  @ObservationIgnored private(set) lazy var appRelocationService = AppRelocationService()
   @ObservationIgnored private var launchAtLoginRepairAttempted = false
 
   /// Long-lived search coordinators for the Proxies page and the dashboard's
@@ -907,6 +937,7 @@ final class AppModel {
     coreController: CoreProcessController = CoreProcessController(),
     systemProxyController: SystemProxyController? = nil,
     helperClient: TunnelHelperClient = TunnelHelperClient(),
+    installLocationInspector: any AppInstallLocationInspecting = BundleAppInstallLocationInspector(),
     networkExtensionController: NetworkExtensionController = NetworkExtensionController(),
     loginItemService: any LoginItemManaging = MainAppLoginItemService(),
     tunnelReadinessProbe: CoreReadinessProbing = MihomoCoreReadinessProbe(),
@@ -945,6 +976,7 @@ final class AppModel {
     self.profileCoordinator = ProfileCoordinator(profileStore: self.profileStore, proxyPreview: self.proxyPreview)
     self.coreController = coreController
     self.helperClient = helperClient
+    self.installLocationInspector = installLocationInspector
     self.networkExtensionController = networkExtensionController
     self.tunnelReadinessProbe = tunnelReadinessProbe
     self.proxyPortReadinessProbe = proxyPortReadinessProbe
@@ -3448,6 +3480,7 @@ final class AppModel {
     proxyRoutingMode = mode
     if mode == .tun {
       resumeInitialTunHelperPromptDeferralForExplicitAction()
+      presentTunHelperSetupForExplicitTunSelection()
       if tunHelperPreparationState.allowsStartAttempt, !shouldRestart {
         lastError = nil
       } else {
@@ -4225,6 +4258,7 @@ final class AppModel {
       return
     }
     didWarmTunHelperRegistrationOnLaunch = true
+    guard canWarmTunHelperRegistrationOnLaunch(serviceStatus) else { return }
     Task { @MainActor [weak self] in
       guard let self else { return }
       let state = await helperClient.warmRegistration()
@@ -4270,8 +4304,14 @@ final class AppModel {
     presentInitialTunHelperPrompt(for: helperClient.serviceStatus)
   }
 
+  /// Runs the primary button of the setup sheet. What that means depends on the
+  /// stage, but the user only ever sees one obvious next step.
   func installInitialTunHelper() {
     guard !initialTunHelperPromptActionInFlight else { return }
+    if case let .relocate(issue) = initialTunHelperPrompt?.stage {
+      relocateAppForHelperSetup(issue: issue)
+      return
+    }
     initialTunHelperPromptActionInFlight = true
     Task { @MainActor [weak self] in
       guard let self else { return }
@@ -4280,6 +4320,7 @@ final class AppModel {
       }
       do {
         lastError = nil
+        initialTunHelperPromptFailure = nil
         try await helperClient.register()
         await updateTunHelperStatusDetail()
         syncInitialTunHelperPromptAfterUserAction()
@@ -4287,35 +4328,85 @@ final class AppModel {
         let message = UserFacingError.message(for: error)
         helperClient.statusMessage = message
         lastError = message
-        if settings.initialTunHelperPromptHandled {
-          initialTunHelperPrompt = nil
-        } else {
-          initialTunHelperPrompt = InitialTunHelperPrompt(
-            primaryAction: .install,
-            statusMessage: message
-          )
-        }
+        initialTunHelperPromptFailure = message
+        syncInitialTunHelperPromptAfterUserAction()
         await updateTunHelperStatusDetail()
       }
     }
   }
 
+  /// Moves the bundle into /Applications (or reveals it when macOS is running a
+  /// translocated copy that cannot move itself) and relaunches from there.
+  private func relocateAppForHelperSetup(issue: AppInstallLocationIssue) {
+    guard issue.allowsAutomaticRelocation else {
+      appRelocationService.revealInFinder()
+      return
+    }
+    initialTunHelperPromptActionInFlight = true
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      do {
+        let destination = try appRelocationService.relocateToApplications()
+        await appRelocationService.relaunch(at: destination)
+      } catch {
+        initialTunHelperPromptActionInFlight = false
+        let message = UserFacingError.message(for: error)
+        initialTunHelperPromptFailure = message
+        lastError = message
+        syncInitialTunHelperPromptAfterUserAction()
+      }
+    }
+  }
+
+  /// "Later" stops the launch nag but must not disable the flow: the sheet comes
+  /// back the moment the user actually asks for TUN, because that is the point
+  /// where the helper stops being optional.
   func dismissInitialTunHelperPrompt() {
     settings.markInitialTunHelperPromptHandled()
     initialTunHelperPrompt = nil
     initialTunHelperPromptActionInFlight = false
+    initialTunHelperPromptFailure = nil
+    cancelInitialTunHelperApprovalWatch()
+  }
+
+  /// Re-reads the approval state whenever the user comes back to ClashMax.
+  ///
+  /// `SMAppService` publishes no change notification, so returning from System
+  /// Settings is the strongest signal available that the toggle may have just
+  /// been flipped.
+  func refreshInitialTunHelperPromptOnActivation() {
+    guard initialTunHelperPrompt != nil, !initialTunHelperPromptActionInFlight else { return }
+    syncInitialTunHelperPromptAfterUserAction()
   }
 
   private func shouldPresentInitialTunHelperPromptBeforeWarmup(_ status: TunnelHelperServiceStatus) -> Bool {
     guard !settings.initialTunHelperPromptHandled else { return false }
     switch status {
     case .notRegistered, .requiresApproval:
-      return true
+      // TUN is the only mode that needs the helper, so a System Proxy or NE
+      // user is never interrupted by a privileged-helper sheet before they have
+      // even loaded a profile.
+      return proxyRoutingMode == .tun
     case .enabled:
       settings.markInitialTunHelperPromptHandled()
       return false
     case .notFound, .unknown:
       return false
+    }
+  }
+
+  /// Whether launch warmup may talk to `SMAppService` at all.
+  ///
+  /// Warmup must never install the privileged daemon for someone who has not
+  /// asked for TUN — registering it is a system-wide change, and the sheet that
+  /// explains it is deliberately not being shown in that case. Refreshing a
+  /// helper that is already registered is fine.
+  private func canWarmTunHelperRegistrationOnLaunch(_ status: TunnelHelperServiceStatus) -> Bool {
+    switch status {
+    case .enabled, .requiresApproval:
+      return true
+    case .notRegistered, .notFound, .unknown:
+      return proxyRoutingMode == .tun
     }
   }
 
@@ -4342,6 +4433,34 @@ final class AppModel {
     didResumeInitialTunHelperPromptAfterUserOpen = true
     initialTunHelperPromptDeferredDuringSilentStart = false
     initialTunHelperPrompt = nil
+    cancelInitialTunHelperApprovalWatch()
+  }
+
+  /// Presents the setup sheet because the user just asked for TUN, even if they
+  /// dismissed the launch prompt earlier — at this point the helper is the only
+  /// thing standing between them and the mode they picked.
+  private func presentTunHelperSetupForExplicitTunSelection() {
+    let status = helperClient.serviceStatus
+    guard status != .enabled else { return }
+    initialTunHelperPromptFailure = nil
+    applyInitialTunHelperStage(
+      HelperSetupPolicy.stage(
+        locationIssue: installLocationInspector.locationIssue,
+        serviceStatus: status
+      )
+    )
+    guard initialTunHelperPrompt != nil else { return }
+    revealMainWindowForHelperSetup()
+  }
+
+  /// The setup sheet is attached to the main window, but TUN is just as likely
+  /// to be picked from the menu bar panel or a global shortcut — where setting
+  /// the prompt alone would put the instructions somewhere nobody can see them.
+  private func revealMainWindowForHelperSetup() {
+    // Skipped under XCTest: raising a real window mid-suite would flip the
+    // activation policy out from under every other test in the host app.
+    guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
+    AppDelegate.showMainWindow()
   }
 
   private func presentInitialTunHelperPrompt(for status: TunnelHelperServiceStatus) {
@@ -4349,53 +4468,111 @@ final class AppModel {
       initialTunHelperPrompt = nil
       return
     }
-    switch status {
-    case .notRegistered:
-      initialTunHelperPrompt = InitialTunHelperPrompt(
-        primaryAction: .install,
-        statusMessage: TunnelHelperClient.statusMessage(for: .notRegistered)
-      )
-    case .requiresApproval:
-      initialTunHelperPrompt = InitialTunHelperPrompt(
-        primaryAction: .openSettings,
-        statusMessage: TunnelHelperClient.statusMessage(for: .requiresApproval)
-      )
-    case .enabled:
+    if status == .enabled {
       settings.markInitialTunHelperPromptHandled()
-      initialTunHelperPrompt = nil
-    case .notFound, .unknown:
-      initialTunHelperPrompt = nil
     }
-  }
-
-  private func syncInitialTunHelperPromptAfterUserAction() {
-    guard !settings.initialTunHelperPromptHandled else {
+    let stage = HelperSetupPolicy.stage(
+      locationIssue: installLocationInspector.locationIssue,
+      serviceStatus: status,
+      failureMessage: initialTunHelperPromptFailure
+    )
+    // Launch path only: someone on System Proxy or NE never needs the helper, so
+    // the sheet waits until they actually pick TUN, where
+    // `presentTunHelperSetupForExplicitTunSelection` brings it back.
+    guard stage == .ready || proxyRoutingMode == .tun else {
       initialTunHelperPrompt = nil
       return
     }
-    switch helperClient.serviceStatus {
-    case .enabled:
+    applyInitialTunHelperStage(stage)
+  }
+
+  /// Recomputes which step the sheet is on from the current service status.
+  ///
+  /// Deliberately does not kick off another status refresh, so it is safe to
+  /// call from `applyTunHelperPreparationState` — the preparation path is
+  /// already the thing driving the status forward.
+  private func refreshInitialTunHelperPromptStage() {
+    let status = helperClient.serviceStatus
+    if status == .enabled {
       settings.markInitialTunHelperPromptHandled()
-      initialTunHelperPrompt = nil
-      if proxyRoutingMode == .tun {
-        refreshHelperRegistrationStatus()
-      }
-    case .requiresApproval:
-      initialTunHelperPrompt = InitialTunHelperPrompt(
-        primaryAction: .openSettings,
-        statusMessage: TunnelHelperClient.statusMessage(for: .requiresApproval)
+    }
+    // Registration got through in the end — possibly via the TUN preparation
+    // path rather than this sheet — so an earlier registration error must not
+    // keep the sheet parked on "Try Again" while approval is what's pending.
+    if status == .requiresApproval || status == .enabled {
+      initialTunHelperPromptFailure = nil
+    }
+    applyInitialTunHelperStage(
+      HelperSetupPolicy.stage(
+        locationIssue: installLocationInspector.locationIssue,
+        serviceStatus: status,
+        failureMessage: initialTunHelperPromptFailure
       )
-      if proxyRoutingMode == .tun {
-        refreshHelperRegistrationStatus()
-      }
-    case .notRegistered:
+    )
+  }
+
+  private func syncInitialTunHelperPromptAfterUserAction() {
+    refreshInitialTunHelperPromptStage()
+    if helperClient.serviceStatus != .notRegistered, proxyRoutingMode == .tun {
+      refreshHelperRegistrationStatus()
+    }
+  }
+
+  private func applyInitialTunHelperStage(_ stage: HelperSetupStage) {
+    switch stage {
+    case .ready:
+      initialTunHelperPrompt = nil
+      initialTunHelperPromptFailure = nil
+      cancelInitialTunHelperApprovalWatch()
+      return
+    case let .relocate(issue):
+      initialTunHelperPrompt = InitialTunHelperPrompt(stage: stage, statusMessage: issue.explanation)
+    case .install:
       initialTunHelperPrompt = InitialTunHelperPrompt(
-        primaryAction: .install,
+        stage: stage,
         statusMessage: TunnelHelperClient.statusMessage(for: .notRegistered)
       )
-    case .notFound, .unknown:
-      initialTunHelperPrompt = nil
+    case .approve:
+      initialTunHelperPrompt = InitialTunHelperPrompt(
+        stage: stage,
+        statusMessage: TunnelHelperClient.statusMessage(for: .requiresApproval)
+      )
+    case let .failed(message):
+      initialTunHelperPrompt = InitialTunHelperPrompt(stage: stage, statusMessage: message)
     }
+    if HelperSetupPolicy.shouldPollForApproval(stage) {
+      startInitialTunHelperApprovalWatch()
+    } else {
+      cancelInitialTunHelperApprovalWatch()
+    }
+  }
+
+  /// Watches for the Login Items toggle while the sheet sits on the approval
+  /// step. macOS never tells the app when approval lands, so the choice is
+  /// polling or making the user press a button to find out — and making them
+  /// press a button is exactly what strands people who do not know to.
+  private func startInitialTunHelperApprovalWatch() {
+    guard initialTunHelperApprovalWatchTask == nil else { return }
+    initialTunHelperApprovalWatchTask = Task { @MainActor [weak self] in
+      defer { self?.initialTunHelperApprovalWatchTask = nil }
+      while !Task.isCancelled {
+        do {
+          try await Task.sleep(nanoseconds: Self.tunHelperApprovalPollingIntervalNanoseconds)
+        } catch {
+          return
+        }
+        guard let self, !Task.isCancelled else { return }
+        guard initialTunHelperPrompt?.isWaitingOnSystemSettings == true else { return }
+        guard helperClient.serviceStatus == .enabled else { continue }
+        syncInitialTunHelperPromptAfterUserAction()
+        return
+      }
+    }
+  }
+
+  private func cancelInitialTunHelperApprovalWatch() {
+    initialTunHelperApprovalWatchTask?.cancel()
+    initialTunHelperApprovalWatchTask = nil
   }
 
   func warmPreviewRuntimeOnLaunch() {
@@ -4611,6 +4788,12 @@ final class AppModel {
 
   private func applyTunHelperPreparationState(_ state: TunHelperPreparationState) {
     tunHelperPreparationState = state
+    // Selecting TUN runs the preparation path *and* shows the setup sheet, so
+    // the sheet has to follow along — otherwise it keeps saying "install" while
+    // the helper is already registered and waiting on the Login Items toggle.
+    if initialTunHelperPrompt != nil, !initialTunHelperPromptActionInFlight {
+      refreshInitialTunHelperPromptStage()
+    }
     switch state {
     case .requiresApproval, .notBootstrapped:
       publishWarningNotice(state.message)
