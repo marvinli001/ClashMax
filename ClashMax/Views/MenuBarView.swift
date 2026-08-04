@@ -3,7 +3,10 @@ import SwiftUI
 enum MenuBarPanelLayout {
   /// Control Center's panel width — the native analog for a rich menu bar panel.
   static let width: CGFloat = 320
-  static let padding: CGFloat = 9
+  /// Inset between the content and the system panel's own edge. `MenuBarExtra`'s
+  /// window style already draws the rounded, blurred panel on macOS 26, so this
+  /// is the *only* chrome the app contributes — no second card, no border.
+  static let padding: CGFloat = 12
   static let controlWidth: CGFloat = 108
   /// Wider than `controlWidth` so a group row can show the current node name and a
   /// delay chip side by side; the node name truncates before the group name does.
@@ -14,83 +17,16 @@ enum MenuBarPanelLayout {
   static let plannedWidthRange: ClosedRange<CGFloat> = 300 ... 330
 }
 
-/// Chrome metrics for the status-item panel window, aligned with the system's
-/// own menu bar panels (Control Center style on macOS 26): a floating rounded
-/// glass card detached from the menu bar rather than an opaque attached sheet.
-enum MenuBarPanelChrome {
-  static let cornerRadius: CGFloat = 24
-  /// Transparent margin around the card. Gives AppKit's content-shaped window
-  /// shadow room to render and keeps the card visually detached at the edges.
-  static let outerMargin: CGFloat = 10
-  /// Extra transparent inset above the card so it floats below the menu bar the
-  /// way the system's own panels do.
-  static let topGap: CGFloat = 6
-}
-
-/// Wraps the panel content in native menu-bar-panel chrome: the hosting window
-/// goes transparent and the content becomes a rounded card backed by the same
-/// behind-window `.popover` material system panels use, so blur, tint, and
-/// light/dark adaptation always match the OS instead of the app theme's flat
-/// window background.
-struct MenuBarPanelChromeModifier: ViewModifier {
-  func body(content: Content) -> some View {
-    content
-      .background(MenuBarPanelBackdrop())
-      .clipShape(RoundedRectangle(cornerRadius: MenuBarPanelChrome.cornerRadius, style: .continuous))
-      .overlay(
-        RoundedRectangle(cornerRadius: MenuBarPanelChrome.cornerRadius, style: .continuous)
-          .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
-      )
-      .padding(
-        EdgeInsets(
-          top: MenuBarPanelChrome.topGap,
-          leading: MenuBarPanelChrome.outerMargin,
-          bottom: MenuBarPanelChrome.outerMargin,
-          trailing: MenuBarPanelChrome.outerMargin
-        )
-      )
-      .background(MenuBarPanelWindowConfigurator())
-  }
-}
-
-extension View {
-  func menuBarPanelChrome() -> some View {
-    modifier(MenuBarPanelChromeModifier())
-  }
-}
-
-/// System-material backdrop for the panel card. `.popover` + `.behindWindow` is
-/// what native menu bar panels sample, so the desktop shows through with the
-/// OS-standard blur instead of an opaque window color.
-private struct MenuBarPanelBackdrop: NSViewRepresentable {
-  func makeNSView(context: Context) -> NSVisualEffectView {
-    let view = NSVisualEffectView()
-    view.material = .popover
-    view.blendingMode = .behindWindow
-    view.state = .active
-    return view
-  }
-
-  func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
-}
-
-/// Clears the MenuBarExtra window's own background so only the rounded card is
-/// visible. AppKit keeps drawing the window shadow from the remaining opaque
-/// content, which is exactly how the system's floating panels get their shape.
-private struct MenuBarPanelWindowConfigurator: NSViewRepresentable {
-  final class ConfiguringView: NSView {
-    override func viewDidMoveToWindow() {
-      super.viewDidMoveToWindow()
-      guard let window else { return }
-      window.backgroundColor = .clear
-      window.isOpaque = false
-    }
-  }
-
-  func makeNSView(context: Context) -> NSView { ConfiguringView() }
-  func updateNSView(_ nsView: NSView, context: Context) {}
-}
-
+/// The whole panel presented by `MenuBarExtra(...).menuBarExtraStyle(.window)`.
+///
+/// The panel background is the system's, not the app's: on macOS 26 the window
+/// style already renders the rounded, blurred, light/dark-adaptive menu bar
+/// panel with its own shadow, exactly like Control Center and Wi-Fi. So this
+/// view contributes content and padding only. An earlier version wrapped the
+/// content in its own `NSVisualEffectView` card (rounded rect + separator
+/// border + outer margin), which stacked a second panel inside the system one
+/// and read as a double background — do not reintroduce a full-panel background
+/// here; only nested sections (status chip, controls) get their own material.
 struct MenuBarView: View {
   @Environment(AppModel.self) private var appModel
   @Environment(RuntimeDataStore.self) private var runtimeData

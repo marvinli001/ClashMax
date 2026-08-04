@@ -132,7 +132,6 @@ struct ClashMaxApp: App {
 
     MenuBarExtra {
       MenuBarView()
-        .menuBarPanelChrome()
         .environment(appModel)
         .environment(appModel.settings)
         .environment(appModel.profileStore)

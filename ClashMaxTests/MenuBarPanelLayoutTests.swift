@@ -17,13 +17,27 @@ final class MenuBarPanelLayoutTests: XCTestCase {
     XCTAssertEqual(MenuBarPanelLayout.trafficChartHeight, 52)
   }
 
-  func testPanelChromeMatchesFloatingSystemPanelMetrics() {
-    // The card must stay a floating rounded panel: generous continuous corners,
-    // transparent margins for the window shadow, and a visible gap below the
-    // menu bar like the system's own panels.
-    XCTAssertEqual(MenuBarPanelChrome.cornerRadius, 24)
-    XCTAssertEqual(MenuBarPanelChrome.outerMargin, 10)
-    XCTAssertEqual(MenuBarPanelChrome.topGap, 6)
+  func testPanelAddsNoChromeMarginInsideTheSystemPanel() async throws {
+    // `MenuBarExtra(.window)` draws the rounded, blurred panel itself. The app
+    // must not wrap its content in a second card: any background/border/outer
+    // margin of its own stacks a panel inside the system panel. An outer margin
+    // shows up here as content that no longer fills the declared panel width.
+    let fixture = try Self.makeFixture()
+    defer { fixture.cleanup() }
+
+    let store = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
+    await store.waitForManifestLoad()
+    let model = makeAppModel(paths: fixture.paths, store: store, defaults: fixture.defaults)
+
+    let size = fittingSize(
+      for: fullPanelView(model: model, localeIdentifier: "en"),
+      height: Self.maximumPanelHeight
+    )
+
+    XCTAssertEqual(size.width, MenuBarPanelLayout.width, accuracy: 1)
+    // Content sits directly against the system panel's edge, inset only enough
+    // to clear its rounded corners.
+    XCTAssertTrue((8 ... 16).contains(MenuBarPanelLayout.padding))
   }
 
   func testFullPanelFitsPlannedWidthWithoutProfile() async throws {
