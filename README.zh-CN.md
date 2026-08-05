@@ -7,6 +7,7 @@
   <p><a href="README.md">English</a> | <strong>简体中文</strong></p>
   <p>面向 macOS 的原生 Mihomo 代理客户端，聚焦配置管理、运行控制、代理组、连接、规则、日志和系统集成。</p>
   <p>
+    <a href="https://github.com/marvinli001/ClashMax/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/marvinli001/ClashMax/actions/workflows/ci.yml/badge.svg?branch=master"></a>
     <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%2015%2B-111111?logo=apple&logoColor=white">
     <img alt="Swift" src="https://img.shields.io/badge/Swift-6.0-F05138?logo=swift&logoColor=white">
     <img alt="Mihomo" src="https://img.shields.io/badge/core-Mihomo%20v1.19.29-2f6fed">
@@ -64,6 +65,7 @@ ClashMax 是一个使用 SwiftUI 构建的原生 macOS Mihomo 图形客户端。
 - TUN 模式由 privileged helper 负责，helper 校验 app-owned core/config paths。
 - MVP core 策略保持单通道：只支持 App 自带的 bundled Mihomo core。未来如支持 core channel，必须先补 manifest、签名/哈希校验、helper allowlist、UI 状态和回滚策略。
 - macOS TUN runtime config 不写入 Linux-only `auto-redirect`。
+- 安全漏洞请按 [SECURITY.md](SECURITY.md) 私下报告，不要开公开 Issue。订阅 URL、凭据和私有域名不得出现在 Issue、Discussion 或附带日志中。
 
 ## 下载与更新
 
@@ -76,6 +78,7 @@ ClashMax 是一个使用 SwiftUI 构建的原生 macOS Mihomo 图形客户端。
 - [Ideas](https://github.com/marvinli001/ClashMax/discussions/new?category=ideas) 用于早期功能想法、产品方向和工作流提案，等想法收敛后再转成可跟踪 Issue。
 - [Development](https://github.com/marvinli001/ClashMax/discussions/new?category=development) 用于较大贡献开始前的设计讨论、边界确认和验证方案对齐。
 - 提交日志或截图前，请移除订阅 URL、节点凭据、私有域名和其他敏感 profile 信息。
+- 项目公开的维护与安全工作流计划（含隐私红线和评估指标）见 [docs/CODEX_OSS_PLAN.md](docs/CODEX_OSS_PLAN.md)。
 
 ## 本地开发
 
@@ -92,6 +95,8 @@ xcodegen generate
 ```bash
 xcodebuild test -project ClashMax.xcodeproj -scheme ClashMax -destination 'platform=macOS' -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO
 ```
+
+每次 push 和 pull request 都会在 [CI](.github/workflows/ci.yml) 上跑同一条命令，随后执行 `script/localization_gate.sh` 和一次未签名的 universal Release 构建（含 bundle 结构检查）。仓库不提交 Mihomo 二进制，所以依赖真实内核的测试在 CI 上会显示为 skipped。
 
 ## 许可证
 

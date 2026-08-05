@@ -1,0 +1,183 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # The Xcode the maintainer verifies with locally. The runner image rotates its
+  # default Xcode, so pin here and fall back with a warning when the pinned
+  # version is no longer installed on the image.
+  XCODE_VERSION: "26.5"
+
+jobs:
+  hygiene:
+    name: Repo hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: String catalog is valid JSON
+        run: jq empty Resources/Localizable.xcstrings
+
+      - name: Shell scripts are executable and have a shebang
+        run: |
+          set -euo pipefail
+          failed=0
+          for script in script/*.sh; do
+            if [ ! -x "$script" ]; then
+              echo "::error file=$script::script is not executable"
+              failed=1
+            fi
+            if ! head -n 1 "$script" | grep -q '^#!'; then
+              echo "::error file=$script::script has no shebang"
+              failed=1
+            fi
+          done
+          exit "$failed"
+
+      - name: No private keys committed
+        run: |
+          set -euo pipefail
+          # SECURITY.md asks reporters to keep secrets out of the repository and out of
+          # public issues. This is the mechanical half of that promise. The workflow file
+          # itself is excluded because it necessarily contains the search pattern.
+          # -e is required: the pattern starts with dashes and would otherwise be
+          # parsed as an option, which makes the check silently pass.
+          pattern='-----BEGIN [A-Z ]*PRIVATE KEY-----'
+          if git grep -InE -e "$pattern" -- . ':!.github/workflows/ci.yml'; then
+            echo "::error::A private key block is committed to the repository."
+            exit 1
+          fi
+          echo "No private key blocks found."
+
+  test:
+    name: Tests and localization gate
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          candidate="/Applications/Xcode_${XCODE_VERSION}.app"
+          if [ -d "$candidate" ]; then
+            sudo xcode-select -s "$candidate/Contents/Developer"
+          else
+            echo "::warning::Xcode ${XCODE_VERSION} is not installed on this runner image; using the image default."
+          fi
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      # Same command as README.md, CONTRIBUTING.md, and docs/DEVELOPMENT.md, apart from
+      # the result bundle, so a red CI run reproduces locally verbatim. A fresh clone has
+      # neither the bundled Mihomo binaries nor the workstation-only release runbook, so
+      # the tests that need them report as skipped rather than failing.
+      - name: Run tests
+        run: |
+          xcodebuild test \
+            -project ClashMax.xcodeproj \
+            -scheme ClashMax \
+            -destination 'platform=macOS' \
+            -derivedDataPath DerivedData \
+            -resultBundlePath DerivedData/ClashMaxTests.xcresult \
+            CODE_SIGNING_ALLOWED=NO
+
+      # Validates Resources/Localizable.xcstrings, dry-runs catalog compilation, and
+      # re-runs LocalizationTests including the active-key stale check. Reuses the
+      # DerivedData above, so this is an incremental step rather than a second build.
+      - name: Localization gate
+        run: script/localization_gate.sh
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results
+          path: DerivedData/ClashMaxTests.xcresult
+          retention-days: 7
+          if-no-files-found: ignore
+
+  build:
+    name: Release build
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          candidate="/Applications/Xcode_${XCODE_VERSION}.app"
+          if [ -d "$candidate" ]; then
+            sudo xcode-select -s "$candidate/Contents/Developer"
+          else
+            echo "::warning::Xcode ${XCODE_VERSION} is not installed on this runner image; using the image default."
+          fi
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      # Release is the shipping configuration: universal (arm64 + x86_64) and built
+      # with optimizations, which the Debug test build does not cover. Signing,
+      # notarization, and the release smoke gate stay on the maintainer's machine
+      # because they need Developer ID assets that CI does not have.
+      - name: Build Release (unsigned)
+        run: |
+          xcodebuild build \
+            -project ClashMax.xcodeproj \
+            -scheme ClashMax \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath DerivedData-Release \
+            CODE_SIGNING_ALLOWED=NO
+
+      # The helper, LaunchDaemon plist, Network Extension, and core payload are
+      # embedded by build script phases, so a silent regression there would not fail
+      # the compile. Assert the shipped bundle layout instead.
+      - name: Check app bundle layout
+        run: |
+          set -euo pipefail
+          app="DerivedData-Release/Build/Products/Release/ClashMax.app"
+          test -d "$app"
+          test -x "$app/Contents/MacOS/ClashMax"
+          test -f "$app/Contents/Library/LaunchServices/ClashMaxHelper"
+          test -f "$app/Contents/Library/LaunchDaemons/io.github.clashmax.ClashMax.Helper.plist"
+          test -d "$app/Contents/Library/SystemExtensions/io.github.clashmax.ClashMax.NetworkExtension.systemextension"
+          test -f "$app/Contents/Resources/Core/mihomo-manifest.json"
+          # The legacy helper location must stay empty; macOS reads the helper from
+          # Contents/Library/LaunchServices.
+          test ! -e "$app/Contents/MacOS/ClashMaxHelper"
+
+          archs="$(lipo -archs "$app/Contents/MacOS/ClashMax")"
+          echo "app architectures: $archs"
+          for arch in arm64 x86_64; do
+            case " $archs " in
+              *" $arch "*) ;;
+              *) echo "::error::Release app binary is missing the $arch slice"; exit 1 ;;
+            esac
+          done

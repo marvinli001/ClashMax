@@ -86,10 +86,6 @@ final class SystemProxyControllerTests: XCTestCase {
   func testReleaseSmokeDocumentationUsesScriptedGateAsReleaseEntryPoint() throws {
     let testFile = URL(fileURLWithPath: #filePath)
     let projectRoot = testFile.deletingLastPathComponent().deletingLastPathComponent()
-    let appUpdates = try String(
-      contentsOf: projectRoot.appendingPathComponent("docs/APP_UPDATES.md"),
-      encoding: .utf8
-    )
     let development = try String(
       contentsOf: projectRoot.appendingPathComponent("docs/DEVELOPMENT.md"),
       encoding: .utf8
@@ -99,12 +95,26 @@ final class SystemProxyControllerTests: XCTestCase {
       encoding: .utf8
     )
 
+    XCTAssertTrue(development.contains("script/release_smoke_check.sh"))
+    XCTAssertTrue(tunRunbook.contains("script/release_smoke_check.sh"))
+  }
+
+  /// `docs/APP_UPDATES.md` is a workstation-only release runbook and is excluded by
+  /// `.gitignore`, so a fresh clone — including CI — does not carry it. Skip instead of
+  /// failing there; the tracked runbooks are covered by the test above.
+  func testWorkstationReleaseRunbookUsesScriptedGateWhenPresent() throws {
+    let testFile = URL(fileURLWithPath: #filePath)
+    let projectRoot = testFile.deletingLastPathComponent().deletingLastPathComponent()
+    let appUpdatesURL = projectRoot.appendingPathComponent("docs/APP_UPDATES.md")
+    guard FileManager.default.fileExists(atPath: appUpdatesURL.path) else {
+      throw XCTSkip("docs/APP_UPDATES.md is workstation-only and is not part of a fresh clone.")
+    }
+    let appUpdates = try String(contentsOf: appUpdatesURL, encoding: .utf8)
+
     XCTAssertTrue(appUpdates.contains("script/release_smoke_check.sh"))
     XCTAssertTrue(appUpdates.contains("--preflight-only"))
     XCTAssertTrue(appUpdates.contains("--live --soak-minutes 60"))
     XCTAssertTrue(appUpdates.contains("dist/release-smoke"))
-    XCTAssertTrue(development.contains("script/release_smoke_check.sh"))
-    XCTAssertTrue(tunRunbook.contains("script/release_smoke_check.sh"))
     XCTAssertFalse(appUpdates.contains("发布前检查导出的 app 和生成的更新源："))
   }
 

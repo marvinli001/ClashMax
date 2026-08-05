@@ -7,6 +7,7 @@
   <p><strong>English</strong> | <a href="README.zh-CN.md">简体中文</a></p>
   <p>A native Mihomo proxy client for macOS, focused on profile management, runtime control, proxy groups, connections, rules, logs, and system integration.</p>
   <p>
+    <a href="https://github.com/marvinli001/ClashMax/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/marvinli001/ClashMax/actions/workflows/ci.yml/badge.svg?branch=master"></a>
     <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%2015%2B-111111?logo=apple&logoColor=white">
     <img alt="Swift" src="https://img.shields.io/badge/Swift-6.0-F05138?logo=swift&logoColor=white">
     <img alt="Mihomo" src="https://img.shields.io/badge/core-Mihomo%20v1.19.29-2f6fed">
@@ -64,6 +65,7 @@ The interface stays restrained, compact, and easy to scan. The first screen is t
 - TUN mode is handled by a privileged helper, and the helper validates app-owned core/config paths.
 - MVP core policy is intentionally single-channel: only the app-owned bundled Mihomo core is supported. Future core channels must add a manifest, signature/hash verification, helper allowlisting, UI state, and rollback first.
 - macOS TUN runtime config does not write Linux-only `auto-redirect`.
+- Vulnerabilities go through [SECURITY.md](SECURITY.md), never a public issue. Subscription URLs, credentials, and private domains must not appear in issues, discussions, or attached logs.
 
 ## Downloads And Updates
 
@@ -76,6 +78,7 @@ Release builds are distributed through GitHub Releases. After installation, Clas
 - Use [Ideas](https://github.com/marvinli001/ClashMax/discussions/new?category=ideas) for early feature ideas, product direction, and workflow proposals before they become implementation tasks.
 - Use [Development](https://github.com/marvinli001/ClashMax/discussions/new?category=development) before starting larger contributions that need design alignment, ownership boundaries, or release-sensitive verification.
 - Before opening a report, remove subscription URLs, node credentials, private domains, and other sensitive profile data from screenshots or logs.
+- The project's public maintenance and security workflow plan, including its privacy red lines and evaluation metrics, is in [docs/CODEX_OSS_PLAN.md](docs/CODEX_OSS_PLAN.md).
 
 ## Local Development
 
@@ -92,6 +95,8 @@ Then open the generated `ClashMax.xcodeproj`, or run the test command directly:
 ```bash
 xcodebuild test -project ClashMax.xcodeproj -scheme ClashMax -destination 'platform=macOS' -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO
 ```
+
+[CI](.github/workflows/ci.yml) runs that same command on every push and pull request, followed by `script/localization_gate.sh` and an unsigned universal Release build with a bundle-layout check. The bundled Mihomo binaries are not committed, so the tests that exercise the real core report as skipped in CI.
 
 ## License
 
