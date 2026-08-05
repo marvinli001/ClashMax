@@ -323,6 +323,40 @@ final class CoreRuntimePreflightTests: XCTestCase {
     XCTAssertEqual(request.timeoutInterval, 0.5, accuracy: 0.01)
   }
 
+  /// A rejecting core explains itself on stdout and then exits, so the explanation can
+  /// become readable only after `terminationHandler` has already fired. When that output is
+  /// dropped the user is told nothing but "mihomo exited with code 1". The grandchild here
+  /// makes the timing deterministic; under CPU load the core's own final chunk lands in the
+  /// same window.
+  func testRuntimeConfigValidationReportsCoreOutputThatArrivesAfterExit() async throws {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxValidatorLateOutput-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let rejectingCore = directory.appendingPathComponent("mihomo-reject")
+    let configURL = directory.appendingPathComponent("config.yaml")
+    try """
+    #!/bin/sh
+    ( sleep 0.1; echo "rejected by test core" ) &
+    exit 1
+    """.write(to: rejectingCore, atomically: true, encoding: .utf8)
+    try "mixed-port: 7890\n".write(to: configURL, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: rejectingCore.path)
+
+    let validator = MihomoRuntimeConfigValidator(timeout: 5)
+
+    do {
+      try await validator.validate(coreURL: rejectingCore, configURL: configURL, workDirectory: directory)
+      XCTFail("Expected runtime config validation to fail.")
+    } catch {
+      XCTAssertTrue(
+        error.localizedDescription.contains("rejected by test core"),
+        "Expected the core's own rejection message, got: \(error.localizedDescription)"
+      )
+    }
+  }
+
   func testRuntimeConfigValidationTimesOutHangingCoreTestMode() async throws {
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("ClashMaxValidatorTests-\(UUID().uuidString)", isDirectory: true)

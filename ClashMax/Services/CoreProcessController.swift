@@ -483,7 +483,8 @@ struct ProcessOutputCapture: Sendable {
         )
       },
       output: {
-        drain.flush(trimmed: false)
+        await drain.waitForOutputEnd()
+        return drain.flush(trimmed: false)
       },
       cleanup: {
         drain.detachAll()
@@ -511,7 +512,7 @@ final class CancellableProcessExecution: @unchecked Sendable {
   private let process: Process
   private let timeout: TimeInterval
   private let timeoutError: (String) -> Error
-  private let output: () -> String
+  private let output: () async -> String
   private let cleanup: () -> Void
   private let lock = NSLock()
   private var isStarted = false
@@ -523,7 +524,7 @@ final class CancellableProcessExecution: @unchecked Sendable {
     process: Process,
     timeout: TimeInterval,
     timeoutError: @escaping (String) -> Error,
-    output: @escaping () -> String,
+    output: @escaping () async -> String,
     cleanup: @escaping () -> Void = {}
   ) {
     self.process = process
@@ -568,7 +569,7 @@ final class CancellableProcessExecution: @unchecked Sendable {
     let terminationStatus = await waitForTermination()
     timeoutTask.cancel()
 
-    let resultOutput = output()
+    let resultOutput = await output()
     process.terminationHandler = nil
     cleanup()
 
@@ -924,7 +925,8 @@ struct MihomoRuntimeConfigValidator: RuntimeConfigValidating {
         )
       },
       output: {
-        drain.flush()
+        await drain.waitForOutputEnd()
+        return drain.flush()
       },
       cleanup: {
         drain.detachAll()
@@ -1020,6 +1022,9 @@ final class FoundationProcessLauncher: CoreProcessLaunching {
       let exitCode = process.terminationStatus
       process.terminationHandler = nil
       Task { @MainActor [weak wrapper] in
+        // A crashing core explains itself on the way out, and `onTermination` reads that
+        // tail to build the crash message. Let the last lines land before reporting.
+        await drain.waitForOutputEnd()
         wrapper?.notifyTermination(exitCode: exitCode)
       }
     }
@@ -1124,6 +1129,8 @@ final class LiveOutputDrain: @unchecked Sendable {
   private let maxRetainedBytes: Int?
   private let onOutput: (@Sendable (ProcessOutputLine) -> Void)?
   private var attached: [FileHandle] = []
+  /// Attached handles that have not yet reported end of output. See `waitForOutputEnd`.
+  private var openHandleCount = 0
 
   // Raw mode.
   private var buffer = Data()
@@ -1162,16 +1169,49 @@ final class LiveOutputDrain: @unchecked Sendable {
   }
 
   func attach(_ handle: FileHandle, stream: ProcessOutputStream = .stdout) {
+    lock.lock()
+    attached.append(handle)
+    openHandleCount += 1
+    lock.unlock()
     handle.readabilityHandler = { [weak self] handle in
       let chunk = handle.availableData
       guard !chunk.isEmpty else {
         handle.readabilityHandler = nil
+        self?.markEndOfOutput()
         return
       }
       self?.append(chunk, stream: stream)
     }
+  }
+
+  /// Waits until every attached handle has reported end of output, or `timeout` elapses.
+  ///
+  /// `Process.terminationHandler` fires the moment the child exits, which races the
+  /// dispatch reads carrying its final bytes: under CPU contention the last chunk — for a
+  /// short-lived command, usually its entire message — lands *after* termination. Reading
+  /// `flush()` or `tail()` at that point silently returns nothing, turning a core's
+  /// explanation of why it rejected a config into a bare exit code. Callers that report
+  /// output wait here first.
+  ///
+  /// The wait is bounded because end of output is not guaranteed: a grandchild that
+  /// inherited the write end holds the pipe open even after the child is killed.
+  func waitForOutputEnd(timeout: TimeInterval = 1) async {
+    let deadline = Date().addingTimeInterval(timeout)
+    while hasOpenHandles {
+      guard !Task.isCancelled, Date() < deadline else { return }
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+  }
+
+  private var hasOpenHandles: Bool {
     lock.lock()
-    attached.append(handle)
+    defer { lock.unlock() }
+    return openHandleCount > 0
+  }
+
+  private func markEndOfOutput() {
+    lock.lock()
+    openHandleCount = max(0, openHandleCount - 1)
     lock.unlock()
   }
 
@@ -1252,6 +1292,9 @@ final class LiveOutputDrain: @unchecked Sendable {
     lock.lock()
     let handles = attached
     attached.removeAll()
+    // Removing the handlers means no further end-of-output callback can arrive, so nothing
+    // is left for `waitForOutputEnd` to wait on.
+    openHandleCount = 0
     // Retain the trailing fragment of each stream, so a core that died without a final
     // newline still leaves its last words behind.
     var emitted: [ProcessOutputLine] = []

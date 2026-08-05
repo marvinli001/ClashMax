@@ -1014,7 +1014,11 @@ struct ProcessCommandRunner: CommandRunning {
         )
       },
       output: {
-        drain.flush(trimmed: false)
+        // The command's last chunk can be delivered after it exits, and here that output
+        // is parsed rather than merely logged — a truncated `route -n get` table reads as
+        // a missing default route, not as an error. Wait for end of output first.
+        await drain.waitForOutputEnd()
+        return drain.flush(trimmed: false)
       },
       cleanup: {
         drain.detachAll()

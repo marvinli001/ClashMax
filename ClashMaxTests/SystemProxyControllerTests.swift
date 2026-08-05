@@ -317,6 +317,30 @@ final class SystemProxyControllerTests: XCTestCase {
     XCTAssertTrue(didExit)
   }
 
+  /// The runner's return value is parsed by its callers — `route -n get` tables,
+  /// `networksetup` output, curl bodies — so output delivered after the command exits must
+  /// still be returned. The grandchild makes that ordering deterministic; under CPU load the
+  /// command's own final chunk lands in the same window after `terminationHandler` fires.
+  func testProcessCommandRunnerReturnsOutputThatArrivesAfterCommandExits() async throws {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxCommandRunnerLateOutput-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let scriptURL = directory.appendingPathComponent("late-output.sh")
+    try """
+    #!/bin/sh
+    ( sleep 0.1; echo "gateway: 192.168.1.1" ) &
+    exit 0
+    """.write(to: scriptURL, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+
+    let runner = ProcessCommandRunner(timeout: 5)
+    let output = try await runner.run(scriptURL.path, [])
+
+    XCTAssertTrue(output.contains("gateway: 192.168.1.1"), "command output was dropped: \(output.debugDescription)")
+  }
+
   func testProcessCommandRunnerTimeoutErrorUsesDisplayDescriptionInsteadOfRealArguments() async throws {
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("ClashMaxCommandRunnerRedaction-\(UUID().uuidString)", isDirectory: true)

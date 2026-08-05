@@ -102,6 +102,23 @@ jobs:
             -resultBundlePath DerivedData/ClashMaxTests.xcresult \
             CODE_SIGNING_ALLOWED=NO
 
+      # xcodebuild prints a failing assertion where it happens — thousands of lines above
+      # the end of the log — and its trailing "Failing tests:" list carries only test names.
+      # The result bundle has the message, but it is a ~100 MB artifact. Repeat the failure
+      # text at the end of the log so a red run explains itself at a glance.
+      - name: Summarize test failures
+        if: failure()
+        run: |
+          set -uo pipefail
+          bundle="DerivedData/ClashMaxTests.xcresult"
+          if [ ! -d "$bundle" ]; then
+            echo "No result bundle at $bundle."
+            exit 0
+          fi
+          xcrun xcresulttool get test-results summary --path "$bundle" --format json \
+            | jq -r '.testFailures[]? | "\(.targetName // "?") · \(.testName // "?")\n\(.failureText // "no failure text")\n"' \
+            || echo "Could not read failures from $bundle; download the test-results artifact instead."
+
       # Validates Resources/Localizable.xcstrings, dry-runs catalog compilation, and
       # re-runs LocalizationTests including the active-key stale check. Reuses the
       # DerivedData above, so this is an incremental step rather than a second build.
