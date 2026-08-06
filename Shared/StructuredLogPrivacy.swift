@@ -50,32 +50,32 @@ enum StructuredLogRedactor {
     "juicity", "anytls", "snell", "ssr", "tuic", "hy2", "ss",
   ].joined(separator: "|")
 
-  // NSRegularExpression is documented as thread-safe and these are immutable after
-  // construction, so sharing one compiled copy across producers is safe.
-  nonisolated(unsafe) private static let shareLinkRegex = compile(
+  // NSRegularExpression is Sendable and these are immutable after construction, so
+  // sharing one compiled copy across producers is safe.
+  private static let shareLinkRegex = compile(
     "\\b(\(shareLinkSchemePattern))://\\S+"
   )
-  nonisolated(unsafe) private static let webURLRegex = compile(
+  private static let webURLRegex = compile(
     "\\b(https?)://(?:([^\\s/@]*)@)?([^\\s/?#]+)([^\\s?#]*)(\\?[^\\s#]*)?(#\\S*)?"
   )
-  nonisolated(unsafe) private static let userinfoRegex = compile(
+  private static let userinfoRegex = compile(
     "\\b([a-z][a-z0-9+.-]*)://[^\\s/@]+@"
   )
-  nonisolated(unsafe) private static let keyColonRegex = compile(
+  private static let keyColonRegex = compile(
     "\\b(\(sensitiveKeyPattern))[\"']?\\s*:\\s*\\S[^\\n]*",
     options: [.caseInsensitive, .anchorsMatchLines]
   )
-  nonisolated(unsafe) private static let keyEqualsRegex = compile(
+  private static let keyEqualsRegex = compile(
     "\\b(\(sensitiveKeyPattern))[\"']?\\s*=\\s*[\"']?[^\\s&;,\"']+"
   )
-  nonisolated(unsafe) private static let bearerRegex = compile(
+  private static let bearerRegex = compile(
     "\\bbearer\\s+[A-Za-z0-9._~+/=-]+"
   )
   // A user-owned path root followed by up to 64 components. A component may contain
   // spaces ("Application Support") only when another `/` follows it, which keeps the
   // match from swallowing the prose after a path. Both repetitions are bounded so a
   // hostile remote string cannot turn this into a backtracking bomb.
-  nonisolated(unsafe) private static let homePathRegex = compile(
+  private static let homePathRegex = compile(
     "(/Users/[^/\\s]+|/private/var/root|/var/root|~)"
       + "((?:/(?:[^\\s/]+(?: [^\\s/]+){0,8}(?=/)|[^\\s/]+)){0,64})"
   )
