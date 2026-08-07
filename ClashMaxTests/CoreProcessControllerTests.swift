@@ -347,7 +347,23 @@ final class CoreProcessControllerTests: XCTestCase {
     XCTAssertEqual(controller.status, .crashed(message: "mihomo exited with code 7\nfatal: bind failed"))
   }
 
-  func testFoundationRunningProcessDeliversCachedTerminationWhenHandlerIsInstalledLate() async throws {
+  /// Polls a condition in wall-clock time, which a `Task.yield()` spin cannot do.
+  ///
+  /// The launcher's termination chain parks in `LiveOutputDrain.waitForOutputEnd`, sleeping in 1ms
+  /// steps until a Dispatch-driven pipe EOF arrives. Yielding only reschedules the current task, so
+  /// a yield-spin completes in microseconds with the chain no further along. The budget has to clear
+  /// that drain wait (1s by default) plus CI contention.
+  private func waitUntil(
+    _ isSatisfied: () -> Bool,
+    timeout: TimeInterval = 5
+  ) async {
+    let deadline = Date().addingTimeInterval(timeout)
+    while !isSatisfied(), Date() < deadline {
+      try? await Task.sleep(nanoseconds: 5_000_000)
+    }
+  }
+
+  func testFoundationRunningProcessDeliversTerminationWhenHandlerIsInstalledAfterExit() async throws {
     let launcher = FoundationProcessLauncher()
     let process = try launcher.launch(
       executable: URL(fileURLWithPath: "/bin/sh"),
@@ -355,16 +371,19 @@ final class CoreProcessControllerTests: XCTestCase {
       environment: [:],
       workDirectory: URL(fileURLWithPath: "/tmp")
     )
-    try await Task.sleep(nanoseconds: 100_000_000)
+
+    // Wait on the observable fact — the child is gone — instead of guessing how long the exit takes.
+    await waitUntil { !process.isRunning }
 
     var receivedExitCode: Int32?
     process.onTermination = { exitCode in
       receivedExitCode = exitCode
     }
 
-    for _ in 0..<20 where receivedExitCode == nil {
-      await Task.yield()
-    }
+    // Whether this lands via the cached branch or the live one depends on whether the drain wait has
+    // finished, which is not observable from here. Assert the outcome both branches owe us; the
+    // cached branch itself is pinned deterministically by the two synthetic tests below.
+    await waitUntil { receivedExitCode != nil }
 
     XCTAssertEqual(receivedExitCode, 7)
   }
