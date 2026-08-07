@@ -43,6 +43,8 @@ struct EffectiveRuntimeConfigSnapshot: Equatable, Sendable {
   var redactedOriginalYAML: String
   var redactedFinalYAML: String
   var preflightStatus: EffectiveRuntimeConfigPreflightStatus
+  /// Whether the app-managed DNS override is really in effect, and on which keys (issue #16).
+  var dnsOverride: DNSOverridePlan = .inactive
 
   var redactedDiffText: String {
     diffRows.map(\.displayLine).joined(separator: "\n")
@@ -58,6 +60,8 @@ struct EffectiveRuntimeConfigSnapshot: Equatable, Sendable {
     if let message = preflightStatus.message {
       lines.append("Preflight Detail: \(message)")
     }
+    lines.append("")
+    lines.append(contentsOf: dnsOverride.plainTextLines)
     lines.append("")
     lines.append("Layers")
     for layer in layers {

@@ -30,7 +30,7 @@ struct ConfigNormalizer {
     "MATCH,Proxy"
   ]
 
-  enum NormalizerError: Error, CustomStringConvertible, Sendable {
+  enum NormalizerError: Error, CustomStringConvertible, LocalizedError, Sendable {
     case yaml(String)
     case rootIsNotMapping
     case invalidProfile(String)
@@ -45,6 +45,12 @@ struct ConfigNormalizer {
         return message
       }
     }
+
+    /// Without this, `localizedDescription` is the generic "operation couldn't be completed" NSError
+    /// text. `UserFacingError` only falls back to `String(describing:)` when it recognizes that
+    /// English wording, so on a non-English host the real reason was dropped (issue #16 asks for
+    /// specific errors when a DNS override is rejected).
+    var errorDescription: String? { description }
   }
 
   func runtimeConfig(
@@ -181,6 +187,19 @@ struct ConfigNormalizer {
     }
     root["tun"] = tun
 
+    // A typed DNS override that never sets `dns.enable` is inert: Mihomo starts no DNS server and
+    // silently ignores every key, even though the generated YAML and its diff both show the change
+    // (issue #16). TUN already self-enables above; do the same for snippet DNS patches, but never
+    // against an explicit "off" — that toggle is the user's decision, not ours to reverse.
+    if !snippetApplication.dnsPatches.isEmpty, overrides.dnsEnabled != false {
+      var dns = root["dns"] as? [String: Any] ?? [:]
+      if dns["enable"] as? Bool != true {
+        dns["enable"] = true
+        dns["ipv6"] = overrides.ipv6Enabled
+      }
+      root["dns"] = dns
+    }
+
     let ruleOverlay = overrides.ruleOverlay.combined(
       withProfileOverlay: options.subscriptionProviderOptions.ruleOverlay
     )
@@ -230,7 +249,22 @@ struct ConfigNormalizer {
       to: &root
     )
 
+    // Validate the merged result, not the individual layers: the outbound-proxy bootstrap above can
+    // supply `proxy-server-nameserver`, so only the final map knows whether Mihomo will accept it.
+    try validateDNSCompatibility(root["dns"])
+
     return try Yams.dump(object: root, sortKeys: false)
+  }
+
+  /// Rejects DNS combinations Mihomo refuses at startup, with the reason instead of a core crash.
+  ///
+  /// Mihomo validates `respect-rules` regardless of `dns.enable`, so an override that looks inert
+  /// still takes the whole core down ("if “respect-rules” is turned on, “proxy-server-nameserver”
+  /// cannot be empty"). Verified against the bundled Mihomo v1.19.29.
+  private func validateDNSCompatibility(_ dns: Any?) throws {
+    let facts = DNSRuntimeFacts.facts(from: dns)
+    guard facts.respectRules, !facts.hasProxyServerNameserver else { return }
+    throw NormalizerError.invalidProfile(DNSOverridePlanBuilder.respectRulesRequirement)
   }
 
   private func validateOutboundProxyOptions(
@@ -915,7 +949,7 @@ struct ConfigNormalizer {
       "proxy-groups": proxyGroups,
       "rules": generatedRules(template: options.generatedTemplate, finalRulePolicy: finalRulePolicy)
     ]
-    if options.generatedTemplateVersion >= SubscriptionTemplateKind.currentVersion {
+    if SubscriptionTemplateKind.emitsDNSBase(version: options.generatedTemplateVersion) {
       root["dns"] = providerTemplateDNS(ipv6Enabled: ipv6Enabled)
     }
     return root
@@ -930,6 +964,14 @@ struct ConfigNormalizer {
       "enhanced-mode": "fake-ip",
       "fake-ip-range": TunSettings.defaultFakeIPRange,
       "default-nameserver": [
+        "223.5.5.5",
+        "119.29.29.29"
+      ],
+      // Required by the `respect-rules: true` above: Mihomo refuses to start without it, so the
+      // generated template used to produce a config the core rejected outright (issue #16). Plain
+      // IP resolvers on purpose — this is what resolves the proxy server's own hostname, so it must
+      // work before any proxy is reachable.
+      "proxy-server-nameserver": [
         "223.5.5.5",
         "119.29.29.29"
       ],

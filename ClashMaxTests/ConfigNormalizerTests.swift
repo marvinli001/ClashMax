@@ -1528,6 +1528,7 @@ final class ConfigNormalizerTests: XCTestCase {
       "Snippets",
       "Manual Proxy",
       "Upstream Proxy",
+      "DNS override",
       "Final runtime YAML"
     ])
     XCTAssertEqual(snapshot.preflightStatus, .notRun)
@@ -1653,6 +1654,8 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(dns["enhanced-mode"] as? String, "fake-ip")
     XCTAssertEqual(dns["fake-ip-range"] as? String, "198.18.0.1/16")
     XCTAssertEqual(dns["default-nameserver"] as? [String], ["223.5.5.5", "119.29.29.29"])
+    // respect-rules above makes this mandatory; without it Mihomo refuses to start at all.
+    XCTAssertEqual(dns["proxy-server-nameserver"] as? [String], ["223.5.5.5", "119.29.29.29"])
     XCTAssertEqual(dns["nameserver"] as? [String], ["https://dns.alidns.com/dns-query", "https://doh.pub/dns-query"])
     XCTAssertEqual(dns["fallback"] as? [String], ["tls://8.8.4.4", "tls://1.1.1.1"])
     XCTAssertEqual(fallbackFilter["geoip"] as? Bool, true)
@@ -2369,7 +2372,10 @@ final class ConfigNormalizerTests: XCTestCase {
         payload: .dnsPatch(
           TunDNSSettings(
             respectRules: true,
-            nameserver: ["https://dns.example/dns-query"]
+            nameserver: ["https://dns.example/dns-query"],
+            // Mihomo refuses to start when respect-rules has no proxy-server-nameserver, and
+            // TunDNSSettings.default supplies none, so the patch has to carry its own.
+            proxyServerNameserver: ["https://doh.pub/dns-query"]
           )
         )
       )
@@ -2389,7 +2395,180 @@ final class ConfigNormalizerTests: XCTestCase {
       ["https://dns.example/dns-query", "https://dns.alidns.com/dns-query", "https://doh.pub/dns-query"]
     )
     XCTAssertEqual(dns["respect-rules"] as? Bool, true)
+    XCTAssertEqual(dns["proxy-server-nameserver"] as? [String], ["https://doh.pub/dns-query"])
   }
+
+  // MARK: - DNS override (issue #16)
+
+  func testRuntimeConfigEnablesDNSForSnippetDNSPatch() throws {
+    // Without this, the patch lands in the YAML but Mihomo starts no DNS server and ignores it.
+    var options = RuntimeConfigOptions.default
+    options.runtimeSnippets = [
+      RuntimeSnippet(
+        name: "Corp DNS",
+        payload: .dnsPatch(TunDNSSettings(nameserver: ["https://corp.example/dns-query"]))
+      )
+    ]
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: Self.minimalProfileSource,
+      overrides: .defaultForLaunch(secret: "secret-token"),
+      options: options
+    )
+    let dns = try XCTUnwrap((try Yams.load(yaml: output) as? [String: Any])?["dns"] as? [String: Any])
+
+    XCTAssertEqual(dns["enable"] as? Bool, true)
+    XCTAssertEqual(dns["nameserver"] as? [String], ["https://corp.example/dns-query"])
+  }
+
+  func testRuntimeConfigLeavesDNSDisabledWhenTheUserTurnedTheOverrideOff() throws {
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.dnsEnabled = false
+    var options = RuntimeConfigOptions.default
+    options.runtimeSnippets = [
+      RuntimeSnippet(
+        name: "Corp DNS",
+        payload: .dnsPatch(TunDNSSettings(nameserver: ["https://corp.example/dns-query"]))
+      )
+    ]
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: Self.minimalProfileSource,
+      overrides: overrides,
+      options: options
+    )
+    let dns = try XCTUnwrap((try Yams.load(yaml: output) as? [String: Any])?["dns"] as? [String: Any])
+
+    XCTAssertEqual(dns["enable"] as? Bool, false)
+    XCTAssertEqual(dns["nameserver"] as? [String], ["https://corp.example/dns-query"])
+  }
+
+  func testRuntimeConfigOverridesProfileDNSDisableForSnippetPatch() throws {
+    var options = RuntimeConfigOptions.default
+    options.runtimeSnippets = [
+      RuntimeSnippet(
+        name: "Corp DNS",
+        payload: .dnsPatch(TunDNSSettings(useHosts: true))
+      )
+    ]
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: """
+      \(Self.minimalProfileSource)
+      dns:
+        enable: false
+        listen: 127.0.0.1:1053
+      """,
+      overrides: .defaultForLaunch(secret: "secret-token"),
+      options: options
+    )
+    let dns = try XCTUnwrap((try Yams.load(yaml: output) as? [String: Any])?["dns"] as? [String: Any])
+
+    // The profile explicitly said `false`, but nothing else does — enable it so the patch is real.
+    XCTAssertEqual(dns["enable"] as? Bool, true)
+    XCTAssertEqual(dns["use-hosts"] as? Bool, true)
+    XCTAssertEqual(dns["listen"] as? String, "127.0.0.1:1053")
+  }
+
+  func testRuntimeConfigRejectsRespectRulesWithoutProxyServerNameserver() throws {
+    var options = RuntimeConfigOptions.default
+    options.runtimeSnippets = [
+      RuntimeSnippet(
+        name: "Corp DNS",
+        payload: .dnsPatch(TunDNSSettings(respectRules: true, nameserver: ["https://corp.example/dns-query"]))
+      )
+    ]
+
+    XCTAssertThrowsError(
+      try ConfigNormalizer().runtimeConfig(
+        from: Self.minimalProfileSource,
+        overrides: .defaultForLaunch(secret: "secret-token"),
+        options: options
+      )
+    ) { error in
+      guard case let ConfigNormalizer.NormalizerError.invalidProfile(message) = error else {
+        return XCTFail("Expected a DNS compatibility rejection, got \(error).")
+      }
+      XCTAssertEqual(message, DNSOverridePlanBuilder.respectRulesRequirement)
+      // Issue #16 asks for a *specific* message when a DNS override is rejected, so assert what the
+      // UI actually shows rather than only the associated value.
+      XCTAssertEqual(UserFacingError.message(for: error), DNSOverridePlanBuilder.respectRulesRequirement)
+    }
+  }
+
+  func testRuntimeConfigAcceptsRespectRulesWhenTheProfileSuppliesTheResolver() throws {
+    // The snippet alone would be invalid; only the merged map knows the profile already has one.
+    var options = RuntimeConfigOptions.default
+    options.runtimeSnippets = [
+      RuntimeSnippet(
+        name: "Corp DNS",
+        payload: .dnsPatch(TunDNSSettings(respectRules: true))
+      )
+    ]
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: """
+      \(Self.minimalProfileSource)
+      dns:
+        proxy-server-nameserver:
+          - https://doh.pub/dns-query
+      """,
+      overrides: .defaultForLaunch(secret: "secret-token"),
+      options: options
+    )
+    let dns = try XCTUnwrap((try Yams.load(yaml: output) as? [String: Any])?["dns"] as? [String: Any])
+
+    XCTAssertEqual(dns["enable"] as? Bool, true)
+    XCTAssertEqual(dns["respect-rules"] as? Bool, true)
+    XCTAssertEqual(dns["proxy-server-nameserver"] as? [String], ["https://doh.pub/dns-query"])
+  }
+
+  func testRuntimeConfigRejectsRespectRulesEvenWhenDNSStaysDisabled() throws {
+    // Mihomo validates respect-rules before it looks at dns.enable, so an "inert" patch still
+    // takes the whole core down.
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.dnsEnabled = false
+    var options = RuntimeConfigOptions.default
+    options.runtimeSnippets = [
+      RuntimeSnippet(name: "Corp DNS", payload: .dnsPatch(TunDNSSettings(respectRules: true)))
+    ]
+
+    XCTAssertThrowsError(
+      try ConfigNormalizer().runtimeConfig(
+        from: Self.minimalProfileSource,
+        overrides: overrides,
+        options: options
+      )
+    )
+  }
+
+  func testDefaultDNSPatchSnippetGeneratesAConfigMihomoAccepts() throws {
+    var options = RuntimeConfigOptions.default
+    options.runtimeSnippets = [RuntimeSnippet.defaultDNSPatchSnippet]
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: Self.minimalProfileSource,
+      overrides: .defaultForLaunch(secret: "secret-token"),
+      options: options
+    )
+    let dns = try XCTUnwrap((try Yams.load(yaml: output) as? [String: Any])?["dns"] as? [String: Any])
+
+    XCTAssertEqual(dns["enable"] as? Bool, true)
+    XCTAssertEqual(dns["respect-rules"] as? Bool, true)
+    XCTAssertFalse((dns["proxy-server-nameserver"] as? [String] ?? []).isEmpty)
+  }
+
+  private static let minimalProfileSource = """
+  proxies:
+    - name: Direct
+      type: direct
+  proxy-groups:
+    - name: Proxy
+      type: select
+      proxies: [Direct, DIRECT]
+  rules:
+    - MATCH,DIRECT
+  """
 
   func testRuntimeSnippetYAMLPatchParserAcceptsOnlyDNSWhitelist() throws {
     let settings = try RuntimeSnippetYAMLPatchParser.dnsPatch(

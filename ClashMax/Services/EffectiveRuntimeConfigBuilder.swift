@@ -68,6 +68,18 @@ struct EffectiveRuntimeConfigBuilder {
       controllerSecret: overrides.secret,
       providerContentPaths: providerContentPaths
     )
+    // Diff the DNS the profile asked for against the DNS Mihomo will actually read, so the panel
+    // reports the merged result instead of the app's intent (issue #16).
+    let dnsOverride = DNSOverridePlanBuilder.plan(
+      baseline: dnsFacts(inYAML: originalSource),
+      final: dnsFacts(inYAML: finalRuntimeYAML),
+      sources: dnsOverrideSources(
+        overrides: overrides,
+        options: options,
+        sourceFormat: sourceFormat,
+        runtimeSnippets: runtimeSnippets
+      )
+    )
     let layers = makeLayers(
       profile: profile,
       overrides: overrides,
@@ -77,6 +89,7 @@ struct EffectiveRuntimeConfigBuilder {
       runtimeSnippets: runtimeSnippets,
       manualProxyEndpoint: options.manualProxyEndpoint,
       upstreamProxyEndpoint: options.upstreamProxyEndpoint,
+      dnsOverride: dnsOverride,
       redactedOriginal: redactedOriginal,
       redactedFinal: redactedFinal
     )
@@ -93,7 +106,49 @@ struct EffectiveRuntimeConfigBuilder {
       diffRows: EffectiveRuntimeConfigLineDiff.diff(oldText: redactedOriginal, newText: redactedFinal),
       redactedOriginalYAML: redactedOriginal,
       redactedFinalYAML: redactedFinal,
-      preflightStatus: preflightStatus
+      preflightStatus: preflightStatus,
+      dnsOverride: dnsOverride
+    )
+  }
+
+  /// Provider content and other non-mapping sources simply have no `dns:` block; `.absent` is the
+  /// honest baseline there, and every DNS key in the generated YAML is then an app-managed override.
+  private func dnsFacts(inYAML yaml: String) -> DNSRuntimeFacts {
+    guard let root = (try? Yams.load(yaml: yaml)) as? [String: Any] else { return .absent }
+    return DNSRuntimeFacts.facts(from: root["dns"])
+  }
+
+  private func dnsOverrideSources(
+    overrides: RuntimeOverrides,
+    options: RuntimeConfigOptions,
+    sourceFormat: ProfileConfigFormat?,
+    runtimeSnippets: [RuntimeSnippet]
+  ) -> DNSOverrideSources {
+    let networkExtension = options.networkExtensionRoutingSettings
+    return DNSOverrideSources(
+      globalDNSEnabled: overrides.dnsEnabled,
+      tunEnabled: overrides.tunEnabled,
+      tunContributesDNS: overrides.tunSettings.dnsFakeIPEnabled
+        || overrides.tunSettings.dns.hasRuntimeOverlay,
+      networkExtensionContributesDNS: networkExtension.map {
+        $0.dnsCaptureEnabled || $0.dnsFakeIPEnabled
+      } ?? false,
+      // Mirrors the branch ConfigNormalizer takes: a manual endpoint replaces the whole root, so the
+      // generated provider template (and its DNS base) never runs.
+      providerTemplateContributesDNS: options.manualProxyEndpoint == nil
+        && sourceFormat == .proxyProviderContent
+        && SubscriptionTemplateKind.emitsDNSBase(
+          version: options.subscriptionProviderOptions.generatedTemplateVersion
+        ),
+      dnsPatchSnippetNames: runtimeSnippets.compactMap { snippet in
+        guard snippet.enabled,
+              case let .dnsPatch(settings) = snippet.payload,
+              settings.hasRuntimeOverlay
+        else { return nil }
+        return snippet.normalizedName.isEmpty
+          ? String(localized: "Untitled Snippet")
+          : snippet.normalizedName
+      }
     )
   }
 
@@ -124,6 +179,7 @@ struct EffectiveRuntimeConfigBuilder {
     runtimeSnippets: [RuntimeSnippet],
     manualProxyEndpoint: ResolvedOutboundProxyEndpoint?,
     upstreamProxyEndpoint: ResolvedOutboundProxyEndpoint?,
+    dnsOverride: DNSOverridePlan,
     redactedOriginal: String,
     redactedFinal: String
   ) -> [EffectiveRuntimeConfigLayer] {
@@ -187,6 +243,13 @@ struct EffectiveRuntimeConfigBuilder {
         title: "Upstream Proxy",
         endpoint: upstreamProxyEndpoint,
         summary: String(localized: "All network proxy nodes and remote providers use this upstream.")
+      ),
+      EffectiveRuntimeConfigLayer(
+        id: "dns-override",
+        title: "DNS override",
+        summary: dnsOverride.summary,
+        redactedContent: renderDNSOverride(dnsOverride),
+        isActive: dnsOverride.hasOverride
       ),
       EffectiveRuntimeConfigLayer(
         id: "final-runtime-yaml",
@@ -318,6 +381,20 @@ struct EffectiveRuntimeConfigBuilder {
       lines.append("After:")
       lines.append(contentsOf: overlay.runtimeAppendRules.map { "- \($0)" })
     }
+    return lines.joined(separator: "\n")
+  }
+
+  /// Only key names and diagnostics — never resolver values, which can carry credentials.
+  private func renderDNSOverride(_ plan: DNSOverridePlan) -> String {
+    guard plan.hasOverride else {
+      return String(localized: "The profile decides DNS on its own.")
+    }
+    var lines = ["\(plan.enablement.displayName)"]
+    lines.append("Overridden Keys: \(plan.overriddenFieldNames.joined(separator: ", "))")
+    if !plan.contributors.isEmpty {
+      lines.append("Contributors: \(plan.contributors.joined(separator: ", "))")
+    }
+    lines.append(contentsOf: plan.issues.map(\.message))
     return lines.joined(separator: "\n")
   }
 

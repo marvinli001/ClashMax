@@ -667,6 +667,15 @@ private struct TunSettingsPopover: View {
                 }
                 .padding(.top, 8)
               }
+
+              // Advisory, not blocking: the profile may already carry a proxy-server-nameserver, and
+              // only the merged runtime config knows. ConfigNormalizer blocks there (issue #16).
+              if let compatibilityWarning = settings.dns.compatibilityWarning {
+                Label(compatibilityWarning, systemImage: "exclamationmark.triangle")
+                  .font(.caption)
+                  .foregroundStyle(.orange)
+                  .fixedSize(horizontal: false, vertical: true)
+              }
             }
             .padding(.top, 8)
           }

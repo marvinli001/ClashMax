@@ -245,13 +245,17 @@ struct RuntimeSnippet: Identifiable, Codable, Equatable, Sendable {
     )
   }
 
+  /// `respect-rules` is what makes DNS resolution follow the rule list, so it is the right default
+  /// for a DNS patch — but Mihomo refuses to start when it has no `proxy-server-nameserver`, even
+  /// with DNS disabled. Ship the resolver alongside it so the default snippet is valid on its own.
   static var defaultDNSPatchSnippet: RuntimeSnippet {
     RuntimeSnippet(
       name: String(localized: "New DNS Patch"),
       payload: .dnsPatch(
         TunDNSSettings(
           respectRules: true,
-          fakeIPFilter: ["*.local"]
+          fakeIPFilter: ["*.local"],
+          proxyServerNameserver: ["https://doh.pub/dns-query"]
         )
       )
     )

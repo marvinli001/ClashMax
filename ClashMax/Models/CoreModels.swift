@@ -314,9 +314,15 @@ enum SubscriptionTemplateKind: String, Codable, CaseIterable, Identifiable, Send
   }
 
   func versionSummary(version: Int) -> String {
-    version >= Self.currentVersion
+    Self.emitsDNSBase(version: version)
       ? String(localized: "Template v2: includes app-managed DNS base.")
       : String(localized: "Template v1: legacy generated provider rules without DNS base.")
+  }
+
+  /// Whether the generated provider template authors the whole `dns:` block. v1 profiles keep
+  /// whatever DNS the subscription implied, so the DNS override panel must not credit the template.
+  static func emitsDNSBase(version: Int) -> Bool {
+    version >= currentVersion
   }
 }
 
@@ -3573,6 +3579,15 @@ struct TunDNSSettings: Codable, Equatable, Sendable {
       return fallbackFilterValidationError
     }
     return nil
+  }
+
+  /// Advisory counterpart to `validationError`: this layer on its own would make Mihomo refuse to
+  /// start, but another layer (the profile, TUN, or the outbound-proxy bootstrap) may still supply
+  /// `proxy-server-nameserver`. Only the merged map can decide, so editors warn and
+  /// `ConfigNormalizer` blocks (issue #16).
+  var compatibilityWarning: String? {
+    guard respectRules == true, proxyServerNameserver.isEmpty else { return nil }
+    return DNSOverridePlanBuilder.respectRulesRequirement
   }
 
   static func normalizedList(_ values: [String]) -> [String] {

@@ -430,10 +430,85 @@ struct RoutingView: View {
     VStack(alignment: .leading, spacing: 12) {
       snippetStatus
       effectiveConfigPreview
+      dnsOverrideStatus
       runtimeDiffPreview
       connectionExplanation
       matchSimulator
     }
+  }
+
+  /// Answers "is my DNS override on, what does it change, and does anything reach it?" — the three
+  /// questions issue #16 says the rule and DNS surfaces never connected.
+  private var dnsOverrideStatus: some View {
+    RoutingInspectorPanel(title: "DNS Override", systemImage: "shield.lefthalf.filled") {
+      if let snapshot = loadedEffectiveConfigSnapshot {
+        dnsOverrideContent(snapshot.dnsOverride)
+      } else {
+        RoutingWorkspaceNotice(
+          title: "Not Generated",
+          systemImage: "doc.badge.clock",
+          message: String(localized: "Refresh the effective config to see which DNS keys Mihomo really reads.")
+        )
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func dnsOverrideContent(_ plan: DNSOverridePlan) -> some View {
+    RoutingDetailRow(title: "Status", value: plan.enablement.displayName, isProminent: true)
+    RoutingDetailRow(title: "Effect", value: plan.summary, lineLimit: 3)
+
+    if plan.hasOverride {
+      diffSection(title: "Overridden Keys", values: plan.overriddenFieldNames)
+    }
+    if !plan.contributors.isEmpty {
+      diffSection(title: "Contributors", values: plan.contributors)
+    }
+
+    ForEach(plan.issues) { issue in
+      Label(
+        issue.message,
+        systemImage: issue.isBlocking ? "exclamationmark.octagon.fill" : "info.circle"
+      )
+      .font(.caption)
+      .foregroundStyle(issue.isBlocking ? Color.red : Color.secondary)
+      .fixedSize(horizontal: false, vertical: true)
+    }
+
+    ForEach(dnsOverrideRelationshipHints, id: \.self) { hint in
+      Text(hint)
+        .font(.caption)
+        .foregroundStyle(.tertiary)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+  }
+
+  /// How the override interacts with the capture modes: without TUN or the NE proxy, only traffic
+  /// that already goes through Mihomo ever asks Mihomo's resolver.
+  private var dnsOverrideRelationshipHints: [String] {
+    var hints: [String] = []
+    if appModel.tunEnabled {
+      hints.append(String(localized: "TUN is on, so its DNS hijack sends system queries to Mihomo's resolver."))
+    } else if appModel.networkExtensionEnabled {
+      hints.append(String(localized: "NE Proxy is on, so captured queries use Mihomo's resolver."))
+    } else if appModel.systemProxyEnabled {
+      hints.append(String(localized: "Only system proxy is on: proxied requests resolve inside Mihomo, while macOS keeps resolving everything else."))
+    } else {
+      hints.append(String(localized: "No traffic capture is active, so nothing reaches Mihomo's resolver yet."))
+    }
+    hints.append(
+      appModel.isRunning
+        ? String(localized: "Saving reloads the running config, so DNS changes apply immediately.")
+        : String(localized: "DNS changes apply the next time the core starts.")
+    )
+    return hints
+  }
+
+  private var loadedEffectiveConfigSnapshot: EffectiveRuntimeConfigSnapshot? {
+    guard case let .loaded(snapshot) = appModel.effectiveRuntimeConfigState,
+          snapshot.profileID == profileStore.activeProfile?.id
+    else { return nil }
+    return snapshot
   }
 
   private var snippetStatus: some View {
@@ -1290,6 +1365,15 @@ private struct RuntimeDNSPatchEditor: View {
 
       if let validationError = settings.validationError {
         Label(validationError, systemImage: "exclamationmark.triangle.fill")
+          .font(.caption)
+          .foregroundStyle(.orange)
+          .lineLimit(3)
+      }
+
+      // Advisory, not blocking: another layer (the profile or TUN) may still supply the resolver, so
+      // only the merged runtime config can decide. See DNSOverridePlanBuilder (issue #16).
+      if let compatibilityWarning = settings.compatibilityWarning {
+        Label(compatibilityWarning, systemImage: "exclamationmark.triangle")
           .font(.caption)
           .foregroundStyle(.orange)
           .lineLimit(3)
