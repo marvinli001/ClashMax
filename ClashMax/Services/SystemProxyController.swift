@@ -133,12 +133,50 @@ struct SystemProxyRestoreVerificationError: LocalizedError, Equatable, Sendable 
   }
 }
 
+/// One enabled macOS proxy entry that points at a loopback address, read live from
+/// `networksetup` rather than from ClashMax's own belief about what it applied.
+struct LocalSystemProxyEntry: Equatable, Sendable {
+  var service: String
+  /// Locale-independent proxy kind: `HTTP`, `HTTPS`, or `SOCKS`.
+  var kind: String
+  var host: String
+  var port: Int
+
+  var summary: String {
+    "\(service) \(kind) → \(host):\(port)"
+  }
+}
+
+/// What ClashMax knows about the live macOS proxy state for a single diagnostics pass.
+///
+/// Issue #19: the runtime can be healthy while macOS still points every app at a proxy port
+/// nothing listens on, so the diagnostics have to read the real state instead of trusting the
+/// app's own `systemProxyEnabled` flag.
+enum LocalSystemProxyObservation: Equatable, Sendable {
+  /// The live state was not read for this inspection.
+  case notSampled
+  /// Reading the live state failed; the payload is the user-facing reason.
+  case unavailable(String)
+  /// The enabled loopback proxies macOS currently points at. Empty means none.
+  case entries([LocalSystemProxyEntry])
+
+  /// Entries pointing at a loopback port the running runtime does not serve — traffic that
+  /// macOS still hands to a port ClashMax is not listening on.
+  func residualEntries(servedPorts: Set<Int>) -> [LocalSystemProxyEntry] {
+    guard case let .entries(entries) = self else { return [] }
+    return entries.filter { !servedPorts.contains($0.port) }
+  }
+}
+
 // Thread-safety: mutable state is serialized by `lock` (NSLock); async operations are serialized by `operationGate` (AsyncOperationGate).
 final class SystemProxyController: @unchecked Sendable {
   static let defaultBypassDomains = SystemProxySettings.defaultBypassDomains
 
+  static let loopbackProxyHosts: Set<String> = ["127.0.0.1", "localhost", "::1"]
+
   static let applyBudgetSeconds: TimeInterval = 15
   static let restoreVerificationBudgetSeconds: TimeInterval = 20
+  static let readBudgetSeconds: TimeInterval = 8
   static let commandTimeoutSeconds: TimeInterval = 12
   private static let persistedSnapshotsDefaultsKey = "io.github.clashmax.systemProxySnapshots"
   private static let persistedDNSSnapshotsDefaultsKey = "io.github.clashmax.systemDNSSnapshots"
@@ -320,6 +358,21 @@ final class SystemProxyController: @unchecked Sendable {
     try await operationGate.run { [self] in
       try await withTimeout(seconds: Self.applyBudgetSeconds) { [self] in
         try await restoreCapturedDNSSnapshots()
+      }
+    }
+  }
+
+  /// Reads the live macOS proxy state and reports every enabled proxy pointing at a loopback
+  /// address. TUN diagnostics use this instead of ClashMax's own `systemProxyEnabled` flag:
+  /// a proxy left behind on a port ClashMax no longer serves keeps every app that honors the
+  /// system proxy pointed at a dead listener (issue #19), and the app's own flag cannot see it.
+  func localProxyEntries(
+    hosts: Set<String> = SystemProxyController.loopbackProxyHosts
+  ) async throws -> [LocalSystemProxyEntry] {
+    let normalizedHosts = normalizedProxyMatchHosts(hosts)
+    return try await operationGate.run { [self] in
+      try await withTimeout(seconds: Self.readBudgetSeconds) { [self] in
+        try await localProxyEntriesInner(hosts: normalizedHosts)
       }
     }
   }
@@ -514,6 +567,16 @@ final class SystemProxyController: @unchecked Sendable {
       }
     }
     return didChange
+  }
+
+  private func localProxyEntriesInner(hosts: Set<String>) async throws -> [LocalSystemProxyEntry] {
+    var entries: [LocalSystemProxyEntry] = []
+    for service in try await networkServices() {
+      try Task.checkCancellation()
+      let snapshot = try await snapshot(for: service)
+      entries.append(contentsOf: snapshot.localProxyEntries(service: service, hosts: hosts))
+    }
+    return entries
   }
 
   private func servicesMatchingProxyInner(hosts: Set<String>, ports: Set<Int>) async throws -> [String] {
@@ -815,6 +878,19 @@ private struct ServiceProxySnapshot: Codable {
   func containsProxyMatching(hosts: Set<String>, ports: Set<Int>) -> Bool {
     [web, secureWeb, socks].contains { $0.matches(hosts: hosts, ports: ports) }
   }
+
+  func localProxyEntries(service: String, hosts: Set<String>) -> [LocalSystemProxyEntry] {
+    [(ProxyKind.web, web), (ProxyKind.secureWeb, secureWeb), (ProxyKind.socks, socks)]
+      .compactMap { kind, state in
+        guard state.matchesHost(hosts) else { return nil }
+        return LocalSystemProxyEntry(
+          service: service,
+          kind: kind.diagnosticName,
+          host: state.server,
+          port: state.port
+        )
+      }
+  }
 }
 
 private struct ServiceDNSSnapshot: Codable {
@@ -856,9 +932,13 @@ private struct ProxyState: Codable {
     port = Int(values["Port"] ?? "") ?? 0
   }
 
-  func matches(hosts: Set<String>, ports: Set<Int>) -> Bool {
+  func matchesHost(_ hosts: Set<String>) -> Bool {
     guard let normalizedServer = normalizedProxyMatchHost(server) else { return false }
-    return enabled && hosts.contains(normalizedServer) && ports.contains(port)
+    return enabled && hosts.contains(normalizedServer)
+  }
+
+  func matches(hosts: Set<String>, ports: Set<Int>) -> Bool {
+    matchesHost(hosts) && ports.contains(port)
   }
 }
 
@@ -890,6 +970,15 @@ private enum ProxyKind {
   case web
   case secureWeb
   case socks
+
+  /// Locale-independent label used in diagnostics output.
+  var diagnosticName: String {
+    switch self {
+    case .web: "HTTP"
+    case .secureWeb: "HTTPS"
+    case .socks: "SOCKS"
+    }
+  }
 
   var setCommand: String {
     switch self {

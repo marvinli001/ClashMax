@@ -3610,6 +3610,22 @@
         }
       }
     },
+    "Disable residual System Proxy" : {
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Disable residual System Proxy"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭残留系统代理"
+          }
+        }
+      }
+    },
     "Disabled" : {
       "localizations" : {
         "base" : {

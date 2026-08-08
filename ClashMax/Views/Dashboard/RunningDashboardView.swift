@@ -789,6 +789,17 @@ private struct TunDiagnosticsRuntimeCard: View {
         .buttonStyle(.borderless)
         .disabled(!appModel.canRepairTunRouting)
         .help("Repair TUN routing")
+
+        if appModel.hasResidualSystemProxy {
+          Button {
+            appModel.disableResidualSystemProxy()
+          } label: {
+            Image(systemName: "xmark.shield")
+          }
+          .buttonStyle(.borderless)
+          .disabled(!appModel.canDisableResidualSystemProxy)
+          .help("Disable residual System Proxy")
+        }
       }
 
       HStack(spacing: 10) {
@@ -843,7 +854,10 @@ private struct TunDiagnosticsRuntimeCard: View {
   private var diagnosticCounterText: String {
     let diagnostics = appModel.tunDiagnostics
     guard !diagnostics.checks.isEmpty else { return "Waiting" }
-    return "\(diagnostics.passCount)/\(diagnostics.warnCount)/\(diagnostics.failCount)"
+    let base = "\(diagnostics.passCount)/\(diagnostics.warnCount)/\(diagnostics.failCount)"
+    // Only widen the tile when something was actually downgraded, so the segments always
+    // account for every listed check.
+    return diagnostics.infoCount > 0 ? "\(base)/\(diagnostics.infoCount)" : base
   }
 
   private var lastUpdateText: String {
@@ -859,6 +873,8 @@ private struct TunDiagnosticsRuntimeCard: View {
       return .orange
     case .fail:
       return .red
+    case .info:
+      return .blue
     case .skipped:
       return .secondary
     }
@@ -899,6 +915,8 @@ private struct TunDiagnosticCheckRow: View {
       return "exclamationmark.triangle.fill"
     case .fail:
       return "xmark.octagon.fill"
+    case .info:
+      return "info.circle.fill"
     case .skipped:
       return "minus.circle"
     }
@@ -912,6 +930,8 @@ private struct TunDiagnosticCheckRow: View {
       return .orange
     case .fail:
       return .red
+    case .info:
+      return .blue
     case .skipped:
       return .secondary
     }
@@ -1632,6 +1652,17 @@ private struct StatusTunDiagnosticsCard: View {
         .buttonStyle(.borderless)
         .disabled(!appModel.canRepairTunRouting)
         .help("Repair TUN routing")
+
+        if appModel.hasResidualSystemProxy {
+          Button {
+            appModel.disableResidualSystemProxy()
+          } label: {
+            Image(systemName: "xmark.shield")
+          }
+          .buttonStyle(.borderless)
+          .disabled(!appModel.canDisableResidualSystemProxy)
+          .help("Disable residual System Proxy")
+        }
       }
 
       StatusFactGrid(minimumColumnWidth: 108) {
@@ -1694,7 +1725,10 @@ private struct StatusTunDiagnosticsCard: View {
   private var diagnosticCounterText: String {
     let diagnostics = appModel.tunDiagnostics
     guard !diagnostics.checks.isEmpty else { return "Waiting" }
-    return "\(diagnostics.passCount)/\(diagnostics.warnCount)/\(diagnostics.failCount)"
+    let base = "\(diagnostics.passCount)/\(diagnostics.warnCount)/\(diagnostics.failCount)"
+    // Only widen the tile when something was actually downgraded, so the segments always
+    // account for every listed check.
+    return diagnostics.infoCount > 0 ? "\(base)/\(diagnostics.infoCount)" : base
   }
 
   private var lastUpdateText: String {
@@ -1710,6 +1744,8 @@ private struct StatusTunDiagnosticsCard: View {
       return .orange
     case .fail:
       return .red
+    case .info:
+      return .blue
     case .skipped:
       return .secondary
     }
@@ -1760,6 +1796,8 @@ private struct StatusTunDiagnosticCheckTile: View {
       return "exclamationmark.triangle.fill"
     case .fail:
       return "xmark.octagon.fill"
+    case .info:
+      return "info.circle.fill"
     case .skipped:
       return "minus.circle"
     }
@@ -1773,6 +1811,8 @@ private struct StatusTunDiagnosticCheckTile: View {
       return .orange
     case .fail:
       return .red
+    case .info:
+      return .blue
     case .skipped:
       return .secondary
     }

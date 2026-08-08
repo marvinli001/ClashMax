@@ -516,6 +516,35 @@ final class SystemProxyControllerTests: XCTestCase {
     XCTAssertTrue(runner.commands.contains("/usr/sbin/networksetup -setproxybypassdomains Wi-Fi \(SystemProxySettings.defaultBypassDomains.joined(separator: " "))"))
   }
 
+  /// Issue #19: the diagnostics must see the proxy macOS is actually applying, not the one
+  /// ClashMax believes it applied, so only enabled loopback entries are reported.
+  func testLocalProxyEntriesReportsEnabledLoopbackProxiesFromTheLiveState() async throws {
+    let runner = RecordingCommandRunner(outputs: [
+      "/usr/sbin/networksetup -listallnetworkservices": "An asterisk (*) denotes that a network service is disabled.\nWi-Fi\n",
+      "/usr/sbin/networksetup -getwebproxy Wi-Fi": "Enabled: Yes\nServer: 127.0.0.1\nPort: 17890\n",
+      // Disabled: macOS is not routing anything here, so it must not be reported.
+      "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi": "Enabled: No\nServer: 127.0.0.1\nPort: 17890\n",
+      // Enabled but not loopback: somebody else's proxy, not a ClashMax leftover.
+      "/usr/sbin/networksetup -getsocksfirewallproxy Wi-Fi": "Enabled: Yes\nServer: 10.0.0.2\nPort: 8080\n",
+      "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": "There aren't any bypass domains set.\n"
+    ])
+    let controller = SystemProxyController(commandRunner: runner)
+
+    let entries = try await controller.localProxyEntries()
+
+    XCTAssertEqual(
+      entries,
+      [LocalSystemProxyEntry(service: "Wi-Fi", kind: "HTTP", host: "127.0.0.1", port: 17_890)]
+    )
+    XCTAssertEqual(
+      LocalSystemProxyObservation.entries(entries).residualEntries(servedPorts: [7890]),
+      entries
+    )
+    XCTAssertTrue(
+      LocalSystemProxyObservation.entries(entries).residualEntries(servedPorts: [17_890]).isEmpty
+    )
+  }
+
   func testApplySystemProxySkipsInactiveBridgeAndVPNServicesWhenActiveInterfacesAreKnown() async throws {
     let runner = RecordingCommandRunner(outputs: [
       "/usr/sbin/networksetup -listallnetworkservices": """

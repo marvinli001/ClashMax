@@ -6,6 +6,10 @@ enum TunDiagnosticStatus: String, Codable, Equatable, Sendable {
   case warn
   case fail
   case skipped
+  /// Checked, worth reporting, but not a fault: the observed shape is a legitimate one.
+  /// Deliberately outside `primaryIssue` and the repairable-routing set so context never
+  /// reads as a failure or triggers a helper restart (issue #19).
+  case info
 
   var displayName: String {
     switch self {
@@ -13,6 +17,7 @@ enum TunDiagnosticStatus: String, Codable, Equatable, Sendable {
     case .warn: "Warn"
     case .fail: "Fail"
     case .skipped: "Skipped"
+    case .info: "Info"
     }
   }
 }
@@ -53,6 +58,7 @@ struct TunDiagnosticsSnapshot: Codable, Equatable, Sendable {
   var passCount: Int { checks.filter { $0.status == .pass }.count }
   var warnCount: Int { checks.filter { $0.status == .warn }.count }
   var failCount: Int { checks.filter { $0.status == .fail }.count }
+  var infoCount: Int { checks.filter { $0.status == .info }.count }
 
   var overallStatus: TunDiagnosticStatus {
     if failCount > 0 {
@@ -68,7 +74,8 @@ struct TunDiagnosticsSnapshot: Codable, Equatable, Sendable {
     if checks.isEmpty {
       return "Waiting"
     }
-    return "\(passCount) pass / \(warnCount) warn / \(failCount) fail"
+    let base = "\(passCount) pass / \(warnCount) warn / \(failCount) fail"
+    return infoCount > 0 ? "\(base) / \(infoCount) info" : base
   }
 
   var primaryIssue: TunDiagnosticCheck? {
@@ -86,6 +93,10 @@ struct TunRuntimeInspectionConfiguration: Equatable, Sendable {
   var helperPID: Int?
   var helperStatusMessage: String?
   var systemDNSState: SystemDNSOverrideState
+  var systemProxyState: LocalSystemProxyObservation
+  /// Loopback proxy ports the running runtime actually serves. Anything macOS points at
+  /// outside this set is a leftover pointing at a port nothing listens on.
+  var servedLocalProxyPorts: Set<Int>
   var includeExternal: Bool
 
   init(
@@ -94,6 +105,8 @@ struct TunRuntimeInspectionConfiguration: Equatable, Sendable {
     helperPID: Int?,
     helperStatusMessage: String? = nil,
     systemDNSState: SystemDNSOverrideState,
+    systemProxyState: LocalSystemProxyObservation = .notSampled,
+    servedLocalProxyPorts: Set<Int> = [],
     includeExternal: Bool = true
   ) {
     self.api = api
@@ -101,6 +114,8 @@ struct TunRuntimeInspectionConfiguration: Equatable, Sendable {
     self.helperPID = helperPID
     self.helperStatusMessage = helperStatusMessage
     self.systemDNSState = systemDNSState
+    self.systemProxyState = systemProxyState
+    self.servedLocalProxyPorts = servedLocalProxyPorts
     self.includeExternal = includeExternal
   }
 }
@@ -133,6 +148,7 @@ struct TunRuntimeInspector: TunRuntimeInspecting {
     checks.append(await interfaceCheck(configuration))
     checks.append(await defaultRouteCheck(configuration))
     checks.append(await routeExcludeCheck(configuration))
+    checks.append(systemProxyCheck(configuration))
     checks.append(systemDNSCheck(configuration))
     checks.append(await dnsHijackCheck(configuration))
 
@@ -155,10 +171,40 @@ struct TunRuntimeInspector: TunRuntimeInspecting {
     }
 
     return TunDiagnosticsSnapshot(
-      checks: checks,
+      checks: Self.downgradingRouteWarningBackedByLiveTraffic(checks),
       updatedAt: Date(),
       externalProbeIncluded: configuration.includeExternal
     )
+  }
+
+  /// A route probe landing on a physical interface is not by itself proof that TUN is dead:
+  /// macOS split routes and per-destination policy routing both produce it on a working TUN.
+  /// When both live probes actually reached the network, the route warning is context rather
+  /// than a fault, so it drops to `.info` — out of `primaryIssue`, and out of the set that
+  /// makes the repair path restart the helper (issue #19).
+  private static func downgradingRouteWarningBackedByLiveTraffic(
+    _ checks: [TunDiagnosticCheck]
+  ) -> [TunDiagnosticCheck] {
+    guard let routeIndex = checks.firstIndex(where: { $0.id == "default-route" }),
+          checks[routeIndex].status == .warn,
+          checks.first(where: { $0.id == "external-tcp" })?.status == .pass,
+          checks.first(where: { $0.id == "external-udp" })?.status == .pass
+    else {
+      return checks
+    }
+
+    var downgraded = checks
+    let route = checks[routeIndex]
+    downgraded[routeIndex] = TunDiagnosticCheck(
+      id: route.id,
+      title: route.title,
+      status: .info,
+      message: "\(route.message) Live TCP and UDP probes still reached the network, so traffic is flowing.",
+      detail: [route.detail, "external TCP and UDP probes passed"]
+        .compactMap { $0 }
+        .joined(separator: " · ")
+    )
+    return downgraded
   }
 
   private func controllerCheck(_ configuration: TunRuntimeInspectionConfiguration) async -> TunDiagnosticCheck {
@@ -364,6 +410,66 @@ struct TunRuntimeInspector: TunRuntimeInspecting {
       )
     } catch {
       return commandFailureCheck(id: "route-exclude", title: "Route Exclude", error: error)
+    }
+  }
+
+  /// TUN carries traffic at the routing layer, so macOS's own proxy settings are supposed to be
+  /// out of the picture. Issue #19: a proxy left enabled on a port ClashMax no longer serves
+  /// still hijacks every app that honors the system proxy, and the app's own state flag cannot
+  /// see it — this reads the live `networksetup` state instead.
+  private func systemProxyCheck(_ configuration: TunRuntimeInspectionConfiguration) -> TunDiagnosticCheck {
+    let title = "System Proxy"
+    switch configuration.systemProxyState {
+    case .notSampled:
+      return TunDiagnosticCheck(
+        id: "system-proxy",
+        title: title,
+        status: .skipped,
+        message: "Live System Proxy state was not sampled."
+      )
+    case let .unavailable(message):
+      // A read that never happened is not evidence of a problem, so this stays out of the
+      // warn/fail counts instead of inventing a fault the diagnostics never observed.
+      return TunDiagnosticCheck(
+        id: "system-proxy",
+        title: title,
+        status: .skipped,
+        message: "Could not read the live System Proxy state.",
+        detail: message
+      )
+    case let .entries(entries):
+      let residual = configuration.systemProxyState.residualEntries(
+        servedPorts: configuration.servedLocalProxyPorts
+      )
+      guard residual.isEmpty else {
+        var seenEndpoints: Set<String> = []
+        let ports = residual
+          .map { "\($0.host):\($0.port)" }
+          .filter { seenEndpoints.insert($0).inserted }
+          .joined(separator: ", ")
+        return TunDiagnosticCheck(
+          id: "system-proxy",
+          title: title,
+          status: .warn,
+          message: "System Proxy still sends apps to \(ports), which no ClashMax runtime is listening on.",
+          detail: residual.map(\.summary).joined(separator: ", ")
+        )
+      }
+      guard entries.isEmpty else {
+        return TunDiagnosticCheck(
+          id: "system-proxy",
+          title: title,
+          status: .pass,
+          message: "System Proxy points at the running mixed port.",
+          detail: entries.map(\.summary).joined(separator: ", ")
+        )
+      }
+      return TunDiagnosticCheck(
+        id: "system-proxy",
+        title: title,
+        status: .pass,
+        message: "No local System Proxy is set while TUN handles routing."
+      )
     }
   }
 

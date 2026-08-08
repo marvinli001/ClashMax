@@ -115,6 +115,15 @@ private extension TunDiagnosticsSnapshot {
     }
     return "\(issue.title): \(issue.message)"
   }
+
+  /// True when the only thing between this snapshot and a clean bill of health is a route
+  /// warning that no live probe has contradicted yet. macOS split routes leave the default route
+  /// on the physical interface even on a perfectly working TUN, so the route table alone must not
+  /// be allowed to order a helper restart — the data plane decides (issue #19).
+  var needsDataPlaneConfirmation: Bool {
+    guard !externalProbeIncluded, let issue = repairableRoutingIssue else { return false }
+    return issue.id == "default-route" && issue.status == .warn
+  }
 }
 
 private enum LastErrorOrigin {
@@ -650,6 +659,15 @@ final class AppModel {
       || tunnelCoreRunning
       || systemProxyController.hasManagedSystemDNSState
   }
+  /// Whether the last diagnostics pass saw macOS still pointing apps at a loopback proxy the
+  /// running runtime does not serve. Gates the visibility of the "disable residual System Proxy"
+  /// action, which stays hidden while there is nothing stranded to clean up.
+  var hasResidualSystemProxy: Bool {
+    !residualSystemProxyEntries.isEmpty
+  }
+  var canDisableResidualSystemProxy: Bool {
+    hasResidualSystemProxy && !residualSystemProxyDisableInFlight
+  }
   var canRepairTunRouting: Bool {
     runtimeOwner == .tunnel
       || tunEnabled
@@ -662,6 +680,11 @@ final class AppModel {
   private(set) var networkExtensionSystemDNSState: SystemDNSOverrideState = .inactive
   private(set) var tunSystemDNSState: SystemDNSOverrideState = .inactive
   private(set) var tunDiagnostics: TunDiagnosticsSnapshot = .empty
+  /// Loopback proxies macOS still points apps at on a port the running runtime does not serve,
+  /// as observed by the last diagnostics pass. Drives the "disable residual System Proxy"
+  /// action, which disables exactly these entries rather than guessing at ports (issue #19).
+  private(set) var residualSystemProxyEntries: [LocalSystemProxyEntry] = []
+  private(set) var residualSystemProxyDisableInFlight = false
   private(set) var tunHelperPreparationState: TunHelperPreparationState = .idle
   private(set) var tunHelperStatusDetail: TunnelHelperStatusDetail = .unknown
   var isAddingSubscription: Bool { profileCoordinator.isAddingSubscription }
@@ -894,6 +917,7 @@ final class AppModel {
   @ObservationIgnored private var runtimeStreamToken: UUID?
   @ObservationIgnored private var networkExtensionDiagnosticsTask: Task<Void, Never>?
   @ObservationIgnored private var tunDiagnosticsTask: Task<Void, Never>?
+  @ObservationIgnored private var residualSystemProxyDisableTask: Task<Void, Never>?
   @ObservationIgnored private var publishedNetworkExtensionDiagnosticEventIDs: Set<String> = []
   private let externalDashboardSecretStore: any SecretStoring
   private let currentNetworkProvider: any CurrentNetworkProviding
@@ -5085,7 +5109,7 @@ final class AppModel {
   ) {
     tunDiagnosticsTask?.cancel()
     guard runtimeOwner == .tunnel || tunEnabled || tunnelCoreRunning else {
-      tunDiagnostics = .empty
+      clearTunDiagnostics()
       tunDiagnosticsTask = nil
       return
     }
@@ -5096,17 +5120,22 @@ final class AppModel {
     let dnsState = tunSystemDNSState
     let helperClient = helperClient
     let inspector = tunRuntimeInspector
+    let servedPorts: Set<Int> = [runtimeOverrides.mixedPort]
     tunDiagnosticsTask = Task { @MainActor [weak self] in
       let helperStatus = await self?.liveTunHelperStatus(using: helperClient)
         ?? (pid: Optional<Int>.none, message: Optional<String>.none)
       guard !Task.isCancelled else { return }
       self?.tunHelperPID = helperStatus.pid
+      let systemProxyState = await self?.sampleLocalSystemProxyState(servedPorts: servedPorts) ?? .notSampled
+      guard !Task.isCancelled else { return }
       let configuration = TunRuntimeInspectionConfiguration(
         api: api,
         tunSettings: settings,
         helperPID: helperStatus.pid,
         helperStatusMessage: helperStatus.message,
         systemDNSState: dnsState,
+        systemProxyState: systemProxyState,
+        servedLocalProxyPorts: servedPorts,
         includeExternal: includeExternal
       )
       let snapshot = await inspector.inspect(configuration)
@@ -5143,11 +5172,19 @@ final class AppModel {
     }
   }
 
+  /// Drops the diagnostics snapshot together with everything derived from it. The residual
+  /// System Proxy list is only meaningful next to the pass that observed it: acting on a stale
+  /// copy would disable proxies that a later runtime legitimately owns.
+  private func clearTunDiagnostics() {
+    tunDiagnostics = .empty
+    residualSystemProxyEntries = []
+  }
+
   private func stopTunDiagnostics(clear: Bool) {
     tunDiagnosticsTask?.cancel()
     tunDiagnosticsTask = nil
     if clear {
-      tunDiagnostics = .empty
+      clearTunDiagnostics()
     }
   }
 
@@ -6339,8 +6376,11 @@ final class AppModel {
     didRestartHelper: Bool
   ) async throws -> Bool {
     var didRestartHelper = didRestartHelper
-    let postReloadSnapshot = await inspectTunRuntimeNow(
-      includeExternal: false,
+    let postReloadSnapshot = await routingSnapshotConfirmedByDataPlane(
+      await inspectTunRuntimeNow(
+        includeExternal: false,
+        runtimeOverrides: runtimeOverrides
+      ),
       runtimeOverrides: runtimeOverrides
     )
     guard postReloadSnapshot.hasRepairableRoutingIssue else {
@@ -6359,8 +6399,11 @@ final class AppModel {
         reason: reason
       )
       didRestartHelper = true
-      let postRestartSnapshot = await inspectTunRuntimeNow(
-        includeExternal: false,
+      let postRestartSnapshot = await routingSnapshotConfirmedByDataPlane(
+        await inspectTunRuntimeNow(
+          includeExternal: false,
+          runtimeOverrides: runtimeOverrides
+        ),
         runtimeOverrides: runtimeOverrides
       )
       if postRestartSnapshot.hasRepairableRoutingIssue {
@@ -6644,8 +6687,11 @@ final class AppModel {
         didRestartHelper = true
       }
 
-      let postReloadSnapshot = await inspectTunRuntimeNow(
-        includeExternal: false,
+      let postReloadSnapshot = await routingSnapshotConfirmedByDataPlane(
+        await inspectTunRuntimeNow(
+          includeExternal: false,
+          runtimeOverrides: runtimeOverrides
+        ),
         runtimeOverrides: runtimeOverrides
       )
       if !didRestartHelper, postReloadSnapshot.hasRepairableRoutingIssue {
@@ -6657,8 +6703,11 @@ final class AppModel {
         )
         activateRuntimeArtifacts(materialization)
         didRestartHelper = true
-        let postRestartSnapshot = await inspectTunRuntimeNow(
-          includeExternal: false,
+        let postRestartSnapshot = await routingSnapshotConfirmedByDataPlane(
+          await inspectTunRuntimeNow(
+            includeExternal: false,
+            runtimeOverrides: runtimeOverrides
+          ),
           runtimeOverrides: runtimeOverrides
         )
         if postRestartSnapshot.hasRepairableRoutingIssue {
@@ -6674,10 +6723,10 @@ final class AppModel {
       reloadRuntimeData()
     } else if systemProxyController.hasManagedSystemDNSState {
       _ = try await restoreTunSystemDNS()
-      tunDiagnostics = .empty
+      clearTunDiagnostics()
     } else {
       setTunSystemDNSState(.inactive)
-      tunDiagnostics = .empty
+      clearTunDiagnostics()
     }
     lastError = nil
   }
@@ -6687,13 +6736,14 @@ final class AppModel {
     runtimeOverrides: RuntimeOverrides? = nil
   ) async -> TunDiagnosticsSnapshot {
     guard runtimeOwner == .tunnel || tunEnabled || tunnelCoreRunning else {
-      tunDiagnostics = .empty
+      clearTunDiagnostics()
       return .empty
     }
     stopTunDiagnostics(clear: false)
     let helperStatus = await liveTunHelperStatus(using: helperClient)
     tunHelperPID = helperStatus.pid
     let runtimeOverrides = runtimeOverrides ?? currentRuntimeOverrides
+    let servedPorts: Set<Int> = [runtimeOverrides.mixedPort]
     let snapshot = await tunRuntimeInspector.inspect(
       TunRuntimeInspectionConfiguration(
         api: runtimeOverrides.endpoint,
@@ -6701,11 +6751,82 @@ final class AppModel {
         helperPID: helperStatus.pid,
         helperStatusMessage: helperStatus.message,
         systemDNSState: tunSystemDNSState,
+        systemProxyState: await sampleLocalSystemProxyState(servedPorts: servedPorts),
+        servedLocalProxyPorts: servedPorts,
         includeExternal: includeExternal
       )
     )
     tunDiagnostics = snapshot
     return snapshot
+  }
+
+  /// Second opinion before a routing repair escalates to a helper restart. The repair paths
+  /// inspect without external probes because they run on every settings apply, but that cheap
+  /// pass cannot tell a dead TUN from a split-routed working one. When a bare route warning is
+  /// the sole complaint, this re-inspects once with live probes: if traffic is flowing the check
+  /// downgrades to `.info` and the restart is skipped (issue #19). Any other issue is returned
+  /// untouched, so the common paths keep paying nothing for the probes.
+  private func routingSnapshotConfirmedByDataPlane(
+    _ snapshot: TunDiagnosticsSnapshot,
+    runtimeOverrides: RuntimeOverrides
+  ) async -> TunDiagnosticsSnapshot {
+    guard snapshot.needsDataPlaneConfirmation else { return snapshot }
+    return await inspectTunRuntimeNow(includeExternal: true, runtimeOverrides: runtimeOverrides)
+  }
+
+  /// Reads the live macOS proxy state for one diagnostics pass and remembers the leftovers, so
+  /// the repair action can disable exactly the entries that were observed instead of guessing
+  /// at ports. A read that fails is reported as unavailable rather than as "no proxy set" —
+  /// claiming the clean state we could not observe is how issue #19 stayed invisible.
+  private func sampleLocalSystemProxyState(servedPorts: Set<Int>) async -> LocalSystemProxyObservation {
+    let observation: LocalSystemProxyObservation
+    do {
+      let entries = try await withTimeout(seconds: 6) { @Sendable [systemProxyController] in
+        try await systemProxyController.localProxyEntries()
+      }
+      observation = .entries(entries)
+    } catch is CancellationError {
+      return .notSampled
+    } catch {
+      observation = .unavailable(UserFacingError.message(for: error))
+    }
+    residualSystemProxyEntries = observation.residualEntries(servedPorts: servedPorts)
+    return observation
+  }
+
+  /// Turns off exactly the leftover loopback proxies the last diagnostics pass observed. TUN
+  /// routes traffic itself, so a proxy still pointing at a port ClashMax does not serve only
+  /// breaks the apps that honor it (issue #19); no helper restart can clear that.
+  func disableResidualSystemProxy() {
+    guard !residualSystemProxyEntries.isEmpty, residualSystemProxyDisableTask == nil else { return }
+    let entries = residualSystemProxyEntries
+    residualSystemProxyDisableInFlight = true
+    residualSystemProxyDisableTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer {
+        residualSystemProxyDisableTask = nil
+        residualSystemProxyDisableInFlight = false
+      }
+      do {
+        let didChange = try await systemProxyController.disableMatchingProxy(
+          hosts: Set(entries.map(\.host)),
+          ports: Set(entries.map(\.port))
+        )
+        appendAppLog(
+          level: didChange ? "info" : "warn",
+          message: didChange
+            ? "Disabled residual System Proxy entries: \(entries.map(\.summary).joined(separator: ", "))."
+            : "Residual System Proxy entries were already gone: \(entries.map(\.summary).joined(separator: ", "))."
+        )
+        residualSystemProxyEntries = []
+        lastError = nil
+        refreshTunDiagnostics(includeExternal: false)
+      } catch is CancellationError {
+        return
+      } catch {
+        lastError = "Could not disable the residual System Proxy: \(UserFacingError.message(for: error))"
+      }
+    }
   }
 
   private func applySystemProxySettings(_ snapshot: AppliedRuntimeSettingsSnapshot? = nil) async throws {

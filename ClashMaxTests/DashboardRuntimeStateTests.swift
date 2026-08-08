@@ -9209,6 +9209,108 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(configurations.last?.includeExternal, false)
   }
 
+  /// Issue #19: the runtime can look healthy while macOS still hands every app to a proxy port
+  /// nothing serves. Diagnostics have to read the live state, and the fix is a proxy toggle —
+  /// not a helper restart.
+  func testResidualSystemProxyIsReadFromTheLiveStateAndDisabledOnDemand() async throws {
+    let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
+    let helperTransport = ReadyTunnelHelperTransport()
+    var outputs = Self.defaultNetworkSetupOutputs()
+    // A System Proxy stranded on the preview runtime port the running core does not serve.
+    outputs["/usr/sbin/networksetup -getwebproxy Wi-Fi"] = "Enabled: Yes\nServer: 127.0.0.1\nPort: 17890\n"
+    let commandRunner = RecordingCommandRunner(outputs: outputs)
+    let inspector = RecordingTunRuntimeInspector(snapshots: [])
+    let model = try await makeRunningTunnelModel(
+      client: client,
+      helperTransport: helperTransport,
+      tunRuntimeInspector: inspector,
+      systemProxyController: SystemProxyController(commandRunner: commandRunner)
+    )
+
+    model.refreshTunDiagnostics(includeExternal: false)
+    for _ in 0..<500 where !model.hasResidualSystemProxy {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(model.residualSystemProxyEntries.map(\.summary), ["Wi-Fi HTTP → 127.0.0.1:17890"])
+    XCTAssertTrue(model.canDisableResidualSystemProxy)
+    let configurations = await inspector.configurations()
+    XCTAssertEqual(configurations.first?.servedLocalProxyPorts, [model.currentRuntimeOverrides.mixedPort])
+    XCTAssertEqual(
+      configurations.first?.systemProxyState,
+      .entries([LocalSystemProxyEntry(service: "Wi-Fi", kind: "HTTP", host: "127.0.0.1", port: 17_890)])
+    )
+
+    let disableCommand = "/usr/sbin/networksetup -setwebproxystate Wi-Fi off"
+    model.disableResidualSystemProxy()
+    for _ in 0..<500 where !commandRunner.commands.contains(disableCommand) && model.lastError == nil {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertTrue(commandRunner.commands.contains(disableCommand))
+    XCTAssertNil(model.lastError)
+    let restartCount = await helperTransport.restartCount()
+    let startCount = await helperTransport.startCount()
+    XCTAssertEqual(restartCount, 0)
+    XCTAssertEqual(startCount, 0)
+  }
+
+  /// Issue #19: macOS split routes leave the default route on the physical interface even when
+  /// TUN is carrying traffic. The cheap route-table pass cannot tell that apart from a dead TUN,
+  /// so a bare route warning has to be confirmed by live probes before anything gets restarted.
+  func testRoutingRepairConfirmsARouteWarningWithLiveProbesInsteadOfRestartingTheHelper() async throws {
+    let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
+    let helperTransport = ReadyTunnelHelperTransport()
+    let routeWarning = Self.tunDiagnosticsSnapshot(
+      checks: [
+        TunDiagnosticCheck(
+          id: "default-route",
+          title: "TUN Route",
+          status: .warn,
+          message: "Route to 1.1.1.1 is not using the configured TUN device."
+        )
+      ],
+      includeExternal: false,
+      time: 11
+    )
+    let confirmed = Self.tunDiagnosticsSnapshot(
+      checks: [
+        TunDiagnosticCheck(
+          id: "default-route",
+          title: "TUN Route",
+          status: .info,
+          message: "Route to 1.1.1.1 is not using the configured TUN device. Live TCP and UDP probes still reached the network, so traffic is flowing."
+        )
+      ],
+      includeExternal: true,
+      time: 12
+    )
+    let inspector = RecordingTunRuntimeInspector(snapshots: [routeWarning, confirmed])
+    let model = try await makeRunningTunnelModel(
+      client: client,
+      helperTransport: helperTransport,
+      tunRuntimeInspector: inspector
+    )
+    model.tunSettings = .default
+
+    model.repairTunRouting()
+    for _ in 0..<800 where model.tunDiagnostics != confirmed && model.lastError == nil {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertNil(model.lastError)
+    XCTAssertEqual(model.tunDiagnostics, confirmed)
+    let configurations = await inspector.configurations()
+    XCTAssertEqual(configurations.map(\.includeExternal), [false, true])
+    let restartCount = await helperTransport.restartCount()
+    let startCount = await helperTransport.startCount()
+    XCTAssertEqual(restartCount, 0, "Live probes contradicted the route warning, so nothing needed restarting.")
+    XCTAssertEqual(startCount, 0)
+  }
+
   func testTunStopDisablesMihomoTunBeforeStoppingHelper() async throws {
     let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
     let helperTransport = ReadyTunnelHelperTransport()
