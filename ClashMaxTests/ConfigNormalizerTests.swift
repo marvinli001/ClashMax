@@ -3200,6 +3200,39 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(nodes.map(\.name), ["PASS", "PASS-RULE", "COMPATIBLE", "REJECT-DROP", "DIRECT"])
     XCTAssertEqual(nodes.map(\.type), ["pass", "pass-rule", "compatible", "reject", "direct"])
     XCTAssertTrue(nodes.allSatisfy(\.isSelectable))
+    XCTAssertEqual(nodes.map(\.supportsDelayTesting), [false, false, true, false, true])
+  }
+
+  func testDelayTestingSupportExcludesOnlyTheUnprobeableBuiltInOutbounds() throws {
+    // Verified against the bundled core (v1.19.29): these four answer /proxies/<name>/delay with
+    // HTTP 503 no matter what, so probing them can only ever record a phantom failure.
+    for name in ["REJECT", "REJECT-DROP", "PASS", "PASS-RULE"] {
+      XCTAssertFalse(
+        MihomoBuiltInProxy.supportsDelayTesting(name: name, type: "Selector"),
+        "\(name) must be excluded from delay testing"
+      )
+      XCTAssertFalse(
+        MihomoBuiltInProxy.supportsDelayTesting(name: name.lowercased(), type: ""),
+        "\(name) must be excluded case-insensitively"
+      )
+    }
+
+    // The same outbounds keyed by type, both as the runtime reports them and as the profile
+    // preview synthesizes them.
+    for type in ["Reject", "RejectDrop", "Pass", "PassRule", "reject", "reject-drop", "pass-rule"] {
+      XCTAssertFalse(
+        MihomoBuiltInProxy.supportsDelayTesting(name: "Renamed", type: type),
+        "type \(type) must be excluded from delay testing"
+      )
+    }
+
+    // DIRECT, COMPATIBLE and GLOBAL all return a real measurement, so they stay testable.
+    XCTAssertTrue(MihomoBuiltInProxy.supportsDelayTesting(name: "DIRECT", type: "Direct"))
+    XCTAssertTrue(MihomoBuiltInProxy.supportsDelayTesting(name: "COMPATIBLE", type: "Compatible"))
+    XCTAssertTrue(MihomoBuiltInProxy.supportsDelayTesting(name: "GLOBAL", type: "Selector"))
+    XCTAssertTrue(MihomoBuiltInProxy.supportsDelayTesting(name: "Japan", type: "vless"))
+    // A user node whose name merely contains a reserved word is still testable.
+    XCTAssertTrue(MihomoBuiltInProxy.supportsDelayTesting(name: "REJECT-ish Relay", type: "ss"))
   }
 
   func testPreviewGroupsExtractBase64URIProviderContent() throws {

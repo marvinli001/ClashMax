@@ -7,10 +7,16 @@ enum MenuBarPanelLayout {
   /// window style already draws the rounded, blurred panel on macOS 26, so this
   /// is the *only* chrome the app contributes — no second card, no border.
   static let padding: CGFloat = 12
-  static let controlWidth: CGFloat = 108
-  /// Wider than `controlWidth` so a group row can show the current node name and a
-  /// delay chip side by side; the node name truncates before the group name does.
-  static let selectionLabelMaxWidth: CGFloat = 176
+  /// One width for every trailing control in the panel's control rows — Run Mode,
+  /// Profile, and each proxy-group selector. Shared so the popups line up on both
+  /// edges instead of each sizing to its own content, and generous enough that a
+  /// typical node name ("[vless]JP Nano") reads in full next to its delay chip.
+  ///
+  /// It is a fixed width, not a minimum: it doubles as the cap that keeps an
+  /// overlong subscription node name truncating *inside* the popup instead of
+  /// widening the row and squeezing the group name out of the panel.
+  static let trailingControlWidth: CGFloat = 162
+  static let trailingControlCornerRadius: CGFloat = 5
   static let statusCornerRadius: CGFloat = 8
   static let trafficChartHeight: CGFloat = 52
   static let footerButtonMinWidth: CGFloat = 0
@@ -74,37 +80,45 @@ struct MenuBarView: View {
         MenuBarProxyModeSelector()
 
         MenuBarControlRow(title: String(localized: "Run Mode"), systemImage: "slider.horizontal.3") {
-          Picker("Run Mode", selection: Binding(
-            get: { appModel.overrides.mode },
-            set: { appModel.requestMode($0) }
-          )) {
+          MenuBarSelectionMenu {
             ForEach(RunMode.allCases) { mode in
-              Label(mode.displayName, systemImage: mode.menuBarSymbolName)
-                .tag(mode)
+              Button {
+                appModel.requestMode(mode)
+              } label: {
+                Label(
+                  mode.displayName,
+                  systemImage: mode == appModel.overrides.mode
+                    ? "checkmark.circle.fill"
+                    : mode.menuBarSymbolName
+                )
+              }
             }
+          } value: {
+            Label(
+              appModel.overrides.mode.displayName,
+              systemImage: appModel.overrides.mode.menuBarSymbolName
+            )
           }
-          .menuBarPopupPickerStyle()
         }
 
         MenuBarControlRow(title: String(localized: "Profile"), systemImage: "rectangle.stack") {
-          Picker("Profile", selection: Binding<Profile.ID?>(
-            get: { appModel.profileStore.activeProfileID },
-            set: { id in
-              guard let id,
-                    let profile = appModel.profileStore.profiles.first(where: { $0.id == id })
-              else { return }
-              appModel.selectProfile(profile)
-            }
-          )) {
-            Label("No Profile", systemImage: "rectangle.stack")
-              .tag(Profile.ID?.none)
-
+          MenuBarSelectionMenu {
             ForEach(appModel.profileStore.profiles) { profile in
-              Label(profile.name, systemImage: profile.menuBarSymbolName)
-                .tag(Profile.ID?.some(profile.id))
+              Button {
+                appModel.selectProfile(profile)
+              } label: {
+                Label(
+                  profile.name,
+                  systemImage: profile.id == appModel.profileStore.activeProfileID
+                    ? "checkmark.circle.fill"
+                    : profile.menuBarSymbolName
+                )
+              }
             }
+          } value: {
+            Label(activeProfileName, systemImage: activeProfileSymbolName)
           }
-          .menuBarPopupPickerStyle(disabled: appModel.profileStore.profiles.isEmpty)
+          .disabled(appModel.profileStore.profiles.isEmpty)
         }
 
         ForEach(nodeSelectorGroups) { group in
@@ -198,6 +212,10 @@ struct MenuBarView: View {
 
   private var activeProfileName: String {
     appModel.profileStore.activeProfile?.name ?? String(localized: "No Profile")
+  }
+
+  private var activeProfileSymbolName: String {
+    appModel.profileStore.activeProfile?.menuBarSymbolName ?? "rectangle.stack"
   }
 
   private var nodeSelectorGroups: [ProxyGroup] {
@@ -510,15 +528,14 @@ private struct MenuBarGroupSelectionRow: View {
 
   var body: some View {
     MenuBarControlRow(title: group.name, systemImage: systemImage) {
-      Menu {
+      MenuBarSelectionMenu {
         MenuBarGroupNodeButtons(group: group)
-      } label: {
+      } value: {
         MenuBarGroupSelectionLabel(
           selectedNode: MenuBarNodeSelection.currentSelectionLabel(for: group),
           delay: MenuBarNodeSelection.currentDelayDisplay(for: group)
         )
       }
-      .controlSize(.small)
       .disabled(!appModel.canSelectProxyNodesFromMenuBar || group.nodes.filter(\.isSelectable).isEmpty)
     }
   }
@@ -713,10 +730,11 @@ struct MenuBarControlRow<Control: View>: View {
   }
 }
 
-/// Trailing label for a group-selection row: the current node (truncated) plus a
-/// compact delay chip that reuses the Proxies-page `ProxyDelayDisplay` semantics
-/// and colors. Capped so a long node name truncates instead of pushing the group
-/// name off the row (Discussion #20).
+/// Value shown by a group-selection row's `MenuBarSelectionMenu`: the current node
+/// plus a compact delay chip that reuses the Proxies-page `ProxyDelayDisplay`
+/// semantics and colors. The node name is the only part allowed to give up space,
+/// so a long subscription name truncates inside the shared control column instead
+/// of pushing the delay — or the group name — off the row (Discussion #20).
 struct MenuBarGroupSelectionLabel: View {
   let selectedNode: String
   let delay: ProxyDelayDisplay
@@ -733,7 +751,6 @@ struct MenuBarGroupSelectionLabel: View {
         .lineLimit(1)
         .fixedSize()
     }
-    .frame(maxWidth: MenuBarPanelLayout.selectionLabelMaxWidth, alignment: .trailing)
   }
 }
 
@@ -794,13 +811,73 @@ private extension Profile {
   }
 }
 
-private extension View {
-  func menuBarPopupPickerStyle(disabled: Bool = false) -> some View {
-    labelsHidden()
-      .pickerStyle(.menu)
-      .controlSize(.small)
-      .frame(width: MenuBarPanelLayout.controlWidth)
-      .fixedSize(horizontal: true, vertical: false)
-      .disabled(disabled)
+/// The panel's one trailing control: a pull-down menu drawn as a fixed-width
+/// popup button. Run Mode, Profile, and every proxy-group selector use it, so the
+/// three rows line up on both edges and no value can widen its row.
+///
+/// It is deliberately not a stock `Picker`/`Menu` bezel. A macOS popup button
+/// sizes itself to its own content and a SwiftUI frame can only *compress* it,
+/// never stretch it — measured: `.frame(width:)` leaves a short picker at its
+/// intrinsic width and centers it, and a `Menu` discards its label's layout
+/// entirely (an overlong node name grew the bezel instead of truncating). Routing
+/// the menu through a custom `ButtonStyle` is what moves the layout from AppKit
+/// back into SwiftUI, which is where the shared width becomes ours to set.
+struct MenuBarSelectionMenu<Content: View, Value: View>: View {
+  @ViewBuilder var content: Content
+  @ViewBuilder var value: Value
+
+  var body: some View {
+    Menu {
+      content
+    } label: {
+      HStack(spacing: 4) {
+        value
+          .lineLimit(1)
+
+        Spacer(minLength: 2)
+
+        Image(systemName: "chevron.up.chevron.down")
+          .font(.caption2.weight(.semibold))
+          .foregroundStyle(.secondary)
+      }
+      .font(.subheadline)
+    }
+    .menuStyle(.button)
+    .buttonStyle(MenuBarSelectionMenuStyle())
+    .menuIndicator(.hidden)
+    .frame(width: MenuBarPanelLayout.trailingControlWidth)
+  }
+}
+
+/// Draws the popup-button bezel `MenuBarSelectionMenu` needs. Being a custom
+/// style is the point — see that type — so keep the frame/padding here rather
+/// than reaching for a stock bordered style.
+private struct MenuBarSelectionMenuStyle: ButtonStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    Bezel(configuration: configuration)
+  }
+
+  private struct Bezel: View {
+    @Environment(\.isEnabled) private var isEnabled
+    let configuration: ButtonStyleConfiguration
+
+    private var shape: RoundedRectangle {
+      RoundedRectangle(cornerRadius: MenuBarPanelLayout.trailingControlCornerRadius, style: .continuous)
+    }
+
+    var body: some View {
+      configuration.label
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(.quaternary, in: shape)
+        .contentShape(shape)
+        .opacity(opacity)
+    }
+
+    private var opacity: Double {
+      guard isEnabled else { return 0.45 }
+      return configuration.isPressed ? 0.75 : 1
+    }
   }
 }

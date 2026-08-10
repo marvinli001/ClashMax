@@ -13,8 +13,15 @@ final class MenuBarPanelLayoutTests: XCTestCase {
     // Control Center's 320pt panel width is the native reference for a rich
     // menu bar panel.
     XCTAssertEqual(MenuBarPanelLayout.width, 320)
-    XCTAssertEqual(MenuBarPanelLayout.controlWidth, 108)
+    XCTAssertEqual(MenuBarPanelLayout.trailingControlWidth, 162)
     XCTAssertEqual(MenuBarPanelLayout.trafficChartHeight, 52)
+    // The trailing column and its row label both have to fit the panel's content
+    // box, so the column can never be widened past the point where a row title
+    // would have no room left.
+    XCTAssertLessThanOrEqual(
+      MenuBarPanelLayout.trailingControlWidth + 100,
+      MenuBarPanelLayout.width - 2 * MenuBarPanelLayout.padding
+    )
   }
 
   func testPanelAddsNoChromeMarginInsideTheSystemPanel() async throws {
@@ -152,7 +159,7 @@ final class MenuBarPanelLayoutTests: XCTestCase {
     let view = MenuBarControlRow(title: String(localized: "Proxy Routing"), systemImage: "network") {
       Text(String(localized: "System Proxy"))
         .lineLimit(1)
-        .frame(width: MenuBarPanelLayout.controlWidth, alignment: .trailing)
+        .frame(width: MenuBarPanelLayout.trailingControlWidth, alignment: .trailing)
     }
     .padding(MenuBarPanelLayout.padding)
     .frame(width: MenuBarPanelLayout.width)
@@ -168,9 +175,9 @@ final class MenuBarPanelLayoutTests: XCTestCase {
       title: "Proxy Group - 香港 日本 美国 自动选择 - Very Long Provider Alias",
       systemImage: "point.3.connected.trianglepath.dotted"
     ) {
-      MenuBarGroupSelectionLabel(
-        selectedNode: "Auto Select - Hong Kong Premium Relay With A Very Long Name",
-        delay: ProxyDelayDisplay(state: .measured(8888))
+      groupSelector(
+        node: "Auto Select - Hong Kong Premium Relay With A Very Long Name",
+        delay: .measured(8888)
       )
     }
     .padding(MenuBarPanelLayout.padding)
@@ -181,6 +188,95 @@ final class MenuBarPanelLayoutTests: XCTestCase {
 
     XCTAssertLessThanOrEqual(size.width, MenuBarPanelLayout.width + 1)
     XCTAssertLessThanOrEqual(size.height, 52)
+  }
+
+  func testRunModeProfileAndGroupSelectorShareOneDrawnControlWidth() throws {
+    // The three control rows must present one aligned column. Measuring the view
+    // tree is not enough: a stock popup button reports whatever width its frame
+    // claims while AppKit draws the bezel at its own intrinsic width, which is
+    // exactly how the rows drifted apart (79 / 90 / 118pt for Run Mode / Profile
+    // / a group). So this measures the *drawn* bezel out of a render.
+    let panel = VStack(alignment: .leading, spacing: 7) {
+      MenuBarSelectionMenu {
+        Button("Rule") {}
+      } value: {
+        Label(RunMode.rule.displayName, systemImage: "list.bullet.rectangle")
+      }
+
+      MenuBarSelectionMenu {
+        Button("Elite") {}
+      } value: {
+        Label("Elite", systemImage: "arrow.triangle.2.circlepath.circle")
+      }
+
+      groupSelector(node: "[vless]JP Nano", delay: .measured(66))
+
+      // The cap: an absurd node name must not widen the column past the others.
+      groupSelector(
+        node: "[vless] 日本 东京 IEPL 专线 中继 - Premium Relay Node 01 - 倍率 0.2",
+        delay: .measured(8888)
+      )
+
+      groupSelector(node: "JP", delay: .unknown)
+        .disabled(true)
+    }
+    .padding(MenuBarPanelLayout.padding)
+    .frame(width: MenuBarPanelLayout.width, alignment: .leading)
+    .environment(\.locale, Locale(identifier: "zh-Hans"))
+
+    let bezels = try Self.drawnRowWidths(for: panel)
+
+    XCTAssertEqual(bezels.count, 5, "expected one drawn bezel per selection row, got \(bezels)")
+    for width in bezels {
+      XCTAssertEqual(
+        width,
+        MenuBarPanelLayout.trailingControlWidth,
+        accuracy: 1.5,
+        "a selection control drew at \(width)pt instead of the shared column width"
+      )
+    }
+  }
+
+  private func groupSelector(node: String, delay: ProxyDelayState) -> some View {
+    MenuBarSelectionMenu {
+      Button(node) {}
+    } value: {
+      MenuBarGroupSelectionLabel(selectedNode: node, delay: ProxyDelayDisplay(state: delay))
+    }
+  }
+
+  /// Widths of the painted horizontal bands in a rendered view — one band per
+  /// control row here, because the panel itself paints no background.
+  private static func drawnRowWidths<Content: View>(for view: Content) throws -> [CGFloat] {
+    let hostingView = NSHostingView(rootView: view)
+    hostingView.appearance = NSAppearance(named: .aqua)
+    hostingView.setFrameSize(NSSize(width: MenuBarPanelLayout.width, height: 400))
+    hostingView.layoutSubtreeIfNeeded()
+    hostingView.setFrameSize(hostingView.fittingSize)
+    hostingView.layoutSubtreeIfNeeded()
+
+    let rep = try XCTUnwrap(hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds))
+    hostingView.cacheDisplay(in: hostingView.bounds, to: rep)
+
+    let scale = CGFloat(rep.pixelsWide) / hostingView.bounds.width
+    var widths: [CGFloat] = []
+    var band: (first: Int, last: Int)?
+
+    for y in 0..<rep.pixelsHigh {
+      let painted = (0..<rep.pixelsWide).filter { x in
+        (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.02
+      }
+      if let first = painted.first, let last = painted.last {
+        band = (min(band?.first ?? first, first), max(band?.last ?? last, last))
+      } else if let finished = band {
+        widths.append(CGFloat(finished.last - finished.first + 1) / scale)
+        band = nil
+      }
+    }
+    if let finished = band {
+      widths.append(CGFloat(finished.last - finished.first + 1) / scale)
+    }
+    return widths
   }
 
   func testProxyModeSelectorRowFitsPanelWidthInEnglishAndChinese() {

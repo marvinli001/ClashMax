@@ -643,11 +643,26 @@ private struct CurrentProxyRuntimeCard: View {
         }
         .buttonStyle(.borderless)
         .controlSize(.small)
-        .disabled(!appModel.canControlRuntimeProxies)
-        .help(appModel.canControlRuntimeProxies ? "Test current node delay" : appModel.proxyRuntimeActionMessage)
+        .disabled(!appModel.canControlRuntimeProxies || !currentNodeSupportsDelayTesting(in: group))
+        .help(nodeDelayTestHelp(group: group))
       }
     }
     .disabled(!appModel.canControlRuntimeProxies)
+  }
+
+  /// Reserved outbounds (REJECT / PASS …) can be *selected* as a group's node but never answer a
+  /// delay probe, so the button is disabled instead of firing a request that always fails.
+  private func currentNodeSupportsDelayTesting(in group: ProxyGroup) -> Bool {
+    guard let node = DashboardProxySelectionState.currentNode(in: group) else { return false }
+    return node.supportsDelayTesting
+  }
+
+  private func nodeDelayTestHelp(group: ProxyGroup) -> String {
+    guard appModel.canControlRuntimeProxies else { return appModel.proxyRuntimeActionMessage }
+    guard currentNodeSupportsDelayTesting(in: group) else {
+      return String(localized: "Built-in outbounds have no connection to measure.")
+    }
+    return String(localized: "Test current node delay")
   }
 
   private func groupSelection(groups: [ProxyGroup]) -> Binding<String?> {

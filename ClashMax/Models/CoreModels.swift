@@ -4544,6 +4544,13 @@ struct ProxyNode: Identifiable, Codable, Equatable, Sendable {
     return delayState
   }
 
+  /// `false` for reserved outbounds whose delay probe always fails (REJECT / PASS and friends).
+  /// They are still selectable — you can point a group at REJECT — they just cannot be measured,
+  /// so delay testing skips them instead of recording a guaranteed 503 as a node failure.
+  var supportsDelayTesting: Bool {
+    MihomoBuiltInProxy.supportsDelayTesting(name: name, type: type)
+  }
+
   var endpointSummary: String? {
     guard let host = serverHost?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty else {
       return nil
@@ -4585,6 +4592,35 @@ enum MihomoBuiltInProxy {
     default:
       return nil
     }
+  }
+
+  /// Reserved outbounds that can never answer `/proxies/<name>/delay`: they have no dialer to
+  /// probe with, so mihomo always replies `503 {"message":"An error occurred in the delay test"}`
+  /// — the same response a genuinely dead node gives, which is why they have to be excluded by
+  /// identity rather than by inspecting the failure.
+  ///
+  /// Verified against the bundled core (v1.19.29): `REJECT`, `REJECT-DROP`, `PASS` and `PASS-RULE`
+  /// return 503, while `DIRECT` and `COMPATIBLE` return a real measurement — so only the four
+  /// below are excluded. `GLOBAL` (a selector) is probeable too and stays testable.
+  private static let nonProbeableNames: Set<String> = ["REJECT", "REJECT-DROP", "PASS", "PASS-RULE"]
+
+  /// The same outbounds keyed by the `type` mihomo reports (`Reject`, `RejectDrop`, `Pass`,
+  /// `PassRule`) and by the lowercased types `type(for:)` synthesizes for profile-preview nodes.
+  /// Separators are stripped before the lookup so both spellings collapse onto one entry.
+  private static let nonProbeableTypes: Set<String> = ["REJECT", "REJECTDROP", "PASS", "PASSRULE"]
+
+  /// Whether a delay probe against this proxy can produce a meaningful result.
+  static func supportsDelayTesting(name: String, type: String) -> Bool {
+    let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    if nonProbeableNames.contains(normalizedName) {
+      return false
+    }
+    let normalizedType = type
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .uppercased()
+      .replacingOccurrences(of: "-", with: "")
+      .replacingOccurrences(of: "_", with: "")
+    return !nonProbeableTypes.contains(normalizedType)
   }
 }
 

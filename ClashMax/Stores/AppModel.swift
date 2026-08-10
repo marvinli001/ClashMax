@@ -5353,12 +5353,12 @@ final class AppModel {
     testDelay(in: fallbackGroup, for: node)
   }
 
-    func testDelay(in group: ProxyGroup, testURL: URL? = nil) {
-      let selectableNodes = group.nodes.filter(\.isSelectable)
-      guard !selectableNodes.isEmpty else {
-        publishWarningNotice("\(group.name) has no selectable nodes to test.")
-        return
-      }
+  func testDelay(in group: ProxyGroup, testURL: URL? = nil) {
+    let selectableNodes = group.nodes.filter { $0.isSelectable && $0.supportsDelayTesting }
+    guard !selectableNodes.isEmpty else {
+      publishWarningNotice("\(group.name) has no selectable nodes to test.")
+      return
+    }
     for node in selectableNodes {
       testDelay(in: group, for: node, testURL: testURL, reloadAfterCompletion: false)
     }
@@ -5393,10 +5393,16 @@ final class AppModel {
     testURL: URL?,
     reloadAfterCompletion: Bool
   ) {
-      guard node.isSelectable else {
-        publishWarningNotice("\(node.name) cannot be tested from the runtime.")
-        return
-      }
+    guard node.isSelectable else {
+      publishWarningNotice("\(node.name) cannot be tested from the runtime.")
+      return
+    }
+    // Reserved outbounds (REJECT / PASS …) always answer their delay endpoint with 503, so the
+    // probe is skipped rather than recorded as a node failure.
+    guard node.supportsDelayTesting else {
+      publishWarningNotice("\(node.name) is a built-in outbound with no connection to measure.")
+      return
+    }
     guard let apiClient = runtimeAPIClientForProxyAction() else { return }
     let settings = delayTestSettings
     let effectiveTestURL = testURL ?? customDelayTestURL(forGroupName: group.name) ?? AppConstants.defaultDelayTestURL
@@ -5435,8 +5441,11 @@ final class AppModel {
   private func startProxyDelayBatch(overrideTestURL: URL?) {
     guard let apiClient = runtimeAPIClientForProxyAction() else { return }
     guard proxyDelayBatchTask == nil else { return }
+    // Reserved outbounds (REJECT / PASS …) are skipped rather than probed: mihomo answers their
+    // delay endpoint with a guaranteed 503, which used to surface as a real node failure and left
+    // every batch reporting "partially completed" with one unavoidable error.
     let items = visibleProxyGroups.flatMap { group in
-      group.nodes.filter(\.isSelectable).map { node in
+      group.nodes.filter { $0.isSelectable && $0.supportsDelayTesting }.map { node in
         let effectiveTestURL = overrideTestURL
           ?? customDelayTestURL(forGroupName: group.name)
           ?? AppConstants.defaultDelayTestURL

@@ -6265,6 +6265,112 @@ final class DashboardRuntimeStateTests: XCTestCase {
     })
   }
 
+  func testBatchDelayTestingSkipsBuiltInOutboundsThatCannotBeProbed() async throws {
+    // Mirrors the GLOBAL group mihomo synthesizes: REJECT and friends sit next to real nodes and
+    // are reported as selectable, but their delay endpoint always answers 503. Probing them left
+    // every batch stuck at "partially completed" with one unavoidable failure.
+    let group = ProxyGroup(
+      name: "GLOBAL",
+      type: "select",
+      selected: "Japan",
+      nodes: [
+        ProxyNode(name: "DIRECT", type: "Direct", delay: nil, isSelectable: true),
+        ProxyNode(name: "REJECT", type: "Reject", delay: nil, isSelectable: true),
+        ProxyNode(name: "REJECT-DROP", type: "RejectDrop", delay: nil, isSelectable: true),
+        ProxyNode(name: "PASS", type: "Pass", delay: nil, isSelectable: true),
+        ProxyNode(name: "COMPATIBLE", type: "Compatible", delay: nil, isSelectable: true),
+        ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true)
+      ]
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [group],
+      testDelayResults: [73, 88, 99]
+    )
+    let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [group])
+
+    model.testDelayForAllProxyGroups()
+    try await waitForBatchProgress(model) { !$0.isRunning && $0.completed == 3 }
+
+    let probed = await client.delayRequestProxies()
+    XCTAssertEqual(probed.sorted(), ["COMPATIBLE", "DIRECT", "Japan"])
+
+    let progress = try XCTUnwrap(model.proxyDelayBatchProgress)
+    XCTAssertEqual(progress.total, 3)
+    XCTAssertEqual(progress.succeeded, 3)
+    XCTAssertEqual(progress.failureCount, 0)
+    XCTAssertTrue(progress.failures.isEmpty)
+    XCTAssertEqual(progress.status, .completed)
+
+    let nodes = try XCTUnwrap(model.proxyGroups.first?.nodes)
+    XCTAssertNil(nodes.first { $0.name == "REJECT" }?.delay)
+    XCTAssertEqual(nodes.first { $0.name == "REJECT" }?.resolvedDelayState, .unknown)
+    XCTAssertNil(model.lastError)
+  }
+
+  func testSingleDelayTestOnBuiltInOutboundWarnsInsteadOfProbing() async throws {
+    let group = ProxyGroup(
+      name: "GLOBAL",
+      type: "select",
+      selected: "REJECT",
+      nodes: [
+        ProxyNode(name: "REJECT", type: "Reject", delay: nil, isSelectable: true),
+        ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true)
+      ]
+    )
+    let client = RecordingMihomoController(proxyGroupsResponse: [group], testDelayResult: 73)
+    let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [group])
+
+    model.testDelay(in: group, for: group.nodes[0])
+
+    for _ in 0..<80 where model.appNotice == nil {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 2_000_000)
+    }
+
+    let delayRequestCount = await client.delayRequestCount()
+    XCTAssertEqual(delayRequestCount, 0)
+    XCTAssertEqual(model.appNotice?.tone, .warning)
+    XCTAssertTrue(model.appNotice?.message.contains("REJECT") == true)
+    XCTAssertNil(model.lastError)
+    XCTAssertEqual(model.proxyGroups.first?.nodes.first?.resolvedDelayState, .unknown)
+  }
+
+  func testGroupDelayTestingSkipsBuiltInOutboundsThatCannotBeProbed() async throws {
+    let group = ProxyGroup(
+      name: "GLOBAL",
+      type: "select",
+      selected: "Japan",
+      nodes: [
+        ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
+        ProxyNode(name: "PASS-RULE", type: "PassRule", delay: nil, isSelectable: true),
+        ProxyNode(name: "DIRECT", type: "Direct", delay: nil, isSelectable: true)
+      ]
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [group],
+      testDelayResults: [73, 88]
+    )
+    let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [group])
+
+    model.testDelay(in: group)
+
+    for _ in 0..<80 {
+      if await client.delayRequestCount() >= 2 { break }
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 2_000_000)
+    }
+
+    // Settle so a late PASS-RULE probe would still be caught by the assertion below.
+    for _ in 0..<10 {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 2_000_000)
+    }
+
+    let probed = await client.delayRequestProxies()
+    XCTAssertEqual(probed.sorted(), ["DIRECT", "Japan"])
+    XCTAssertNil(model.lastError)
+  }
+
   func testBatchDelayTestingReportsMissingEndpointForNativePing() async throws {
     let group = ProxyGroup(
       name: "Proxy",

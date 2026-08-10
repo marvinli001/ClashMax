@@ -48,25 +48,32 @@ struct ProxiesView: View {
     )
 
     AdaptivePage(title: "Proxies") {
-      searchProgressIndicator
-      testAllButton
-      if !appModel.isRunning, appModel.profileStore.activeProfile != nil {
-        Button {
-          appModel.start()
-        } label: {
-          Label(
-            localizedProxiesText(isStarting ? "Starting" : "Start"),
-            systemImage: isStarting ? "clock.arrow.circlepath" : "play.fill"
-          )
+      // The spinner's fade is scoped to this action bar on purpose. `isComputing` flips twice per
+      // pipeline run (once on submit, once on publish) and a delay batch runs the pipeline on
+      // every coalesced flush, so as a page-level modifier this put the *entire* Proxies tree —
+      // every group card, node card and layout change — into a continuous 150ms interpolation.
+      HStack(spacing: 8) {
+        searchProgressIndicator
+        testAllButton(hasGroups: !rawGroups.isEmpty)
+        if !appModel.isRunning, appModel.profileStore.activeProfile != nil {
+          Button {
+            appModel.start()
+          } label: {
+            Label(
+              localizedProxiesText(isStarting ? "Starting" : "Start"),
+              systemImage: isStarting ? "clock.arrow.circlepath" : "play.fill"
+            )
+          }
+          .disabled(!canStart)
         }
-        .disabled(!canStart)
+        Button {
+          appModel.reloadRuntimeData()
+        } label: {
+          Label(localizedProxiesText("Refresh"), systemImage: "arrow.clockwise")
+        }
+        .disabled(!ProxiesPageActionState.canRefresh(isStarting: isStarting))
       }
-      Button {
-        appModel.reloadRuntimeData()
-      } label: {
-        Label(localizedProxiesText("Refresh"), systemImage: "arrow.clockwise")
-      }
-      .disabled(!ProxiesPageActionState.canRefresh(isStarting: isStarting))
+      .animation(.easeInOut(duration: 0.15), value: searchCoordinator.isComputing)
     } content: {
       if showsLoadingSkeleton(rawGroupCount: rawGroups.count) {
         ScrollView {
@@ -93,7 +100,6 @@ struct ProxiesView: View {
       }
     }
     .searchable(text: $searchText, placement: .toolbar, prompt: Text("Search"))
-    .animation(.easeInOut(duration: 0.15), value: searchCoordinator.isComputing)
     .task {
       // Returning to the page: the coordinator outlives the view, so restore the
       // search field from the retained snapshot instead of showing a filtered
@@ -157,12 +163,15 @@ struct ProxiesView: View {
     visibleExpandedGroupIDs: Set<String>,
     listAnimationState: ProxyGroupListAnimationState
   ) -> some View {
-    ProxyWorkspaceSurface {
+    let batchProgress = appModel.proxyDelayBatchProgress
+    let isDelayBatchRunning = batchProgress?.isRunning == true
+
+    return ProxyWorkspaceSurface {
       proxyWorkspaceControls
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
 
-      if let progress = appModel.proxyDelayBatchProgress {
+      if let progress = batchProgress {
         Divider()
         ProxyDelayBatchProgressStrip(
           progress: progress,
@@ -204,7 +213,8 @@ struct ProxiesView: View {
                 showsDeveloperDetails: appModel.developerMode || appModel.proxyPageSettings.showsNodeDetails,
                 closesOldConnectionsAfterSwitch: appModel.proxyPageSettings.closesOldConnectionsAfterSwitch,
                 isExpanded: visibleExpandedGroupIDs.contains(group.id),
-                isSearchActive: !searchQuery.isEmpty
+                isSearchActive: !searchQuery.isEmpty,
+                isDelayBatchRunning: isDelayBatchRunning
               ) {
                 toggleExpansion(for: group, visibleGroups: groups, searchQuery: searchQuery)
               }
@@ -222,6 +232,7 @@ struct ProxiesView: View {
           nodePresentation: appModel.proxyPageSettings.nodePresentation,
           showsNodeDetails: appModel.proxyPageSettings.showsNodeDetails,
           closesOldConnectionsAfterSwitch: appModel.proxyPageSettings.closesOldConnectionsAfterSwitch,
+          isDelayBatchRunning: isDelayBatchRunning,
           customDelayTestURLText: customDelayTestURLBinding(for: selectedGroupID)
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -280,13 +291,16 @@ struct ProxiesView: View {
     }
   }
 
-  private var testAllButton: some View {
+  /// `hasGroups` comes from the `rawGroups` the body already read. Asking `appModel` again would
+  /// rebuild `visibleProxyGroups` (profile ordering + preview-selection merge) a second time on
+  /// every pass just to check for emptiness.
+  private func testAllButton(hasGroups: Bool) -> some View {
     Button {
       appModel.testDelayForAllProxyGroups()
     } label: {
       Label("Test All", systemImage: "waveform.path.ecg")
     }
-    .disabled(!appModel.canControlRuntimeProxies || appModel.visibleProxyGroups.isEmpty || appModel.isProxyDelayBatchRunning)
+    .disabled(!appModel.canControlRuntimeProxies || !hasGroups || appModel.isProxyDelayBatchRunning)
     .help("Test delay for every selectable node")
   }
 
@@ -803,6 +817,7 @@ private struct ProxyGroupSplitView: View {
   let nodePresentation: ProxyNodePresentation
   let showsNodeDetails: Bool
   let closesOldConnectionsAfterSwitch: Bool
+  let isDelayBatchRunning: Bool
   @Binding var customDelayTestURLText: String
 
   init(
@@ -811,6 +826,7 @@ private struct ProxyGroupSplitView: View {
     nodePresentation: ProxyNodePresentation,
     showsNodeDetails: Bool,
     closesOldConnectionsAfterSwitch: Bool,
+    isDelayBatchRunning: Bool,
     customDelayTestURLText: Binding<String>
   ) {
     self.groups = groups
@@ -818,6 +834,7 @@ private struct ProxyGroupSplitView: View {
     self.nodePresentation = nodePresentation
     self.showsNodeDetails = showsNodeDetails
     self.closesOldConnectionsAfterSwitch = closesOldConnectionsAfterSwitch
+    self.isDelayBatchRunning = isDelayBatchRunning
     self._customDelayTestURLText = customDelayTestURLText
   }
 
@@ -834,6 +851,7 @@ private struct ProxyGroupSplitView: View {
           nodePresentation: nodePresentation,
           showsNodeDetails: showsNodeDetails,
           closesOldConnectionsAfterSwitch: closesOldConnectionsAfterSwitch,
+          isDelayBatchRunning: isDelayBatchRunning,
           customDelayTestURLText: $customDelayTestURLText
         )
       } else {
@@ -941,6 +959,7 @@ private struct ProxyGroupDetailPane: View {
   let nodePresentation: ProxyNodePresentation
   let showsNodeDetails: Bool
   let closesOldConnectionsAfterSwitch: Bool
+  let isDelayBatchRunning: Bool
   @Binding var customDelayTestURLText: String
 
   var body: some View {
@@ -986,7 +1005,8 @@ private struct ProxyGroupDetailPane: View {
         node: node,
         customDelayTestURL: parsedCustomDelayTestURL,
         showsDetails: showsNodeDetails,
-        closesOldConnectionsAfterSwitch: closesOldConnectionsAfterSwitch
+        closesOldConnectionsAfterSwitch: closesOldConnectionsAfterSwitch,
+        isDelayBatchRunning: isDelayBatchRunning
       )
       .id(node.id)
     }
@@ -1058,8 +1078,8 @@ private struct ProxyGroupDetailPane: View {
       }
       .disabled(
         !appModel.canControlRuntimeProxies
-          || !group.nodes.contains(where: \.isSelectable)
-          || appModel.isProxyDelayBatchRunning
+          || !group.nodes.contains { $0.isSelectable && $0.supportsDelayTesting }
+          || isDelayBatchRunning
       )
       .help("Test delay for this group")
 
@@ -1424,6 +1444,7 @@ private struct ProxyGroupCard: View {
   let closesOldConnectionsAfterSwitch: Bool
   let isExpanded: Bool
   let isSearchActive: Bool
+  let isDelayBatchRunning: Bool
   let onToggle: () -> Void
 
   var body: some View {
@@ -1465,7 +1486,8 @@ private struct ProxyGroupCard: View {
             node: node,
             customDelayTestURL: customDelayTestURL,
             showsDetails: showsDeveloperDetails,
-            closesOldConnectionsAfterSwitch: closesOldConnectionsAfterSwitch
+            closesOldConnectionsAfterSwitch: closesOldConnectionsAfterSwitch,
+            isDelayBatchRunning: isDelayBatchRunning
           )
             .transition(ProxyInteractionAnimation.nodeTransition(reduceMotion: reduceMotion))
         }
@@ -1582,12 +1604,20 @@ private struct ProxyNodeCard: View {
   let customDelayTestURL: URL?
   let showsDetails: Bool
   let closesOldConnectionsAfterSwitch: Bool
+  /// Passed in rather than read from `appModel`: the getter touches `proxyDelayBatchProgress`, and
+  /// Observation tracks the stored property, not the derived flag. Reading it here subscribed every
+  /// node card to every coalesced batch flush, so all of them re-ran their body several times a
+  /// second while "Test All" was running even though the flag itself never changed.
+  let isDelayBatchRunning: Bool
 
   var body: some View {
     let canSelect = group.allowsManualProxySelection
       && node.isSelectable
       && (appModel.canControlRuntimeProxies || appModel.canSelectProxyOffline)
-    let canTest = node.isSelectable && appModel.canControlRuntimeProxies && !appModel.isProxyDelayBatchRunning
+    let canTest = node.isSelectable
+      && node.supportsDelayTesting
+      && appModel.canControlRuntimeProxies
+      && !isDelayBatchRunning
     let delayDisplay = ProxyDelayDisplay(state: node.resolvedDelayState)
     let isSelected = group.selected == node.name
 
@@ -1649,7 +1679,7 @@ private struct ProxyNodeCard: View {
       .buttonStyle(.borderless)
       .controlSize(.small)
       .disabled(!canTest)
-      .help(canTest ? "Test delay" : "Preview core needs a moment to come up before delay testing.")
+      .help(delayTestHelp(canTest: canTest))
       .accessibilityLabel("Test delay for \(node.name)")
       .padding(.top, 7)
       .padding(.trailing, 7)
@@ -1677,6 +1707,16 @@ private struct ProxyNodeCard: View {
   private func nodeScale(canSelect: Bool) -> Double {
     guard canSelect, isPressing, !reduceMotion else { return 1 }
     return 0.992
+  }
+
+  private func delayTestHelp(canTest: Bool) -> String {
+    if canTest {
+      return String(localized: "Test delay")
+    }
+    if !node.supportsDelayTesting {
+      return String(localized: "Built-in outbounds have no connection to measure.")
+    }
+    return String(localized: "Preview core needs a moment to come up before delay testing.")
   }
 
   private func selectionHelp(canSelect: Bool) -> String {
