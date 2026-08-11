@@ -198,3 +198,35 @@ jobs:
               *) echo "::error::Release app binary is missing the $arch slice"; exit 1 ;;
             esac
           done
+
+      # macOS 26.4 and later tell users an app "includes a component that isn't
+      # compatible with future versions of macOS" when any Mach-O in its bundle
+      # lacks an arm64 slice — even one that never executes. ClashMax used to embed
+      # a separate Intel-only Mihomo core, which is exactly what set it off.
+      - name: Check no embedded binary is Intel-only
+        run: |
+          set -euo pipefail
+          app="DerivedData-Release/Build/Products/Release/ClashMax.app"
+
+          # The per-architecture cores are superseded by the merged universal one.
+          # CI does not fetch the core, so this only catches a build-phase regression
+          # that re-embeds them; the maintainer-side gate is release_smoke_check.sh.
+          if compgen -G "$app/Contents/Resources/Core/mihomo-darwin-*" > /dev/null; then
+            echo "::error::Per-architecture Mihomo cores are embedded; ship the merged universal Core/mihomo instead"
+            exit 1
+          fi
+
+          status=0
+          while IFS= read -r binary; do
+            # lipo fails on anything that is not Mach-O, which is how non-code
+            # resources are skipped.
+            archs="$(lipo -archs "$binary" 2>/dev/null)" || continue
+            case " $archs " in
+              *" arm64 "*) printf 'ok    %-14s %s\n' "$archs" "${binary#"$app/"}" ;;
+              *)
+                echo "::error::${binary#"$app/"} has no arm64 slice ($archs)"
+                status=1
+                ;;
+            esac
+          done < <(find "$app" -type f)
+          exit $status

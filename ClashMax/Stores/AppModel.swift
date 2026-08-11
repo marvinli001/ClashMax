@@ -8214,10 +8214,14 @@ final class AppModel {
   }
 
   private static func resolveBundledCoreURL() throws -> URL {
+    // The shipping core is a single universal binary. The per-architecture name is
+    // only a fallback for working copies that predate the universal merge; it must
+    // never win over `mihomo`, or a checkout with a stale Intel-only file left in
+    // Resources/Core would run the core under Rosetta.
     let architecture = ProcessInfo.processInfo.machineHardwareName.contains("x86") ? "amd64" : "arm64"
     let candidates = [
-      AppConstants.bundledCoreRoot.appendingPathComponent("mihomo-darwin-\(architecture)"),
-      AppConstants.bundledCoreRoot.appendingPathComponent("mihomo")
+      AppConstants.bundledCoreRoot.appendingPathComponent("mihomo"),
+      AppConstants.bundledCoreRoot.appendingPathComponent("mihomo-darwin-\(architecture)")
     ]
     guard let core = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) else {
       throw AppError.missingBundledCore

@@ -11,6 +11,7 @@ final class TransparentProxyProvider: NETransparentProxyProvider, @unchecked Sen
     "io.github.clashmax.ClashMax",
     "io.github.clashmax.ClashMax.Helper",
     NetworkExtensionRuntimeConstants.providerBundleIdentifier,
+    NetworkExtensionRuntimeConstants.mihomoSigningIdentifier,
     NetworkExtensionRuntimeConstants.mihomoArm64SigningIdentifier,
     NetworkExtensionRuntimeConstants.mihomoAmd64SigningIdentifier
   ]

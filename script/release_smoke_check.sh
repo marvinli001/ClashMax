@@ -287,12 +287,54 @@ PY
   esac
 }
 
+# macOS 26.4 and later tell users an app "includes a component that isn't
+# compatible with future versions of macOS" when any Mach-O in its bundle lacks an
+# arm64 slice, even one that never runs. The separately embedded Intel-only Mihomo
+# core used to trigger exactly that, so refuse to ship a bundle that has one.
+check_bundle_architectures() {
+  local core_dir="$APP_BUNDLE/Contents/Resources/Core"
+  local legacy_cores=()
+  local binary archs offenders=() checked=0
+
+  while IFS= read -r binary; do
+    legacy_cores+=("$(basename "$binary")")
+  done < <(find "$core_dir" -maxdepth 1 -type f -name 'mihomo-darwin-*' 2>/dev/null)
+
+  if [ "${#legacy_cores[@]}" -gt 0 ]; then
+    record_event "core.legacy_per_arch" fail \
+      "per-architecture Mihomo cores are embedded instead of the merged universal binary" \
+      "{\"files\":$(json_string "${legacy_cores[*]}")}"
+  else
+    record_event "core.legacy_per_arch" pass "no per-architecture Mihomo cores are embedded" "{}"
+  fi
+
+  while IFS= read -r binary; do
+    # lipo fails on anything that is not Mach-O, which is how resources are skipped.
+    archs="$(/usr/bin/lipo -archs "$binary" 2>/dev/null)" || continue
+    checked=$((checked + 1))
+    case " $archs " in
+      *" arm64 "*) ;;
+      *) offenders+=("${binary#"$APP_BUNDLE/"} ($archs)") ;;
+    esac
+  done < <(find "$APP_BUNDLE" -type f)
+
+  if [ "${#offenders[@]}" -gt 0 ]; then
+    record_event "bundle.arm64_slices" fail \
+      "bundle contains Mach-O binaries without an arm64 slice" \
+      "{\"checked\":$checked,\"offenders\":$(json_string "${offenders[*]}")}"
+  else
+    record_event "bundle.arm64_slices" pass \
+      "every embedded Mach-O has an arm64 slice" \
+      "{\"checked\":$checked}"
+  fi
+}
+
 check_core_bundle() {
   local core_dir="$APP_BUNDLE/Contents/Resources/Core"
   require_path "core.directory" "$core_dir" dir || true
   require_path "core.manifest" "$core_dir/mihomo-manifest.json" file || true
-  require_path "core.arm64" "$core_dir/mihomo-darwin-arm64" file || true
-  require_path "core.amd64" "$core_dir/mihomo-darwin-amd64" file || true
+  require_path "core.universal" "$core_dir/mihomo" file || true
+  check_bundle_architectures
   if [ -f "$core_dir/mihomo-manifest.json" ]; then
     if output="$(/usr/bin/python3 - "$core_dir/mihomo-manifest.json" <<'PY'
 import json
@@ -328,10 +370,9 @@ check_signatures() {
   run_check "codesign.app" critical /usr/bin/codesign --verify --strict --verbose=2 "$APP_BUNDLE" || true
   run_check "codesign.helper" critical /usr/bin/codesign --verify --strict --verbose=2 "$helper" || true
   run_check "codesign.network_extension" critical /usr/bin/codesign --verify --strict --verbose=2 "$extension" || true
-  for core in "$core_dir"/mihomo-darwin-*; do
-    [ -f "$core" ] || continue
-    run_check "codesign.$(basename "$core")" critical /usr/bin/codesign --verify --strict --verbose=2 "$core" || true
-  done
+  if [ -f "$core_dir/mihomo" ]; then
+    run_check "codesign.mihomo" critical /usr/bin/codesign --verify --strict --verbose=2 "$core_dir/mihomo" || true
+  fi
   run_check "spctl.app" critical /usr/sbin/spctl --assess --type execute --verbose "$APP_BUNDLE" || true
 }
 
@@ -600,11 +641,8 @@ PY
       if [ "$kind" = "yaml" ]; then
         local arch core_binary
         arch="$(uname -m)"
-        case "$arch" in
-          arm64) core_binary="$APP_BUNDLE/Contents/Resources/Core/mihomo-darwin-arm64" ;;
-          x86_64) core_binary="$APP_BUNDLE/Contents/Resources/Core/mihomo-darwin-amd64" ;;
-          *) core_binary="" ;;
-        esac
+        # One universal core covers every architecture the app supports.
+        core_binary="$APP_BUNDLE/Contents/Resources/Core/mihomo"
         if [ -n "$core_binary" ] && [ -x "$core_binary" ]; then
           local validation_output="$SUBSCRIPTION_TMP/subscription-$sub_id.mihomo-validate"
           if "$core_binary" -t -f "$body" > "$validation_output" 2>&1; then

@@ -275,7 +275,8 @@ final class SystemProxyControllerTests: XCTestCase {
 
     for content in [project, projectSpec] {
       XCTAssertTrue(content.contains("Sign Nested Core Binaries"))
-      XCTAssertTrue(content.contains("mihomo-darwin-*"))
+      XCTAssertTrue(content.contains("io.github.clashmax.ClashMax.Mihomo"))
+      XCTAssertTrue(content.contains("embedded Mihomo core is missing the arm64 slice"))
       XCTAssertTrue(content.contains("EXPANDED_CODE_SIGN_IDENTITY"))
       XCTAssertTrue(content.contains("--options runtime"))
       XCTAssertTrue(content.contains("--timestamp"))

@@ -126,16 +126,14 @@ targets:
           - "$(BUILT_PRODUCTS_DIR)/ClashMaxHelper"
           - "$(SRCROOT)/Config/io.github.clashmax.ClashMax.Helper.plist"
           - "$(SRCROOT)/Resources/Core/README.md"
-          - "$(SRCROOT)/Resources/Core/mihomo-darwin-amd64"
-          - "$(SRCROOT)/Resources/Core/mihomo-darwin-arm64"
+          - "$(SRCROOT)/Resources/Core/mihomo"
           - "$(SRCROOT)/Resources/Core/mihomo-manifest.json"
         outputFiles:
           - "$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Library/LaunchServices/ClashMaxHelper"
           - "$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Library/LaunchDaemons/io.github.clashmax.ClashMax.Helper.plist"
           - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Core"
           - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Core/README.md"
-          - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Core/mihomo-darwin-amd64"
-          - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Core/mihomo-darwin-arm64"
+          - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Core/mihomo"
           - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Core/mihomo-manifest.json"
         script: |
           set -euo pipefail
@@ -147,6 +145,10 @@ targets:
           rm -f "$legacy_macos_helper"
           cp "$BUILT_PRODUCTS_DIR/ClashMaxHelper" "$launch_services/ClashMaxHelper"
           cp "$SRCROOT/Config/io.github.clashmax.ClashMax.Helper.plist" "$launch_daemons/io.github.clashmax.ClashMax.Helper.plist"
+          # ClashMax used to embed one core per architecture. cp -R only adds files,
+          # so an incremental build over an older build directory would keep shipping
+          # the Intel-only binary that macOS flags as an incompatible component.
+          rm -f "$core_resources"/mihomo-darwin-*
           cp -R "$SRCROOT/Resources/Core/." "$core_resources/"
       - name: Embed Network Extension
         basedOnDependencyAnalysis: false
@@ -191,19 +193,30 @@ targets:
 
           core_signing_identifier() {
             case "$(basename "$1")" in
-              mihomo-darwin-arm64) printf '%s\n' "io.github.clashmax.ClashMax.Mihomo.arm64" ;;
-              mihomo-darwin-amd64) printf '%s\n' "io.github.clashmax.ClashMax.Mihomo.amd64" ;;
+              mihomo) printf '%s\n' "io.github.clashmax.ClashMax.Mihomo" ;;
               *) return 1 ;;
             esac
           }
 
-          for core_binary in "$core_resources"/mihomo-darwin-*; do
+          for core_binary in "$core_resources"/mihomo; do
             if [ ! -f "$core_binary" ]; then
               continue
             fi
 
             chmod +x "$core_binary"
             xattr -cr "$core_binary" || true
+
+            # An embedded core without an arm64 slice makes macOS 26.4+ tell users
+            # that ClashMax "includes a component that isn't compatible with future
+            # versions of macOS". Refuse to build one instead of shipping it.
+            core_archs="$(/usr/bin/lipo -archs "$core_binary")"
+            case " $core_archs " in
+              *" arm64 "*) ;;
+              *)
+                echo "error: embedded Mihomo core is missing the arm64 slice ($core_archs): $core_binary" >&2
+                exit 1
+                ;;
+            esac
 
             if [ "$should_sign" != "YES" ]; then
               echo "Skipping nested core signing for $core_binary because code signing is disabled or no identity is available."

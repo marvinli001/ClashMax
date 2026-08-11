@@ -132,8 +132,7 @@ check_path "$HELPER" "helper.binary"
 check_path "$PLIST" "helper.launchdaemon"
 check_path "$NETWORK_EXTENSION" "network_extension.bundle"
 check_path "$CORE_DIR/mihomo-manifest.json" "core.manifest"
-check_path "$CORE_DIR/mihomo-darwin-arm64" "core.arm64"
-check_path "$CORE_DIR/mihomo-darwin-amd64" "core.amd64"
+check_path "$CORE_DIR/mihomo" "core.universal"
 
 section "Code Signatures"
 if [ -d "$APP_BUNDLE" ]; then
@@ -145,10 +144,9 @@ fi
 if [ -d "$NETWORK_EXTENSION" ]; then
   run_readonly "codesign.network_extension" "critical" /usr/bin/codesign --verify --strict --verbose=2 "$NETWORK_EXTENSION"
 fi
-for core in "$CORE_DIR"/mihomo-darwin-*; do
-  [ -f "$core" ] || continue
-  run_readonly "codesign.$(basename "$core")" "critical" /usr/bin/codesign --verify --strict --verbose=2 "$core"
-done
+if [ -f "$CORE_DIR/mihomo" ]; then
+  run_readonly "codesign.mihomo" "critical" /usr/bin/codesign --verify --strict --verbose=2 "$CORE_DIR/mihomo"
+fi
 
 section "Helper launchd State"
 run_readonly "helper.launchd_state" "noncritical" /bin/launchctl print "system/$HELPER_ID"

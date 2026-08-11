@@ -11742,13 +11742,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
   private static func installFakeBundledCoreForAppModelTests() throws {
     let root = AppConstants.bundledCoreRoot
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    let architecture: String
-    #if arch(x86_64)
-      architecture = "amd64"
-    #else
-      architecture = "arm64"
-    #endif
-    let coreURL = root.appendingPathComponent("mihomo-darwin-\(architecture)")
+    let coreURL = root.appendingPathComponent("mihomo")
     guard !FileManager.default.isExecutableFile(atPath: coreURL.path) else { return }
     try """
     #!/bin/sh

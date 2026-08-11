@@ -2,6 +2,8 @@
   "upstream": "https://github.com/MetaCubeX/mihomo",
   "version": "v1.19.29",
   "license": "GPL-3.0",
+  "artifact": "mihomo",
+  "artifactNote": "The assets below are merged into a single universal Resources/Core/mihomo by script/install_mihomo_core.sh.",
   "assets": [
     {
       "name": "mihomo-darwin-arm64-v1.19.29.gz",

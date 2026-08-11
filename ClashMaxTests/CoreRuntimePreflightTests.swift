@@ -433,22 +433,13 @@ final class CoreRuntimePreflightTests: XCTestCase {
   }
 
   private static func bundledCoreURL() -> URL? {
-    let architecture: String
-    #if arch(arm64)
-      architecture = "arm64"
-    #elseif arch(x86_64)
-      architecture = "amd64"
-    #else
-      return nil
-    #endif
-
     let repositoryRoot = URL(fileURLWithPath: #filePath)
       .deletingLastPathComponent()
       .deletingLastPathComponent()
     let coreURL = repositoryRoot
       .appendingPathComponent("Resources", isDirectory: true)
       .appendingPathComponent("Core", isDirectory: true)
-      .appendingPathComponent("mihomo-darwin-\(architecture)")
+      .appendingPathComponent("mihomo")
     return FileManager.default.isExecutableFile(atPath: coreURL.path) ? coreURL : nil
   }
 }

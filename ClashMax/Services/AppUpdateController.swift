@@ -7,18 +7,25 @@ final class AppUpdateController: NSObject {
   private(set) var canCheckForUpdates = false
   private(set) var statusMessage = String(localized: "Checking for updates is not configured for this build.")
 
-  @ObservationIgnored private let updaterController: SPUStandardUpdaterController?
+  @ObservationIgnored private var updaterController: SPUStandardUpdaterController?
   @ObservationIgnored private var canCheckObservation: NSKeyValueObservation?
 
+  /// Sparkle only filters appcast items by minimum system version, so an
+  /// Apple-silicon-only build would otherwise be offered to Intel Macs that
+  /// cannot launch it. Publishing such a build under this channel keeps it
+  /// invisible to Intel clients; universal builds stay in the default channel so
+  /// every client, including ones predating this delegate, still sees them.
+  static let appleSiliconUpdateChannel = "apple-silicon"
+
   override init() {
+    super.init()
     if Self.hasConfiguredPublicKey {
       let controller = SPUStandardUpdaterController(
         startingUpdater: true,
-        updaterDelegate: nil,
+        updaterDelegate: self,
         userDriverDelegate: nil
       )
       updaterController = controller
-      super.init()
       statusMessage = String(localized: "Sparkle is configured for automatic app updates.")
       canCheckForUpdates = controller.updater.canCheckForUpdates
       canCheckObservation = controller.updater.observe(\.canCheckForUpdates, options: [.initial, .new]) { [weak self] updater, _ in
@@ -28,9 +35,18 @@ final class AppUpdateController: NSObject {
       }
     } else {
       updaterController = nil
-      super.init()
       statusMessage = String(localized: "Generate a Sparkle EdDSA key and replace SUPublicEDKey before publishing updates.")
     }
+  }
+
+  /// Resolved from the running slice rather than `uname`, so a universal build
+  /// translated by Rosetta correctly identifies itself as an Intel client.
+  static var allowedUpdateChannels: Set<String> {
+    #if arch(arm64)
+      [appleSiliconUpdateChannel]
+    #else
+      []
+    #endif
   }
 
   var feedURLString: String {
@@ -55,5 +71,11 @@ final class AppUpdateController: NSObject {
       return false
     }
     return Data(base64Encoded: key)?.count == 32
+  }
+}
+
+extension AppUpdateController: SPUUpdaterDelegate {
+  func allowedChannels(for updater: SPUUpdater) -> Set<String> {
+    Self.allowedUpdateChannels
   }
 }

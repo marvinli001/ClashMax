@@ -144,12 +144,15 @@ final class NetworkExtensionProjectConfigurationTests: XCTestCase {
       encoding: .utf8
     )
 
+    // The shipping core is one universal binary signed under a single identifier.
     for content in [projectYAML, constants] {
-      XCTAssertTrue(content.contains("io.github.clashmax.ClashMax.Mihomo.arm64"))
-      XCTAssertTrue(content.contains("io.github.clashmax.ClashMax.Mihomo.amd64"))
+      XCTAssertTrue(content.contains("io.github.clashmax.ClashMax.Mihomo"))
     }
-    XCTAssertFalse(script.contains("io.github.clashmax.ClashMax.Mihomo.arm64"))
-    XCTAssertFalse(script.contains("io.github.clashmax.ClashMax.Mihomo.amd64"))
+    // Cores from installs that predate the universal merge must still be bypassed.
+    XCTAssertTrue(constants.contains("io.github.clashmax.ClashMax.Mihomo.arm64"))
+    XCTAssertTrue(constants.contains("io.github.clashmax.ClashMax.Mihomo.amd64"))
+    XCTAssertFalse(script.contains("io.github.clashmax.ClashMax.Mihomo"))
+    XCTAssertTrue(provider.contains("mihomoSigningIdentifier"))
     XCTAssertTrue(provider.contains("mihomoArm64SigningIdentifier"))
     XCTAssertTrue(provider.contains("mihomoAmd64SigningIdentifier"))
     XCTAssertTrue(projectYAML.contains(#"--identifier "$core_identifier""#))
