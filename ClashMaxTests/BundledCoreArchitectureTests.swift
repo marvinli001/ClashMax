@@ -18,19 +18,25 @@ final class BundledCoreArchitectureTests: XCTestCase {
     )
   }
 
-  func testEmbedStepPurgesPerArchitectureCoresFromStaleBuildDirectories() throws {
+  /// cp -R only adds files, so merging into the previous build's Core directory
+  /// kept shipping whatever was already there: the Intel-only per-architecture core
+  /// after an incremental build, and the placeholder core that
+  /// `DashboardRuntimeStateTests` writes into the test host on a checkout without
+  /// `Resources/Core/mihomo` — which then failed the next build's arm64 check.
+  func testEmbedStepMirrorsTheSourceCoreDirectoryInsteadOfMergingIntoIt() throws {
     let projectYAML = try contents(of: "project.yml")
 
-    // cp -R only adds files, so without this an incremental build over an older
-    // build directory keeps shipping the Intel-only core.
-    XCTAssertTrue(projectYAML.contains(#"rm -f "$core_resources"/mihomo-darwin-*"#))
+    XCTAssertTrue(projectYAML.contains(#"rm -rf "$core_resources""#))
+    XCTAssertTrue(projectYAML.contains(#"cp -R "$SRCROOT/Resources/Core/." "$core_resources/""#))
   }
 
   func testBuildFailsWhenTheEmbeddedCoreHasNoARM64Slice() throws {
     let projectYAML = try contents(of: "project.yml")
 
-    XCTAssertTrue(projectYAML.contains(#"core_archs="$(/usr/bin/lipo -archs "$core_binary")""#))
+    XCTAssertTrue(projectYAML.contains(#"core_archs="$(/usr/bin/lipo -archs "$core_binary" 2>/dev/null)""#))
     XCTAssertTrue(projectYAML.contains("embedded Mihomo core is missing the arm64 slice"))
+    // lipo's own diagnostic for a non-Mach-O file reads as a toolchain fault.
+    XCTAssertTrue(projectYAML.contains("embedded Mihomo core is not a Mach-O binary"))
   }
 
   func testInstallScriptMergesTheUpstreamAssetsIntoOneUniversalBinary() throws {

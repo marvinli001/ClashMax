@@ -141,14 +141,18 @@ targets:
           legacy_macos_helper="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/MacOS/ClashMaxHelper"
           launch_daemons="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Library/LaunchDaemons"
           core_resources="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Core"
-          mkdir -p "$launch_services" "$launch_daemons" "$core_resources"
+          mkdir -p "$launch_services" "$launch_daemons"
           rm -f "$legacy_macos_helper"
           cp "$BUILT_PRODUCTS_DIR/ClashMaxHelper" "$launch_services/ClashMaxHelper"
           cp "$SRCROOT/Config/io.github.clashmax.ClashMax.Helper.plist" "$launch_daemons/io.github.clashmax.ClashMax.Helper.plist"
-          # ClashMax used to embed one core per architecture. cp -R only adds files,
-          # so an incremental build over an older build directory would keep shipping
-          # the Intel-only binary that macOS flags as an incompatible component.
-          rm -f "$core_resources"/mihomo-darwin-*
+          # The embedded Core directory mirrors Resources/Core; it never merges into
+          # whatever the previous build left behind. cp -R only adds files, which is
+          # how the Intel-only per-architecture core survived an incremental build,
+          # and how the placeholder "mihomo" that the AppModel tests write into the
+          # test host — on any checkout that has no core — survives to fail the next
+          # build's arm64 check.
+          rm -rf "$core_resources"
+          mkdir -p "$core_resources"
           cp -R "$SRCROOT/Resources/Core/." "$core_resources/"
       - name: Embed Network Extension
         basedOnDependencyAnalysis: false
@@ -209,7 +213,12 @@ targets:
             # An embedded core without an arm64 slice makes macOS 26.4+ tell users
             # that ClashMax "includes a component that isn't compatible with future
             # versions of macOS". Refuse to build one instead of shipping it.
-            core_archs="$(/usr/bin/lipo -archs "$core_binary")"
+            # lipo reports a non-Mach-O file as "can't figure out the architecture
+            # type", which reads as a toolchain fault; name the real problem instead.
+            if ! core_archs="$(/usr/bin/lipo -archs "$core_binary" 2>/dev/null)"; then
+              echo "error: embedded Mihomo core is not a Mach-O binary: $core_binary" >&2
+              exit 1
+            fi
             case " $core_archs " in
               *" arm64 "*) ;;
               *)
