@@ -221,7 +221,7 @@ struct RuntimeSnippet: Identifiable, Codable, Equatable, Sendable {
 
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    self.init(
+    let decoded = RuntimeSnippet(
       id: try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID(),
       name: try container.decodeIfPresent(String.self, forKey: .name) ?? "",
       enabled: try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true,
@@ -229,19 +229,29 @@ struct RuntimeSnippet: Identifiable, Codable, Equatable, Sendable {
       payload: try container.decodeIfPresent(RuntimeSnippetPayload.self, forKey: .payload)
         ?? .rules(.disabled)
     )
+    self = decoded.foldingRulePayloadEnablementIntoSnippet()
   }
 
+  /// A rule snippet has exactly one switch: the snippet's own `enabled`. Snippets written before
+  /// that rule carried a second, redundant `RuleOverlaySettings.enabled`, and a snippet stored with
+  /// it off has no way back once the editor stops showing it. Fold the two into the snippet flag —
+  /// both shapes contribute nothing to the runtime, so this preserves behaviour exactly.
+  private func foldingRulePayloadEnablementIntoSnippet() -> RuntimeSnippet {
+    guard case let .rules(settings) = payload, !settings.enabled else { return self }
+    var folded = self
+    var unfoldedSettings = settings
+    unfoldedSettings.enabled = true
+    folded.payload = .rules(unfoldedSettings)
+    folded.enabled = false
+    return folded
+  }
+
+  /// Ships empty on purpose: an overlay with no rules has no runtime effect, so a freshly created
+  /// snippet cannot silently route anything until the user adds a rule themselves.
   static var defaultRuleSnippet: RuntimeSnippet {
     RuntimeSnippet(
       name: String(localized: "New Rule Snippet"),
-      payload: .rules(
-        RuleOverlaySettings(
-          enabled: true,
-          prependRules: [
-            ManagedRuleOverlayRule(kind: .domainSuffix, value: "example.com", policy: "DIRECT")
-          ]
-        )
-      )
+      payload: .rules(RuleOverlaySettings(enabled: true))
     )
   }
 

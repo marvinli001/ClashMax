@@ -98,6 +98,10 @@ struct RoutingView: View {
   @State private var explanationContext: RuleExplanation?
   @State private var effectiveConfigTab: EffectiveConfigInspectorTab = .layers
   @State private var simulationDebouncer = RuleMatchSimulationDebouncer()
+  /// Toggling a snippet preflights the effective config and can reload the running core, so a switch
+  /// bound straight to the store stays frozen on its old value for the whole round trip.
+  @State private var pendingSnippetEnabled: [RuntimeSnippet.ID: Bool] = [:]
+  @State private var snippetToggleTokens: [RuntimeSnippet.ID: Int] = [:]
 
   var body: some View {
     AdaptivePage(title: "Routing") {
@@ -328,16 +332,15 @@ struct RoutingView: View {
         ForEach(Array(snippetLibrary.snippets.enumerated()), id: \.element.id) { index, snippet in
           RuntimeSnippetRow(
             snippet: snippet,
+            isEnabled: pendingSnippetEnabled[snippet.id] ?? snippet.enabled,
             isSelected: snippet.id == selectedSnippetID,
             canMoveUp: index > 0,
             canMoveDown: index < snippetLibrary.snippets.count - 1,
             onSelect: {
               selectedSnippetID = snippet.id
             },
-            onToggle: {
-              Task { @MainActor in
-                _ = await appModel.setRuntimeSnippet(snippet, enabled: !snippet.enabled)
-              }
+            onToggle: { enabled in
+              setSnippetEnabled(snippet, enabled: enabled)
             },
             onMoveUp: {
               Task { @MainActor in
@@ -352,6 +355,21 @@ struct RoutingView: View {
           )
         }
       }
+    }
+  }
+
+  /// Shows the requested value immediately and falls back to the store once the write settles, so a
+  /// rejected preflight snaps the switch back instead of leaving it lying about the runtime. The
+  /// token makes a rapid second click win: a stale round trip no longer clears the newer intent.
+  private func setSnippetEnabled(_ snippet: RuntimeSnippet, enabled: Bool) {
+    pendingSnippetEnabled[snippet.id] = enabled
+    let token = (snippetToggleTokens[snippet.id] ?? 0) &+ 1
+    snippetToggleTokens[snippet.id] = token
+    Task { @MainActor in
+      _ = await appModel.setRuntimeSnippet(snippet, enabled: enabled)
+      guard snippetToggleTokens[snippet.id] == token else { return }
+      pendingSnippetEnabled[snippet.id] = nil
+      snippetToggleTokens[snippet.id] = nil
     }
   }
 
@@ -404,7 +422,9 @@ struct RoutingView: View {
 
       switch draftSnippet.payload {
       case .rules:
-        RuleOverlaySettingsEditor(settings: rulesPayloadBinding, showsHeader: false, showsEnableToggle: true)
+        // The snippet's own "Enabled" row above is the only switch — a second overlay-level toggle
+        // just gives the same snippet two ways to be off.
+        RuleOverlaySettingsEditor(settings: rulesPayloadBinding, showsHeader: false, showsEnableToggle: false)
       case .dnsPatch:
         RuntimeDNSPatchEditor(settings: dnsPayloadBinding)
       }
@@ -933,7 +953,11 @@ struct RoutingView: View {
   private var rulesPayloadBinding: Binding<RuleOverlaySettings> {
     Binding(
       get: { draftSnippet.rulesPayload },
-      set: { draftSnippet.payload = .rules($0) }
+      set: { settings in
+        var settings = settings
+        settings.enabled = true
+        draftSnippet.payload = .rules(settings)
+      }
     )
   }
 
@@ -1217,18 +1241,20 @@ private extension RuntimeSnippet {
 
 private struct RuntimeSnippetRow: View {
   let snippet: RuntimeSnippet
+  /// Not `snippet.enabled`: the owner shows the requested value while the write is in flight.
+  let isEnabled: Bool
   let isSelected: Bool
   let canMoveUp: Bool
   let canMoveDown: Bool
   let onSelect: () -> Void
-  let onToggle: () -> Void
+  let onToggle: (Bool) -> Void
   let onMoveUp: () -> Void
   let onMoveDown: () -> Void
 
   var body: some View {
     let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
     HStack(alignment: .center, spacing: 8) {
-      Toggle("Enabled", isOn: Binding(get: { snippet.enabled }, set: { _ in onToggle() }))
+      Toggle("Enabled", isOn: Binding(get: { isEnabled }, set: { onToggle($0) }))
         .labelsHidden()
         .toggleStyle(.switch)
 

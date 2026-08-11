@@ -129,6 +129,76 @@ final class RuntimeSnippetLibraryStoreTests: XCTestCase {
     XCTAssertEqual(reloaded.snippets.map(\.id), [valid.id])
   }
 
+  func testDefaultRuleSnippetShipsWithNoRulesAndNoRuntimeEffect() throws {
+    let snippet = RuntimeSnippet.defaultRuleSnippet
+
+    XCTAssertTrue(snippet.enabled)
+    let settings = try XCTUnwrap(Self.rulesSettings(of: snippet))
+    XCTAssertTrue(settings.prependRules.isEmpty)
+    XCTAssertTrue(settings.appendRules.isEmpty)
+    XCTAssertTrue(settings.disabledRuleMatchers.isEmpty)
+    // Enabled but empty: the snippet contributes nothing until the user adds a rule to it.
+    XCTAssertFalse(settings.hasRuntimeOverlay)
+    XCTAssertFalse(snippet.hasRuntimeEffect)
+    XCTAssertEqual(RuntimeSnippetApplication(snippets: [snippet]), .empty)
+  }
+
+  func testDecodingFoldsLegacyPayloadDisableIntoSnippetEnabled() throws {
+    let id = UUID()
+    let json = Data(
+      """
+      {
+        "id": "\(id.uuidString)",
+        "name": "Legacy",
+        "enabled": true,
+        "binding": { "kind": "allProfiles" },
+        "payload": {
+          "kind": "rules",
+          "rules": {
+            "enabled": false,
+            "prependRules": [
+              { "id": "\(UUID().uuidString)", "kind": "DOMAIN-SUFFIX", "value": "legacy.example", "policy": "DIRECT" }
+            ],
+            "appendRules": [],
+            "disabledRuleMatchers": []
+          }
+        }
+      }
+      """.utf8
+    )
+
+    let decoded = try JSONDecoder().decode(RuntimeSnippet.self, from: json)
+
+    // The overlay-level switch is gone from the editor, so a snippet stored with it off has to keep
+    // being off via the one switch that is still reachable.
+    XCTAssertEqual(decoded.id, id)
+    XCTAssertFalse(decoded.enabled)
+    let settings = try XCTUnwrap(Self.rulesSettings(of: decoded))
+    XCTAssertTrue(settings.enabled)
+    XCTAssertEqual(settings.prependRules.map(\.value), ["legacy.example"])
+    XCTAssertFalse(decoded.hasRuntimeEffect)
+    XCTAssertEqual(RuntimeSnippetApplication(snippets: [decoded]), .empty)
+  }
+
+  func testDecodingLeavesAlreadyEnabledPayloadUntouched() throws {
+    let snippet = Self.ruleSnippet(name: "Modern", domain: "modern.example")
+    let encoded = try JSONEncoder().encode(snippet)
+
+    let decoded = try JSONDecoder().decode(RuntimeSnippet.self, from: encoded)
+
+    XCTAssertEqual(decoded, snippet)
+    XCTAssertTrue(decoded.enabled)
+    XCTAssertEqual(
+      RuntimeSnippetApplication(snippets: [decoded]).ruleOverlay.prependRules.map(\.value),
+      ["modern.example"]
+    )
+  }
+
+  private static func rulesSettings(of snippet: RuntimeSnippet) -> RuleOverlaySettings? {
+    guard case let .rules(settings) = snippet.payload else { return nil }
+    return settings
+  }
+
   private static func ruleSnippet(name: String, domain: String) -> RuntimeSnippet {
     RuntimeSnippet(
       name: name,

@@ -19,6 +19,34 @@ struct EffectiveRuntimeConfigBuilder {
     self.now = now
   }
 
+  /// Materializes the config and asks the core to check it, without building any of the inspector
+  /// payload. Callers that only gate a mutation on "would Mihomo still start?" never read the
+  /// layers, diff or redacted YAML, and those are by far the most expensive part of a snapshot.
+  func validate(
+    profile: Profile,
+    paths: RuntimePaths,
+    overrides: RuntimeOverrides,
+    selectionOverrides: [String: String],
+    runtimeSnippets: [RuntimeSnippet],
+    options baseOptions: RuntimeConfigOptions = .default,
+    preflight: EffectiveRuntimeConfigPreflightMode
+  ) async throws -> EffectiveRuntimeConfigPreflightStatus {
+    try await withPreflightWorkspace(
+      profile: profile,
+      paths: paths,
+      overrides: overrides,
+      selectionOverrides: selectionOverrides,
+      runtimeSnippets: runtimeSnippets,
+      options: baseOptions
+    ) { materialization, preflightDirectory, _ in
+      await validateIfNeeded(
+        preflight,
+        configURL: materialization.runtimeConfigURL,
+        workDirectory: preflightDirectory
+      )
+    }
+  }
+
   func snapshot(
     profile: Profile,
     paths: RuntimePaths,
@@ -28,6 +56,75 @@ struct EffectiveRuntimeConfigBuilder {
     options baseOptions: RuntimeConfigOptions = .default,
     preflight: EffectiveRuntimeConfigPreflightMode
   ) async throws -> EffectiveRuntimeConfigSnapshot {
+    try await withPreflightWorkspace(
+      profile: profile,
+      paths: paths,
+      overrides: overrides,
+      selectionOverrides: selectionOverrides,
+      runtimeSnippets: runtimeSnippets,
+      options: baseOptions
+    ) { materialization, preflightDirectory, options in
+      let providerContentPaths = materialization.providerContentURL.map { [$0.path] } ?? []
+      let presentation = try await Self.makePresentation(
+        originalConfigPath: profile.originalConfigPath,
+        runtimeConfigURL: materialization.runtimeConfigURL,
+        providerContentURL: materialization.providerContentURL,
+        controllerSecret: overrides.secret,
+        providerContentPaths: providerContentPaths
+      )
+      // Diff the DNS the profile asked for against the DNS Mihomo will actually read, so the panel
+      // reports the merged result instead of the app's intent (issue #16).
+      let dnsOverride = DNSOverridePlanBuilder.plan(
+        baseline: presentation.baselineDNSFacts,
+        final: presentation.finalDNSFacts,
+        sources: dnsOverrideSources(
+          overrides: overrides,
+          options: options,
+          sourceFormat: presentation.sourceFormat,
+          runtimeSnippets: runtimeSnippets
+        )
+      )
+      let layers = makeLayers(
+        profile: profile,
+        overrides: overrides,
+        sourceFormat: presentation.sourceFormat,
+        providerContent: presentation.providerContent,
+        providerContentPaths: providerContentPaths,
+        runtimeSnippets: runtimeSnippets,
+        manualProxyEndpoint: options.manualProxyEndpoint,
+        upstreamProxyEndpoint: options.upstreamProxyEndpoint,
+        dnsOverride: dnsOverride,
+        redactedOriginal: presentation.redactedOriginal,
+        redactedFinal: presentation.redactedFinal
+      )
+      let preflightStatus = await validateIfNeeded(
+        preflight,
+        configURL: materialization.runtimeConfigURL,
+        workDirectory: preflightDirectory
+      )
+      return EffectiveRuntimeConfigSnapshot(
+        generatedAt: now(),
+        profileID: profile.id,
+        profileName: profile.name,
+        layers: layers,
+        diffRows: presentation.diffRows,
+        redactedOriginalYAML: presentation.redactedOriginal,
+        redactedFinalYAML: presentation.redactedFinal,
+        preflightStatus: preflightStatus,
+        dnsOverride: dnsOverride
+      )
+    }
+  }
+
+  private func withPreflightWorkspace<T>(
+    profile: Profile,
+    paths: RuntimePaths,
+    overrides: RuntimeOverrides,
+    selectionOverrides: [String: String],
+    runtimeSnippets: [RuntimeSnippet],
+    options baseOptions: RuntimeConfigOptions,
+    body: @MainActor (RuntimeConfigMaterializationResult, URL, RuntimeConfigOptions) async throws -> T
+  ) async throws -> T {
     let preflightDirectory = paths.runtime.appendingPathComponent(
       "effective-config-preview-\(UUID().uuidString)",
       isDirectory: true
@@ -37,8 +134,6 @@ struct EffectiveRuntimeConfigBuilder {
       try? FileManager.default.removeItem(at: preflightDirectory)
     }
 
-    let originalSource = try String(contentsOfFile: profile.originalConfigPath, encoding: .utf8)
-    let sourceFormat = try? ProfileConfigInspector.format(of: originalSource)
     var options = baseOptions
     options.subscriptionProviderOptions = profile.subscriptionProviderOptions
     options.runtimeSnippets = runtimeSnippets
@@ -55,65 +150,66 @@ struct EffectiveRuntimeConfigBuilder {
         retainedGenerationCount: 0
       )
     )
-    let finalRuntimeYAML = try String(contentsOf: materialization.runtimeConfigURL, encoding: .utf8)
-    let providerContent = materialization.providerContentURL.flatMap { try? String(contentsOf: $0, encoding: .utf8) }
-    let providerContentPaths = materialization.providerContentURL.map { [$0.path] } ?? []
-    let redactedOriginal = RuntimeConfigDisplayRedactor.redacted(
-      originalSource,
-      controllerSecret: overrides.secret,
-      providerContentPaths: providerContentPaths
-    )
-    let redactedFinal = RuntimeConfigDisplayRedactor.redacted(
-      finalRuntimeYAML,
-      controllerSecret: overrides.secret,
-      providerContentPaths: providerContentPaths
-    )
-    // Diff the DNS the profile asked for against the DNS Mihomo will actually read, so the panel
-    // reports the merged result instead of the app's intent (issue #16).
-    let dnsOverride = DNSOverridePlanBuilder.plan(
-      baseline: dnsFacts(inYAML: originalSource),
-      final: dnsFacts(inYAML: finalRuntimeYAML),
-      sources: dnsOverrideSources(
-        overrides: overrides,
-        options: options,
-        sourceFormat: sourceFormat,
-        runtimeSnippets: runtimeSnippets
+    return try await body(materialization, preflightDirectory, options)
+  }
+
+  /// Everything the inspector renders, none of which the runtime needs. Parsing, redacting and
+  /// diffing two full configs is proportional to the profile's size, so it runs off the main actor
+  /// the same way `RuntimeConfigMaterializer` already generates the config off it.
+  private struct Presentation: Sendable {
+    var sourceFormat: ProfileConfigFormat?
+    var providerContent: String?
+    var redactedOriginal: String
+    var redactedFinal: String
+    var baselineDNSFacts: DNSRuntimeFacts
+    var finalDNSFacts: DNSRuntimeFacts
+    var diffRows: [EffectiveRuntimeConfigDiffRow]
+  }
+
+  nonisolated private static func makePresentation(
+    originalConfigPath: String,
+    runtimeConfigURL: URL,
+    providerContentURL: URL?,
+    controllerSecret: String,
+    providerContentPaths: [String]
+  ) async throws -> Presentation {
+    let task = Task.detached(priority: .userInitiated) {
+      let originalSource = try String(contentsOfFile: originalConfigPath, encoding: .utf8)
+      try Task.checkCancellation()
+      let finalRuntimeYAML = try String(contentsOf: runtimeConfigURL, encoding: .utf8)
+      let providerContent = providerContentURL.flatMap { try? String(contentsOf: $0, encoding: .utf8) }
+      try Task.checkCancellation()
+      let redactedOriginal = RuntimeConfigDisplayRedactor.redacted(
+        originalSource,
+        controllerSecret: controllerSecret,
+        providerContentPaths: providerContentPaths
       )
-    )
-    let layers = makeLayers(
-      profile: profile,
-      overrides: overrides,
-      sourceFormat: sourceFormat,
-      providerContent: providerContent,
-      providerContentPaths: providerContentPaths,
-      runtimeSnippets: runtimeSnippets,
-      manualProxyEndpoint: options.manualProxyEndpoint,
-      upstreamProxyEndpoint: options.upstreamProxyEndpoint,
-      dnsOverride: dnsOverride,
-      redactedOriginal: redactedOriginal,
-      redactedFinal: redactedFinal
-    )
-    let preflightStatus = await validateIfNeeded(
-      preflight,
-      configURL: materialization.runtimeConfigURL,
-      workDirectory: preflightDirectory
-    )
-    return EffectiveRuntimeConfigSnapshot(
-      generatedAt: now(),
-      profileID: profile.id,
-      profileName: profile.name,
-      layers: layers,
-      diffRows: EffectiveRuntimeConfigLineDiff.diff(oldText: redactedOriginal, newText: redactedFinal),
-      redactedOriginalYAML: redactedOriginal,
-      redactedFinalYAML: redactedFinal,
-      preflightStatus: preflightStatus,
-      dnsOverride: dnsOverride
-    )
+      let redactedFinal = RuntimeConfigDisplayRedactor.redacted(
+        finalRuntimeYAML,
+        controllerSecret: controllerSecret,
+        providerContentPaths: providerContentPaths
+      )
+      try Task.checkCancellation()
+      return Presentation(
+        sourceFormat: try? ProfileConfigInspector.format(of: originalSource),
+        providerContent: providerContent,
+        redactedOriginal: redactedOriginal,
+        redactedFinal: redactedFinal,
+        baselineDNSFacts: dnsFacts(inYAML: originalSource),
+        finalDNSFacts: dnsFacts(inYAML: finalRuntimeYAML),
+        diffRows: EffectiveRuntimeConfigLineDiff.diff(oldText: redactedOriginal, newText: redactedFinal)
+      )
+    }
+    return try await withTaskCancellationHandler {
+      try await task.value
+    } onCancel: {
+      task.cancel()
+    }
   }
 
   /// Provider content and other non-mapping sources simply have no `dns:` block; `.absent` is the
   /// honest baseline there, and every DNS key in the generated YAML is then an app-managed override.
-  private func dnsFacts(inYAML yaml: String) -> DNSRuntimeFacts {
+  nonisolated private static func dnsFacts(inYAML yaml: String) -> DNSRuntimeFacts {
     guard let root = (try? Yams.load(yaml: yaml)) as? [String: Any] else { return .absent }
     return DNSRuntimeFacts.facts(from: root["dns"])
   }

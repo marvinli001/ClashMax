@@ -1207,7 +1207,7 @@ final class AppModel {
           for: profile,
           baseOptions: currentRoutingRuntimeConfigOptions()
         )
-        _ = try await preflightEffectiveRuntimeConfig(
+        try await preflightEffectiveRuntimeConfig(
           profile: profile,
           overrides: preflightOverrides,
           runtimeOptions: runtimeOptions
@@ -1258,7 +1258,7 @@ final class AppModel {
         for: proposedProfile,
         baseOptions: currentRoutingRuntimeConfigOptions()
       )
-      _ = try await preflightEffectiveRuntimeConfig(
+      try await preflightEffectiveRuntimeConfig(
         profile: proposedProfile,
         overrides: preflightOverrides,
         runtimeOptions: proposedOptions
@@ -1331,7 +1331,7 @@ final class AppModel {
           baseOptions: currentRoutingRuntimeConfigOptions(),
           endpointOverrides: [endpoint.id: proposedResolved]
         )
-        _ = try await preflightEffectiveRuntimeConfig(
+        try await preflightEffectiveRuntimeConfig(
           profile: referencedProfile,
           overrides: preflightOverrides,
           runtimeOptions: options
@@ -8054,14 +8054,16 @@ final class AppModel {
     activeRuntimeConfigMaterialization = nil
   }
 
-  @discardableResult
+  /// Answers only "would Mihomo still accept the config?" — every caller gates a mutation on that and
+  /// none of them render the inspector, so this deliberately skips building the snapshot's layers,
+  /// redacted YAML and line diff. Use `makeEffectiveRuntimeConfigSnapshot` when the payload is needed.
   func preflightEffectiveRuntimeConfig(
     profile: Profile? = nil,
     overrides: RuntimeOverrides? = nil,
     runtimeSnippets: [RuntimeSnippet]? = nil,
     selectionOverrides: [String: String]? = nil,
     runtimeOptions: RuntimeConfigOptions? = nil
-  ) async throws -> EffectiveRuntimeConfigSnapshot {
+  ) async throws {
     let targetProfile = try profile ?? requireActiveProfile()
     let snippets: [RuntimeSnippet]
     if let runtimeSnippets {
@@ -8070,24 +8072,38 @@ final class AppModel {
       await runtimeSnippetLibrary.waitForLoad()
       snippets = runtimeSnippetLibrary.snippets(applyingTo: targetProfile.id)
     }
-    return try await makeEffectiveRuntimeConfigSnapshot(
+    let resolved = try await resolveEffectiveRuntimeConfigPreflight(
       profile: targetProfile,
-      overrides: overrides ?? self.overrides,
-      selectionOverrides: selectionOverrides ?? previewSelections,
-      runtimeSnippets: snippets,
       runtimeOptions: runtimeOptions,
       preflight: .requireCore
     )
+    let status = try await EffectiveRuntimeConfigBuilder(
+      materializer: runtimeConfigMaterializer
+    ).validate(
+      profile: targetProfile,
+      paths: paths,
+      overrides: overrides ?? self.overrides,
+      selectionOverrides: selectionOverrides ?? previewSelections,
+      runtimeSnippets: snippets,
+      options: resolved.options,
+      preflight: resolved.mode
+    )
+    if case let .failed(message) = status {
+      throw AppError.configValidationFailed(message)
+    }
   }
 
-  private func makeEffectiveRuntimeConfigSnapshot(
+  private struct ResolvedEffectiveRuntimeConfigPreflight {
+    var mode: EffectiveRuntimeConfigPreflightMode
+    var optionalCoreErrorMessage: String?
+    var options: RuntimeConfigOptions
+  }
+
+  private func resolveEffectiveRuntimeConfigPreflight(
     profile: Profile,
-    overrides: RuntimeOverrides,
-    selectionOverrides: [String: String]? = nil,
-    runtimeSnippets: [RuntimeSnippet],
-    runtimeOptions: RuntimeConfigOptions? = nil,
+    runtimeOptions: RuntimeConfigOptions?,
     preflight: EffectiveRuntimeConfigValidationIntent
-  ) async throws -> EffectiveRuntimeConfigSnapshot {
+  ) async throws -> ResolvedEffectiveRuntimeConfigPreflight {
     let preflightMode: EffectiveRuntimeConfigPreflightMode
     let optionalCoreErrorMessage: String?
     switch preflight {
@@ -8113,6 +8129,29 @@ final class AppModel {
     } else {
       effectiveRuntimeOptions = try await resolvedRuntimeConfigOptions(for: profile)
     }
+    return ResolvedEffectiveRuntimeConfigPreflight(
+      mode: preflightMode,
+      optionalCoreErrorMessage: optionalCoreErrorMessage,
+      options: effectiveRuntimeOptions
+    )
+  }
+
+  private func makeEffectiveRuntimeConfigSnapshot(
+    profile: Profile,
+    overrides: RuntimeOverrides,
+    selectionOverrides: [String: String]? = nil,
+    runtimeSnippets: [RuntimeSnippet],
+    runtimeOptions: RuntimeConfigOptions? = nil,
+    preflight: EffectiveRuntimeConfigValidationIntent
+  ) async throws -> EffectiveRuntimeConfigSnapshot {
+    let resolved = try await resolveEffectiveRuntimeConfigPreflight(
+      profile: profile,
+      runtimeOptions: runtimeOptions,
+      preflight: preflight
+    )
+    let preflightMode = resolved.mode
+    let optionalCoreErrorMessage = resolved.optionalCoreErrorMessage
+    let effectiveRuntimeOptions = resolved.options
     var snapshot = try await EffectiveRuntimeConfigBuilder(
       materializer: runtimeConfigMaterializer
     ).snapshot(

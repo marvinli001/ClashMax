@@ -104,7 +104,14 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
 
     await model.waitForOutboundProxyEndpointLoad()
-    let snapshot = try await model.preflightEffectiveRuntimeConfig(profile: profile)
+    XCTAssertEqual(profileStore.activeProfileID, profile.id)
+    // The inspector preview is the only surface that builds a full snapshot; the mutation preflight
+    // deliberately validates without producing one.
+    await model.refreshEffectiveRuntimeConfigPreview()
+    guard case let .loaded(snapshot) = model.effectiveRuntimeConfigState else {
+      return XCTFail("Expected a loaded effective config, got \(model.effectiveRuntimeConfigState)")
+    }
+    XCTAssertEqual(snapshot.preflightStatus, .passed)
 
     XCTAssertTrue(snapshot.layers.contains { $0.id == "upstream-proxy" && $0.isActive })
     XCTAssertTrue(snapshot.redactedFinalYAML.contains("dialer-proxy"))
