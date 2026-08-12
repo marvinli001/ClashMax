@@ -567,8 +567,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let inactiveReloadPaths = await client.reloadRequestPaths()
     XCTAssertEqual(inactiveReloadPaths.count, 0)
 
+    // Nothing reached the running core, so this is a next-start change rather than a live one.
+    XCTAssertEqual(model.lastRuntimeApplyOutcome, .savedForNextStart(.rules))
+
     let didSaveActiveSnippet = await model.saveRuntimeSnippet(activeSnippet)
     XCTAssertTrue(didSaveActiveSnippet)
+    XCTAssertEqual(model.lastRuntimeApplyOutcome, .applied(.rules))
     let reloadPaths = await client.reloadRequestPaths()
     XCTAssertEqual(reloadPaths.count, 1)
     let runtimeConfig = try String(contentsOfFile: try XCTUnwrap(reloadPaths.first), encoding: .utf8)
@@ -641,6 +645,13 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertFalse(didSave)
     XCTAssertEqual(model.runtimeSnippetLibrary.snippets, [stableSnippet])
     XCTAssertTrue(model.lastError?.contains("reload rejected") == true)
+    // The snippet the user just saved was silently restored to its previous state; that has to be
+    // reported, not merely logged (issue #15).
+    guard case let .rolledBack(change, message)? = model.lastRuntimeApplyOutcome else {
+      return XCTFail("expected a reported rollback, got \(String(describing: model.lastRuntimeApplyOutcome))")
+    }
+    XCTAssertEqual(change, .rules)
+    XCTAssertTrue(message.contains("reload rejected"))
     let reloadRequestCount = await client.reloadRequestPaths().count
     XCTAssertEqual(reloadRequestCount, 1)
 
@@ -703,6 +714,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let reloadRequestCount = await client.reloadRequestPaths().count
     XCTAssertEqual(reloadRequestCount, 1)
     XCTAssertTrue(model.lastError?.contains("reload rejected") == true)
+    guard case let .rolledBack(change, message)? = model.lastRuntimeApplyOutcome else {
+      return XCTFail("expected a reported rollback, got \(String(describing: model.lastRuntimeApplyOutcome))")
+    }
+    XCTAssertEqual(change, .profileOptions)
+    XCTAssertTrue(message.contains("reload rejected"))
   }
 
   func testRuntimeReloadFailureKeepsPreviousActiveArtifactsProtected() async throws {
@@ -1647,6 +1663,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertFalse(didUpdate)
     XCTAssertEqual(model.ruleOverlaySettings, .disabled)
     XCTAssertTrue(model.lastError?.contains("rejected by test core") == true)
+    // Nothing was stored and nothing was reverted, so there is no apply outcome to report.
+    XCTAssertNil(model.lastRuntimeApplyOutcome)
 
     let reloadedModel = AppModel(
       paths: paths,
@@ -1682,6 +1700,126 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(didUpdate)
     XCTAssertEqual(model.ruleOverlaySettings, overlay)
     XCTAssertNil(model.lastError)
+    XCTAssertEqual(model.lastRuntimeApplyOutcome, .savedForNextStart(.rules))
+  }
+
+  func testGlobalRuleOverlayReachesTheRunningCoreAndReportsItApplied() async throws {
+    // Issue #15: the Settings rule overlay used to be written straight to disk with nothing
+    // reloading the core, so an edit made while running changed no traffic at all.
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    let profile = try await store.importLocalConfig(from: configURL)
+    let controller = CoreProcessController(
+      launcher: FakeProcessLauncher(),
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
+    let preflightCore = try Self.makeRuleOverlayPreflightCore(in: paths.appSupport, rejectedToken: "never-matched")
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      apiClient: client,
+      defaults: try Self.makeIsolatedDefaults(),
+      bundledCoreURLProvider: { preflightCore }
+    )
+    try await controller.startUserMode(
+      coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+      configURL: URL(fileURLWithPath: profile.originalConfigPath),
+      workDirectory: paths.runtime,
+      api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+    )
+    let overlay = RuleOverlaySettings(
+      enabled: true,
+      prependRules: [
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "live.example", policy: "DIRECT")
+      ]
+    )
+
+    let didUpdate = await model.updateGlobalRuleOverlay(overlay)
+
+    XCTAssertTrue(didUpdate)
+    XCTAssertEqual(model.ruleOverlaySettings, overlay)
+    XCTAssertEqual(model.lastRuntimeApplyOutcome, .applied(.rules))
+    let reloadPaths = await client.reloadRequestPaths()
+    XCTAssertEqual(reloadPaths.count, 1)
+    let runtimeConfig = try String(contentsOfFile: try XCTUnwrap(reloadPaths.first), encoding: .utf8)
+    XCTAssertTrue(runtimeConfig.contains("DOMAIN-SUFFIX,live.example,DIRECT"))
+  }
+
+  func testGlobalRuleOverlayRestoresPreviousRulesAndReportsTheRollbackWhenReloadFails() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let defaults = try Self.makeIsolatedDefaults()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    let profile = try await store.importLocalConfig(from: configURL)
+    let controller = CoreProcessController(
+      launcher: FakeProcessLauncher(),
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [],
+      testDelayResult: 0,
+      reloadFailureMessage: "reload rejected"
+    )
+    let preflightCore = try Self.makeRuleOverlayPreflightCore(in: paths.appSupport, rejectedToken: "never-matched")
+    let model = AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      apiClient: client,
+      defaults: defaults,
+      bundledCoreURLProvider: { preflightCore }
+    )
+    let stableOverlay = RuleOverlaySettings(
+      enabled: true,
+      prependRules: [
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "stable.example", policy: "DIRECT")
+      ]
+    )
+    model.ruleOverlaySettings = stableOverlay
+    try await controller.startUserMode(
+      coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+      configURL: URL(fileURLWithPath: profile.originalConfigPath),
+      workDirectory: paths.runtime,
+      api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+    )
+    let rejectedOverlay = RuleOverlaySettings(
+      enabled: true,
+      prependRules: [
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "rejected.example", policy: "DIRECT")
+      ]
+    )
+
+    let didUpdate = await model.updateGlobalRuleOverlay(rejectedOverlay)
+
+    XCTAssertFalse(didUpdate)
+    // Stored settings must match what the core is actually running, and the user must be told the
+    // edit was taken back rather than finding it gone.
+    XCTAssertEqual(model.ruleOverlaySettings, stableOverlay)
+    XCTAssertTrue(model.lastError?.contains("reload rejected") == true)
+    guard case let .rolledBack(change, message)? = model.lastRuntimeApplyOutcome else {
+      return XCTFail("expected a reported rollback, got \(String(describing: model.lastRuntimeApplyOutcome))")
+    }
+    XCTAssertEqual(change, .rules)
+    XCTAssertTrue(message.contains("reload rejected"))
+
+    let reloadedModel = AppModel(
+      paths: paths,
+      profileStore: store,
+      defaults: defaults,
+      bundledCoreURLProvider: { preflightCore }
+    )
+    XCTAssertEqual(reloadedModel.ruleOverlaySettings, stableOverlay)
   }
 
   func testTunSettingsMigratesMissingRouteExcludeAddressesFromUserDefaults() throws {

@@ -7,6 +7,11 @@ final class ProfileCoordinator {
   private(set) var isAddingSubscription = false
   private(set) var updatingProfileIDs: Set<Profile.ID> = []
   private(set) var message: String?
+  /// Set when the last provider-options mutation was reverted because the runtime rejected it. The
+  /// coordinator's `message` is cleared by the failure path above it, so without this flag the
+  /// rollback would reach the user as a bare error and their edit would look like it vanished
+  /// (issue #15).
+  private(set) var didRollBackLastProviderOptions = false
 
   private let profileStore: ProfileStore
   private let proxyPreview: ProxyPreviewStore
@@ -236,6 +241,7 @@ final class ProfileCoordinator {
     guard profile.isSubscription else {
       throw AppError.invalidProfileConfig("Only subscription profiles can update provider options.")
     }
+    didRollBackLastProviderOptions = false
     let previousOptions = profileStore.profiles.first(where: { $0.id == profile.id })?.subscriptionProviderOptions
       ?? profile.subscriptionProviderOptions
     try await profileStore.updateSubscriptionProviderOptions(
@@ -259,6 +265,7 @@ final class ProfileCoordinator {
             preflightValidator: NoopSubscriptionProfilePreflightValidator()
           )
           await refreshPreviewAndWait()
+          didRollBackLastProviderOptions = true
           message = "Rolled back provider options for \(profile.name) after runtime reload failed."
           hooks.appendAppLog("warn", "Rolled back provider options for \(profile.name) after runtime reload failed.")
         } catch {

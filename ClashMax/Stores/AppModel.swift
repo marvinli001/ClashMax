@@ -738,6 +738,10 @@ final class AppModel {
   private(set) var providerSideLoadPreflightStatus: ProviderSideLoadPreflightStatus = .idle
   private(set) var proxyDelayBatchProgress: ProxyDelayBatchProgress?
   var routingSimulationRequest: RoutingSimulationRequest?
+  /// What the last rule/DNS commit actually did to the runtime. Published so a successful hot
+  /// reload is visible rather than merely "no red text", and so a rollback — the runtime rejected
+  /// the edit and ClashMax restored the previous config — is never silent (issue #15).
+  private(set) var lastRuntimeApplyOutcome: RuntimeApplyOutcome?
   @ObservationIgnored private var lastErrorOrigin: LastErrorOrigin?
   @ObservationIgnored private var isPublishingNetworkExtensionLastError = false
   @ObservationIgnored private var isPublishingLastErrorWithDetails = false
@@ -2623,8 +2627,42 @@ final class AppModel {
     return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
   }
 
+  /// The runtime facts that decide whether a pending edit hot-reloads, needs a restart, or waits
+  /// for the next start. `effectiveRuntimeOwnerForSettingsSnapshot` is used rather than the raw
+  /// `runtimeOwner` so a core that is up but has not published an owner yet still reads as live.
+  var runtimeApplyContext: RuntimeApplyContext {
+    RuntimeApplyContext(
+      runtimeOwner: isRunning ? effectiveRuntimeOwnerForSettingsSnapshot : .stopped,
+      previewRuntimeActive: previewRuntimeActive
+    )
+  }
+
+  func runtimeApplyMode(for change: RuntimeChangeKind) -> RuntimeChangeApplyMode {
+    RuntimeChangeApplyMode.resolve(change, in: runtimeApplyContext)
+  }
+
+  func clearRuntimeApplyOutcome() {
+    lastRuntimeApplyOutcome = nil
+  }
+
+  private func publishRuntimeApplyOutcome(for change: RuntimeChangeKind, mode: RuntimeChangeApplyMode) {
+    switch mode {
+    case .hotReload:
+      lastRuntimeApplyOutcome = .applied(change)
+    case let .requiresRestart(reason):
+      lastRuntimeApplyOutcome = .restartNeeded(change, reason)
+    case .appliesOnNextStart:
+      lastRuntimeApplyOutcome = .savedForNextStart(change)
+    }
+  }
+
+  private func publishRuntimeApplyRollback(for change: RuntimeChangeKind, error: Error) {
+    lastRuntimeApplyOutcome = .rolledBack(change, message: UserFacingError.message(for: error))
+  }
+
   @discardableResult
   func updateGlobalRuleOverlay(_ overlay: RuleOverlaySettings) async -> Bool {
+    lastRuntimeApplyOutcome = nil
     if let validationError = overlay.validationError {
       lastError = validationError
       return false
@@ -2642,17 +2680,26 @@ final class AppModel {
         return false
       }
     }
+    let applyMode = runtimeApplyMode(for: .rules)
+    let previousOverlay = ruleOverlaySettings
     ruleOverlaySettings = overlay
     guard let profileID = profileStore.activeProfileID, isRunning else {
       lastError = nil
+      publishRuntimeApplyOutcome(for: .rules, mode: applyMode)
       return true
     }
     do {
       try await reloadActiveRuntimeConfigIfNeeded(for: profileID, logMessage: "Rule overlay updated")
       lastError = nil
+      publishRuntimeApplyOutcome(for: .rules, mode: applyMode)
       return true
     } catch {
+      // The reload is the only step that touches the core, so a throw here means the runtime is
+      // still on the previous rules. Restore the stored overlay to match rather than leaving
+      // settings claiming rules the core never accepted.
+      ruleOverlaySettings = previousOverlay
       lastError = UserFacingError.message(for: error)
+      publishRuntimeApplyRollback(for: .rules, error: error)
       return false
     }
   }
@@ -2670,7 +2717,10 @@ final class AppModel {
     } else {
       proposedSnippets.append(snippet)
     }
-    return await mutateRuntimeSnippetLibrary(logMessage: "Runtime snippet updated") {
+    return await mutateRuntimeSnippetLibrary(
+      change: RuntimeChangeKind(snippet.payload.kind),
+      logMessage: "Runtime snippet updated"
+    ) {
       try await runtimeSnippetLibrary.saveSnippet(snippet)
     } proposedSnippets: {
       proposedSnippets
@@ -2681,7 +2731,10 @@ final class AppModel {
   func deleteRuntimeSnippet(_ snippet: RuntimeSnippet) async -> Bool {
     await runtimeSnippetLibrary.waitForLoad()
     let proposedSnippets = runtimeSnippetLibrary.snippets.filter { $0.id != snippet.id }
-    return await mutateRuntimeSnippetLibrary(logMessage: "Runtime snippet deleted") {
+    return await mutateRuntimeSnippetLibrary(
+      change: RuntimeChangeKind(snippet.payload.kind),
+      logMessage: "Runtime snippet deleted"
+    ) {
       try await runtimeSnippetLibrary.deleteSnippet(id: snippet.id)
     } proposedSnippets: {
       proposedSnippets
@@ -2699,7 +2752,10 @@ final class AppModel {
         return false
       }
     }
-    return await mutateRuntimeSnippetLibrary(logMessage: "Runtime snippet toggled") {
+    return await mutateRuntimeSnippetLibrary(
+      change: RuntimeChangeKind(snippet.payload.kind),
+      logMessage: "Runtime snippet toggled"
+    ) {
       try await runtimeSnippetLibrary.setSnippetEnabled(id: snippet.id, enabled: enabled)
     } proposedSnippets: {
       proposedSnippets
@@ -2711,7 +2767,10 @@ final class AppModel {
     await runtimeSnippetLibrary.waitForLoad()
     var proposedSnippets = runtimeSnippetLibrary.snippets
     moveSnippets(&proposedSnippets, fromOffsets: source, toOffset: destination)
-    return await mutateRuntimeSnippetLibrary(logMessage: "Runtime snippets reordered") {
+    return await mutateRuntimeSnippetLibrary(
+      change: .snippetOrder,
+      logMessage: "Runtime snippets reordered"
+    ) {
       try await runtimeSnippetLibrary.moveSnippet(fromOffsets: source, toOffset: destination)
     } proposedSnippets: {
       proposedSnippets
@@ -2719,10 +2778,12 @@ final class AppModel {
   }
 
   private func mutateRuntimeSnippetLibrary(
+    change: RuntimeChangeKind,
     logMessage: String,
     mutation: () async throws -> Void,
     proposedSnippets proposedSnippetsProvider: () -> [RuntimeSnippet]
   ) async -> Bool {
+    lastRuntimeApplyOutcome = nil
     await runtimeSnippetLibrary.waitForLoad()
     let activeProfileID = profileStore.activeProfileID
     let beforeSnippets = runtimeSnippetLibrary.snippets
@@ -2739,9 +2800,11 @@ final class AppModel {
       }
       try await mutation()
       let afterActiveSnippets = activeProfileID.map { runtimeSnippetLibrary.snippets(applyingTo: $0) } ?? []
+      var didReload = false
       if isRunning, let activeProfileID, beforeActiveSnippets != afterActiveSnippets {
         do {
           try await reloadActiveRuntimeConfigIfNeeded(for: activeProfileID, logMessage: logMessage)
+          didReload = true
         } catch {
           do {
             try await runtimeSnippetLibrary.replaceSnippets(beforeSnippets)
@@ -2751,6 +2814,9 @@ final class AppModel {
               message: "Runtime snippet rollback failed: \(UserFacingError.message(for: error))"
             )
           }
+          // Publish before rethrowing: the outer catch only knows the edit failed, not that the
+          // stored snippets were silently reverted underneath the user (issue #15).
+          publishRuntimeApplyRollback(for: change, error: error)
           throw error
         }
       }
@@ -2758,6 +2824,9 @@ final class AppModel {
         resetEffectiveRuntimeConfigPreviewIfNeeded(invalidatedProfileID: activeProfileID)
       }
       lastError = nil
+      // Not reloading means the edit never reached a running core — either nothing is running or the
+      // snippet does not apply to the active profile — so it is a next-start change, not a live one.
+      publishRuntimeApplyOutcome(for: change, mode: didReload ? runtimeApplyMode(for: change) : .appliesOnNextStart)
       return true
     } catch {
       lastError = UserFacingError.message(for: error)
@@ -2847,7 +2916,15 @@ final class AppModel {
     options: SubscriptionProviderOptions
   ) async -> Bool {
     lastError = nil
+    lastRuntimeApplyOutcome = nil
     profileCoordinator.clearMessage()
+
+    // The coordinator only reloads the core for the active profile, so editing any other profile is
+    // a next-start change however the runtime is running.
+    let reachesRunningRuntime = isRunning && profile.id == profileStore.activeProfileID
+    let applyMode: RuntimeChangeApplyMode = reachesRunningRuntime
+      ? runtimeApplyMode(for: .profileOptions)
+      : .appliesOnNextStart
 
     do {
       try await profileCoordinator.updateSubscriptionProviderOptions(
@@ -2856,8 +2933,13 @@ final class AppModel {
         preflightValidator: subscriptionPreflightValidator()
       )
       resetEffectiveRuntimeConfigPreviewIfNeeded(invalidatedProfileID: profile.id)
+      publishRuntimeApplyOutcome(for: .profileOptions, mode: applyMode)
       return true
     } catch {
+      // Read the rollback fact before clearing the coordinator, which drops the message describing it.
+      if profileCoordinator.didRollBackLastProviderOptions {
+        publishRuntimeApplyRollback(for: .profileOptions, error: error)
+      }
       profileCoordinator.clearMessage()
       publishSubscriptionFailure(error)
       return false

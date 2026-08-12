@@ -2865,6 +2865,22 @@ struct RuleOverlaySettings: Codable, Equatable, Sendable {
     runtimeDisabledRuleMatchers.contains { $0.matches(rule) }
   }
 
+  /// How many discrete edits separate this overlay from `baseline`, for the draft editor's
+  /// "N changes pending" line. Insertions and removals count separately, so replacing a rule reads
+  /// as two edits rather than being rounded down to one.
+  func pendingChangeCount(comparedTo baseline: RuleOverlaySettings) -> Int {
+    var count = enabled == baseline.enabled ? 0 : 1
+    count += Self.editCount(prependRules, baseline.prependRules)
+    count += Self.editCount(appendRules, baseline.appendRules)
+    count += Self.editCount(disabledRuleMatchers, baseline.disabledRuleMatchers)
+    return count
+  }
+
+  private static func editCount<Element: Equatable>(_ lhs: [Element], _ rhs: [Element]) -> Int {
+    let difference = lhs.difference(from: rhs)
+    return difference.insertions.count + difference.removals.count
+  }
+
   var summary: String {
     guard enabled else {
       return String(localized: "Disabled")

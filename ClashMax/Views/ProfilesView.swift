@@ -107,6 +107,10 @@ struct ProfilesView: View {
             .lineLimit(2)
         }
 
+        if appModel.lastRuntimeApplyOutcome != nil {
+          RuntimeApplyOutcomeBanner()
+        }
+
         if let error = appModel.lastError {
           GlobalErrorBanner(
             message: error,
@@ -2143,9 +2147,16 @@ private struct SubscriptionProviderOptionsEditor: View {
           .accessibilityLabel("Edit")
           .help("Edit")
           .popover(isPresented: $isRuleOverlayPresented, arrowEdge: .bottom) {
-            RuleOverlaySettingsPopover(settings: $options.ruleOverlay)
-              .padding(16)
-              .frame(width: 420)
+            RuleOverlayDraftPopover(
+              baseline: options.ruleOverlay,
+              pendingSummary: String(localized: "Staged in this editor: saving the profile applies it to the runtime."),
+              applyTitle: "Stage"
+            ) { draft in
+              options.ruleOverlay = draft
+              isRuleOverlayPresented = false
+            }
+            .padding(16)
+            .frame(width: 460)
           }
         }
       }

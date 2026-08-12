@@ -210,6 +210,13 @@ struct RoutingView: View {
       Divider()
       routingWorkspaceBody
 
+      if appModel.lastRuntimeApplyOutcome != nil {
+        Divider()
+        RuntimeApplyOutcomeBanner()
+          .padding(.horizontal, 12)
+          .padding(.vertical, 10)
+      }
+
       if let error = appModel.lastError {
         Divider()
         Label(error, systemImage: "exclamationmark.triangle.fill")

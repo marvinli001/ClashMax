@@ -8,12 +8,32 @@ struct SettingsView: View {
   @Environment(AppUpdateController.self) private var appUpdateController
   private let bundledCoreInfo: BundledCoreInfo
   @State private var isRuleOverlayPresented = false
+  @State private var isApplyingRuleOverlay = false
+  @State private var ruleOverlayApplyError: String?
   @State private var isNetworkPoliciesPresented = false
   @State private var isBackupExportPresented = false
   @State private var isBackupRestorePresented = false
 
   init(bundledCoreInfo: BundledCoreInfo = BundledCoreInfo()) {
     self.bundledCoreInfo = bundledCoreInfo
+  }
+
+  /// Commit the rule overlay draft. Kept out of `body` so the popover only ever holds a synchronous
+  /// closure (an `async` one stored on a `View` crashes the compiler in IRGen).
+  private func applyGlobalRuleOverlay(_ draft: RuleOverlaySettings) {
+    guard !isApplyingRuleOverlay else { return }
+    isApplyingRuleOverlay = true
+    ruleOverlayApplyError = nil
+    Task {
+      let didApply = await appModel.updateGlobalRuleOverlay(draft)
+      isApplyingRuleOverlay = false
+      if didApply {
+        isRuleOverlayPresented = false
+      } else {
+        // Keep the popover open with the draft intact: a rejected overlay is still work in progress.
+        ruleOverlayApplyError = appModel.lastError
+      }
+    }
   }
 
   private var latestHelperExitSummary: String? {
@@ -326,6 +346,10 @@ struct SettingsView: View {
         }
 
         Section("Rules") {
+          if appModel.lastRuntimeApplyOutcome != nil {
+            RuntimeApplyOutcomeBanner()
+              .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
+          }
           SettingsControlRow("Rule Overlay", description: settings.ruleOverlaySettings.summary) {
             Button {
               isRuleOverlayPresented = true
@@ -333,9 +357,16 @@ struct SettingsView: View {
               Label("Configure", systemImage: "slider.horizontal.3")
             }
             .popover(isPresented: $isRuleOverlayPresented, arrowEdge: .bottom) {
-              RuleOverlaySettingsPopover(settings: $settings.ruleOverlaySettings)
-                .frame(width: 560)
-                .padding(18)
+              RuleOverlayDraftPopover(
+                baseline: settings.ruleOverlaySettings,
+                pendingSummary: appModel.runtimeApplyMode(for: .rules).pendingSummary,
+                isApplying: isApplyingRuleOverlay,
+                errorMessage: ruleOverlayApplyError
+              ) { draft in
+                applyGlobalRuleOverlay(draft)
+              }
+              .frame(width: 560)
+              .padding(18)
             }
           }
         }
@@ -1325,11 +1356,114 @@ private struct ExternalDashboardProfilesPopover: View {
   }
 }
 
-struct RuleOverlaySettingsPopover: View {
-  @Binding var settings: RuleOverlaySettings
+/// Rule overlay editor with an explicit commit.
+///
+/// Issue #15: the editor used to write straight into the stored settings as the user typed, so there
+/// was no moment at which "this is the change" was known — nothing could preflight it, nothing could
+/// reload the core for it, and nothing could report what happened. Editing a local draft and
+/// committing once gives the boundary a place to be stated before Apply and confirmed after it.
+///
+/// `onApply` is deliberately synchronous: the callers wrap their own `Task`. Storing an `async`
+/// closure on a `View` crashes swift-frontend in IRGen.
+struct RuleOverlayDraftPopover: View {
+  let baseline: RuleOverlaySettings
+  let pendingSummary: String
+  let applyTitle: LocalizedStringResource
+  let isApplying: Bool
+  let errorMessage: String?
+  let onApply: (RuleOverlaySettings) -> Void
+
+  @State private var draft: RuleOverlaySettings
+
+  init(
+    baseline: RuleOverlaySettings,
+    pendingSummary: String,
+    applyTitle: LocalizedStringResource = "Apply",
+    isApplying: Bool = false,
+    errorMessage: String? = nil,
+    onApply: @escaping (RuleOverlaySettings) -> Void
+  ) {
+    self.baseline = baseline
+    self.pendingSummary = pendingSummary
+    self.applyTitle = applyTitle
+    self.isApplying = isApplying
+    self.errorMessage = errorMessage
+    self.onApply = onApply
+    self._draft = State(initialValue: baseline)
+  }
+
+  private var pendingChangeCount: Int {
+    draft.pendingChangeCount(comparedTo: baseline)
+  }
+
+  private var validationError: String? {
+    draft.validationError
+  }
 
   var body: some View {
-    RuleOverlaySettingsEditor(settings: $settings)
+    VStack(alignment: .leading, spacing: 14) {
+      RuleOverlaySettingsEditor(settings: $draft)
+      Divider()
+      commitFooter
+    }
+    .onChange(of: baseline) { oldValue, newValue in
+      // Adopt an outside change only when the draft is still untouched, so a background edit can
+      // never swallow rules the user has typed but not applied yet.
+      guard draft == oldValue else { return }
+      draft = newValue
+    }
+  }
+
+  private var commitFooter: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(alignment: .firstTextBaseline, spacing: 10) {
+        VStack(alignment: .leading, spacing: 4) {
+          Text(pendingSummary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+          Text(pendingChangeSummary)
+            .font(.caption.weight(.medium))
+            .foregroundStyle(pendingChangeCount > 0 ? .primary : .secondary)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+
+        Spacer(minLength: 12)
+
+        Button("Revert") {
+          draft = baseline
+        }
+        .disabled(pendingChangeCount == 0 || isApplying)
+
+        Button {
+          onApply(draft)
+        } label: {
+          if isApplying {
+            ProgressView()
+              .controlSize(.small)
+          } else {
+            Text(applyTitle)
+          }
+        }
+        .keyboardShortcut(.defaultAction)
+        .buttonStyle(.borderedProminent)
+        .disabled(pendingChangeCount == 0 || isApplying || validationError != nil)
+      }
+
+      if let message = validationError ?? errorMessage {
+        Label(message, systemImage: "exclamationmark.triangle.fill")
+          .font(.caption)
+          .foregroundStyle(.orange)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+  }
+
+  private var pendingChangeSummary: String {
+    let count = pendingChangeCount
+    guard count > 0 else {
+      return String(localized: "No pending changes")
+    }
+    return String(format: String(localized: "%lld changes pending"), Int64(count))
   }
 }
 
