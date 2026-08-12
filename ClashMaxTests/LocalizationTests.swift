@@ -463,4 +463,122 @@ final class LocalizationTests: XCTestCase {
     let viaFormat = zhBundle.localizedString(forKey: "Via %@", value: nil, table: nil)
     XCTAssertEqual(String(format: viaFormat, "Office"), "经由 Office")
   }
+
+  /// Issue #15 phase B shipped the Quick Rules sheet and the Rules/Connections row menus with an
+  /// English-only string catalog, so the whole feature rendered in English on a Simplified Chinese
+  /// system. These are the strings that panel is made of.
+  func testSimplifiedChineseStringCatalogProvidesQuickRuleKeys() throws {
+    let bundle = try XCTUnwrap(Bundle(identifier: AppConstants.bundleIdentifier))
+    let zhPath = try XCTUnwrap(bundle.path(forResource: "zh-Hans", ofType: "lproj"))
+    let zhBundle = try XCTUnwrap(Bundle(path: zhPath))
+    let expectedTranslations = [
+      "Quick Rules": "快捷规则",
+      "Add Rule for This Connection": "为此连接添加规则",
+      "Insert Rule Before This": "在此规则前插入规则",
+      "Insert Rule Before This…": "在此规则前插入规则…",
+      "Enable This Rule": "启用此规则",
+      "Disable This Rule": "禁用此规则",
+      "Copy Rule": "复制规则",
+      "Copy Rules": "复制所选规则",
+      "Copy Payload": "复制规则值",
+      "Payload": "规则值",
+      "Copy Host": "复制主机",
+      "Copy Hosts": "复制所选主机",
+      "Copy Destination": "复制目标地址",
+      "Host": "主机",
+      "Open in Routing": "在“路由”页打开",
+      "Placement": "插入位置",
+      "Before profile rules": "在配置规则之前",
+      "After profile rules": "在配置规则之后",
+      "Evaluated ahead of the profile's rules, so it overrides them.": "先于配置自带规则参与匹配，因此会覆盖它们。",
+      "Evaluated only after every profile rule has missed.": "仅在配置的所有规则都未命中后才参与匹配。",
+      "Choose a policy": "选择策略",
+      "Choose a policy group or built-in outbound": "选择策略组或内置出站",
+      "Match without resolving DNS (no-resolve)": "匹配时不解析 DNS（no-resolve）",
+      "Rule Line": "规则行",
+      "Saved in the \"Quick Rules\" snippet, where Routing can edit, reorder or remove it.":
+        "保存在“快捷规则”片段中，可在“路由”页编辑、重排或删除。",
+      "Checking which rule matches now…": "正在检查当前命中的规则…",
+      "Your rule is the one that matches": "命中的就是你的规则",
+      "An earlier rule wins": "更靠前的规则先命中",
+      "Cannot be checked here": "无法在此判定",
+      "Decided inside Mihomo": "由 Mihomo 内部决定",
+      "Nothing matched": "没有命中任何规则",
+      "This rule type is matched by Mihomo itself, so ClashMax cannot confirm it locally.":
+        "此规则类型由 Mihomo 自行匹配，ClashMax 无法在本地确认。",
+      "No rule matched the probe, so the rule is stored but was not reached.":
+        "探测未命中任何规则：规则已保存，但没有被匹配到。",
+      "This rule was already in Quick Rules, so nothing was changed.": "此规则已在“快捷规则”中，未做任何更改。",
+      "The rule could not be applied.": "规则应用失败。",
+      "IP CIDR must be a valid CIDR range, for example 10.0.0.0/8.":
+        "IP CIDR 必须是有效的 CIDR 网段，例如 10.0.0.0/8。",
+      "Done": "完成",
+      "no reported rule": "未报告的规则",
+      "destination": "目标地址",
+      "destination port": "目标端口",
+      "source IP": "源 IP",
+      "source port": "源端口",
+      "process": "进程",
+      "Test current node delay": "测试当前节点延迟",
+      "Built-in outbounds have no connection to measure.": "内置出站没有可测量的连接。",
+      // The sheet's own rule editor: field placeholders and the errors it can show inline.
+      "Provider name": "Provider 名称",
+      "Condition, for example NETWORK,tcp": "条件，例如 NETWORK,tcp",
+      "Country code": "国家代码",
+      "IP suffix": "IP 后缀",
+      "Port or range": "端口或端口范围",
+      "Process name": "进程名",
+      "Process path": "进程路径",
+      "Sub-rule name": "子规则名称",
+      "Sub-rule condition must be NETWORK,tcp or NETWORK,udp.": "子规则条件必须是 NETWORK,tcp 或 NETWORK,udp。",
+      "Source IP CIDR must be a valid CIDR range.": "源 IP CIDR 必须是有效的 CIDR 网段。",
+      "Port rule value must be a port or range between 1 and 65535.": "端口规则值必须是 1 到 65535 之间的端口或范围。"
+    ]
+
+    for (key, expected) in expectedTranslations {
+      XCTAssertEqual(
+        zhBundle.localizedString(forKey: key, value: nil, table: nil),
+        expected,
+        "Missing or incorrect Simplified Chinese localization for \(key)"
+      )
+    }
+
+    let addRuleFormat = zhBundle.localizedString(forKey: "Add Rule for %@…", value: nil, table: nil)
+    XCTAssertEqual(String(format: addRuleFormat, "example.com"), "为 example.com 添加规则…")
+
+    let connectionFormat = zhBundle.localizedString(
+      forKey: "%@ currently matches %@ and routes through %@.",
+      value: nil,
+      table: nil
+    )
+    XCTAssertEqual(
+      String(format: connectionFormat, "example.com", "DOMAIN-SUFFIX,example.com,Proxy", "HK-01"),
+      "example.com 当前命中 DOMAIN-SUFFIX,example.com,Proxy，经由 HK-01 转发。"
+    )
+
+    let insertBeforeFormat = zhBundle.localizedString(forKey: "Evaluated before rule #%lld: %@", value: nil, table: nil)
+    XCTAssertEqual(
+      String(format: insertBeforeFormat, Int64(12), "DOMAIN-SUFFIX,example.com,DIRECT"),
+      "将先于第 12 条规则参与匹配：DOMAIN-SUFFIX,example.com,DIRECT"
+    )
+
+    let winningFormat = zhBundle.localizedString(forKey: "Rule #%lld is yours, and it routes to %@.", value: nil, table: nil)
+    XCTAssertEqual(String(format: winningFormat, Int64(3), "Proxy"), "第 3 条规则就是你添加的，它会路由到 Proxy。")
+
+    let shadowedFormat = zhBundle.localizedString(
+      forKey: "Rule #%lld matches first and routes to %@: %@. Reorder it in Routing, or narrow that rule, for yours to take effect.",
+      value: nil,
+      table: nil
+    )
+    XCTAssertEqual(
+      String(format: shadowedFormat, Int64(7), "DIRECT", "DOMAIN-SUFFIX,example.com,DIRECT"),
+      "第 7 条规则先命中并路由到 DIRECT：DOMAIN-SUFFIX,example.com,DIRECT。请在“路由”页调整顺序，或收窄该规则，你的规则才会生效。"
+    )
+
+    let probeFormat = zhBundle.localizedString(forKey: "Simulated against the current rule list with %@.", value: nil, table: nil)
+    XCTAssertEqual(
+      String(format: probeFormat, "目标地址 example.com"),
+      "已按当前规则列表模拟：目标地址 example.com。"
+    )
+  }
 }
