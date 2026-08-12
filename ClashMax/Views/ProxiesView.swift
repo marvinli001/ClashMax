@@ -1340,6 +1340,7 @@ private struct ProxyDelayBatchMetric: View {
 private struct ProxyProviderList: View {
   @Environment(AppModel.self) private var appModel
   @Environment(RuntimeDataStore.self) private var runtimeData
+  @Environment(\.pageHeight) private var pageHeight
   let providers: [ProxyProvider]
 
   var body: some View {
@@ -1358,63 +1359,70 @@ private struct ProxyProviderList: View {
         .controlSize(.small)
         .disabled(!appModel.canControlRuntimeProxies || providers.isEmpty || allUpdatesInFlight)
       }
-      ForEach(providers) { provider in
-        HStack(spacing: 10) {
-          VStack(alignment: .leading, spacing: 2) {
-            Text(provider.name)
-              .font(.callout.weight(.medium))
-              .lineLimit(1)
-            Text(providerSubtitle(provider))
-              .font(.caption)
-              .foregroundStyle(.secondary)
-              .lineLimit(1)
-            if let usage = provider.subscriptionInfo?.usageSummary {
-              Text(usage)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            }
-          }
-          Spacer(minLength: 12)
-          if let expireAt = provider.subscriptionInfo?.expireAt {
-            Text(expireAt, style: .date)
-              .font(.caption)
-              .foregroundStyle(.secondary)
-          }
-          if let updatedAt = provider.updatedAt {
-            Text(updatedAt, style: .date)
-              .font(.caption)
-              .foregroundStyle(.secondary)
-          }
-          Button {
-            appModel.updateProxyProvider(provider)
-          } label: {
-            if runtimeData.proxyProviderUpdatesInFlight.contains(provider.id) {
-              Image(systemName: "clock.arrow.circlepath")
-            } else {
-              Image(systemName: "arrow.clockwise")
-            }
-          }
-          .buttonStyle(.borderless)
-          .disabled(!appModel.canControlRuntimeProxies || runtimeData.proxyProviderUpdatesInFlight.contains(provider.id))
-          .help("Update provider")
-          .accessibilityLabel("Update provider \(provider.name)")
+      // Issue #27: this summary sits above the group list and used to grow one row per provider,
+      // so a subscription with dozens of providers pushed the group list — and the page itself —
+      // straight out of the window. The header stays put and only the rows scroll.
+      BoundedHeightSection(maxHeight: SecondarySectionHeight.maxHeight(pageHeight: pageHeight)) {
+        LazyVStack(alignment: .leading, spacing: 0) {
+          ForEach(providers) { provider in
+            HStack(spacing: 10) {
+              VStack(alignment: .leading, spacing: 2) {
+                Text(provider.name)
+                  .font(.callout.weight(.medium))
+                  .lineLimit(1)
+                Text(providerSubtitle(provider))
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+                  .lineLimit(1)
+                if let usage = provider.subscriptionInfo?.usageSummary {
+                  Text(usage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                }
+              }
+              Spacer(minLength: 12)
+              if let expireAt = provider.subscriptionInfo?.expireAt {
+                Text(expireAt, style: .date)
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+              }
+              if let updatedAt = provider.updatedAt {
+                Text(updatedAt, style: .date)
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+              }
+              Button {
+                appModel.updateProxyProvider(provider)
+              } label: {
+                if runtimeData.proxyProviderUpdatesInFlight.contains(provider.id) {
+                  Image(systemName: "clock.arrow.circlepath")
+                } else {
+                  Image(systemName: "arrow.clockwise")
+                }
+              }
+              .buttonStyle(.borderless)
+              .disabled(!appModel.canControlRuntimeProxies || runtimeData.proxyProviderUpdatesInFlight.contains(provider.id))
+              .help("Update provider")
+              .accessibilityLabel("Update provider \(provider.name)")
 
-          Button {
-            appModel.healthCheckProvider(provider)
-          } label: {
-            if runtimeData.providerHealthChecksInFlight.contains(provider.id) {
-              Image(systemName: "clock.arrow.circlepath")
-            } else {
-              Image(systemName: "waveform.path.ecg")
+              Button {
+                appModel.healthCheckProvider(provider)
+              } label: {
+                if runtimeData.providerHealthChecksInFlight.contains(provider.id) {
+                  Image(systemName: "clock.arrow.circlepath")
+                } else {
+                  Image(systemName: "waveform.path.ecg")
+                }
+              }
+              .buttonStyle(.borderless)
+              .disabled(!appModel.canControlRuntimeProxies || runtimeData.providerHealthChecksInFlight.contains(provider.id))
+              .help("Run provider health check")
+              .accessibilityLabel("Run health check for \(provider.name)")
             }
+            .padding(.vertical, 4)
           }
-          .buttonStyle(.borderless)
-          .disabled(!appModel.canControlRuntimeProxies || runtimeData.providerHealthChecksInFlight.contains(provider.id))
-          .help("Run provider health check")
-          .accessibilityLabel("Run health check for \(provider.name)")
         }
-        .padding(.vertical, 4)
       }
     }
     .padding(.horizontal, 12)

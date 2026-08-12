@@ -2777,6 +2777,79 @@ final class AppModel {
     }
   }
 
+  /// The snippet quick rules collect in, if the user has added any. Views read it to show what a
+  /// row's quick-rule state already is, without having to know how quick rules are stored.
+  var quickRuleSnippet: RuntimeSnippet? {
+    runtimeSnippetLibrary.snippets.first {
+      $0.id == QuickRuleLibrary.snippetID && $0.payload.kind == .rules
+    }
+  }
+
+  /// Whether `rule` is currently switched off by a quick-rule disable matcher.
+  ///
+  /// Only quick rules are consulted: the Rules page offers to undo what it itself wrote, and a rule
+  /// disabled by a hand-written snippet or the global overlay belongs to the editor that owns it.
+  func isDisabledByQuickRules(_ rule: RuntimeRule) -> Bool {
+    guard let snippet = quickRuleSnippet, case let .rules(settings) = snippet.payload else {
+      return false
+    }
+    return settings.disabledRuleMatchers.contains { $0.isExactDisable(of: rule.raw) }
+  }
+
+  /// Add a rule drafted from the Rules or Connections page.
+  ///
+  /// Issue #15 phase B: reaching a running config used to mean navigating to Routing, creating a
+  /// snippet, picking a payload kind and filling a form. This lands the rule through the very same
+  /// `saveRuntimeSnippet` path — preflight, hot reload, rollback on rejection, published outcome —
+  /// so a quick rule is never a second, weaker way of changing the runtime.
+  @discardableResult
+  func addQuickRule(_ draft: QuickRuleDraft) async -> Bool {
+    if let validationError = draft.validationError {
+      lastRuntimeApplyOutcome = nil
+      lastError = validationError
+      return false
+    }
+    // Before reading the library: a quick rule added while it is still loading would be folded into
+    // an empty snapshot and then appended as a second Quick Rules snippet.
+    await runtimeSnippetLibrary.waitForLoad()
+    return await saveRuntimeSnippet(quickRuleSnippet(applying: draft))
+  }
+
+  /// Turn a rule the active profile ships off (or back on) without editing the profile.
+  @discardableResult
+  func setRuntimeRuleDisabled(_ rule: RuntimeRule, disabled: Bool) async -> Bool {
+    await runtimeSnippetLibrary.waitForLoad()
+    let target = QuickRuleLibrary.targetSnippet(
+      in: runtimeSnippetLibrary.snippets,
+      activeProfileID: profileStore.activeProfileID
+    )
+    let updated = disabled
+      ? QuickRuleLibrary.disabling(rule.raw, in: target)
+      : QuickRuleLibrary.enabling(rule.raw, in: target)
+    return await saveRuntimeSnippet(updated)
+  }
+
+  /// Whether adding `draft` would change nothing that reaches the core.
+  func quickRuleIsAlreadyActive(_ draft: QuickRuleDraft) -> Bool {
+    QuickRuleLibrary.isAlreadyActive(
+      draft,
+      in: quickRuleSnippet,
+      activeProfileID: profileStore.activeProfileID
+    )
+  }
+
+  /// The snippet that adding `draft` would produce, so a view can tell whether the rule is already
+  /// in effect before committing a reload that would change nothing.
+  func quickRuleSnippet(applying draft: QuickRuleDraft) -> RuntimeSnippet {
+    QuickRuleLibrary.adding(
+      draft,
+      to: QuickRuleLibrary.targetSnippet(
+        in: runtimeSnippetLibrary.snippets,
+        activeProfileID: profileStore.activeProfileID
+      )
+    )
+  }
+
   private func mutateRuntimeSnippetLibrary(
     change: RuntimeChangeKind,
     logMessage: String,

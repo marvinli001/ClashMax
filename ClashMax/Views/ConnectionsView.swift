@@ -14,6 +14,27 @@ enum ConnectionsLayout {
   static func mode(forWidth width: CGFloat) -> ConnectionsLayoutMode {
     width >= splitDetailBreakpoint ? .splitDetail : .stackedDetail
   }
+
+  /// Issue #27: the stacked layout puts the detail card *under* the list, so the two share one
+  /// page. `stackedListMinHeight` alone outgrew a short window, and an oversized page does not
+  /// clip — it stretches the whole window's layout. Both blocks therefore scale with the room
+  /// they actually have.
+  static func stackedListMinHeight(availableHeight: CGFloat) -> CGFloat {
+    guard availableHeight.isFinite, availableHeight > 0 else { return stackedListMinHeight }
+    return min(stackedListMinHeight, max(availableHeight * 0.45, 120))
+  }
+
+  /// How tall the detail card may grow before its contents scroll inside it. Beside the list it
+  /// owns a full column; under the list it may claim only part of the page.
+  static func detailMaxHeight(mode: ConnectionsLayoutMode, availableHeight: CGFloat) -> CGFloat {
+    guard availableHeight.isFinite, availableHeight > 0 else { return 320 }
+    switch mode {
+    case .splitDetail:
+      return availableHeight
+    case .stackedDetail:
+      return min(max(availableHeight * 0.4, 96), 320)
+    }
+  }
 }
 
 struct ConnectionsView: View {
@@ -24,6 +45,7 @@ struct ConnectionsView: View {
   @State private var groupsByApp = false
   @State private var selectedConnectionIDs = Set<ConnectionSnapshot.ID>()
   @State private var appIconCache = ConnectionAppIconCache()
+  @State private var quickRuleContext: QuickRuleSheetContext?
 
   var body: some View {
     AdaptivePage(title: "Connections") {
@@ -56,7 +78,10 @@ struct ConnectionsView: View {
       } else {
         VStack(spacing: 8) {
           GeometryReader { proxy in
-            connectionsWorkspace(mode: ConnectionsLayout.mode(forWidth: proxy.size.width))
+            connectionsWorkspace(
+              mode: ConnectionsLayout.mode(forWidth: proxy.size.width),
+              availableHeight: proxy.size.height
+            )
           }
           .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
@@ -71,6 +96,59 @@ struct ConnectionsView: View {
     .onChange(of: visibleConnections.map(\.id)) { _, ids in
       selectedConnectionIDs = selectedConnectionIDs.intersection(Set(ids))
     }
+    .quickRuleSheet($quickRuleContext)
+  }
+
+  /// Issue #15 phase B2: a connection going the wrong way is where the user notices the problem,
+  /// so the rule that fixes it is written from here, prefilled with the host in front of them.
+  @ViewBuilder
+  private func connectionMenu(for selection: [ConnectionSnapshot]) -> some View {
+    if let connection = selection.first, selection.count == 1 {
+      Button(String(format: String(localized: "Add Rule for %@…"), connectionRuleHost(connection))) {
+        let host = connectionRuleHost(connection)
+        quickRuleContext = QuickRuleSheetContext(
+          title: "Add Rule for This Connection",
+          subtitle: String(
+            format: String(localized: "%@ currently matches %@ and routes through %@."),
+            host,
+            connection.ruleSummary.isEmpty ? String(localized: "no reported rule") : connection.ruleSummary,
+            connection.chain.first ?? String(localized: "-")
+          ),
+          draft: .targeting(host: host)
+        )
+      }
+      .disabled(connectionRuleHost(connection).isEmpty)
+
+      Button("Open in Routing") {
+        appModel.openRoutingExplanation(for: connection)
+      }
+
+      Divider()
+
+      Button("Copy Host") { copy(connectionRuleHost(connection)) }
+      Button("Copy Destination") { copy(connection.destinationAddress) }
+    } else if !selection.isEmpty {
+      Button("Copy Hosts") {
+        copy(selection.map(connectionRuleHost).filter { !$0.isEmpty }.joined(separator: "\n"))
+      }
+    }
+  }
+
+  /// Mihomo reports the destination IP as the host for connections opened without a hostname, and a
+  /// domain rule keyed on an IP would never match, so the address is used as-is and the draft turns
+  /// it into a CIDR rule.
+  private func connectionRuleHost(_ connection: ConnectionSnapshot) -> String {
+    let host = connection.host.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard host.isEmpty else { return host }
+    let destination = connection.destinationAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let separator = destination.lastIndex(of: ":") else { return destination }
+    return String(destination[destination.startIndex..<separator])
+  }
+
+  private func copy(_ text: String) {
+    guard !text.isEmpty else { return }
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(text, forType: .string)
   }
 
   private var controls: some View {
@@ -97,7 +175,12 @@ struct ConnectionsView: View {
   }
 
   @ViewBuilder
-  private func connectionsWorkspace(mode layoutMode: ConnectionsLayoutMode) -> some View {
+  private func connectionsWorkspace(mode layoutMode: ConnectionsLayoutMode, availableHeight: CGFloat) -> some View {
+    let detailMaxHeight = ConnectionsLayout.detailMaxHeight(
+      mode: layoutMode,
+      availableHeight: availableHeight
+    )
+
     VStack(alignment: .leading, spacing: 10) {
       controls
 
@@ -106,15 +189,15 @@ struct ConnectionsView: View {
         HStack(alignment: .top, spacing: 12) {
           connectionList
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-          connectionDetail
+          connectionDetail(maxHeight: detailMaxHeight)
             .frame(width: ConnectionsLayout.detailWidth, alignment: .topLeading)
         }
       case .stackedDetail:
         VStack(alignment: .leading, spacing: 12) {
           connectionList
-            .frame(minHeight: ConnectionsLayout.stackedListMinHeight)
+            .frame(minHeight: ConnectionsLayout.stackedListMinHeight(availableHeight: availableHeight))
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-          connectionDetail
+          connectionDetail(maxHeight: detailMaxHeight)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
       }
@@ -167,6 +250,9 @@ struct ConnectionsView: View {
                 } closeAction: {
                   guard canClose else { return }
                   appModel.closeConnection(connection)
+                }
+                .contextMenu {
+                  connectionMenu(for: [connection])
                 }
               }
             }
@@ -236,29 +322,36 @@ struct ConnectionsView: View {
         .width(min: 64, ideal: 72, max: 82)
       }
       .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+      .contextMenu(forSelectionType: ConnectionSnapshot.ID.self) { ids in
+        connectionMenu(for: visibleConnections.filter { ids.contains($0.id) })
+      }
     }
   }
 
-  private var connectionDetail: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      Label("Connection Detail", systemImage: "info.circle")
-        .font(.headline)
+  /// The card scrolls its own rows rather than growing past `maxHeight`, so a long chain or process
+  /// path can never push the connection list out of the page (issue #27).
+  private func connectionDetail(maxHeight: CGFloat) -> some View {
+    BoundedHeightSection(maxHeight: maxHeight) {
+      VStack(alignment: .leading, spacing: 10) {
+        Label("Connection Detail", systemImage: "info.circle")
+          .font(.headline)
 
-      if let connection = selectedConnection {
-        detailRow("App", connection.appDisplayName)
-        detailRow("Process", connection.processPath ?? "-")
-        detailRow("Network", connection.network.isEmpty ? "-" : connection.network)
-        detailRow("Source", connection.sourceAddress)
-        detailRow("Destination", connection.destinationAddress)
-        detailRow("Rule", connection.ruleSummary.isEmpty ? "-" : connection.ruleSummary)
-        detailRow("Chain", connection.chain.isEmpty ? "-" : connection.chain.joined(separator: " / "))
-        detailRow("Traffic", TrafficSample.formatBytes(connection.download + connection.upload))
-        whyThisRule(connection)
-      } else {
-        Text("Select a connection to inspect the process, rule, and chain.")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .lineLimit(4)
+        if let connection = selectedConnection {
+          detailRow("App", connection.appDisplayName)
+          detailRow("Process", connection.processPath ?? "-")
+          detailRow("Network", connection.network.isEmpty ? "-" : connection.network)
+          detailRow("Source", connection.sourceAddress)
+          detailRow("Destination", connection.destinationAddress)
+          detailRow("Rule", connection.ruleSummary.isEmpty ? "-" : connection.ruleSummary)
+          detailRow("Chain", connection.chain.isEmpty ? "-" : connection.chain.joined(separator: " / "))
+          detailRow("Traffic", TrafficSample.formatBytes(connection.download + connection.upload))
+          whyThisRule(connection)
+        } else {
+          Text("Select a connection to inspect the process, rule, and chain.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(4)
+        }
       }
     }
     .padding(12)

@@ -13,8 +13,17 @@ struct ContentView: View {
       VStack(spacing: 0) {
         StatusStrip()
         Divider()
-        detail
-          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        // Issue #27: a flexible frame does not clamp an oversized child — SwiftUI grows the frame
+        // to fit it and then centers the overflow. So a page whose content outgrew the window used
+        // to stretch this column from the inside, painting over the title bar and pushing the
+        // sidebar's rows off screen; the window could only be recovered by quitting. GeometryReader
+        // always reports the size it was proposed no matter what it contains, which pins the column
+        // to the window, and the clip keeps a page that still overflows contained inside it.
+        GeometryReader { _ in
+          detail
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+        .clipped()
       }
         .toolbar {
           // Deliberately the default placement, not `.navigation`: `.navigation` sits

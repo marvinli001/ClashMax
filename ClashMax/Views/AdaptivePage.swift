@@ -13,6 +13,10 @@ enum PageChromePlacement {
 
 extension EnvironmentValues {
   @Entry var pageChromePlacement: PageChromePlacement = .toolbar
+  /// Height of the page currently being laid out, published by `AdaptivePage` so sections nested
+  /// anywhere inside it can bound themselves against the real window (see `SecondarySectionHeight`).
+  /// Zero until the first geometry pass.
+  @Entry var pageHeight: CGFloat = 0
 }
 
 struct AdaptivePage<Actions: View, Content: View>: View {
@@ -22,7 +26,7 @@ struct AdaptivePage<Actions: View, Content: View>: View {
   @ViewBuilder var content: Content
 
   @Environment(\.pageChromePlacement) private var placement
-  @State private var pageWidth: CGFloat = 0
+  @State private var pageSize: CGSize = .zero
 
   var body: some View {
     switch placement {
@@ -57,18 +61,19 @@ struct AdaptivePage<Actions: View, Content: View>: View {
       content
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
-    .padding(DashboardLayoutMetrics.pagePadding(for: pageWidth))
+    .padding(DashboardLayoutMetrics.pagePadding(for: pageSize.width))
     .frame(maxWidth: maxContentWidth)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    // Replaces a GeometryReader wrapper: this reports the container width without
+    // Replaces a GeometryReader wrapper: this reports the container size without
     // the reader's habit of claiming all proposed space and flattening ideal sizes.
     // Measured on the outermost frame, so the value never depends on the padding
     // it feeds.
-    .onGeometryChange(for: CGFloat.self) { proxy in
-      proxy.size.width
-    } action: { width in
-      pageWidth = width
+    .onGeometryChange(for: CGSize.self) { proxy in
+      proxy.size
+    } action: { size in
+      pageSize = size
     }
+    .environment(\.pageHeight, pageSize.height)
   }
 
   private var inlineHeader: some View {

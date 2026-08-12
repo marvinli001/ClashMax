@@ -2640,6 +2640,11 @@ struct ManagedRuleOverlayRule: Codable, Equatable, Identifiable, Sendable {
     if kind == .srcIPCIDR, !Self.isValidCIDR(normalizedValue) {
       return String(localized: "Source IP CIDR must be a valid CIDR range.")
     }
+    // Mihomo rejects an IP rule whose payload is not a CIDR range, and the whole config with it.
+    // Catching it here keeps a bad value from reaching a running core and being rolled back.
+    if kind == .ipCIDR || kind == .ipCIDR6, !Self.isValidCIDR(normalizedValue) {
+      return String(localized: "IP CIDR must be a valid CIDR range, for example 10.0.0.0/8.")
+    }
     if kind.isPortRule, !Self.isValidPortRange(normalizedValue) {
       return String(localized: "Port rule value must be a port or range between 1 and 65535.")
     }
@@ -5060,6 +5065,33 @@ struct RuleMatchSimulationTrace: Equatable, Sendable {
   }
 }
 
+/// Rule type names compared without their separators, because the same rule reaches this code under
+/// two different spellings and only one of them is the config syntax.
+///
+/// A rule read back from a running core arrives as mihomo names it in `/rules` — `DomainSuffix`,
+/// `IPCIDR`, `ProcessName` — while a rule composed from an overlay arrives as the config writes it,
+/// `DOMAIN-SUFFIX`. Verified against the bundled core (v1.19.29): every multi-word type is reported
+/// in camel case, and both `IP-CIDR` and `IP-CIDR6` collapse onto `IPCIDR`. Comparing the raw
+/// uppercased strings therefore missed every hyphenated type whenever the core was up, which sent
+/// address and process rules into a substring fallback that reported wrong matches.
+enum RuntimeRuleTypeName {
+  /// Both spellings of a type folded onto one token by dropping `-` and `_`.
+  static func normalized(_ type: String) -> String {
+    type
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .uppercased()
+      .replacingOccurrences(of: "-", with: "")
+      .replacingOccurrences(of: "_", with: "")
+  }
+
+  /// `normalized`, plus the collapse the core itself performs: an `IP-CIDR6` rule is reported as
+  /// `IPCIDR`, so the two have to compare equal when identifying a rule across that boundary.
+  static func canonical(_ type: String) -> String {
+    let normalized = normalized(type)
+    return normalized == "IPCIDR6" ? "IPCIDR" : normalized
+  }
+}
+
 struct RuleMatchSimulator: Sendable {
   func simulate(target: String, rules: [RuntimeRule]) -> RuleMatchSimulationOutcome {
     simulate(
@@ -5120,7 +5152,7 @@ struct RuleMatchSimulator: Sendable {
   }
 
   private func match(rule: RuntimeRule, input: RuleMatchSimulationInput) -> Bool? {
-    let type = rule.type.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    let type = RuntimeRuleTypeName.normalized(rule.type)
     let payload = rule.payload.trimmingCharacters(in: .whitespacesAndNewlines)
     let destination = input.destination.trimmingCharacters(in: .whitespacesAndNewlines)
     let sourceIP = input.sourceIP.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -5128,36 +5160,39 @@ struct RuleMatchSimulator: Sendable {
     switch type {
     case "DOMAIN":
       return destination.caseInsensitiveCompare(payload) == .orderedSame
-    case "DOMAIN-SUFFIX":
+    case "DOMAINSUFFIX":
       let lowerTarget = destination.lowercased()
       let lowerPayload = payload.lowercased()
       return lowerTarget == lowerPayload || lowerTarget.hasSuffix(".\(lowerPayload)")
-    case "DOMAIN-KEYWORD":
+    case "DOMAINKEYWORD":
       return destination.localizedCaseInsensitiveContains(payload)
-    case "IP-CIDR":
-      return matchCIDR(payload: payload, target: destination, family: .ipv4)
-    case "IP-CIDR6":
-      return matchCIDR(payload: payload, target: destination, family: .ipv6)
-    case "SRC-IP-CIDR":
+    case "IPCIDR", "IPCIDR6":
+      // The family is left open rather than pinned per case: the core reports a v6 rule as plain
+      // `IPCIDR`, and the payload already carries its own family, which `matchCIDR` compares.
+      return matchCIDR(payload: payload, target: destination, family: nil)
+    case "SRCIPCIDR":
       return matchCIDR(payload: payload, target: sourceIP, family: nil)
-    case "DST-PORT":
+    case "DSTPORT":
       return matchPort(payload: payload, input: input.destinationPort)
-    case "SRC-PORT":
+    case "SRCPORT":
       return matchPort(payload: payload, input: input.sourcePort)
-    case "IN-PORT":
+    case "INPORT":
       return matchPort(payload: payload, input: input.inboundPort)
-    case "PROCESS-NAME":
+    case "PROCESSNAME":
       let processNameURL = URL(fileURLWithPath: process)
       let processName = processNameURL.lastPathComponent
       let processNameWithoutExtension = processNameURL.deletingPathExtension().lastPathComponent
       return process.caseInsensitiveCompare(payload) == .orderedSame
         || processName.caseInsensitiveCompare(payload) == .orderedSame
         || processNameWithoutExtension.caseInsensitiveCompare(payload) == .orderedSame
-    case "PROCESS-PATH":
+    case "PROCESSPATH":
       return process.caseInsensitiveCompare(payload) == .orderedSame
     case "MATCH":
       return true
-    case "GEOSITE", "GEOIP", "RULE-SET", "SUB-RULE", "SRC-GEOIP", "SRC-IP-ASN", "SRC-IP-SUFFIX":
+    case "GEOSITE", "GEOIP", "RULESET", "SUBRULE", "SRCGEOIP", "SRCIPASN",
+         "SRCIPSUFFIX", "IPSUFFIX", "NETWORK", "PROCESSNAMEREGEX", "PROCESSPATHREGEX":
+      // Decided inside Mihomo, or (NETWORK) keyed on a fact the simulation input does not carry.
+      // Reported as such instead of being guessed at by the fallback below.
       return nil
     default:
       return destination.localizedCaseInsensitiveContains(payload)

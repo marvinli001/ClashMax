@@ -1,9 +1,12 @@
+import AppKit
 import SwiftUI
 
 struct RulesView: View {
   @Environment(AppModel.self) private var appModel
   @Environment(RuntimeDataStore.self) private var runtimeData
   @State private var searchText = ""
+  @State private var quickRuleContext: QuickRuleSheetContext?
+  @State private var selectedRuleIDs = Set<RuntimeRule.ID>()
 
   var body: some View {
     let rules = filteredRules
@@ -33,7 +36,7 @@ struct RulesView: View {
               message: "No loaded rules match the current search."
             )
           } else {
-            Table(rules) {
+            Table(rules, selection: $selectedRuleIDs) {
               TableColumn("#") { rule in
                 Text("\(rule.index)")
                   .font(.system(.caption, design: .monospaced))
@@ -67,6 +70,9 @@ struct RulesView: View {
               .width(min: 110, ideal: 150)
             }
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .contextMenu(forSelectionType: RuntimeRule.ID.self) { ids in
+              ruleMenu(for: rules.filter { ids.contains($0.id) })
+            }
 
             PageStatusFooter(text: ruleSummary)
           }
@@ -74,6 +80,48 @@ struct RulesView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       }
     }
+    .quickRuleSheet($quickRuleContext)
+  }
+
+  /// Issue #15 phase B1: the fix for a wrong route starts on the rule that caused it, not on
+  /// another page. Everything here writes into the same "Quick Rules" snippet so Routing stays the
+  /// one place rules live.
+  @ViewBuilder
+  private func ruleMenu(for selection: [RuntimeRule]) -> some View {
+    if let rule = selection.first, selection.count == 1 {
+      Button("Insert Rule Before This…") {
+        quickRuleContext = QuickRuleSheetContext(
+          title: "Insert Rule Before This",
+          subtitle: String(
+            format: String(localized: "Evaluated before rule #%lld: %@"),
+            Int64(rule.index),
+            rule.raw
+          ),
+          draft: .overriding(rule)
+        )
+      }
+
+      let isDisabled = appModel.isDisabledByQuickRules(rule)
+      Button(isDisabled ? "Enable This Rule" : "Disable This Rule") {
+        Task { await appModel.setRuntimeRuleDisabled(rule, disabled: !isDisabled) }
+      }
+      .disabled(rule.raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+      Divider()
+
+      Button("Copy Rule") { copy(rule.raw) }
+      Button("Copy Payload") { copy(rule.payload) }
+    } else if !selection.isEmpty {
+      Button("Copy Rules") {
+        copy(selection.map(\.raw).joined(separator: "\n"))
+      }
+    }
+  }
+
+  private func copy(_ text: String) {
+    guard !text.isEmpty else { return }
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(text, forType: .string)
   }
 
   private var showsLoadingSkeleton: Bool {
@@ -178,6 +226,7 @@ private struct RulePolicyBadge: View {
 private struct RuleProviderList: View {
   @Environment(AppModel.self) private var appModel
   @Environment(RuntimeDataStore.self) private var runtimeData
+  @Environment(\.pageHeight) private var pageHeight
   let providers: [RuleProvider]
 
   var body: some View {
@@ -197,38 +246,46 @@ private struct RuleProviderList: View {
         .disabled(!appModel.canControlRuntimeProxies || providers.isEmpty || allUpdatesInFlight)
       }
 
-      ForEach(providers) { provider in
-        HStack(spacing: 10) {
-          VStack(alignment: .leading, spacing: 2) {
-            Text(provider.name)
-              .font(.callout.weight(.medium))
-              .lineLimit(1)
-            Text(providerSubtitle(provider))
-              .font(.caption)
-              .foregroundStyle(.secondary)
-              .lineLimit(1)
-          }
-          Spacer(minLength: 12)
-          if let updatedAt = provider.updatedAt {
-            Text(updatedAt, style: .date)
-              .font(.caption)
-              .foregroundStyle(.secondary)
-          }
-          Button {
-            appModel.updateRuleProvider(provider)
-          } label: {
-            if runtimeData.ruleProviderUpdatesInFlight.contains(provider.id) {
-              Image(systemName: "clock.arrow.circlepath")
-            } else {
-              Image(systemName: "arrow.clockwise")
+      // Issue #27: profiles routinely carry dozens of rule providers, and this summary used to
+      // grow one row per provider above the rules table. Past roughly a screenful it pushed the
+      // whole page out of the window instead of scrolling, so the header stays put and only the
+      // rows scroll.
+      BoundedHeightSection(maxHeight: SecondarySectionHeight.maxHeight(pageHeight: pageHeight)) {
+        LazyVStack(alignment: .leading, spacing: 0) {
+          ForEach(providers) { provider in
+            HStack(spacing: 10) {
+              VStack(alignment: .leading, spacing: 2) {
+                Text(provider.name)
+                  .font(.callout.weight(.medium))
+                  .lineLimit(1)
+                Text(providerSubtitle(provider))
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+                  .lineLimit(1)
+              }
+              Spacer(minLength: 12)
+              if let updatedAt = provider.updatedAt {
+                Text(updatedAt, style: .date)
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+              }
+              Button {
+                appModel.updateRuleProvider(provider)
+              } label: {
+                if runtimeData.ruleProviderUpdatesInFlight.contains(provider.id) {
+                  Image(systemName: "clock.arrow.circlepath")
+                } else {
+                  Image(systemName: "arrow.clockwise")
+                }
+              }
+              .buttonStyle(.borderless)
+              .disabled(!appModel.canControlRuntimeProxies || runtimeData.ruleProviderUpdatesInFlight.contains(provider.id))
+              .help("Update rule provider")
+              .accessibilityLabel("Update rule provider \(provider.name)")
             }
+            .padding(.vertical, 4)
           }
-          .buttonStyle(.borderless)
-          .disabled(!appModel.canControlRuntimeProxies || runtimeData.ruleProviderUpdatesInFlight.contains(provider.id))
-          .help("Update rule provider")
-          .accessibilityLabel("Update rule provider \(provider.name)")
         }
-        .padding(.vertical, 4)
       }
     }
     .padding(.horizontal, 12)
