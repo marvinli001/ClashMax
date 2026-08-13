@@ -70,6 +70,76 @@ Main verification command:
 xcodebuild test -project ClashMax.xcodeproj -scheme ClashMax -destination 'platform=macOS' -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO
 ```
 
+### Code Formatting
+
+Formatting is enforced by [SwiftFormat](https://github.com/nicklockwood/SwiftFormat).
+The pinned version lives in one place — the `--minversion` line in
+`.swiftformat` — and CI asserts that the version it installs matches it.
+
+```bash
+brew install swiftformat
+script/swiftformat_lint.sh          # check the files this change touches
+script/swiftformat_lint.sh --fix    # format exactly that set
+script/swiftformat_lint.sh --all --summary   # remaining debt, per rule
+```
+
+Adoption is deliberately two-step. The tree reached ~100k lines of Swift with no
+formatter at all, so a repo-wide gate would have been red on arrival and a
+single reformat commit would have collided with whatever was in flight.
+
+- **Step 1 (in place).** The gate checks only files the change under review
+  touches, so the tree converges as it is edited. A file nobody has touched is
+  allowed to be unformatted. The `hygiene` CI job runs this on every push and
+  pull request, and separately prints the whole-tree violation count without
+  failing on it, so the remaining debt is visible as it shrinks.
+- **Step 2 (later).** One mechanical commit that formats the remainder, taken at
+  a quiet point with nothing else in flight, and skipped afterwards with
+  `git blame --ignore-rev`. It is *not* a whitespace-only diff — `trailingCommas`,
+  `hoistTry`, `redundantSelf` and `sortImports` move tokens, and `git diff -w`
+  only shrinks it by a tenth — so review it by confirming the formatter is
+  idempotent and the suite is green, not by reading every line:
+
+  ```bash
+  git status --porcelain          # must be empty; this commit carries nothing else
+  script/swiftformat_lint.sh --all --fix
+  xcodebuild test -project ClashMax.xcodeproj -scheme ClashMax -destination 'platform=macOS' -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO
+  script/localization_gate.sh     # multiline literals move; the keys must not
+  git commit -am "Format the tree with SwiftFormat"
+  git rev-parse HEAD >> .git-blame-ignore-revs
+  git config blame.ignoreRevsFile .git-blame-ignore-revs
+  ```
+
+  Build it, do not just lint it. `--lint` clean does not mean it compiles:
+  `redundantSelf` strips `self.` from inside `os.Logger` interpolations, where
+  the compiler requires it because the interpolation appenders are `@escaping`
+  autoclosures. That is what `--self-required` in `.swiftformat` is for, and it
+  was found by building, not by linting.
+
+  The localization gate is not optional either: `String(localized:)` multiline
+  literals get re-indented, and a literal whose *value* changed would silently
+  orphan its catalog key.
+
+`.swiftformat` is not the SwiftFormat defaults. Two things shaped it:
+
+- Options describe the style the codebase already had, measured rather than
+  guessed — 2-space indent (298 offending lines, against 86,990 at 4), unspaced
+  ranges (`0..<n`, 361 against 19), lowercase hex, and preserved digit grouping.
+  Adopting the formatter is a normalization pass, not a restyle.
+- Disabled rules follow one line: the formatter normalizes mechanical syntax
+  (whitespace, indentation, ordering, redundant tokens, trailing commas) and
+  does not restructure or delete code someone wrote deliberately. That rules out
+  rewriting `if`/`else` assignments into `if` expressions, expanding one-line
+  bodies such as `var id: String { rawValue }`, promoting explanatory comments to
+  `///`, deleting hand-written memberwise initializers, removing SwiftUI `Group`
+  wrappers (which changes view identity), and rewriting force-unwraps in tests.
+  Each disabled rule carries its reason in the file.
+
+`project.yml` sets `indentWidth: 2` / `tabWidth: 2` / `usesTabs: false`, so the
+generated project tells Xcode's editor the same thing `.swiftformat` tells the
+formatter and code typed in Xcode is born formatted. Those land on the project's
+main group rather than on any build setting, so they do not move the semantic
+snapshot `script/guarded_xcodebuild.sh` compares against.
+
 Localization release gate:
 
 ```bash

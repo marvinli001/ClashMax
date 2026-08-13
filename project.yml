@@ -1,6 +1,11 @@
 name: ClashMax
 options:
   bundleIdPrefix: io.github.clashmax
+  # Match .swiftformat's --indent 2, so code typed in Xcode is born
+  # formatted instead of failing script/swiftformat_lint.sh on save.
+  indentWidth: 2
+  tabWidth: 2
+  usesTabs: false
   developmentLanguage: en
   useBaseInternationalization: false
   fileTypes:
