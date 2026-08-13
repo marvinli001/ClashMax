@@ -1,0 +1,9 @@
+# Commits that are pure mechanical reformatting. `git blame` skips these so it
+# still points at whoever last wrote the line, not at the formatter.
+#
+# Enable locally with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# GitHub reads this file automatically.
+
+# Format the tree with SwiftFormat (step 2 of the SwiftFormat adoption)
+d2fd50af4ff9476bcd6ce02dc92655881e2404f3
