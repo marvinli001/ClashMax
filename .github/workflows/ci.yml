@@ -28,9 +28,24 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # Tags and full history: the translation gate labels an offending key as
+          # new since the last release tag, which is where untranslated keys come
+          # from in practice. The repository is ~8 MiB, so this is cheap.
+          fetch-depth: 0
 
       - name: String catalog is valid JSON
         run: jq empty Resources/Localizable.xcstrings
+
+      # 1.0.22 shipped the whole Quick Rules panel in English on Simplified Chinese
+      # systems: archiving re-extracted the catalog, added 49 keys, and nothing was
+      # red. LocalizationTests only asserts hand-picked keys, so this is the check
+      # that covers keys nobody thought to name.
+      - name: New string-catalog keys ship a Chinese translation
+        run: script/localization_new_key_gate.sh
+
+      - name: Translation gate fixtures
+        run: script/test_localization_new_key_gate.sh
 
       - name: Shell scripts are executable and have a shebang
         run: |

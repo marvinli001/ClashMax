@@ -4224,110 +4224,6 @@ enum GlobalShortcutModifier: String, CaseIterable, Codable, Identifiable, Sendab
   }
 }
 
-struct KeyboardShortcutDescriptor: Codable, Equatable, Hashable, Sendable {
-  let key: String
-  let modifiers: Set<GlobalShortcutModifier>
-
-  private enum CodingKeys: String, CodingKey {
-    case key
-    case modifiers
-  }
-
-  init(key: String, modifiers: Set<GlobalShortcutModifier>) {
-    self.key = Self.normalizedKey(key)
-    self.modifiers = modifiers
-  }
-
-  init(from decoder: Decoder) throws {
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    key = Self.normalizedKey(try container.decode(String.self, forKey: .key))
-    modifiers = try container.decode(Set<GlobalShortcutModifier>.self, forKey: .modifiers)
-  }
-
-  func encode(to encoder: Encoder) throws {
-    var container = encoder.container(keyedBy: CodingKeys.self)
-    try container.encode(Self.normalizedKey(key), forKey: .key)
-    try container.encode(modifiers, forKey: .modifiers)
-  }
-
-  init?(string: String) {
-    let normalized = string
-      .replacingOccurrences(of: "⌘", with: "+cmd+")
-      .replacingOccurrences(of: "⌥", with: "+option+")
-      .replacingOccurrences(of: "⌃", with: "+control+")
-      .replacingOccurrences(of: "⇧", with: "+shift+")
-      .replacingOccurrences(of: "-", with: "+")
-      .replacingOccurrences(of: " ", with: "+")
-    let parts = normalized
-      .split(separator: "+")
-      .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-      .filter { !$0.isEmpty }
-    var modifiers: Set<GlobalShortcutModifier> = []
-    var key: String?
-    for part in parts {
-      switch part.lowercased() {
-      case "cmd", "command", "meta":
-        modifiers.insert(.command)
-      case "opt", "option", "alt":
-        modifiers.insert(.option)
-      case "ctrl", "control", "ctl":
-        modifiers.insert(.control)
-      case "shift", "shft":
-        modifiers.insert(.shift)
-      default:
-        guard key == nil else { return nil }
-        key = part
-      }
-    }
-    guard let key = key.map(Self.normalizedKey), !key.isEmpty, !modifiers.isEmpty else {
-      return nil
-    }
-    self.key = key
-    self.modifiers = modifiers
-  }
-
-  var displayName: String {
-    let orderedModifiers: [GlobalShortcutModifier] = [.control, .option, .shift, .command]
-    return orderedModifiers
-      .filter { modifiers.contains($0) }
-      .map(\.glyph)
-      .joined() + key.uppercased()
-  }
-
-  var storageString: String {
-    let orderedModifiers: [GlobalShortcutModifier] = [.control, .option, .shift, .command]
-    let modifierString = orderedModifiers
-      .filter { modifiers.contains($0) }
-      .map(\.rawValue)
-      .joined(separator: "+")
-    return modifierString.isEmpty ? key : "\(modifierString)+\(key)"
-  }
-
-  var isSupportedGlobalShortcutKey: Bool {
-    Self.supportedGlobalShortcutKeys.contains(key)
-  }
-
-  static func normalizedKey(_ key: String) -> String {
-    let normalized = key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    switch normalized {
-    case "enter":
-      return "return"
-    case "esc":
-      return "escape"
-    default:
-      return normalized
-    }
-  }
-
-  private static let supportedGlobalShortcutKeys: Set<String> = {
-    var keys = Set("abcdefghijklmnopqrstuvwxyz".map { String($0) })
-    keys.formUnion((0...9).map(String.init))
-    keys.formUnion(["space", "return", "escape"])
-    keys.formUnion((1...12).map { "f\($0)" })
-    return keys
-  }()
-}
-
 struct GlobalShortcutBinding: Codable, Equatable, Identifiable, Sendable {
   var action: GlobalShortcutAction
   var shortcut: KeyboardShortcutDescriptor?
@@ -4345,8 +4241,13 @@ struct GlobalShortcutBinding: Codable, Equatable, Identifiable, Sendable {
     self.enabled = enabled
   }
 
-  var displayValue: String {
-    shortcut?.displayName ?? String(localized: "Not Set")
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    action = try container.decode(GlobalShortcutAction.self, forKey: .action)
+    // A shortcut an older build stored but this one cannot map clears just this binding,
+    // rather than failing the decode and taking every other shortcut down with it.
+    shortcut = (try? container.decodeIfPresent(KeyboardShortcutDescriptor.self, forKey: .shortcut)) ?? nil
+    enabled = container.decodeDefault(Bool.self, forKey: .enabled, default: false) && shortcut != nil
   }
 
   var validationError: String? {
@@ -4356,12 +4257,6 @@ struct GlobalShortcutBinding: Codable, Equatable, Identifiable, Sendable {
     }
     if shortcut.modifiers.count == 1, shortcut.modifiers.contains(.command) {
       return String(localized: "Use at least one modifier besides Command for global shortcuts.")
-    }
-    if !shortcut.isSupportedGlobalShortcutKey {
-      return String(
-        format: String(localized: "Unsupported global shortcut key: %@"),
-        shortcut.key.uppercased()
-      )
     }
     return nil
   }
@@ -4386,12 +4281,14 @@ struct GlobalShortcutSettings: Codable, Equatable, Sendable {
     mergedBindings.filter { $0.enabled && $0.shortcut != nil && $0.validationError == nil }
   }
 
+  /// The actions sharing each over-subscribed shortcut. Deliberately names actions rather
+  /// than the key combination: backup validation runs off the main actor, and rendering a
+  /// key code as characters has to ask the current keyboard layout, which is main-actor work.
   var conflictDescriptions: [String] {
-    let grouped = Dictionary(grouping: enabledBindings) { $0.shortcut?.storageString ?? "" }
-    return grouped.compactMap { shortcut, bindings in
+    let grouped = Dictionary(grouping: enabledBindings) { $0.shortcut?.identity ?? "" }
+    return grouped.compactMap { _, bindings in
       guard bindings.count > 1 else { return nil }
-      let actions = bindings.map { $0.action.displayName }.joined(separator: ", ")
-      return "\(shortcut): \(actions)"
+      return bindings.map { $0.action.displayName }.joined(separator: ", ")
     }
     .sorted()
   }
@@ -4420,7 +4317,7 @@ struct GlobalShortcutSettings: Codable, Equatable, Sendable {
 }
 
 struct MigratedShortcutBinding: Codable, Equatable, Identifiable, Sendable {
-  var id: String { "\(sourceKey):\(action.rawValue):\(shortcut.storageString)" }
+  var id: String { "\(sourceKey):\(action.rawValue):\(shortcut.identity)" }
   var sourceKey: String
   var action: GlobalShortcutAction
   var shortcut: KeyboardShortcutDescriptor

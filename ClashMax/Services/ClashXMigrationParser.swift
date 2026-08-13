@@ -1320,7 +1320,7 @@ struct ClientMigrationParser {
     var seen = Set<String>()
     var result: [MigratedShortcutBinding] = []
     for value in values {
-      let key = "\(value.action.rawValue):\(value.shortcut.storageString)".lowercased()
+      let key = "\(value.action.rawValue):\(value.shortcut.identity)"
       guard seen.insert(key).inserted else { continue }
       result.append(value)
     }

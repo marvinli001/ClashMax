@@ -1005,7 +1005,7 @@ final class AppModel {
     self.currentNetworkProvider = currentNetworkProvider
     self.networkEnvironmentMonitor = networkEnvironmentMonitor ?? NetworkEnvironmentMonitor(currentNetworkProvider: currentNetworkProvider)
     self.wiFiLocationAuthorization = wiFiLocationAuthorization
-    self.globalShortcutManager = GlobalShortcutManager(registrar: globalShortcutRegistrar ?? CarbonGlobalShortcutRegistrar())
+    self.globalShortcutManager = GlobalShortcutManager(registrar: globalShortcutRegistrar ?? KeyboardShortcutsRegistrar())
     self.providerSideLoadPreflightRunner = providerSideLoadPreflightRunner
     self.bundledCoreURLProvider = bundledCoreURLProvider ?? Self.resolveBundledCoreURL
     self.profileStore = profileStore ?? ProfileStore(paths: paths)

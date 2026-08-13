@@ -8807,7 +8807,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let failure = GlobalShortcutRegistrationFailure(
       action: .startStop,
       shortcut: shortcut,
-      osStatus: -9876
+      reason: "taken by the system"
     )
     let registrar = RecordingAppGlobalShortcutRegistrar(failuresToReturn: [failure])
     let model = AppModel(
@@ -8823,7 +8823,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     ])
 
     XCTAssertEqual(model.shortcutRegistrationStatus?.failures, [failure])
-    XCTAssertTrue(model.shortcutRegistrationStatus?.errorMessage?.contains("OSStatus -9876") == true)
+    XCTAssertTrue(model.shortcutRegistrationStatus?.errorMessage?.contains("taken by the system") == true)
   }
 
   func testGlobalShortcutsAreRegisteredFromPersistedSettingsAtLaunch() throws {

@@ -1,5 +1,5 @@
-import Carbon
 import Foundation
+import KeyboardShortcuts
 
 struct GlobalShortcutRegistration: Equatable {
   var action: GlobalShortcutAction
@@ -9,10 +9,23 @@ struct GlobalShortcutRegistration: Equatable {
 struct GlobalShortcutRegistrationFailure: Equatable, Sendable {
   var action: GlobalShortcutAction
   var shortcut: KeyboardShortcutDescriptor
-  var osStatus: OSStatus
+  /// Why this shortcut will not reach ClashMax, in the user's language.
+  var reason: String
 
+  @MainActor
   var summary: String {
-    "\(action.displayName) \(shortcut.displayName), OSStatus \(osStatus)"
+    "\(action.displayName) \(shortcut.displayName): \(reason)"
+  }
+
+  static func takenBySystem(
+    action: GlobalShortcutAction,
+    shortcut: KeyboardShortcutDescriptor
+  ) -> Self {
+    .init(
+      action: action,
+      shortcut: shortcut,
+      reason: String(localized: "macOS already uses this shortcut.")
+    )
   }
 }
 
@@ -20,10 +33,11 @@ struct GlobalShortcutRegistrationStatus: Equatable, Sendable {
   var registeredCount: Int
   var failures: [GlobalShortcutRegistrationFailure]
 
+  @MainActor
   var errorMessage: String? {
     guard !failures.isEmpty else { return nil }
     return String(
-      format: String(localized: "Global shortcut registration failed: %@"),
+      format: String(localized: "Some global shortcuts will not work: %@"),
       failures.map(\.summary).joined(separator: ", ")
     )
   }
@@ -42,7 +56,7 @@ protocol GlobalShortcutRegistering: AnyObject {
 final class GlobalShortcutManager {
   private let registrar: any GlobalShortcutRegistering
 
-  init(registrar: any GlobalShortcutRegistering = CarbonGlobalShortcutRegistrar()) {
+  init(registrar: any GlobalShortcutRegistering = KeyboardShortcutsRegistrar()) {
     self.registrar = registrar
   }
 
@@ -67,214 +81,73 @@ final class GlobalShortcutManager {
   }
 }
 
+/// Installs ClashMax's global shortcuts through the KeyboardShortcuts package, which owns the
+/// Carbon `RegisterEventHotKey` plumbing this file used to hand-roll.
+///
+/// `GlobalShortcutSettings` stays the single source of truth — it is what ClashMax persists,
+/// backs up, and imports from other clients. The package keeps its own `UserDefaults` copy,
+/// because that is what it consults when deciding which hot key a name owns, so `register`
+/// mirrors settings into it one way and never reads back.
 @MainActor
-final class CarbonGlobalShortcutRegistrar: GlobalShortcutRegistering {
-  private static let signature: OSType = 0x436C4D78 // ClMx
-  // Mutated only from this @MainActor type's methods and read only from the
-  // Carbon hotkey callback, which Carbon delivers on the main thread (enforced
-  // by the assertion in installEventHandlerIfNeeded). Keeping them MainActor-
-  // isolated lets the compiler verify that invariant instead of relying on an
-  // unchecked nonisolated(unsafe) escape hatch.
-  private static var handlers: [UInt32: @MainActor () -> Void] = [:]
-  private static var nextID: UInt32 = 1
-  private static var eventHandlerInstalled = false
-
-  private var hotKeyRefs: [EventHotKeyRef?] = []
+final class KeyboardShortcutsRegistrar: GlobalShortcutRegistering {
+  /// The names currently holding a hot key, so `unregisterAll` can be exact and a repeated
+  /// `register` does not stack duplicate handlers on the same name.
+  private var installedActions: Set<GlobalShortcutAction> = []
+  private var handler: (@MainActor (GlobalShortcutAction) -> Void)?
 
   func register(
     _ registrations: [GlobalShortcutRegistration],
     handler: @escaping @MainActor (GlobalShortcutAction) -> Void
   ) -> [GlobalShortcutRegistrationFailure] {
-    unregisterAll()
-    guard !registrations.isEmpty else { return [] }
-    let handlerStatus = installEventHandlerIfNeeded()
-    guard handlerStatus == noErr else {
-      return registrations.map {
-        GlobalShortcutRegistrationFailure(
-          action: $0.action,
-          shortcut: $0.shortcut,
-          osStatus: handlerStatus
-        )
-      }
-    }
-    var failures: [GlobalShortcutRegistrationFailure] = []
+    self.handler = handler
+    var shortcutsByAction: [GlobalShortcutAction: KeyboardShortcutDescriptor] = [:]
     for registration in registrations {
-      guard let keyCode = Self.keyCode(for: registration.shortcut.key) else {
-        failures.append(
-          GlobalShortcutRegistrationFailure(
-            action: registration.action,
-            shortcut: registration.shortcut,
-            osStatus: OSStatus(paramErr)
-          )
-        )
-        continue
-      }
-      let modifiers = Self.carbonModifiers(for: registration.shortcut.modifiers)
-      guard modifiers != 0 else {
-        failures.append(
-          GlobalShortcutRegistrationFailure(
-            action: registration.action,
-            shortcut: registration.shortcut,
-            osStatus: OSStatus(paramErr)
-          )
-        )
-        continue
-      }
+      shortcutsByAction[registration.action] = registration.shortcut
+    }
 
-      let id = Self.nextID
-      Self.nextID += 1
-      Self.handlers[id] = { handler(registration.action) }
-      let hotKeyID = EventHotKeyID(signature: Self.signature, id: id)
-      var ref: EventHotKeyRef?
-      let status = RegisterEventHotKey(
-        UInt32(keyCode),
-        modifiers,
-        hotKeyID,
-        GetApplicationEventTarget(),
-        0,
-        &ref
-      )
-      if status == noErr {
-        hotKeyRefs.append(ref)
-      } else {
-        Self.handlers[id] = nil
-        failures.append(
-          GlobalShortcutRegistrationFailure(
-            action: registration.action,
-            shortcut: registration.shortcut,
-            osStatus: status
-          )
-        )
+    var failures: [GlobalShortcutRegistrationFailure] = []
+    for action in GlobalShortcutAction.allCases {
+      let name = Self.name(for: action)
+      guard let descriptor = shortcutsByAction[action] else {
+        if installedActions.remove(action) != nil {
+          KeyboardShortcuts.removeHandler(for: name)
+          KeyboardShortcuts.setShortcut(nil, for: name)
+        }
+        continue
+      }
+      KeyboardShortcuts.setShortcut(descriptor.shortcut, for: name)
+      if installedActions.insert(action).inserted {
+        KeyboardShortcuts.onKeyDown(for: name) { [weak self] in
+          self?.handler?(action)
+        }
+      }
+      // The hot key still registers, but macOS consumes the key press first, so saying it
+      // worked would be a lie. The recorder warns about this too; settings restored from a
+      // backup or imported from another client never went through the recorder.
+      if descriptor.shortcut.isTakenBySystem {
+        failures.append(.takenBySystem(action: action, shortcut: descriptor))
       }
     }
     return failures
   }
 
   func unregisterAll() {
-    for ref in hotKeyRefs {
-      if let ref {
-        UnregisterEventHotKey(ref)
-      }
+    for action in installedActions {
+      let name = Self.name(for: action)
+      KeyboardShortcuts.removeHandler(for: name)
+      KeyboardShortcuts.setShortcut(nil, for: name)
     }
-    hotKeyRefs.removeAll()
-    Self.handlers.removeAll()
+    installedActions.removeAll()
+    handler = nil
   }
 
-  private func installEventHandlerIfNeeded() -> OSStatus {
-    guard !Self.eventHandlerInstalled else { return noErr }
-    var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-    let status = InstallEventHandler(
-      GetApplicationEventTarget(),
-      { _, event, _ in
-        guard let event else { return noErr }
-        var hotKeyID = EventHotKeyID()
-        let status = GetEventParameter(
-          event,
-          EventParamName(kEventParamDirectObject),
-          EventParamType(typeEventHotKeyID),
-          nil,
-          MemoryLayout<EventHotKeyID>.size,
-          nil,
-          &hotKeyID
-        )
-        guard status == noErr, hotKeyID.signature == CarbonGlobalShortcutRegistrar.signature else {
-          return noErr
-        }
-        // Carbon delivers hotkey events on the main thread's run loop, so assume
-        // main-actor isolation synchronously instead of hopping through
-        // DispatchQueue.main.async + Task. This makes the previously implicit
-        // "callback runs on main" invariant explicit and compiler-enforced.
-        assert(Thread.isMainThread, "Carbon hotkey callback expected on the main thread")
-        let handlerID = hotKeyID.id
-        MainActor.assumeIsolated {
-          CarbonGlobalShortcutRegistrar.handlers[handlerID]?()
-        }
-        return noErr
-      },
-      1,
-      &eventType,
-      nil,
-      nil
-    )
-    guard status == noErr else { return status }
-    Self.eventHandlerInstalled = true
-    return noErr
+  /// The package keys both its storage and its hot-key registry by name, and rejects a name
+  /// containing a dot, so actions get their own prefixed namespace.
+  static func name(for action: GlobalShortcutAction) -> KeyboardShortcuts.Name {
+    .init(storageName(for: action))
   }
 
-  private static func carbonModifiers(for modifiers: Set<GlobalShortcutModifier>) -> UInt32 {
-    var result: UInt32 = 0
-    if modifiers.contains(.command) {
-      result |= UInt32(cmdKey)
-    }
-    if modifiers.contains(.option) {
-      result |= UInt32(optionKey)
-    }
-    if modifiers.contains(.control) {
-      result |= UInt32(controlKey)
-    }
-    if modifiers.contains(.shift) {
-      result |= UInt32(shiftKey)
-    }
-    return result
-  }
-
-  private static func keyCode(for key: String) -> Int? {
-    let normalized = key.lowercased()
-    if let letter = normalized.unicodeScalars.first,
-       normalized.count == 1,
-       ("a"..."z").contains(String(letter)) {
-      let base = [
-        "a": kVK_ANSI_A, "b": kVK_ANSI_B, "c": kVK_ANSI_C, "d": kVK_ANSI_D,
-        "e": kVK_ANSI_E, "f": kVK_ANSI_F, "g": kVK_ANSI_G, "h": kVK_ANSI_H,
-        "i": kVK_ANSI_I, "j": kVK_ANSI_J, "k": kVK_ANSI_K, "l": kVK_ANSI_L,
-        "m": kVK_ANSI_M, "n": kVK_ANSI_N, "o": kVK_ANSI_O, "p": kVK_ANSI_P,
-        "q": kVK_ANSI_Q, "r": kVK_ANSI_R, "s": kVK_ANSI_S, "t": kVK_ANSI_T,
-        "u": kVK_ANSI_U, "v": kVK_ANSI_V, "w": kVK_ANSI_W, "x": kVK_ANSI_X,
-        "y": kVK_ANSI_Y, "z": kVK_ANSI_Z
-      ]
-      return base[normalized]
-    }
-    let digits = [
-      "0": kVK_ANSI_0, "1": kVK_ANSI_1, "2": kVK_ANSI_2, "3": kVK_ANSI_3,
-      "4": kVK_ANSI_4, "5": kVK_ANSI_5, "6": kVK_ANSI_6, "7": kVK_ANSI_7,
-      "8": kVK_ANSI_8, "9": kVK_ANSI_9
-    ]
-    if let digit = digits[normalized] {
-      return digit
-    }
-    switch normalized {
-    case "space":
-      return kVK_Space
-    case "return", "enter":
-      return kVK_Return
-    case "escape", "esc":
-      return kVK_Escape
-    case "f1":
-      return kVK_F1
-    case "f2":
-      return kVK_F2
-    case "f3":
-      return kVK_F3
-    case "f4":
-      return kVK_F4
-    case "f5":
-      return kVK_F5
-    case "f6":
-      return kVK_F6
-    case "f7":
-      return kVK_F7
-    case "f8":
-      return kVK_F8
-    case "f9":
-      return kVK_F9
-    case "f10":
-      return kVK_F10
-    case "f11":
-      return kVK_F11
-    case "f12":
-      return kVK_F12
-    default:
-      return nil
-    }
+  static func storageName(for action: GlobalShortcutAction) -> String {
+    "clashmax_\(action.rawValue)"
   }
 }

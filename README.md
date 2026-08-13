@@ -113,3 +113,4 @@ If ClashMax is useful to you, you can support the project through the GitHub Spo
 - [Pow](https://github.com/EmergeTools/Pow) provides SwiftUI effects.
 - [SwiftUI-Shimmer](https://github.com/markiv/SwiftUI-Shimmer) provides loading skeleton shimmer effects.
 - [Sparkle](https://github.com/sparkle-project/Sparkle) provides the macOS app update framework.
+- [KeyboardShortcuts](https://github.com/sindresorhus/KeyboardShortcuts) provides global shortcut recording and registration.

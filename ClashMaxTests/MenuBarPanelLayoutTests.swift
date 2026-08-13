@@ -170,15 +170,12 @@ final class MenuBarPanelLayoutTests: XCTestCase {
     XCTAssertLessThanOrEqual(size.height, 52)
   }
 
-  func testGroupSelectionRowKeepsLongGroupNodeAndDelayInsidePanelWidth() {
+  func testGroupSelectionRowKeepsLongGroupAndNodeNameInsidePanelWidth() {
     let view = MenuBarControlRow(
       title: "Proxy Group - 香港 日本 美国 自动选择 - Very Long Provider Alias",
       systemImage: "point.3.connected.trianglepath.dotted"
     ) {
-      groupSelector(
-        node: "Auto Select - Hong Kong Premium Relay With A Very Long Name",
-        delay: .measured(8888)
-      )
+      groupSelector(node: "Auto Select - Hong Kong Premium Relay With A Very Long Name")
     }
     .padding(MenuBarPanelLayout.padding)
     .frame(width: MenuBarPanelLayout.width)
@@ -209,15 +206,12 @@ final class MenuBarPanelLayoutTests: XCTestCase {
         Label("Elite", systemImage: "arrow.triangle.2.circlepath.circle")
       }
 
-      groupSelector(node: "[vless]JP Nano", delay: .measured(66))
+      groupSelector(node: "[vless]JP Nano")
 
       // The cap: an absurd node name must not widen the column past the others.
-      groupSelector(
-        node: "[vless] 日本 东京 IEPL 专线 中继 - Premium Relay Node 01 - 倍率 0.2",
-        delay: .measured(8888)
-      )
+      groupSelector(node: "[vless] 日本 东京 IEPL 专线 中继 - Premium Relay Node 01 - 倍率 0.2")
 
-      groupSelector(node: "JP", delay: .unknown)
+      groupSelector(node: "JP")
         .disabled(true)
     }
     .padding(MenuBarPanelLayout.padding)
@@ -237,11 +231,28 @@ final class MenuBarPanelLayoutTests: XCTestCase {
     }
   }
 
-  private func groupSelector(node: String, delay: ProxyDelayState) -> some View {
+  /// The collapsed group row is name-only: no delay chip may share the fixed
+  /// control column with the node name, because inside 162pt the chip is paid for
+  /// in the name's characters. Delays belong in the expanded node menu.
+  func testGroupSelectionValueDrawsOnlyTheNodeName() {
+    let name = "[vless]JP Nano"
+
+    let label = MenuBarGroupSelectionLabel(selectedNode: name).font(.subheadline)
+    let bareName = Text(name).lineLimit(1).font(.subheadline)
+
+    XCTAssertEqual(
+      fittingSize(for: label).width,
+      fittingSize(for: bareName).width,
+      accuracy: 0.5,
+      "the collapsed selection value is wider than its node name — something else is being drawn next to it"
+    )
+  }
+
+  private func groupSelector(node: String) -> some View {
     MenuBarSelectionMenu {
       Button(node) {}
     } value: {
-      MenuBarGroupSelectionLabel(selectedNode: node, delay: ProxyDelayDisplay(state: delay))
+      MenuBarGroupSelectionLabel(selectedNode: node)
     }
   }
 

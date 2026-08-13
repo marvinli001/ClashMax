@@ -1,4 +1,5 @@
 import AppKit
+import KeyboardShortcuts
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -941,7 +942,7 @@ private struct GlobalShortcutSettingsView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
-      Text("Configure global shortcuts for high-frequency proxy actions. Shortcuts are disabled until a key is set and enabled.")
+      Text("Configure global shortcuts for high-frequency proxy actions. Click a field, press the keys you want, then switch the shortcut on.")
         .font(.caption)
         .foregroundStyle(.secondary)
         .fixedSize(horizontal: false, vertical: true)
@@ -972,65 +973,27 @@ private struct GlobalShortcutSettingsView: View {
 private struct GlobalShortcutBindingRow: View {
   let action: GlobalShortcutAction
   @Binding var settings: GlobalShortcutSettings
-  @State private var draft = ""
-  @State private var parseError: String?
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 4) {
-      HStack(spacing: 10) {
-        Label(action.displayName, systemImage: action.symbolName)
-          .lineLimit(1)
-          .frame(maxWidth: .infinity, alignment: .leading)
+    HStack(spacing: 10) {
+      Label(action.displayName, systemImage: action.symbolName)
+        .lineLimit(1)
+        .frame(maxWidth: .infinity, alignment: .leading)
 
-        TextField("cmd+shift+p", text: $draft)
-          .textFieldStyle(.roundedBorder)
-          .frame(width: 142)
-          .onSubmit(applyDraft)
-          .onAppear {
-            draft = binding.shortcut?.storageString ?? ""
-          }
-          .onChange(of: draft) { _, _ in
-            parseError = nil
-          }
+      KeyboardShortcuts.Recorder(shortcut: recordedShortcut)
+        .shortcutValidation(validate)
+        .frame(width: 150)
 
-        Button {
-          applyDraft()
-        } label: {
-          Image(systemName: "checkmark")
-            .frame(width: 20, height: 20)
+      Toggle("", isOn: Binding(
+        get: { binding.enabled },
+        set: { enabled in
+          settings.set(binding.shortcut, for: action, enabled: enabled)
         }
-        .buttonStyle(.borderless)
-        .help("Apply shortcut")
-
-        Button {
-          draft = ""
-          parseError = nil
-          settings.set(nil, for: action, enabled: false)
-        } label: {
-          Image(systemName: "xmark")
-            .frame(width: 20, height: 20)
-        }
-        .buttonStyle(.borderless)
-        .help("Clear shortcut")
-
-        Toggle("", isOn: Binding(
-          get: { binding.enabled },
-          set: { enabled in
-            settings.set(binding.shortcut, for: action, enabled: enabled)
-          }
-        ))
-        .labelsHidden()
-        .toggleStyle(.switch)
-        .disabled(binding.shortcut == nil)
-        .help("Enable global shortcut")
-      }
-
-      if let parseError {
-        Label(parseError, systemImage: "exclamationmark.triangle.fill")
-          .font(.caption2)
-          .foregroundStyle(.orange)
-          .lineLimit(2)
-      }
+      ))
+      .labelsHidden()
+      .toggleStyle(.switch)
+      .disabled(binding.shortcut == nil)
+      .help("Enable global shortcut")
     }
     .font(.caption)
   }
@@ -1039,20 +1002,38 @@ private struct GlobalShortcutBindingRow: View {
     settings.mergedBindings.first { $0.action == action } ?? GlobalShortcutBinding(action: action)
   }
 
-  private func applyDraft() {
-    let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else {
-      settings.set(nil, for: action, enabled: false)
-      parseError = nil
-      return
+  /// The recorder reads and writes ClashMax's own settings instead of the package's
+  /// `UserDefaults` storage, which is what backup, restore, and client migration operate on.
+  /// Recording enables the shortcut: pressing keys into the field is the user asking for it.
+  private var recordedShortcut: Binding<KeyboardShortcuts.Shortcut?> {
+    Binding(
+      get: { binding.shortcut?.shortcut },
+      set: { recorded in
+        guard let recorded else {
+          settings.set(nil, for: action, enabled: false)
+          return
+        }
+        settings.set(KeyboardShortcutDescriptor(recorded), for: action, enabled: true)
+      }
+    )
+  }
+
+  /// The recorder already rejects menu-item collisions and warns about system ones. These are
+  /// ClashMax's own rules on top: Command alone is too easy to hit by accident, and two
+  /// actions sharing a combination would make the whole set fail validation.
+  private func validate(_ recorded: KeyboardShortcuts.Shortcut) -> KeyboardShortcuts.ValidationResult {
+    let descriptor = KeyboardShortcutDescriptor(recorded)
+    if descriptor.modifiers == [.command] {
+      return .disallow(
+        reason: String(localized: "Use at least one modifier besides Command for global shortcuts.")
+      )
     }
-    guard let shortcut = KeyboardShortcutDescriptor(string: trimmed) else {
-      parseError = String(localized: "Shortcut must contain one key and at least one modifier.")
-      return
+    if let conflict = settings.mergedBindings.first(where: { $0.action != action && $0.shortcut == descriptor }) {
+      return .disallow(
+        reason: String(format: String(localized: "Already used by %@."), conflict.action.displayName)
+      )
     }
-    draft = shortcut.storageString
-    parseError = nil
-    settings.set(shortcut, for: action, enabled: true)
+    return .allow
   }
 }
 

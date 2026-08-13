@@ -35,6 +35,13 @@ user-visible strings:
 script/localization_gate.sh
 ```
 
+That gate needs Xcode. The new-key translation check inside it also stands alone
+and needs only `jq`:
+
+```bash
+script/localization_new_key_gate.sh
+```
+
 For local app runs:
 
 ```bash
@@ -61,5 +68,6 @@ Before opening a PR, please confirm:
 - Relevant screenshots or screen recordings are included for visible UI changes.
 - The narrowest useful verification command was run, and the result is included in the PR.
 - `script/localization_gate.sh` was run when the PR touches user-visible strings or release preparation.
+- New user-visible strings have a `zh-Hans` translation in `Resources/Localizable.xcstrings`; `script/localization_new_key_gate.sh` passes. Growing `script/localization_untranslated_allowlist.txt` needs a reason in the PR.
 - Documentation was updated when behavior, installation, release, or security expectations changed.
 - Logs, screenshots, sample profiles, and test data do not include subscription URLs, credentials, private domains, or personal network details.

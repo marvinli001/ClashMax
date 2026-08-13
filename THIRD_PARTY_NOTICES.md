@@ -32,3 +32,9 @@ as a separate process and preserves user-provided Clash/Mihomo YAML configs.
 - Upstream: https://github.com/sparkle-project/Sparkle
 - License: MIT
 - Use: Native macOS app bundle update checks and installation.
+
+## KeyboardShortcuts
+
+- Upstream: https://github.com/sindresorhus/KeyboardShortcuts
+- License: MIT
+- Use: Global shortcut recording and Carbon hot-key registration.

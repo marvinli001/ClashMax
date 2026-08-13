@@ -497,14 +497,6 @@ enum MenuBarNodeSelection {
     return String(localized: "Select")
   }
 
-  /// Delay status for the group's current node, reusing the Proxies-page
-  /// `ProxyDelayDisplay` semantics and the dashboard's `currentNode` resolution so
-  /// all three surfaces agree. Unresolvable selections render as `.unknown`.
-  static func currentDelayDisplay(for group: ProxyGroup) -> ProxyDelayDisplay {
-    let state = DashboardProxySelectionState.currentNode(in: group)?.resolvedDelayState ?? .unknown
-    return ProxyDelayDisplay(state: state)
-  }
-
   /// Title for a node row inside a group menu: the node name plus its delay,
   /// reusing `ProxyDelayDisplay`. The `Unknown` state is omitted so large node
   /// menus stay readable; measured/testing/timeout/error are always shown.
@@ -518,8 +510,8 @@ enum MenuBarNodeSelection {
 }
 
 /// One flat row per manually-selectable group. Replaces the old nested
-/// "Node Selection" entry so each group's current node, delay, and node list are
-/// one click closer (Discussion #20). Node lists stay inside a native `Menu` so a
+/// "Node Selection" entry so each group's current node and node list are one
+/// click closer (Discussion #20). Node lists stay inside a native `Menu` so a
 /// group with hundreds of nodes still scrolls natively.
 private struct MenuBarGroupSelectionRow: View {
   @Environment(AppModel.self) private var appModel
@@ -532,8 +524,7 @@ private struct MenuBarGroupSelectionRow: View {
         MenuBarGroupNodeButtons(group: group)
       } value: {
         MenuBarGroupSelectionLabel(
-          selectedNode: MenuBarNodeSelection.currentSelectionLabel(for: group),
-          delay: MenuBarNodeSelection.currentDelayDisplay(for: group)
+          selectedNode: MenuBarNodeSelection.currentSelectionLabel(for: group)
         )
       }
       .disabled(!appModel.canSelectProxyNodesFromMenuBar || group.nodes.filter(\.isSelectable).isEmpty)
@@ -654,6 +645,8 @@ struct MenuBarInfoRow: View {
   let value: String
   let systemImage: String
 
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
   var body: some View {
     HStack(spacing: 6) {
       Image(systemName: systemImage)
@@ -669,6 +662,11 @@ struct MenuBarInfoRow: View {
         .fontWeight(.medium)
         .lineLimit(1)
         .truncationMode(.middle)
+        // The row carries the traffic rate, which mihomo re-reports once a
+        // second. Rolling the digits keeps the number as calm as the chart
+        // below it instead of snapping a new string into place every tick.
+        .contentTransition(.numericText())
+        .animation(reduceMotion ? nil : .snappy(duration: 0.3), value: value)
     }
     .font(.caption)
   }
@@ -730,27 +728,21 @@ struct MenuBarControlRow<Control: View>: View {
   }
 }
 
-/// Value shown by a group-selection row's `MenuBarSelectionMenu`: the current node
-/// plus a compact delay chip that reuses the Proxies-page `ProxyDelayDisplay`
-/// semantics and colors. The node name is the only part allowed to give up space,
-/// so a long subscription name truncates inside the shared control column instead
-/// of pushing the delay — or the group name — off the row (Discussion #20).
+/// Value shown by a group-selection row's `MenuBarSelectionMenu`: the current
+/// node's name, nothing else. The row used to carry a compact delay chip too, but
+/// inside the fixed control column that chip only ate the name's characters — a
+/// collapsed row read `[vless]...Nano Unknown` where the name is what identifies
+/// the selection. Per-node delays live in the expanded node menu instead, where
+/// there is room for them (`MenuBarNodeSelection.nodeMenuTitle`). The name keeps
+/// middle truncation so a long subscription alias still shows both its prefix tag
+/// and the part that distinguishes it.
 struct MenuBarGroupSelectionLabel: View {
   let selectedNode: String
-  let delay: ProxyDelayDisplay
 
   var body: some View {
-    HStack(spacing: 5) {
-      Text(selectedNode)
-        .lineLimit(1)
-        .truncationMode(.middle)
-
-      Text(delay.label)
-        .font(.caption2.monospacedDigit())
-        .foregroundStyle(delay.tone.color)
-        .lineLimit(1)
-        .fixedSize()
-    }
+    Text(selectedNode)
+      .lineLimit(1)
+      .truncationMode(.middle)
   }
 }
 

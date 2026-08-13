@@ -65,11 +65,12 @@ final class ClashXMigrationParserTests: XCTestCase {
     XCTAssertEqual(report.systemProxyEnabled, true)
     XCTAssertFalse(report.unsupportedSettings.contains { $0.contains("shortcut") })
     XCTAssertEqual(
-      report.shortcutBindings.map { "\($0.sourceKey):\($0.action.rawValue):\($0.shortcut.storageString)" },
+      report.shortcutBindings.map { "\($0.sourceKey):\($0.action.rawValue):\($0.shortcut.identity)" },
       [
-        "restartCore:restart:shift+command+r",
-        "toggleProxy:startStop:shift+command+p",
-        "systemProxy:toggleSystemProxy:control+option+s"
+        // identity is "<carbon modifier mask>-<carbon key code>": ⇧⌘R, ⇧⌘P, ⌃⌥S.
+        "restartCore:restart:768-15",
+        "toggleProxy:startStop:768-35",
+        "systemProxy:toggleSystemProxy:6144-1"
       ]
     )
     XCTAssertTrue(report.warnings.contains { $0.contains("unknownAction") })
@@ -93,7 +94,7 @@ final class ClashXMigrationParserTests: XCTestCase {
 
     XCTAssertEqual(report.shortcutBindings.count, 1)
     XCTAssertEqual(report.shortcutBindings.first?.action, .startStop)
-    XCTAssertEqual(report.shortcutBindings.first?.shortcut.storageString, "shift+command+return")
+    XCTAssertEqual(report.shortcutBindings.first?.shortcut.identity, "768-36")
   }
 
   func testParserReadsFlClashSQLiteProfilesRulesLinksAndUnsupportedMappings() throws {

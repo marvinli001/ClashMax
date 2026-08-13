@@ -399,54 +399,6 @@ final class MenuBarNodeSelectionTests: XCTestCase {
     )
   }
 
-  func testCurrentDelayDisplayReusesProxiesPageSemantics() {
-    let measured = ProxyGroup(
-      name: "Elite",
-      type: "Selector",
-      selected: "JP",
-      nodes: [node("JP", delayState: .measured(73)), node("US", delayState: .timeout)]
-    )
-    XCTAssertEqual(
-      MenuBarNodeSelection.currentDelayDisplay(for: measured),
-      ProxyDelayDisplay(state: .measured(73))
-    )
-    XCTAssertEqual(MenuBarNodeSelection.currentDelayDisplay(for: measured).label, "73 ms")
-
-    // No explicit selection falls back to the first selectable node's delay.
-    let unset = ProxyGroup(
-      name: "Region",
-      type: "Selector",
-      selected: nil,
-      nodes: [node("HK", delayState: .testing), node("SG", delayState: .measured(120))]
-    )
-    XCTAssertEqual(MenuBarNodeSelection.currentDelayDisplay(for: unset).label, "Testing")
-
-    // A configured selection that is absent resolves to Unknown (issue #14 semantics).
-    let missing = ProxyGroup(
-      name: "Gone",
-      type: "Selector",
-      selected: "Ghost",
-      nodes: [node("HK", delayState: .measured(50))]
-    )
-    XCTAssertEqual(MenuBarNodeSelection.currentDelayDisplay(for: missing).label, "Unknown")
-
-    let timeout = ProxyGroup(
-      name: "T",
-      type: "Selector",
-      selected: "X",
-      nodes: [node("X", delayState: .timeout)]
-    )
-    XCTAssertEqual(MenuBarNodeSelection.currentDelayDisplay(for: timeout).label, "Timeout")
-
-    let errored = ProxyGroup(
-      name: "E",
-      type: "Selector",
-      selected: "X",
-      nodes: [node("X", delayState: .error("boom"))]
-    )
-    XCTAssertEqual(MenuBarNodeSelection.currentDelayDisplay(for: errored).label, "No result")
-  }
-
   func testNodeMenuTitleAppendsDelayExceptWhenUnknown() {
     XCTAssertEqual(
       MenuBarNodeSelection.nodeMenuTitle(for: node("JP", delayState: .measured(73))),

@@ -77,8 +77,24 @@ script/localization_gate.sh
 ```
 
 Run this before shipping and after touching user-visible strings. The gate
-validates `Resources/Localizable.xcstrings`, dry-runs catalog compilation, and
-runs `LocalizationTests`, including the active-key stale check.
+validates `Resources/Localizable.xcstrings`, dry-runs catalog compilation, runs
+the new-key translation check below, and runs `LocalizationTests`, including the
+active-key stale check.
+
+New keys must ship a Simplified Chinese translation:
+
+```bash
+script/localization_new_key_gate.sh
+```
+
+Every key without a `zh-Hans` value has to be listed in
+`script/localization_untranslated_allowlist.txt`, which snapshots the debt that
+already existed; anything else fails. This is the check that would have caught
+1.0.22, where archiving in Xcode re-extracted the catalog and added 49
+untranslated Quick Rules keys. Keys that get translated must leave the list —
+prune it with `--write-allowlist`. It runs in the `hygiene` CI job, so it does
+not need Xcode; `script/test_localization_new_key_gate.sh` covers the gate
+itself.
 
 Release smoke gate:
 

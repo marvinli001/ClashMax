@@ -38,6 +38,9 @@ packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     from: "2.9.4"
+  KeyboardShortcuts:
+    url: https://github.com/sindresorhus/KeyboardShortcuts
+    from: "3.0.1"
 targets:
   ClashMax:
     type: application
@@ -90,6 +93,7 @@ targets:
       - package: SwiftUIShimmer
         product: Shimmer
       - package: Sparkle
+      - package: KeyboardShortcuts
       - target: ClashMaxHelper
         embed: false
         link: false

@@ -113,3 +113,4 @@ ClashMax 使用 GPL-3.0 许可证发布。项目分发并控制 Mihomo，因此�
 - [Pow](https://github.com/EmergeTools/Pow) 提供 SwiftUI effects。
 - [SwiftUI-Shimmer](https://github.com/markiv/SwiftUI-Shimmer) 提供加载骨架屏 shimmer 效果。
 - [Sparkle](https://github.com/sparkle-project/Sparkle) 提供 macOS app 更新框架。
+- [KeyboardShortcuts](https://github.com/sindresorhus/KeyboardShortcuts) 提供全局快捷键录制与注册。
