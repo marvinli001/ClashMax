@@ -1,11 +1,10 @@
-import XCTest
 @testable import ClashMax
+import XCTest
 
 /// Covers the process-boundary layer of structured logging: level normalization,
 /// source-side credential redaction, and the byte-stream accumulator every producer
 /// (Mihomo stdout, helper, network extension) feeds its output through.
 final class StructuredLogProducerTests: XCTestCase {
-
   // MARK: - Level normalization
 
   func testProducerLevelNormalizesAliasesAndPreservesUnknownRawValue() {
@@ -139,7 +138,7 @@ final class StructuredLogProducerTests: XCTestCase {
     decoder.dateDecodingStrategy = .iso8601
     let decoded = try decoder.decode(
       ProducerLogEvent.self,
-      from: try encoder.encode(event)
+      from: encoder.encode(event)
     )
     XCTAssertEqual(decoded, event)
   }
@@ -173,7 +172,7 @@ final class StructuredLogProducerTests: XCTestCase {
   func testAccumulatorSurvivesInvalidUTF8() {
     var accumulator = SanitizedLineAccumulator()
     var data = Data("ok ".utf8)
-    data.append(contentsOf: [0xFF, 0xFE, 0xC3])
+    data.append(contentsOf: [0xff, 0xfe, 0xc3])
     data.append(contentsOf: Array("\n".utf8))
     let lines = accumulator.append(data)
     XCTAssertEqual(lines.count, 1)

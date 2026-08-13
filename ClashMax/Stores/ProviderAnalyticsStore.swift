@@ -19,7 +19,7 @@ final class ProviderAnalyticsStore {
   private let fileManager: FileManager
 
   init(paths: RuntimePaths, fileManager: FileManager = .default) {
-    self.fileURL = paths.providerAnalyticsURL
+    fileURL = paths.providerAnalyticsURL
     self.fileManager = fileManager
     load()
   }

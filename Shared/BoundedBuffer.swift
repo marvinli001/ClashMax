@@ -23,4 +23,3 @@ struct BoundedBuffer<Element> {
     }
   }
 }
-

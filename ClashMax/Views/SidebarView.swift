@@ -14,4 +14,3 @@ struct SidebarView: View {
     .navigationTitle("ClashMax")
   }
 }
-

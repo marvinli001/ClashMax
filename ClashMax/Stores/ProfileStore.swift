@@ -123,8 +123,8 @@ struct SubscriptionPreflightValidationError: Error, LocalizedError, CustomString
     // Prefer the extracted short summary (the actual Mihomo failure line) over the
     // raw error text, which UserFacingError truncates to its first ~217 chars and
     // would surface only the benign log head (see issue #7).
-    self.message = diagnostics.localizedMessage ?? UserFacingError.message(for: error)
-    self.fullMessage = diagnostics.fullMessage
+    message = diagnostics.localizedMessage ?? UserFacingError.message(for: error)
+    fullMessage = diagnostics.fullMessage
     self.diagnostics = diagnostics
   }
 
@@ -219,7 +219,7 @@ struct MihomoSubscriptionProfilePreflightValidator: SubscriptionProfilePreflight
     // `preflightDirectory`, so the temporary artifacts (referenced by absolute
     // path) stay inside SAFE_PATHS while the geodata cache persists for reuse.
     try await runtimeConfigValidator.validate(
-      coreURL: try coreURLProvider(),
+      coreURL: coreURLProvider(),
       configURL: runtimeConfigURL,
       workDirectory: paths.runtime
     )
@@ -242,6 +242,7 @@ final class ProfileStore {
       onProfilesChange?(profiles)
     }
   }
+
   private(set) var activeProfileID: Profile.ID?
   private(set) var subscriptionURLCache: [Profile.ID: String] = [:]
 
@@ -259,7 +260,7 @@ final class ProfileStore {
   ) {
     self.paths = paths
     self.diskIO = diskIO
-    self.secretIO = ProfileSecretIO(store: keychain)
+    secretIO = ProfileSecretIO(store: keychain)
     manifestLoadTask = Task { @MainActor [weak self] in
       await self?.loadManifestFromDisk()
     }
@@ -326,7 +327,8 @@ final class ProfileStore {
       guard let index = profiles.firstIndex(where: { $0.id == profile.id }) else { return }
       let current = profiles[index]
       if case let .manualProxy(manualEndpointID) = current.source,
-         endpointID == manualEndpointID {
+         endpointID == manualEndpointID
+      {
         throw ProfileStoreError.manualProfileCannotUseOwnEndpoint(manualEndpointID)
       }
       guard current.upstreamEndpointID != endpointID else { return }
@@ -345,7 +347,8 @@ final class ProfileStore {
       profiles.flatMap { profile in
         var references: [OutboundProxyEndpointReference] = []
         if case let .manualProxy(manualEndpointID) = profile.source,
-           manualEndpointID == endpointID {
+           manualEndpointID == endpointID
+        {
           references.append(
             OutboundProxyEndpointReference(
               profileID: profile.id,
@@ -411,12 +414,13 @@ final class ProfileStore {
     await waitForManifestLoad()
     return try await withMutationLock {
       if let upstreamEndpointID,
-         fetchOptions.profileUpstreamEndpoint?.endpoint.id != upstreamEndpointID {
+         fetchOptions.profileUpstreamEndpoint?.endpoint.id != upstreamEndpointID
+      {
         throw ProfileStoreError.unresolvedUpstreamEndpoint(upstreamEndpointID)
       }
       let resolution = try Self.resolvedSubscriptionURL(from: url, displayNameHint: displayNameHint)
-      let result = Self.fetchResult(
-        try await fetchSubscription(url: resolution.url, session: session, options: fetchOptions),
+      let result = try await Self.fetchResult(
+        fetchSubscription(url: resolution.url, session: session, options: fetchOptions),
         displayNameHint: resolution.displayNameHint
       )
       let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -513,8 +517,8 @@ final class ProfileStore {
       let previousSource = try? await diskIO.readProfileSource(atPath: profile.originalConfigPath)
       let result: SubscriptionFetchResult
       do {
-        result = Self.fetchResult(
-          try await fetchSubscription(url: resolution.url, session: session, options: fetchOptions),
+        result = try await Self.fetchResult(
+          fetchSubscription(url: resolution.url, session: session, options: fetchOptions),
           displayNameHint: resolution.displayNameHint
         )
       } catch {
@@ -584,8 +588,8 @@ final class ProfileStore {
       let previousURL = try await storedSubscriptionURL(for: id)
       let result: SubscriptionFetchResult
       do {
-        result = Self.fetchResult(
-          try await fetchSubscription(url: resolution.url, session: session, options: fetchOptions),
+        result = try await Self.fetchResult(
+          fetchSubscription(url: resolution.url, session: session, options: fetchOptions),
           displayNameHint: resolution.displayNameHint
         )
       } catch {
@@ -683,8 +687,8 @@ final class ProfileStore {
       let previousURL = try await storedSubscriptionURL(for: id)
       let result: SubscriptionFetchResult
       do {
-        result = Self.fetchResult(
-          try await fetchSubscription(url: resolution.url, session: session, options: fetchOptions),
+        result = try await Self.fetchResult(
+          fetchSubscription(url: resolution.url, session: session, options: fetchOptions),
           displayNameHint: resolution.displayNameHint
         )
       } catch {
@@ -789,7 +793,7 @@ final class ProfileStore {
             let url = URL(string: rawURL),
             let resolution = SubscriptionURLResolver.resolve(url: url)
       else { return }
-      let source = (try? await diskIO.readProfileSource(atPath: profile.originalConfigPath)) ?? ""
+      let source = await (try? diskIO.readProfileSource(atPath: profile.originalConfigPath)) ?? ""
       let metadata = profiles[index].subscriptionMetadata ?? SubscriptionMetadata()
       let displayName = await Self.subscriptionDisplayNameAsync(metadata: metadata, source: source, url: resolution.url)
       var nextProfiles = profiles
@@ -1234,15 +1238,15 @@ final class ProfileStore {
     }
   }
 
-  nonisolated private static func subscriptionAccount(for id: UUID) -> String {
+  private nonisolated static func subscriptionAccount(for id: UUID) -> String {
     "subscription.\(id.uuidString)"
   }
 
-  nonisolated private static func subscriptionHeaderAccount(subscriptionID: UUID, headerID: UUID) -> String {
+  private nonisolated static func subscriptionHeaderAccount(subscriptionID: UUID, headerID: UUID) -> String {
     "subscription.\(subscriptionID.uuidString).header.\(headerID.uuidString)"
   }
 
-  nonisolated private static func subscriptionRuntimeMergeAccount(subscriptionID: UUID) -> String {
+  private nonisolated static func subscriptionRuntimeMergeAccount(subscriptionID: UUID) -> String {
     "subscription.\(subscriptionID.uuidString).runtimeMergeYAML"
   }
 
@@ -1486,7 +1490,7 @@ final class ProfileStore {
     }
   }
 
-  nonisolated private static func fullPreflightDiagnostic(from error: Error) -> String? {
+  private nonisolated static func fullPreflightDiagnostic(from error: Error) -> String? {
     if case let AppError.configValidationFailed(payload) = error {
       return SubscriptionPreflightDiagnosticFormatter.fullDiagnostic(fromFullMessage: payload)
     }
@@ -1511,7 +1515,7 @@ final class ProfileStore {
     return nil
   }
 
-  nonisolated private static func requiresSubscriptionPreflight(
+  private nonisolated static func requiresSubscriptionPreflight(
     subscriptionSource: String,
     providerOptions: SubscriptionProviderOptions
   ) -> Bool {
@@ -1521,7 +1525,7 @@ final class ProfileStore {
     return (try? ProfileConfigInspector.format(of: subscriptionSource)) != nil
   }
 
-  nonisolated private static func subscriptionHistoryEntry(
+  private nonisolated static func subscriptionHistoryEntry(
     profile: Profile,
     trigger: SubscriptionUpdateTrigger,
     result: SubscriptionUpdateResult,
@@ -1545,7 +1549,7 @@ final class ProfileStore {
     (error as? SubscriptionFetchError)?.diagnostics
   }
 
-  nonisolated private static func resolvedSubscriptionURL(
+  private nonisolated static func resolvedSubscriptionURL(
     from url: URL,
     displayNameHint: String? = nil
   ) throws -> SubscriptionURLResolution {
@@ -1558,7 +1562,7 @@ final class ProfileStore {
     return resolution
   }
 
-  nonisolated private static func fetchResult(
+  private nonisolated static func fetchResult(
     _ result: SubscriptionFetchResult,
     displayNameHint: String?
   ) -> SubscriptionFetchResult {
@@ -1696,9 +1700,9 @@ final class ProfileStore {
     replacing currentProfile: Profile,
     with nextProfile: Profile
   ) async -> ProviderOptionSecretSnapshot {
-    ProviderOptionSecretSnapshot(
-      headers: await headerSecretSnapshot(replacing: currentProfile, with: nextProfile),
-      runtimeMergeYAML: await runtimeMergeSecretSnapshot(for: currentProfile)
+    await ProviderOptionSecretSnapshot(
+      headers: headerSecretSnapshot(replacing: currentProfile, with: nextProfile),
+      runtimeMergeYAML: runtimeMergeSecretSnapshot(for: currentProfile)
     )
   }
 
@@ -1877,7 +1881,7 @@ final class ProfileStore {
     }
   }
 
-  nonisolated private static func subscriptionDisplayNameAsync(
+  private nonisolated static func subscriptionDisplayNameAsync(
     metadata: SubscriptionMetadata,
     source: String,
     url: URL
@@ -1887,8 +1891,8 @@ final class ProfileStore {
     }.value
   }
 
-  nonisolated private static func subscriptionDisplayName(metadata: SubscriptionMetadata, source: String, url: URL) -> String {
-    if let remoteName = metadata.remoteFileName.map(Self.normalizedRemoteProfileName), !remoteName.isEmpty {
+  private nonisolated static func subscriptionDisplayName(metadata: SubscriptionMetadata, source: String, url: URL) -> String {
+    if let remoteName = metadata.remoteFileName.map(normalizedRemoteProfileName), !remoteName.isEmpty {
       return remoteName
     }
     if let displayNameHint = metadata.displayNameHint, !displayNameHint.isEmpty {
@@ -1906,7 +1910,7 @@ final class ProfileStore {
     return "Subscription"
   }
 
-  nonisolated private static func normalizedRemoteProfileName(_ value: String) -> String {
+  private nonisolated static func normalizedRemoteProfileName(_ value: String) -> String {
     let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
     let url = URL(fileURLWithPath: trimmed)
     let withoutExtension = ["yaml", "yml", "txt"].contains(url.pathExtension.lowercased())
@@ -1915,7 +1919,7 @@ final class ProfileStore {
     return withoutExtension.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
-  nonisolated private static func profileName(fromURLPath url: URL) -> String? {
+  private nonisolated static func profileName(fromURLPath url: URL) -> String? {
     let segments = url.path(percentEncoded: false)
       .split(separator: "/")
       .map(String.init)
@@ -1924,7 +1928,7 @@ final class ProfileStore {
     return normalized.isEmpty ? nil : normalized
   }
 
-  nonisolated private static func profileName(from source: String) -> String? {
+  private nonisolated static func profileName(from source: String) -> String? {
     guard let root = try? Yams.load(yaml: source) as? [String: Any] else { return nil }
     if let groups = root["proxy-groups"] as? [[String: Any]] {
       for group in groups {
@@ -1934,7 +1938,8 @@ final class ProfileStore {
       }
     }
     if let providers = root["proxy-providers"] as? [String: Any],
-       let name = providers.keys.sorted().first {
+       let name = providers.keys.sorted().first
+    {
       let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
       if !trimmed.isEmpty { return trimmed }
     }

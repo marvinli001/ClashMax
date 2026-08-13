@@ -1,7 +1,6 @@
+@testable import ClashMax
 import Foundation
 import XCTest
-
-@testable import ClashMax
 
 @MainActor
 final class HelperSetupGuidanceTests: XCTestCase {

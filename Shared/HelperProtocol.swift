@@ -38,7 +38,7 @@ enum ClashMaxHelperXPCInterface {
       #selector(ClashMaxHelperXPCProtocol.startTunnel(corePath:configPath:workDirectoryPath:secret:withReply:)),
       #selector(ClashMaxHelperXPCProtocol.stopTunnel(withReply:)),
       #selector(ClashMaxHelperXPCProtocol.restartTunnel(corePath:configPath:workDirectoryPath:secret:withReply:)),
-      #selector(ClashMaxHelperXPCProtocol.recentLogs(withReply:))
+      #selector(ClashMaxHelperXPCProtocol.recentLogs(withReply:)),
     ]
 
     for selector in replySelectors {
@@ -47,7 +47,7 @@ enum ClashMaxHelperXPCInterface {
 
     let tunnelRequestSelectors = [
       #selector(ClashMaxHelperXPCProtocol.startTunnel(corePath:configPath:workDirectoryPath:secret:withReply:)),
-      #selector(ClashMaxHelperXPCProtocol.restartTunnel(corePath:configPath:workDirectoryPath:secret:withReply:))
+      #selector(ClashMaxHelperXPCProtocol.restartTunnel(corePath:configPath:workDirectoryPath:secret:withReply:)),
     ]
     for selector in tunnelRequestSelectors {
       for argumentIndex in 0..<4 {
@@ -119,7 +119,7 @@ enum HelperXPCPayload {
       HelperResponseKey.running: running,
       HelperResponseKey.pid: pid,
       HelperResponseKey.code: code,
-      HelperResponseKey.message: message
+      HelperResponseKey.message: message,
     ]
     if let protocolVersion {
       payload[HelperResponseKey.protocolVersion] = protocolVersion
@@ -163,7 +163,7 @@ enum HelperXPCPayload {
   }
 }
 
-struct HelperBundleLocator {
+enum HelperBundleLocator {
   static func bundledCoreRoot(
     executableURL: URL? = Bundle.main.executableURL,
     commandPath: String = CommandLine.arguments.first ?? "",
@@ -312,7 +312,7 @@ struct HelperPathValidator {
   private static let approvedBundledCoreNames: Set<String> = [
     "mihomo",
     "mihomo-darwin-amd64",
-    "mihomo-darwin-arm64"
+    "mihomo-darwin-arm64",
   ]
   // Downloaded cores need a manifest hash or signing requirement before adding any non-bundle root.
 
@@ -393,9 +393,9 @@ struct HelperCodeSignatureInfo: Equatable {
 
 enum HelperBuildConfiguration {
   #if DEBUG
-  static let allowsLocalDevelopmentSignatureFallback = true
+    static let allowsLocalDevelopmentSignatureFallback = true
   #else
-  static let allowsLocalDevelopmentSignatureFallback = false
+    static let allowsLocalDevelopmentSignatureFallback = false
   #endif
 }
 
@@ -794,7 +794,7 @@ final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Senda
     process.currentDirectoryURL = paths.workDirectory
     process.environment = ProcessInfo.processInfo.environment.merging([
       "SAFE_PATHS": paths.workDirectory.path,
-      "CLASHMAX_HELPER": "1"
+      "CLASHMAX_HELPER": "1",
     ]) { _, new in new }
     process.standardOutput = pipe
     process.standardError = pipe
@@ -835,7 +835,7 @@ final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Senda
 
   private func waitForProcessExit(_ process: Process, timeout: TimeInterval) {
     let deadline = Date().addingTimeInterval(timeout)
-    while process.isRunning && Date() < deadline {
+    while process.isRunning, Date() < deadline {
       Thread.sleep(forTimeInterval: 0.02)
     }
   }

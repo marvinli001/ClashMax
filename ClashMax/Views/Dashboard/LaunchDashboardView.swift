@@ -30,9 +30,9 @@ struct LaunchDashboardView: View {
           primaryActionDisabled: primaryActionDisabled,
           primaryAction: runRuntime
         )
-          .frame(maxWidth: DashboardLayoutMetrics.launchControlsMaxWidth(availableWidth: availableSize.width))
-          .frame(maxWidth: .infinity)
-          .transition(.movingParts.blur)
+        .frame(maxWidth: DashboardLayoutMetrics.launchControlsMaxWidth(availableWidth: availableSize.width))
+        .frame(maxWidth: .infinity)
+        .transition(.movingParts.blur)
 
         LaunchStatusMessage(state: state)
           .frame(maxWidth: DashboardLayoutMetrics.launchControlsMaxWidth(availableWidth: availableSize.width))
@@ -54,8 +54,8 @@ struct LaunchDashboardView: View {
           reduceMotion: reduceMotion,
           activationTrigger: coreActivationTrigger
         )
-          .frame(width: visualSide, height: visualSide)
-          .contentShape(Circle())
+        .frame(width: visualSide, height: visualSide)
+        .contentShape(Circle())
       }
       .buttonStyle(.plain)
       .disabled(primaryActionDisabled)
@@ -198,7 +198,7 @@ private struct LaunchControlDeck: View {
 
       Picker("Profile", selection: profilePickerBinding) {
         if appModel.profileStore.profiles.isEmpty {
-          Text("No Profiles").tag(Optional<Profile.ID>.none)
+          Text("No Profiles").tag(Profile.ID?.none)
         }
         ForEach(appModel.profileStore.profiles) { profile in
           Text(profile.name).tag(Optional(profile.id))
@@ -282,7 +282,7 @@ private struct LaunchControlDeck: View {
         ),
         in: 1024...65535
       )
-        .frame(width: DashboardLayoutMetrics.launchMixedPortControlWidth, alignment: .leading)
+      .frame(width: DashboardLayoutMetrics.launchMixedPortControlWidth, alignment: .leading)
     }
     .frame(width: DashboardLayoutMetrics.launchMixedPortControlWidth, alignment: .leading)
   }

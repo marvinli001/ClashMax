@@ -186,7 +186,8 @@ struct ResolvedProxyCatalog {
         if node.type.caseInsensitiveCompare("provider") == .orderedSame,
            let providerName = Self.providerName(from: node),
            let nodes = providerNodes[providerName],
-           !nodes.isEmpty {
+           !nodes.isEmpty
+        {
           expandedNodes.append(contentsOf: nodes.map { providerNode in
             var providerNode = providerNode
             providerNode.isSelectable = group.allowsManualProxySelection
@@ -256,10 +257,10 @@ struct ProxySearchInputSignature: Equatable {
         nodeCount += 1
       }
     }
-    self.groupCount = groups.count
-    self.providerCount = providers.count
+    groupCount = groups.count
+    providerCount = providers.count
     self.nodeCount = nodeCount
-    self.contentHash = hasher.finalize()
+    contentHash = hasher.finalize()
   }
 
   private static func combine(node: ProxyNode, into hasher: inout Hasher) {

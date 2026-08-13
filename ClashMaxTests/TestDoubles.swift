@@ -1,6 +1,6 @@
+@testable import ClashMax
 import Foundation
 import XCTest
-@testable import ClashMax
 
 @MainActor
 func XCTAssertThrowsErrorAsync<T>(
@@ -48,7 +48,7 @@ func XCTAssertThrowsCancellationErrorAsync<T>(
 }
 
 final class URLProtocolRecorder: @unchecked Sendable {
-  nonisolated(unsafe) private static var active: URLProtocolRecorder?
+  private nonisolated(unsafe) static var active: URLProtocolRecorder?
   private let lock = NSLock()
   private var recordedRequest: URLRequest?
   private var recordedRequests: [URLRequest] = []

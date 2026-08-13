@@ -1,6 +1,6 @@
+@testable import ClashMax
 import Foundation
 import XCTest
-@testable import ClashMax
 
 @MainActor
 final class ProfileStoreTests: XCTestCase {
@@ -191,7 +191,7 @@ final class ProfileStoreTests: XCTestCase {
 
     XCTAssertEqual(object, [
       "kind": "manualProxy",
-      "endpointID": endpointID.uuidString
+      "endpointID": endpointID.uuidString,
     ])
     XCTAssertEqual(try JSONDecoder().decode(ProfileSource.self, from: data), source)
     XCTAssertEqual(source.displayName, String(localized: "Manual Proxy"))
@@ -304,7 +304,7 @@ final class ProfileStoreTests: XCTestCase {
           profileID: local.id,
           profileName: "Local via Office",
           kind: .upstream
-        )
+        ),
       ]
     )
   }
@@ -364,7 +364,7 @@ final class ProfileStoreTests: XCTestCase {
           profileID: upstream.id,
           profileName: upstream.name,
           kind: .upstream
-        )
+        ),
       ]
     )
   }
@@ -440,7 +440,7 @@ final class ProfileStoreTests: XCTestCase {
       responseHeaders: [
         "subscription-userinfo": "upload=1; download=2; total=3; expire=1893456000",
         "profile-update-interval": "6",
-        "profile-web-page-url": "https://example.com/dashboard"
+        "profile-web-page-url": "https://example.com/dashboard",
       ]
     )
     let session = URLSession(configuration: recorder.configuration)
@@ -502,7 +502,7 @@ final class ProfileStoreTests: XCTestCase {
         "clash-verge://install-config?url=https%3A%2F%2Fverge.example%2Fsub%3Ftoken%3Ddef&name=Verge%20Airport",
         "https://verge.example/sub?token=def",
         "Verge Airport"
-      )
+      ),
     ]
 
     for testCase in cases {
@@ -699,10 +699,10 @@ final class ProfileStoreTests: XCTestCase {
       ruleOverlay: RuleOverlaySettings(
         enabled: true,
         prependRules: [
-          ManagedRuleOverlayRule(kind: .domainSuffix, value: "corp.example", policy: "DIRECT")
+          ManagedRuleOverlayRule(kind: .domainSuffix, value: "corp.example", policy: "DIRECT"),
         ],
         disabledRuleMatchers: [
-          ManagedRuleDisableMatcher(mode: .contains, pattern: "ads.example")
+          ManagedRuleDisableMatcher(mode: .contains, pattern: "ads.example"),
         ]
       )
     )
@@ -743,10 +743,10 @@ final class ProfileStoreTests: XCTestCase {
       ruleOverlay: RuleOverlaySettings(
         enabled: true,
         prependRules: [
-          ManagedRuleOverlayRule(kind: .domainSuffix, value: "front.example", policy: "DIRECT")
+          ManagedRuleOverlayRule(kind: .domainSuffix, value: "front.example", policy: "DIRECT"),
         ],
         disabledRuleMatchers: [
-          ManagedRuleDisableMatcher(mode: .exact, pattern: "DOMAIN-SUFFIX,ads.example,REJECT")
+          ManagedRuleDisableMatcher(mode: .exact, pattern: "DOMAIN-SUFFIX,ads.example,REJECT"),
         ]
       )
     )
@@ -915,7 +915,7 @@ final class ProfileStoreTests: XCTestCase {
       ruleOverlay: RuleOverlaySettings(
         enabled: true,
         prependRules: [
-          ManagedRuleOverlayRule(kind: .ruleSet, value: "RemoteRules", policy: "Proxy")
+          ManagedRuleOverlayRule(kind: .ruleSet, value: "RemoteRules", policy: "Proxy"),
         ]
       )
     )
@@ -1012,7 +1012,7 @@ final class ProfileStoreTests: XCTestCase {
       responseBody: "proxies:\n  - name: DIRECT\n    type: direct\n",
       responseHeaders: [
         "Content-Type": "text/yaml; charset=UTF-8",
-        "subscription-userinfo": "upload=1; download=2; total=3"
+        "subscription-userinfo": "upload=1; download=2; total=3",
       ]
     )
 
@@ -1291,7 +1291,7 @@ final class ProfileStoreTests: XCTestCase {
       domain: "ClashMax.CoreValidation",
       code: Int(ETIMEDOUT),
       userInfo: [
-        NSLocalizedDescriptionKey: "Runtime config validation timed out after 30.0s.\n\(geodataStallOutput)"
+        NSLocalizedDescriptionKey: "Runtime config validation timed out after 30.0s.\n\(geodataStallOutput)",
       ]
     )
     let validator = RecordingSubscriptionPreflightValidator(result: .failure(timeoutError))
@@ -1453,7 +1453,7 @@ final class ProfileStoreTests: XCTestCase {
       responseBody: updatedSource,
       responseHeaders: [
         "Content-Type": "text/html; charset=UTF-8",
-        "subscription-userinfo": "upload=4; download=5; total=6"
+        "subscription-userinfo": "upload=4; download=5; total=6",
       ]
     )
 
@@ -2310,7 +2310,7 @@ final class OutboundProxyEndpointStoreTests: XCTestCase {
         BackupOutboundProxyEndpointPassword(
           endpointID: imported.id,
           password: "restored-secret"
-        )
+        ),
       ]
     )
 
@@ -2373,7 +2373,7 @@ final class OutboundProxyEndpointStoreTests: XCTestCase {
         kind: .socks5,
         host: "second.example",
         port: 1080
-      )
+      ),
     ]
     let duplicateNames = [
       OutboundProxyEndpoint(
@@ -2389,7 +2389,7 @@ final class OutboundProxyEndpointStoreTests: XCTestCase {
         kind: .socks5,
         host: "two.example",
         port: 1080
-      )
+      ),
     ]
     let store = OutboundProxyEndpointStore(
       manifestURL: URL(fileURLWithPath: "/unused/outbound-proxies.json"),
@@ -2443,7 +2443,7 @@ final class OutboundProxyEndpointStoreTests: XCTestCase {
         manifest: OutboundProxyEndpointManifest(endpoints: [endpoint]),
         passwords: [
           BackupOutboundProxyEndpointPassword(endpointID: endpoint.id, password: "first"),
-          BackupOutboundProxyEndpointPassword(endpointID: endpoint.id, password: "second")
+          BackupOutboundProxyEndpointPassword(endpointID: endpoint.id, password: "second"),
         ]
       )
       XCTFail("Expected duplicate endpoint password records to be rejected")
@@ -2477,7 +2477,7 @@ final class OutboundProxyEndpointStoreTests: XCTestCase {
       BackupOutboundProxyEndpointPassword(
         endpointID: missingID,
         password: "not-allowed"
-      )
+      ),
     ] {
       do {
         _ = try await store.mergeRestoreBackup(
@@ -2497,7 +2497,7 @@ final class OutboundProxyEndpointStoreTests: XCTestCase {
   func testManifestDecodingRejectsMissingRequiredFields() {
     for malformedJSON in [
       "{}",
-      #"{"schemaVersion":1}"#
+      #"{"schemaVersion":1}"#,
     ] {
       XCTAssertThrowsError(
         try JSONDecoder().decode(
@@ -2516,7 +2516,7 @@ final class OutboundProxyEndpointStoreTests: XCTestCase {
 
     for (index, malformedJSON) in [
       "{}",
-      #"{"schemaVersion":1}"#
+      #"{"schemaVersion":1}"#,
     ].enumerated() {
       let manifestURL = root.appendingPathComponent("malformed-\(index).json")
       try malformedJSON.write(to: manifestURL, atomically: true, encoding: .utf8)
@@ -2604,7 +2604,7 @@ final class OutboundProxyEndpointStoreTests: XCTestCase {
           BackupOutboundProxyEndpointPassword(
             endpointID: imported.id,
             password: "new-secret"
-          )
+          ),
         ]
       )
     }
@@ -2653,7 +2653,7 @@ final class OutboundProxyEndpointStoreTests: XCTestCase {
         BackupOutboundProxyEndpointPassword(
           endpointID: imported.id,
           password: "restored-secret"
-        )
+        ),
       ]
     )
 
@@ -2727,7 +2727,7 @@ final class OutboundProxyEndpointStoreTests: XCTestCase {
         manifest: OutboundProxyEndpointManifest(endpoints: [first, second]),
         passwords: [
           BackupOutboundProxyEndpointPassword(endpointID: first.id, password: "accepted-secret"),
-          BackupOutboundProxyEndpointPassword(endpointID: second.id, password: "rejected-secret")
+          BackupOutboundProxyEndpointPassword(endpointID: second.id, password: "rejected-secret"),
         ]
       )
     }
@@ -2966,7 +2966,7 @@ private actor ControllableProfileDiskIO: ProfileDiskStoring {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     encoder.dateEncodingStrategy = .iso8601
-    try SecureFileIO.writePrivateData(try encoder.encode(manifest), to: url, fileManager: fileManager)
+    try SecureFileIO.writePrivateData(encoder.encode(manifest), to: url, fileManager: fileManager)
   }
 
   func importLocalConfig(from sourceURL: URL, to destinationURL: URL) throws -> String {

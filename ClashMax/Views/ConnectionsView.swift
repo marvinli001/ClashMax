@@ -501,9 +501,9 @@ private struct ConnectionSearchQuery {
       connection.network,
       connection.rule,
       connection.rulePayload,
-      connection.chain.joined(separator: " ")
+      connection.chain.joined(separator: " "),
     ]
-    .compactMap { $0 }
+    .compactMap(\.self)
     .joined(separator: " ")
     return terms.allSatisfy { haystack.localizedCaseInsensitiveContains($0) }
   }

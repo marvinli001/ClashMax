@@ -140,20 +140,20 @@ struct KeyboardShortcutDescriptor: Codable, Equatable, Hashable, Sendable {
     var table: [String: KeyboardShortcuts.Key] = [:]
     let letters: [KeyboardShortcuts.Key] = [
       .a, .b, .c, .d, .e, .f, .g, .h, .i, .j, .k, .l, .m,
-      .n, .o, .p, .q, .r, .s, .t, .u, .v, .w, .x, .y, .z
+      .n, .o, .p, .q, .r, .s, .t, .u, .v, .w, .x, .y, .z,
     ]
     for (character, key) in zip("abcdefghijklmnopqrstuvwxyz", letters) {
       table[String(character)] = key
     }
     let digits: [KeyboardShortcuts.Key] = [
-      .zero, .one, .two, .three, .four, .five, .six, .seven, .eight, .nine
+      .zero, .one, .two, .three, .four, .five, .six, .seven, .eight, .nine,
     ]
     for (digit, key) in digits.enumerated() {
       table[String(digit)] = key
     }
     let functionKeys: [KeyboardShortcuts.Key] = [
       .f1, .f2, .f3, .f4, .f5, .f6, .f7, .f8, .f9, .f10,
-      .f11, .f12, .f13, .f14, .f15, .f16, .f17, .f18, .f19, .f20
+      .f11, .f12, .f13, .f14, .f15, .f16, .f17, .f18, .f19, .f20,
     ]
     for (index, key) in functionKeys.enumerated() {
       table["f\(index + 1)"] = key
@@ -172,7 +172,7 @@ struct KeyboardShortcutDescriptor: Codable, Equatable, Hashable, Sendable {
       "end": .end,
       "pageup": .pageUp,
       "pagedown": .pageDown,
-      "help": .help
+      "help": .help,
     ]
     let arrows: [String: KeyboardShortcuts.Key] = [
       "up": .upArrow,
@@ -186,7 +186,7 @@ struct KeyboardShortcutDescriptor: Codable, Equatable, Hashable, Sendable {
       "←": .leftArrow,
       "right": .rightArrow,
       "rightarrow": .rightArrow,
-      "→": .rightArrow
+      "→": .rightArrow,
     ]
     let punctuation: [String: KeyboardShortcuts.Key] = [
       "minus": .minus,
@@ -209,7 +209,7 @@ struct KeyboardShortcutDescriptor: Codable, Equatable, Hashable, Sendable {
       "leftbracket": .leftBracket,
       "[": .leftBracket,
       "rightbracket": .rightBracket,
-      "]": .rightBracket
+      "]": .rightBracket,
     ]
     for group in [named, arrows, punctuation] {
       table.merge(group) { current, _ in current }

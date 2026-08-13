@@ -72,7 +72,7 @@ final class NetworkEnvironmentMonitor: NetworkEnvironmentMonitoring, @unchecked 
     self.currentNetworkProvider = currentNetworkProvider
     self.wiFiClient = wiFiClient
     var continuation: AsyncStream<NetworkEnvironmentEvent>.Continuation!
-    self.stream = AsyncStream { continuation = $0 }
+    stream = AsyncStream { continuation = $0 }
     self.continuation = continuation
   }
 

@@ -1,5 +1,5 @@
-import XCTest
 @testable import ClashMax
+import XCTest
 
 final class Socks5ConnectRequestTests: XCTestCase {
   func testIPv4ConnectRequestEncoding() throws {
@@ -72,7 +72,7 @@ final class Socks5ConnectRequestTests: XCTestCase {
 
   func testReplyParserDecodesIPv6BindEndpoint() throws {
     var data = Data([0x05, 0x00, 0x00, 0x04])
-    data.append(try Socks5ConnectRequest.bytes(forIPv6Address: "2001:db8::1"))
+    try data.append(Socks5ConnectRequest.bytes(forIPv6Address: "2001:db8::1"))
     data.append(contentsOf: [0x00, 0x35])
 
     let reply = try Socks5ReplyParser.parse(data)
@@ -147,7 +147,7 @@ final class Socks5ConnectRequestTests: XCTestCase {
       Data([0x00, 0x00, 0x00]),
       Data([0x00, 0x00, 0x00, 0x01, 8, 8, 8, 8, 0x00]),
       Data([0x00, 0x00, 0x00, 0x03, 0x03, 0x64, 0x6e, 0x73, 0x00]),
-      Data([0x00, 0x00, 0x00, 0x04] + Array(repeating: 0x00, count: 15))
+      Data([0x00, 0x00, 0x00, 0x04] + Array(repeating: 0x00, count: 15)),
     ]
 
     for sample in truncatedSamples {

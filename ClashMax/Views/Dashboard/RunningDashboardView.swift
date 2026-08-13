@@ -158,8 +158,8 @@ struct RunningDashboardView: View {
   private var currentNodeIsLoading: Bool {
     if state.isStarting { return true }
     let snapshot = currentNodeCoordinator.snapshot
-    if appModel.runtimeDataLoading && snapshot.unfilteredGroups.isEmpty { return true }
-    if !snapshot.hasResolved && !appModel.visibleProxyGroups.isEmpty { return true }
+    if appModel.runtimeDataLoading, snapshot.unfilteredGroups.isEmpty { return true }
+    if !snapshot.hasResolved, !appModel.visibleProxyGroups.isEmpty { return true }
     return false
   }
 
@@ -335,7 +335,7 @@ private struct RunningHeaderCard: View {
       LazyVGrid(
         columns: [
           GridItem(.flexible(minimum: 120), spacing: 8),
-          GridItem(.flexible(minimum: 120), spacing: 8)
+          GridItem(.flexible(minimum: 120), spacing: 8),
         ],
         alignment: .leading,
         spacing: 8
@@ -440,7 +440,8 @@ enum DashboardProxySelectionState {
   static func resolvedGroup(from groups: [ProxyGroup], preferredName: String?) -> ProxyGroup? {
     let groups = selectableGroups(from: groups)
     if let preferredName,
-       let preferred = groups.first(where: { $0.name == preferredName }) {
+       let preferred = groups.first(where: { $0.name == preferredName })
+    {
       return preferred
     }
     return groups.first
@@ -1002,11 +1003,11 @@ private struct NetworkExtensionDiagnosticsRuntimeCard: View {
     let context = [
       event.flowProtocol?.displayName,
       event.remoteEndpoint,
-      event.sourceAppSigningIdentifier
+      event.sourceAppSigningIdentifier,
     ]
-      .compactMap { $0 }
-      .filter { !$0.isEmpty }
-      .joined(separator: " ")
+    .compactMap(\.self)
+    .filter { !$0.isEmpty }
+    .joined(separator: " ")
     return context.isEmpty ? event.message : context
   }
 }
@@ -1035,7 +1036,7 @@ struct StatusView: View {
 
             StatusHelperDiagnosticsCard()
 
-            if showsTunDiagnostics && showsNetworkExtensionDiagnostics {
+            if showsTunDiagnostics, showsNetworkExtensionDiagnostics {
               StatusResponsivePair(availableWidth: proxy.size.width) {
                 StatusTunDiagnosticsCard()
               } trailing: {
@@ -1270,7 +1271,7 @@ private struct StatusFactFlowLayout: Layout {
       var items: [FlowItem] = []
       var rowHeight: CGFloat = 0
 
-      for index in startIndex ..< startIndex + rowCount {
+      for index in startIndex..<startIndex + rowCount {
         let measuredSize = subviews[index].sizeThatFits(ProposedViewSize(width: itemWidth, height: nil))
         items.append(FlowItem(index: index, size: CGSize(width: itemWidth, height: measuredSize.height)))
         rowHeight = max(rowHeight, measuredSize.height)
@@ -1292,7 +1293,7 @@ private struct StatusFactFlowLayout: Layout {
     let baseCount = itemCount / rowCount
     let extraCount = itemCount % rowCount
 
-    return (0 ..< rowCount).map { rowIndex in
+    return (0..<rowCount).map { rowIndex in
       baseCount + (rowIndex < extraCount ? 1 : 0)
     }
   }
@@ -1882,11 +1883,11 @@ private struct StatusNetworkExtensionDiagnosticsCard: View {
     let context = [
       event.flowProtocol?.displayName,
       event.remoteEndpoint,
-      event.sourceAppSigningIdentifier
+      event.sourceAppSigningIdentifier,
     ]
-      .compactMap { $0 }
-      .filter { !$0.isEmpty }
-      .joined(separator: " ")
+    .compactMap(\.self)
+    .filter { !$0.isEmpty }
+    .joined(separator: " ")
     return context.isEmpty ? event.message : context
   }
 }

@@ -1,6 +1,6 @@
+@testable import ClashMax
 import Foundation
 import XCTest
-@testable import ClashMax
 
 final class SubscriptionPreflightDiagnosticFormatterTests: XCTestCase {
   // Captured Mihomo `-t` output: info/warn lines, then the real

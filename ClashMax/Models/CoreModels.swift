@@ -189,11 +189,11 @@ enum ProfileSource: Codable, Equatable, Sendable {
     let kind = try container.decode(String.self, forKey: .kind)
     switch kind {
     case "localFile":
-      self = .localFile(originalPath: try container.decodeIfPresent(String.self, forKey: .originalPath))
+      self = try .localFile(originalPath: container.decodeIfPresent(String.self, forKey: .originalPath))
     case "subscription":
-      self = .subscription(id: try container.decode(UUID.self, forKey: .subscriptionID))
+      self = try .subscription(id: container.decode(UUID.self, forKey: .subscriptionID))
     case "manualProxy":
-      self = .manualProxy(endpointID: try container.decode(UUID.self, forKey: .endpointID))
+      self = try .manualProxy(endpointID: container.decode(UUID.self, forKey: .endpointID))
     default:
       throw DecodingError.dataCorruptedError(forKey: .kind, in: container, debugDescription: "Unknown profile source")
     }
@@ -597,7 +597,7 @@ struct SubscriptionProviderOptionsGuardrailReport: Codable, Equatable, Sendable 
         options.generatedTemplate.presetSummary,
         options.generatedTemplate.ruleSummary,
         options.generatedTemplate.versionSummary(version: options.generatedTemplateVersion),
-        options.generatedTemplate.dnsSummary
+        options.generatedTemplate.dnsSummary,
       ],
       rollbackAvailable: rollbackOptions.map { $0 != options } ?? false
     )
@@ -758,7 +758,7 @@ struct SubscriptionProviderOptionsGuardrailReport: Codable, Equatable, Sendable 
             key: source,
             severity: .warning,
             message: String(localized: "YAML must be a mapping to be applied safely.")
-          )
+          ),
         ]
       }
       var risks: [ProviderOptionsRisk] = []
@@ -772,7 +772,7 @@ struct SubscriptionProviderOptionsGuardrailReport: Codable, Equatable, Sendable 
           key: source,
           severity: .danger,
           message: String(format: String(localized: "YAML parse failed: %@"), String(describing: error))
-        )
+        ),
       ]
     }
   }
@@ -802,7 +802,7 @@ struct SubscriptionProviderOptionsGuardrailReport: Codable, Equatable, Sendable 
 
   private static func risk(for key: String, path: [String], source: String) -> ProviderOptionsRisk? {
     let normalizedKey = key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    let dangerKeys: Set<String> = [
+    let dangerKeys: Set = [
       "external-controller",
       "external-controller-cors",
       "secret",
@@ -816,7 +816,7 @@ struct SubscriptionProviderOptionsGuardrailReport: Codable, Equatable, Sendable 
       "tun",
       "dns",
       "script",
-      "listeners"
+      "listeners",
     ]
     guard dangerKeys.contains(normalizedKey) || normalizedKey.hasSuffix("-port") else { return nil }
     let severity: ProviderOptionsRisk.Severity = ["secret", "external-controller", "listeners", "script"].contains(normalizedKey)
@@ -992,13 +992,13 @@ struct SubscriptionUpdatePolicy: Codable, Equatable, Sendable {
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     let defaults = Self.default
-    self.init(
+    try self.init(
       automaticUpdatesEnabled: container.decodeDefault(
         Bool.self,
         forKey: .automaticUpdatesEnabled,
         default: defaults.automaticUpdatesEnabled
       ),
-      intervalOverrideMinutes: try container.decodeIfPresent(Int.self, forKey: .intervalOverrideMinutes),
+      intervalOverrideMinutes: container.decodeIfPresent(Int.self, forKey: .intervalOverrideMinutes),
       prefersRemoteInterval: container.decodeDefault(
         Bool.self,
         forKey: .prefersRemoteInterval,
@@ -1089,14 +1089,14 @@ struct SubscriptionUpdateStatus: Codable, Equatable, Sendable {
 
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    self.init(
+    try self.init(
       result: container.decodeDefault(SubscriptionUpdateResult.self, forKey: .result, default: .never),
-      lastStartedAt: try container.decodeIfPresent(Date.self, forKey: .lastStartedAt),
-      lastFinishedAt: try container.decodeIfPresent(Date.self, forKey: .lastFinishedAt),
-      lastSucceededAt: try container.decodeIfPresent(Date.self, forKey: .lastSucceededAt),
-      lastError: try container.decodeIfPresent(String.self, forKey: .lastError),
-      nextUpdateAt: try container.decodeIfPresent(Date.self, forKey: .nextUpdateAt),
-      backoffUntil: try container.decodeIfPresent(Date.self, forKey: .backoffUntil),
+      lastStartedAt: container.decodeIfPresent(Date.self, forKey: .lastStartedAt),
+      lastFinishedAt: container.decodeIfPresent(Date.self, forKey: .lastFinishedAt),
+      lastSucceededAt: container.decodeIfPresent(Date.self, forKey: .lastSucceededAt),
+      lastError: container.decodeIfPresent(String.self, forKey: .lastError),
+      nextUpdateAt: container.decodeIfPresent(Date.self, forKey: .nextUpdateAt),
+      backoffUntil: container.decodeIfPresent(Date.self, forKey: .backoffUntil),
       consecutiveFailures: container.decodeDefault(Int.self, forKey: .consecutiveFailures, default: 0)
     )
   }
@@ -1237,7 +1237,7 @@ enum SubscriptionPreflightDiagnosticFormatter {
     "can't find mmdb",
     "can't find geosite",
     "can't find geoip",
-    "start download"
+    "start download",
   ]
 
   // logrus levels (logfmt `level=...`) that indicate the real failure cause.
@@ -1453,12 +1453,12 @@ struct SubscriptionPreflightDiagnostics: Codable, Equatable, Sendable {
 
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    self.init(
-      checkedAt: try container.decodeIfPresent(Date.self, forKey: .checkedAt) ?? Date(),
-      result: try container.decode(SubscriptionPreflightResult.self, forKey: .result),
-      message: try container.decodeIfPresent(String.self, forKey: .message),
-      fullMessage: try container.decodeIfPresent(String.self, forKey: .fullMessage),
-      messageKind: try container.decodeIfPresent(SubscriptionPreflightDiagnosticMessage.self, forKey: .messageKind)
+    try self.init(
+      checkedAt: container.decodeIfPresent(Date.self, forKey: .checkedAt) ?? Date(),
+      result: container.decode(SubscriptionPreflightResult.self, forKey: .result),
+      message: container.decodeIfPresent(String.self, forKey: .message),
+      fullMessage: container.decodeIfPresent(String.self, forKey: .fullMessage),
+      messageKind: container.decodeIfPresent(SubscriptionPreflightDiagnosticMessage.self, forKey: .messageKind)
     )
   }
 
@@ -1534,9 +1534,9 @@ struct SubscriptionDiagnostics: Codable, Equatable, Sendable {
 
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    self.init(
-      latestFetch: try container.decodeIfPresent(SubscriptionFetchDiagnostics.self, forKey: .latestFetch),
-      latestPreflight: try container.decodeIfPresent(SubscriptionPreflightDiagnostics.self, forKey: .latestPreflight),
+    try self.init(
+      latestFetch: container.decodeIfPresent(SubscriptionFetchDiagnostics.self, forKey: .latestFetch),
+      latestPreflight: container.decodeIfPresent(SubscriptionPreflightDiagnostics.self, forKey: .latestPreflight),
       updateHistory: container.decodeDefault(
         [SubscriptionUpdateHistoryEntry].self,
         forKey: .updateHistory,
@@ -1998,7 +1998,7 @@ struct ProxyNodeKey: Identifiable, Hashable, Codable, Sendable {
       groupName,
       providerName,
       nodeName,
-      testURL
+      testURL,
     ]
     .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty }
     .joined(separator: "::")
@@ -2174,7 +2174,7 @@ struct ProxyDelayBatchProgress: Equatable, Sendable {
     if isRunning {
       return .running
     }
-    if cancelled > 0 && untestedCount > 0 {
+    if cancelled > 0, untestedCount > 0 {
       return .cancelled
     }
     if failureCount == 0 {
@@ -2249,12 +2249,12 @@ struct ExternalControllerCORSSettings: Codable, Equatable, Sendable {
   static let fixedLocalOrigins = [
     "tauri://localhost",
     "http://tauri.localhost",
-    "http://localhost:3000"
+    "http://localhost:3000",
   ]
   static let legacyDefaultPanelOrigins = [
     "https://yacd.metacubex.one",
     "https://metacubex.github.io",
-    "https://board.zash.run.place"
+    "https://board.zash.run.place",
   ]
   static let defaultPanelOrigins: [String] = []
 
@@ -2600,7 +2600,7 @@ struct ManagedRuleOverlayRule: Codable, Equatable, Identifiable, Sendable {
       components.append(normalizedValue)
     }
     components.append(normalizedPolicy)
-    if kind.allowsNoResolve && noResolve {
+    if kind.allowsNoResolve, noResolve {
       components.append("no-resolve")
     }
     return components.joined(separator: ",")
@@ -3004,6 +3004,7 @@ struct RuntimeOverrides: Codable, Equatable, Sendable {
       externalControllerHost = Self.normalizedExternalControllerHost(externalControllerHost)
     }
   }
+
   var externalControllerPort: Int
   var secret: String
   var allowLan: Bool
@@ -3150,7 +3151,7 @@ struct SystemProxySettings: Codable, Equatable, Sendable {
     "169.254/16",
     "10.0.0.0/8",
     "172.16.0.0/12",
-    "192.168.0.0/16"
+    "192.168.0.0/16",
   ]
 
   var proxyHost: String
@@ -3506,15 +3507,15 @@ struct TunDNSSettings: Codable, Equatable, Sendable {
       "routerlogin.net",
       "tplogin.cn",
       "miwifi.com",
-      "tendawifi.com"
+      "tendawifi.com",
     ],
     nameserver: [
       "https://dns.alidns.com/dns-query",
-      "https://doh.pub/dns-query"
+      "https://doh.pub/dns-query",
     ],
     fallback: [
       "tls://8.8.4.4",
-      "tls://1.1.1.1"
+      "tls://1.1.1.1",
     ]
   )
   static let `default` = chinaNetworkDefault
@@ -3524,11 +3525,11 @@ struct TunDNSSettings: Codable, Equatable, Sendable {
     defaultNameserver: ["1.1.1.1", "8.8.8.8"],
     nameserver: [
       "https://cloudflare-dns.com/dns-query",
-      "https://dns.google/dns-query"
+      "https://dns.google/dns-query",
     ],
     fallback: [
       "tls://1.1.1.1",
-      "tls://8.8.8.8"
+      "tls://8.8.8.8",
     ]
   )
   static let presets = [
@@ -3549,7 +3550,7 @@ struct TunDNSSettings: Codable, Equatable, Sendable {
       title: String(localized: "Global Secure"),
       description: String(localized: "Cloudflare and Google DoH/TLS resolvers with the standard fake-ip exclusions."),
       settings: .globalSecureDefault
-    )
+    ),
   ]
 
   var hasRuntimeOverlay: Bool {
@@ -3581,7 +3582,7 @@ struct TunDNSSettings: Codable, Equatable, Sendable {
       ("nameserver", nameserver),
       ("fallback", fallback),
       ("proxy-server-nameserver", proxyServerNameserver),
-      ("direct-nameserver", directNameserver)
+      ("direct-nameserver", directNameserver),
     ] {
       if let invalid = values.first(where: { !Self.isValidResolver($0) }) {
         return "Invalid TUN DNS \(title): \(invalid)"
@@ -3767,7 +3768,7 @@ struct TunDNSSettings: Codable, Equatable, Sendable {
       "server_failure",
       "name_error",
       "not_implemented",
-      "refused"
+      "refused",
     ].contains(String(code))
   }
 
@@ -3990,7 +3991,7 @@ struct TunSettings: Codable, Equatable, Sendable {
   }
 
   static func normalizedRouteExcludeCIDRs(_ values: [String]) -> [String] {
-    NetworkExtensionRoutingSettings.normalizedRouteExcludeCIDRs(values).filter(Self.isValidRouteExcludeCIDR)
+    NetworkExtensionRoutingSettings.normalizedRouteExcludeCIDRs(values).filter(isValidRouteExcludeCIDR)
   }
 
   private func normalizedList(_ values: [String], fallback: [String]) -> [String] {
@@ -4288,7 +4289,7 @@ struct GlobalShortcutSettings: Codable, Equatable, Sendable {
     let grouped = Dictionary(grouping: enabledBindings) { $0.shortcut?.identity ?? "" }
     return grouped.compactMap { _, bindings in
       guard bindings.count > 1 else { return nil }
-      return bindings.map { $0.action.displayName }.joined(separator: ", ")
+      return bindings.map(\.action.displayName).joined(separator: ", ")
     }
     .sorted()
   }
@@ -4380,11 +4381,12 @@ struct ProxyNode: Identifiable, Codable, Equatable, Sendable {
   var id: String {
     [
       providerName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
-      name
+      name,
     ]
-    .compactMap { $0 }
+    .compactMap(\.self)
     .joined(separator: "::")
   }
+
   var name: String
   var type: String
   var delay: Int?
@@ -4440,18 +4442,18 @@ struct ProxyNode: Identifiable, Codable, Equatable, Sendable {
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     let delay = try container.decodeIfPresent(Int.self, forKey: .delay)
-    self.init(
-      name: try container.decode(String.self, forKey: .name),
-      type: try container.decode(String.self, forKey: .type),
+    try self.init(
+      name: container.decode(String.self, forKey: .name),
+      type: container.decode(String.self, forKey: .type),
       delay: delay,
-      isSelectable: try container.decode(Bool.self, forKey: .isSelectable),
-      serverHost: try container.decodeIfPresent(String.self, forKey: .serverHost),
-      serverPort: try container.decodeIfPresent(Int.self, forKey: .serverPort),
-      providerName: try container.decodeIfPresent(String.self, forKey: .providerName),
-      udpSupported: try container.decodeIfPresent(Bool.self, forKey: .udpSupported),
-      tfoSupported: try container.decodeIfPresent(Bool.self, forKey: .tfoSupported),
-      xudpSupported: try container.decodeIfPresent(Bool.self, forKey: .xudpSupported),
-      delayState: try container.decodeIfPresent(ProxyDelayState.self, forKey: .delayState)
+      isSelectable: container.decode(Bool.self, forKey: .isSelectable),
+      serverHost: container.decodeIfPresent(String.self, forKey: .serverHost),
+      serverPort: container.decodeIfPresent(Int.self, forKey: .serverPort),
+      providerName: container.decodeIfPresent(String.self, forKey: .providerName),
+      udpSupported: container.decodeIfPresent(Bool.self, forKey: .udpSupported),
+      tfoSupported: container.decodeIfPresent(Bool.self, forKey: .tfoSupported),
+      xudpSupported: container.decodeIfPresent(Bool.self, forKey: .xudpSupported),
+      delayState: container.decodeIfPresent(ProxyDelayState.self, forKey: .delayState)
     )
   }
 
@@ -4669,7 +4671,7 @@ struct ConnectionSnapshot: Identifiable, Codable, Equatable, Sendable {
   }
 
   var ruleSummary: String {
-    [rule, rulePayload].compactMap { $0 }.joined(separator: " ")
+    [rule, rulePayload].compactMap(\.self).joined(separator: " ")
   }
 
   private static func endpointLabel(host: String?, port: Int?) -> String {
@@ -4748,7 +4750,7 @@ struct RuntimeRuleCandidate: Equatable, Sendable {
   var source: RuntimeRuleSource
 }
 
-struct RuntimeRuleCandidateBuilder {
+enum RuntimeRuleCandidateBuilder {
   static func runtimeCandidates(runtimeRules: [RuntimeRule]) -> [RuntimeRuleCandidate] {
     runtimeRules.enumerated().map { offset, rule in
       var runtimeRule = rule
@@ -4800,7 +4802,7 @@ struct RuntimeRuleCandidateBuilder {
   }
 }
 
-struct RuntimeRuleParser {
+enum RuntimeRuleParser {
   static func parse(raw: String, index: Int, providerName: String? = nil) -> RuntimeRule {
     let components = topLevelComponents(in: raw)
     let type = components.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -5207,7 +5209,7 @@ struct RuleExplanation: Equatable, Sendable {
   var ruleCount: Int
 
   var reportedRuleSummary: String {
-    [reportedRule, reportedRulePayload].compactMap { $0 }.joined(separator: " ")
+    [reportedRule, reportedRulePayload].compactMap(\.self).joined(separator: " ")
   }
 
   var chosenPolicySummary: String {
@@ -5388,7 +5390,7 @@ struct RuleExplanationBuilder: Sendable {
         value.destinationPort,
         value.sourcePort,
         value.inboundPort,
-        value.process
+        value.process,
       ]
       .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
       .joined(separator: "\u{1F}")
@@ -5405,7 +5407,7 @@ struct RuleExplanationBuilder: Sendable {
       input.sourceIP,
       input.destinationPort,
       input.sourcePort,
-      input.inboundPort
+      input.inboundPort,
     ]
     .compactMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty }
     .first ?? ""
@@ -5447,12 +5449,12 @@ struct ExternalDashboardProfile: Identifiable, Codable, Equatable, Sendable {
 
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    self.init(
+    try self.init(
       id: container.decodeDefault(UUID.self, forKey: .id, default: UUID()),
       name: container.decodeDefault(String.self, forKey: .name, default: String(localized: "Dashboard")),
       url: container.decodeDefault(URL.self, forKey: .url, default: URL(string: "https://yacd.metacubex.one")!),
       readOnly: container.decodeDefault(Bool.self, forKey: .readOnly, default: true),
-      secretAccount: try container.decodeIfPresent(String.self, forKey: .secretAccount),
+      secretAccount: container.decodeIfPresent(String.self, forKey: .secretAccount),
       trustedForSecretAutofill: container.decodeDefault(Bool.self, forKey: .trustedForSecretAutofill, default: false)
     )
   }
@@ -5914,7 +5916,7 @@ struct ClientMigrationReport: Codable, Equatable, Sendable {
 
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    self.init(
+    try self.init(
       client: container.decodeDefault(MigrationClient.self, forKey: .client, default: .clashX),
       configDirectory: container.decodeDefault(String.self, forKey: .configDirectory, default: ""),
       localProfiles: container.decodeDefault([MigratedProfileCandidate].self, forKey: .localProfiles, default: []),
@@ -5929,10 +5931,10 @@ struct ClientMigrationReport: Codable, Equatable, Sendable {
       duplicateSubscriptionURLs: container.decodeDefault([String].self, forKey: .duplicateSubscriptionURLs, default: []),
       bypassDomains: container.decodeDefault([String].self, forKey: .bypassDomains, default: []),
       ports: container.decodeDefault([String: Int].self, forKey: .ports, default: [:]),
-      allowLan: try container.decodeIfPresent(Bool.self, forKey: .allowLan),
-      mode: try container.decodeIfPresent(String.self, forKey: .mode),
-      logLevel: try container.decodeIfPresent(String.self, forKey: .logLevel),
-      systemProxyEnabled: try container.decodeIfPresent(Bool.self, forKey: .systemProxyEnabled),
+      allowLan: container.decodeIfPresent(Bool.self, forKey: .allowLan),
+      mode: container.decodeIfPresent(String.self, forKey: .mode),
+      logLevel: container.decodeIfPresent(String.self, forKey: .logLevel),
+      systemProxyEnabled: container.decodeIfPresent(Bool.self, forKey: .systemProxyEnabled),
       conflicts: container.decodeDefault([String].self, forKey: .conflicts, default: []),
       unsupportedSettings: container.decodeDefault([String].self, forKey: .unsupportedSettings, default: []),
       unknownKeys: container.decodeDefault([String].self, forKey: .unknownKeys, default: []),

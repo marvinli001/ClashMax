@@ -1,6 +1,6 @@
 import AppKit
-import XCTest
 @testable import ClashMax
+import XCTest
 
 final class MenuBarRuntimePresentationTests: XCTestCase {
   func testPresentationTitlesCoverMenuBarRuntimeStates() {
@@ -220,7 +220,7 @@ final class MenuBarStatusItemImageTests: XCTestCase {
     }
     let logoRegionMaxX = Int(MenuBarStatusItemImage.logoPointSize * 2)
     XCTAssertGreaterThan(
-      alphaPixels(in: rep, xRange: 0 ..< logoRegionMaxX),
+      alphaPixels(in: rep, xRange: 0..<logoRegionMaxX),
       0,
       "Logo must be drawn into the composite image"
     )
@@ -228,12 +228,12 @@ final class MenuBarStatusItemImageTests: XCTestCase {
     // carry real pixels — the empty-image / clipped-second-row regressions both
     // fail here.
     XCTAssertGreaterThan(
-      alphaPixels(in: rep, xRange: logoRegionMaxX ..< rep.pixelsWide, yRange: 0 ..< rep.pixelsHigh / 2),
+      alphaPixels(in: rep, xRange: logoRegionMaxX..<rep.pixelsWide, yRange: 0..<rep.pixelsHigh / 2),
       0,
       "Upload row must be drawn"
     )
     XCTAssertGreaterThan(
-      alphaPixels(in: rep, xRange: logoRegionMaxX ..< rep.pixelsWide, yRange: rep.pixelsHigh / 2 ..< rep.pixelsHigh),
+      alphaPixels(in: rep, xRange: logoRegionMaxX..<rep.pixelsWide, yRange: rep.pixelsHigh / 2..<rep.pixelsHigh),
       0,
       "Download row must be drawn"
     )
@@ -248,8 +248,8 @@ final class MenuBarStatusItemImageTests: XCTestCase {
     guard let rep = image.representations.first as? NSBitmapImageRep else {
       return XCTFail("Expected a pre-rasterized bitmap representation")
     }
-    XCTAssertGreaterThan(alphaPixels(in: rep, yRange: 0 ..< rep.pixelsHigh / 2), 0)
-    XCTAssertGreaterThan(alphaPixels(in: rep, yRange: rep.pixelsHigh / 2 ..< rep.pixelsHigh), 0)
+    XCTAssertGreaterThan(alphaPixels(in: rep, yRange: 0..<rep.pixelsHigh / 2), 0)
+    XCTAssertGreaterThan(alphaPixels(in: rep, yRange: rep.pixelsHigh / 2..<rep.pixelsHigh), 0)
   }
 
   private func solidLogo() -> NSImage {
@@ -266,8 +266,8 @@ final class MenuBarStatusItemImageTests: XCTestCase {
     yRange: Range<Int>? = nil
   ) -> Int {
     var count = 0
-    for x in xRange ?? 0 ..< rep.pixelsWide {
-      for y in yRange ?? 0 ..< rep.pixelsHigh {
+    for x in xRange ?? 0..<rep.pixelsWide {
+      for y in yRange ?? 0..<rep.pixelsHigh {
         if let color = rep.colorAt(x: x, y: y), color.alphaComponent > 0.1 {
           count += 1
         }
@@ -300,7 +300,7 @@ final class MenuBarNodeSelectionTests: XCTestCase {
       group(name: "Fallback", type: "Fallback"),
       group(name: "Auto", type: "URLTest"),
       group(name: "Elite", type: "Selector"),
-      group(name: "Region", type: "select")
+      group(name: "Region", type: "select"),
     ]
 
     let result = MenuBarNodeSelection.selectorGroups(from: groups, runMode: .rule)
@@ -311,7 +311,7 @@ final class MenuBarNodeSelectionTests: XCTestCase {
   func testGlobalGroupOnlyAppearsInGlobalMode() {
     let groups = [
       group(name: "Elite", type: "Selector"),
-      group(name: "GLOBAL", type: "Selector")
+      group(name: "GLOBAL", type: "Selector"),
     ]
 
     XCTAssertEqual(
@@ -336,7 +336,7 @@ final class MenuBarNodeSelectionTests: XCTestCase {
         type: "Selector",
         selected: nil,
         nodes: [node("Locked", selectable: false)]
-      )
+      ),
     ]
 
     XCTAssertEqual(
@@ -349,7 +349,7 @@ final class MenuBarNodeSelectionTests: XCTestCase {
     let groups = [
       group(name: "Elite", type: "Selector"),
       group(name: "Region", type: "select"),
-      group(name: "Backup", type: "Selector")
+      group(name: "Backup", type: "Selector"),
     ]
 
     // Pinned groups already render as their own flat rows, so the node-selection

@@ -13,7 +13,7 @@ final class TransparentProxyProvider: NETransparentProxyProvider, @unchecked Sen
     NetworkExtensionRuntimeConstants.providerBundleIdentifier,
     NetworkExtensionRuntimeConstants.mihomoSigningIdentifier,
     NetworkExtensionRuntimeConstants.mihomoArm64SigningIdentifier,
-    NetworkExtensionRuntimeConstants.mihomoAmd64SigningIdentifier
+    NetworkExtensionRuntimeConstants.mihomoAmd64SigningIdentifier,
   ]
 
   private let lock = NSLock()
@@ -96,7 +96,7 @@ final class TransparentProxyProvider: NETransparentProxyProvider, @unchecked Sen
         localPrefix: 0,
         protocol: .UDP,
         direction: .outbound
-      )
+      ),
     ]
     settings.excludedNetworkRules = excludedNetworkRules
 
@@ -674,7 +674,8 @@ private final class NetworkExtensionDiagnosticsRecorder: @unchecked Sendable {
       try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
       var snapshotToPersist = snapshot
       if preservesExternalSystemDNSState,
-         let persistedSnapshot = Self.persistedSnapshot(at: fileURL) {
+         let persistedSnapshot = Self.persistedSnapshot(at: fileURL)
+      {
         snapshotToPersist.systemDNSOverrideApplied = persistedSnapshot.systemDNSOverrideApplied
         snapshotToPersist.systemDNSOverrideStatus = persistedSnapshot.systemDNSOverrideStatus
       }
@@ -733,11 +734,11 @@ private final class TCPFlowBridge: FlowBridge, @unchecked Sendable {
     self.id = id
     self.flow = flow
     self.endpoint = endpoint
-    self.queue = DispatchQueue(label: "io.github.clashmax.network-extension.tcp-flow.\(id.uuidString)")
+    queue = DispatchQueue(label: "io.github.clashmax.network-extension.tcp-flow.\(id.uuidString)")
     self.onError = onError
     self.onClose = onClose
     let port = NWEndpoint.Port(rawValue: UInt16(clamping: socksPort)) ?? NWEndpoint.Port(integerLiteral: 7890)
-    self.connection = NWConnection(host: NWEndpoint.Host(socksHost), port: port, using: .tcp)
+    connection = NWConnection(host: NWEndpoint.Host(socksHost), port: port, using: .tcp)
   }
 
   func start() {
@@ -745,7 +746,7 @@ private final class TCPFlowBridge: FlowBridge, @unchecked Sendable {
       guard let self else { return }
       switch state {
       case .ready:
-        self.performSocksHandshake { result in
+        performSocksHandshake { result in
           switch result {
           case .success:
             self.openFlowAndCopy()
@@ -756,9 +757,9 @@ private final class TCPFlowBridge: FlowBridge, @unchecked Sendable {
           }
         }
       case let .failed(error):
-        self.close(error)
+        close(error)
       case .cancelled:
-        self.close(nil)
+        close(nil)
       default:
         break
       }
@@ -777,7 +778,7 @@ private final class TCPFlowBridge: FlowBridge, @unchecked Sendable {
         completion(.failure(error))
         return
       }
-      self.receiveExact(length: 2) { greetingResult in
+      receiveExact(length: 2) { greetingResult in
         switch greetingResult {
         case let .failure(error):
           completion(.failure(error))
@@ -800,7 +801,7 @@ private final class TCPFlowBridge: FlowBridge, @unchecked Sendable {
         if let error {
           completion(.failure(error))
         } else {
-          self.readSocksReply { result in
+          readSocksReply { result in
             completion(result.map { _ in () })
           }
         }
@@ -825,7 +826,7 @@ private final class TCPFlowBridge: FlowBridge, @unchecked Sendable {
           completion(.failure(Socks5ReplyError.failureReply(header[1])))
           return
         }
-        self.readSocksReplyAddress(addressType: header[3]) { addressResult in
+        readSocksReplyAddress(addressType: header[3]) { addressResult in
           switch addressResult {
           case let .failure(error):
             completion(.failure(error))
@@ -833,7 +834,7 @@ private final class TCPFlowBridge: FlowBridge, @unchecked Sendable {
             var response = header
             response.append(addressData)
             do {
-              completion(.success(try Socks5ReplyParser.parse(response)))
+              try completion(.success(Socks5ReplyParser.parse(response)))
             } catch {
               completion(.failure(error))
             }
@@ -858,7 +859,7 @@ private final class TCPFlowBridge: FlowBridge, @unchecked Sendable {
           completion(.failure(error))
         case let .success(lengthBytes):
           let length = Int(lengthBytes[0])
-          self.receiveExact(length: length + 2) { result in
+          receiveExact(length: length + 2) { result in
             completion(result.map { remainder in
               var data = lengthBytes
               data.append(remainder)
@@ -899,7 +900,7 @@ private final class TCPFlowBridge: FlowBridge, @unchecked Sendable {
       } else if isComplete {
         completion(.failure(BridgeError.make("SOCKS5 server closed before sending enough data.")))
       } else {
-        self.receiveExact(length: length, accumulated: next, completion: completion)
+        receiveExact(length: length, accumulated: next, completion: completion)
       }
     }
   }
@@ -908,11 +909,11 @@ private final class TCPFlowBridge: FlowBridge, @unchecked Sendable {
     flow.open(withLocalFlowEndpoint: nil) { [weak self] error in
       guard let self else { return }
       if let error {
-        self.close(error)
+        close(error)
         return
       }
-      self.copyFlowToConnection()
-      self.copyConnectionToFlow()
+      copyFlowToConnection()
+      copyConnectionToFlow()
     }
   }
 
@@ -920,19 +921,19 @@ private final class TCPFlowBridge: FlowBridge, @unchecked Sendable {
     flow.readData { [weak self] data, error in
       guard let self else { return }
       if let error {
-        self.close(error)
+        close(error)
         return
       }
       guard let data, !data.isEmpty else {
-        self.connection.send(content: nil, isComplete: true, completion: .contentProcessed { _ in })
+        connection.send(content: nil, isComplete: true, completion: .contentProcessed { _ in })
         return
       }
-      self.connection.send(content: data, completion: .contentProcessed { [weak self] error in
+      connection.send(content: data, completion: .contentProcessed { [weak self] error in
         guard let self else { return }
         if let error {
-          self.close(error)
+          close(error)
         } else {
-          self.copyFlowToConnection()
+          copyFlowToConnection()
         }
       })
     }
@@ -942,24 +943,24 @@ private final class TCPFlowBridge: FlowBridge, @unchecked Sendable {
     connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self] data, _, isComplete, error in
       guard let self else { return }
       if let error {
-        self.close(error)
+        close(error)
         return
       }
       if let data, !data.isEmpty {
-        self.flow.write(data) { [weak self] error in
+        flow.write(data) { [weak self] error in
           guard let self else { return }
           if let error {
-            self.close(error)
+            close(error)
           } else if isComplete {
-            self.close(nil)
+            close(nil)
           } else {
-            self.copyConnectionToFlow()
+            copyConnectionToFlow()
           }
         }
       } else if isComplete {
-        self.close(nil)
+        close(nil)
       } else {
-        self.copyConnectionToFlow()
+        copyConnectionToFlow()
       }
     }
   }
@@ -1033,13 +1034,13 @@ private final class UDPFlowBridge: FlowBridge, @unchecked Sendable {
     self.initialEndpoint = initialEndpoint
     self.dnsCapturePolicy = dnsCapturePolicy
     self.socksHost = socksHost
-    self.queue = DispatchQueue(label: "io.github.clashmax.network-extension.udp-flow.\(id.uuidString)")
+    queue = DispatchQueue(label: "io.github.clashmax.network-extension.udp-flow.\(id.uuidString)")
     self.onDatagram = onDatagram
     self.onDNSRetargetFailure = onDNSRetargetFailure
     self.onError = onError
     self.onClose = onClose
     let port = NWEndpoint.Port(rawValue: UInt16(clamping: socksPort)) ?? NWEndpoint.Port(integerLiteral: 7890)
-    self.controlConnection = NWConnection(host: NWEndpoint.Host(socksHost), port: port, using: .tcp)
+    controlConnection = NWConnection(host: NWEndpoint.Host(socksHost), port: port, using: .tcp)
   }
 
   func start() {
@@ -1050,10 +1051,10 @@ private final class UDPFlowBridge: FlowBridge, @unchecked Sendable {
 
     controlConnection.stateUpdateHandler = { [weak self] state in
       guard let self else { return }
-      guard self.isOpen() else { return }
+      guard isOpen() else { return }
       switch state {
       case .ready:
-        self.performSocksHandshake { result in
+        performSocksHandshake { result in
           switch result {
           case let .success(reply):
             self.startUDPRelay(reply: reply)
@@ -1064,9 +1065,9 @@ private final class UDPFlowBridge: FlowBridge, @unchecked Sendable {
           }
         }
       case let .failed(error):
-        self.close(error)
+        close(error)
       case .cancelled:
-        self.close(nil)
+        close(nil)
       default:
         break
       }
@@ -1081,12 +1082,12 @@ private final class UDPFlowBridge: FlowBridge, @unchecked Sendable {
   private func performSocksHandshake(completion: @escaping @Sendable (Result<Socks5Reply, Error>) -> Void) {
     controlConnection.send(content: Socks5ConnectRequest.noAuthenticationGreeting, completion: .contentProcessed { [weak self] error in
       guard let self else { return }
-      guard self.isOpen() else { return }
+      guard isOpen() else { return }
       if let error {
         completion(.failure(error))
         return
       }
-      self.receiveExact(length: 2) { greetingResult in
+      receiveExact(length: 2) { greetingResult in
         guard self.isOpen() else { return }
         switch greetingResult {
         case let .failure(error):
@@ -1107,11 +1108,11 @@ private final class UDPFlowBridge: FlowBridge, @unchecked Sendable {
       let request = try Socks5ConnectRequest.udpAssociateBytes()
       controlConnection.send(content: request, completion: .contentProcessed { [weak self] error in
         guard let self else { return }
-        guard self.isOpen() else { return }
+        guard isOpen() else { return }
         if let error {
           completion(.failure(error))
         } else {
-          self.readSocksReply(completion: completion)
+          readSocksReply(completion: completion)
         }
       })
     } catch {
@@ -1123,7 +1124,8 @@ private final class UDPFlowBridge: FlowBridge, @unchecked Sendable {
     guard isOpen() else { return }
     guard let portValue = UInt16(exactly: reply.bindEndpoint.port),
           let relayPort = NWEndpoint.Port(rawValue: portValue),
-          reply.bindEndpoint.port > 0 else {
+          reply.bindEndpoint.port > 0
+    else {
       close(BridgeError.make("SOCKS5 UDP relay returned an invalid port: \(reply.bindEndpoint.port)."))
       return
     }
@@ -1131,14 +1133,14 @@ private final class UDPFlowBridge: FlowBridge, @unchecked Sendable {
     let udpConnection = NWConnection(host: relayHost, port: relayPort, using: .udp)
     udpConnection.stateUpdateHandler = { [weak self] state in
       guard let self else { return }
-      guard self.isOpen() else { return }
+      guard isOpen() else { return }
       switch state {
       case .ready:
-        self.openFlowAndCopy()
+        openFlowAndCopy()
       case let .failed(error):
-        self.close(error)
+        close(error)
       case .cancelled:
-        self.close(nil)
+        close(nil)
       default:
         break
       }
@@ -1168,14 +1170,14 @@ private final class UDPFlowBridge: FlowBridge, @unchecked Sendable {
     guard isOpen() else { return }
     flow.open(withLocalFlowEndpoint: nil) { [weak self] error in
       guard let self else { return }
-      guard self.isOpen() else { return }
+      guard isOpen() else { return }
       if let error {
-        self.close(error)
+        close(error)
         return
       }
       Self.log.info("UDP flow bridge ready; targetPortCategory=\(Self.targetPortCategory(from: self.initialEndpoint), privacy: .public)")
-      self.copyFlowToRelay()
-      self.copyRelayToFlow()
+      copyFlowToRelay()
+      copyRelayToFlow()
     }
   }
 
@@ -1183,20 +1185,20 @@ private final class UDPFlowBridge: FlowBridge, @unchecked Sendable {
     guard isOpen() else { return }
     flow.readDatagrams { [weak self] datagrams, error in
       guard let self else { return }
-      guard self.isOpen() else { return }
+      guard isOpen() else { return }
       if let error {
-        self.close(error)
+        close(error)
         return
       }
       guard let datagrams else {
-        self.close(nil)
+        close(nil)
         return
       }
       guard !datagrams.isEmpty else {
-        self.copyFlowToRelay()
+        copyFlowToRelay()
         return
       }
-      self.sendDatagramsToRelay(datagrams, index: 0)
+      sendDatagramsToRelay(datagrams, index: 0)
     }
   }
 
@@ -1236,11 +1238,11 @@ private final class UDPFlowBridge: FlowBridge, @unchecked Sendable {
 
     udpConnection.send(content: encoded, completion: .contentProcessed { [weak self] error in
       guard let self else { return }
-      guard self.isOpen() else { return }
+      guard isOpen() else { return }
       if let error {
-        self.close(error)
+        close(error)
       } else {
-        self.sendDatagramsToRelay(datagrams, index: index + 1)
+        sendDatagramsToRelay(datagrams, index: index + 1)
       }
     })
   }
@@ -1254,13 +1256,13 @@ private final class UDPFlowBridge: FlowBridge, @unchecked Sendable {
     }
     udpConnection.receiveMessage { [weak self] data, _, _, error in
       guard let self else { return }
-      guard self.isOpen() else { return }
+      guard isOpen() else { return }
       if let error {
-        self.close(error)
+        close(error)
         return
       }
       guard let data, !data.isEmpty else {
-        self.copyRelayToFlow()
+        copyRelayToFlow()
         return
       }
 
@@ -1276,23 +1278,23 @@ private final class UDPFlowBridge: FlowBridge, @unchecked Sendable {
         }
         return
       } catch {
-        self.close(error)
+        close(error)
         return
       }
 
-      let responseEndpoint = self.responseEndpoint(for: decoded.endpoint, payload: decoded.payload)
+      let responseEndpoint = responseEndpoint(for: decoded.endpoint, payload: decoded.payload)
       guard let endpoint = Self.nwEndpoint(from: responseEndpoint) else {
-        self.udpRelayFailed = true
-        self.close(BridgeError.make("SOCKS5 UDP reply has an unsupported source endpoint."))
+        udpRelayFailed = true
+        close(BridgeError.make("SOCKS5 UDP reply has an unsupported source endpoint."))
         return
       }
-      self.flow.writeDatagrams([(decoded.payload, endpoint)]) { [weak self] error in
+      flow.writeDatagrams([(decoded.payload, endpoint)]) { [weak self] error in
         guard let self else { return }
-        guard self.isOpen() else { return }
+        guard isOpen() else { return }
         if let error {
-          self.close(error)
+          close(error)
         } else {
-          self.copyRelayToFlow()
+          copyRelayToFlow()
         }
       }
     }
@@ -1302,7 +1304,7 @@ private final class UDPFlowBridge: FlowBridge, @unchecked Sendable {
     guard isOpen() else { return }
     receiveExact(length: 4) { [weak self] result in
       guard let self else { return }
-      guard self.isOpen() else { return }
+      guard isOpen() else { return }
       switch result {
       case let .failure(error):
         completion(.failure(error))
@@ -1315,7 +1317,7 @@ private final class UDPFlowBridge: FlowBridge, @unchecked Sendable {
           completion(.failure(Socks5ReplyError.failureReply(header[1])))
           return
         }
-        self.readSocksReplyAddress(addressType: header[3]) { addressResult in
+        readSocksReplyAddress(addressType: header[3]) { addressResult in
           switch addressResult {
           case let .failure(error):
             completion(.failure(error))
@@ -1323,7 +1325,7 @@ private final class UDPFlowBridge: FlowBridge, @unchecked Sendable {
             var response = header
             response.append(addressData)
             do {
-              completion(.success(try Socks5ReplyParser.parse(response)))
+              try completion(.success(Socks5ReplyParser.parse(response)))
             } catch {
               completion(.failure(error))
             }
@@ -1343,13 +1345,13 @@ private final class UDPFlowBridge: FlowBridge, @unchecked Sendable {
     case 0x03:
       receiveExact(length: 1) { [weak self] result in
         guard let self else { return }
-        guard self.isOpen() else { return }
+        guard isOpen() else { return }
         switch result {
         case let .failure(error):
           completion(.failure(error))
         case let .success(lengthBytes):
           let length = Int(lengthBytes[0])
-          self.receiveExact(length: length + 2) { result in
+          receiveExact(length: length + 2) { result in
             completion(result.map { remainder in
               var data = lengthBytes
               data.append(remainder)
@@ -1378,7 +1380,7 @@ private final class UDPFlowBridge: FlowBridge, @unchecked Sendable {
     let remaining = length - accumulated.count
     controlConnection.receive(minimumIncompleteLength: 1, maximumLength: remaining) { [weak self] data, _, isComplete, error in
       guard let self else { return }
-      guard self.isOpen() else { return }
+      guard isOpen() else { return }
       if let error {
         completion(.failure(error))
         return
@@ -1392,7 +1394,7 @@ private final class UDPFlowBridge: FlowBridge, @unchecked Sendable {
       } else if isComplete {
         completion(.failure(BridgeError.make("SOCKS5 server closed before sending enough data.")))
       } else {
-        self.receiveExact(length: length, accumulated: next, completion: completion)
+        receiveExact(length: length, accumulated: next, completion: completion)
       }
     }
   }
@@ -1439,7 +1441,8 @@ private final class UDPFlowBridge: FlowBridge, @unchecked Sendable {
   private static func nwEndpoint(from endpoint: Socks5Endpoint) -> NWEndpoint? {
     guard let portValue = UInt16(exactly: endpoint.port),
           let port = NWEndpoint.Port(rawValue: portValue),
-          endpoint.port > 0 else {
+          endpoint.port > 0
+    else {
       return nil
     }
     let host: NWEndpoint.Host
@@ -1548,7 +1551,7 @@ private struct ProxyStartCompletion: @unchecked Sendable {
     self.handler = handler
   }
 
-  func callAsFunction(_ error: ((any Error)?)) {
+  func callAsFunction(_ error: (any Error)?) {
     handler(error)
   }
 }

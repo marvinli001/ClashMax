@@ -1,6 +1,6 @@
+@testable import ClashMax
 import Observation
 import XCTest
-@testable import ClashMax
 
 @MainActor
 final class RuntimeDataStoreTests: XCTestCase {

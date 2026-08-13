@@ -150,7 +150,8 @@ struct BackupRestoreService: Sendable {
     let profileSources: [BackupProfileSource]
     if let encryptedProfileSources = backup.encryptedProfileSources,
        let passwordForEncryptedPayloads,
-       !passwordForEncryptedPayloads.isEmpty {
+       !passwordForEncryptedPayloads.isEmpty
+    {
       profileSources = try decryptProfileSources(encryptedProfileSources, password: passwordForEncryptedPayloads)
       try Self.validateProfileSources(profileSources, against: backup.profilesManifest)
     } else {
@@ -403,7 +404,7 @@ struct BackupRestoreService: Sendable {
 
   private static func validate(_ backup: ClashMaxBackupFile) throws {
     guard backup.schemaVersion == 1
-            || backup.schemaVersion == ClashMaxBackupFile.currentSchemaVersion
+      || backup.schemaVersion == ClashMaxBackupFile.currentSchemaVersion
     else {
       throw BackupRestoreError.unsupportedSchema(backup.schemaVersion)
     }
@@ -626,7 +627,8 @@ struct BackupRestoreService: Sendable {
         }
       }
       if let upstreamEndpointID = profile.upstreamEndpointID,
-         !endpointIDs.contains(upstreamEndpointID) {
+         !endpointIDs.contains(upstreamEndpointID)
+      {
         throw BackupRestoreError.invalidBackup(
           "Profile upstream references an unknown outbound proxy endpoint."
         )
@@ -813,7 +815,7 @@ private enum BackupProfileSourceRedactor {
     guard credentialCount > 0 else {
       return (source, 0)
     }
-    return (try Yams.dump(object: redactedRoot, sortKeys: false), credentialCount)
+    return try (Yams.dump(object: redactedRoot, sortKeys: false), credentialCount)
   }
 
   private static func redact(
@@ -856,7 +858,8 @@ private enum BackupProfileSourceRedactor {
     }
     if normalized.contains("password")
       || normalized.contains("token")
-      || normalized.contains("secret") {
+      || normalized.contains("secret")
+    {
       return true
     }
     return [
@@ -868,7 +871,7 @@ private enum BackupProfileSourceRedactor {
       "proxy-authorization",
       "credential",
       "credentials",
-      "psk"
+      "psk",
     ].contains(normalized)
   }
 

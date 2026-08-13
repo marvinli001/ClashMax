@@ -33,16 +33,16 @@ enum AppInstallLocationIssue: Equatable, Sendable {
     case .translocated:
       return String(
         localized: """
-          macOS is running ClashMax from a temporary read-only copy, which it will not let install a \
-          privileged helper. Drag ClashMax into your Applications folder in Finder, then open it from there.
-          """
+        macOS is running ClashMax from a temporary read-only copy, which it will not let install a \
+        privileged helper. Drag ClashMax into your Applications folder in Finder, then open it from there.
+        """
       )
     case let .outsideApplications(folderName):
       return String(
         localized: """
-          ClashMax is running from “\(folderName)”. macOS only allows a privileged helper to be \
-          installed from the Applications folder.
-          """
+        ClashMax is running from “\(folderName)”. macOS only allows a privileged helper to be \
+        installed from the Applications folder.
+        """
       )
     }
   }

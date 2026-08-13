@@ -166,7 +166,7 @@ struct EffectiveRuntimeConfigBuilder {
     var diffRows: [EffectiveRuntimeConfigDiffRow]
   }
 
-  nonisolated private static func makePresentation(
+  private nonisolated static func makePresentation(
     originalConfigPath: String,
     runtimeConfigURL: URL,
     providerContentURL: URL?,
@@ -209,7 +209,7 @@ struct EffectiveRuntimeConfigBuilder {
 
   /// Provider content and other non-mapping sources simply have no `dns:` block; `.absent` is the
   /// honest baseline there, and every DNS key in the generated YAML is then an app-managed override.
-  nonisolated private static func dnsFacts(inYAML yaml: String) -> DNSRuntimeFacts {
+  private nonisolated static func dnsFacts(inYAML yaml: String) -> DNSRuntimeFacts {
     guard let root = (try? Yams.load(yaml: yaml)) as? [String: Any] else { return .absent }
     return DNSRuntimeFacts.facts(from: root["dns"])
   }
@@ -352,7 +352,7 @@ struct EffectiveRuntimeConfigBuilder {
         title: "Final runtime YAML",
         summary: String(localized: "Final generated YAML used by Mihomo after app-managed overlays."),
         redactedContent: redactedFinal
-      )
+      ),
     ]
   }
 
@@ -379,7 +379,7 @@ struct EffectiveRuntimeConfigBuilder {
       "server: \(endpoint.host)",
       "port: \(endpoint.port)",
       "status: \(resolvedEndpoint.secretState.rawValue)",
-      "transport: \(tcpOnly ? "TCP only" : "TCP and UDP")"
+      "transport: \(tcpOnly ? "TCP only" : "TCP and UDP")",
     ].joined(separator: "\n")
     return EffectiveRuntimeConfigLayer(
       id: id,
@@ -414,7 +414,7 @@ struct EffectiveRuntimeConfigBuilder {
       "Provider Interval: \(options.intervalSeconds)s",
       "Custom Headers: \(options.normalizedHeaders.count)",
       "Provider Rule Overlay:",
-      renderRuleOverlay(options.ruleOverlay)
+      renderRuleOverlay(options.ruleOverlay),
     ]
     let overrideYAML = options.overrideYAML.trimmingCharacters(in: .whitespacesAndNewlines)
     if !overrideYAML.isEmpty {
@@ -446,10 +446,10 @@ struct EffectiveRuntimeConfigBuilder {
         "Snippet: \(snippet.normalizedName.isEmpty ? String(localized: "Untitled Snippet") : snippet.normalizedName)",
         "Binding: \(snippet.binding.displayName)",
         "Payload: \(snippet.payload.summary)",
-        renderSnippetPayload(snippet.payload)
+        renderSnippetPayload(snippet.payload),
       ]
-        .filter { !$0.isEmpty }
-        .joined(separator: "\n")
+      .filter { !$0.isEmpty }
+      .joined(separator: "\n")
     }
     .joined(separator: "\n\n")
   }
@@ -464,7 +464,7 @@ struct EffectiveRuntimeConfigBuilder {
   }
 
   private func renderRuleOverlay(_ overlay: RuleOverlaySettings) -> String {
-    var lines: [String] = ["Enabled: \(overlay.enabled ? "yes" : "no")"]
+    var lines = ["Enabled: \(overlay.enabled ? "yes" : "no")"]
     if !overlay.runtimePrependRules.isEmpty {
       lines.append("Before:")
       lines.append(contentsOf: overlay.runtimePrependRules.map { "- \($0)" })
@@ -530,14 +530,15 @@ enum RuntimeConfigDisplayRedactor {
     providerContentPaths: [String] = []
   ) -> String {
     if let loaded = try? Yams.load(yaml: text),
-       (loaded is [String: Any] || loaded is [Any]),
+       loaded is [String: Any] || loaded is [Any],
        let redactedObject = redactedYAMLValue(
-        loaded,
-        path: [],
-        controllerSecret: controllerSecret,
-        providerContentPaths: providerContentPaths
+         loaded,
+         path: [],
+         controllerSecret: controllerSecret,
+         providerContentPaths: providerContentPaths
        ),
-       let dumped = try? Yams.dump(object: redactedObject, sortKeys: false) {
+       let dumped = try? Yams.dump(object: redactedObject, sortKeys: false)
+    {
       return redactScalarSecrets(dumped, controllerSecret: controllerSecret, providerContentPaths: providerContentPaths)
     }
     if ProfileConfigInspector.isProxyProviderContent(text) {
@@ -596,7 +597,8 @@ enum RuntimeConfigDisplayRedactor {
     }
     if normalized.contains("password")
       || normalized.contains("token")
-      || normalized.contains("secret") {
+      || normalized.contains("secret")
+    {
       return true
     }
     return [
@@ -608,7 +610,7 @@ enum RuntimeConfigDisplayRedactor {
       "proxy-authorization",
       "credential",
       "credentials",
-      "psk"
+      "psk",
     ].contains(normalized)
   }
 
@@ -830,7 +832,8 @@ enum EffectiveRuntimeConfigLineDiff {
     let limit = min(oldLimit, newLimit)
     var count = 0
     while count < limit,
-          oldLines[oldLines.count - count - 1] == newLines[newLines.count - count - 1] {
+          oldLines[oldLines.count - count - 1] == newLines[newLines.count - count - 1]
+    {
       count += 1
     }
     return count

@@ -44,7 +44,8 @@ struct ClientMigrationParser {
 
   private func detectedClient(in directoryURL: URL) -> MigrationClient {
     if fileManager.fileExists(atPath: directoryURL.appendingPathComponent("database.sqlite").path)
-      || flClashConfigMapURL(in: directoryURL) != nil {
+      || flClashConfigMapURL(in: directoryURL) != nil
+    {
       return .flClash
     }
     if looksLikeClashVergeDirectory(directoryURL) {
@@ -219,7 +220,8 @@ struct ClientMigrationParser {
     }
 
     if let configURL = flClashConfigMapURL(in: directoryURL),
-       let state = parseFlClashConfigMap(fileURL: configURL, warnings: &warnings) {
+       let state = parseFlClashConfigMap(fileURL: configURL, warnings: &warnings)
+    {
       appendInspectedFile(configURL, to: &inspectedFiles)
       for profile in state.profiles {
         profilesByID[profile.id] = profilesByID[profile.id] ?? profile
@@ -279,7 +281,8 @@ struct ClientMigrationParser {
         )
       }
       if let overwriteType = profile.overwriteType?.nilIfEmpty,
-         overwriteType.localizedCaseInsensitiveContains("script") {
+         overwriteType.localizedCaseInsensitiveContains("script")
+      {
         appendUnsupportedMapping(
           client: .flClash,
           source: "profiles[\(profile.id)]",
@@ -553,19 +556,19 @@ struct ClientMigrationParser {
       "profiles.yaml",
       "profiles.yml",
       "proxy-providers.yaml",
-      "proxy-providers.yml"
+      "proxy-providers.yml",
     ]
     var result: [URL] = commonFiles
       .map { directoryURL.appendingPathComponent($0) }
       .filter { fileManager.fileExists(atPath: $0.path) }
 
-    let commonSubfolders: Set<String> = [
+    let commonSubfolders: Set = [
       "profiles",
       "providers",
       "proxy-providers",
       "rule-providers",
       "clash",
-      "config"
+      "config",
     ]
     guard let enumerator = fileManager.enumerator(
       at: directoryURL,
@@ -599,7 +602,7 @@ struct ClientMigrationParser {
           filePath: fileURL.path,
           source: fileName,
           note: "Original YAML is imported unchanged."
-        )
+        ),
       ]
     }
     return []
@@ -632,7 +635,8 @@ struct ClientMigrationParser {
       } else if let values = root[key] as? [String: Any] {
         for entry in values {
           if let value = entry.value as? [String: Any],
-             let url = stringValue(value["url"]) ?? stringValue(value["uri"]) {
+             let url = stringValue(value["url"]) ?? stringValue(value["uri"])
+          {
             subscriptionEntries.append((name: entry.key, url: url, file: fileLabel))
           } else if let url = stringValue(entry.value) {
             subscriptionEntries.append((name: entry.key, url: url, file: fileLabel))
@@ -729,7 +733,7 @@ struct ClientMigrationParser {
   }
 
   private func unknownTopLevelKeys(from root: [String: Any]) -> [String] {
-    let known: Set<String> = [
+    let known: Set = [
       "allow-lan",
       "authentication",
       "bypass",
@@ -771,7 +775,7 @@ struct ClientMigrationParser {
       "system-proxy",
       "tproxy-port",
       "tray",
-      "tun"
+      "tun",
     ]
     return root.keys.filter { !known.contains($0.lowercased()) }.sorted()
   }
@@ -877,7 +881,8 @@ struct ClientMigrationParser {
         let name: String
         if let profileID,
            let rawProfileID = profileID.replacingOccurrences(of: "flclash-profile-", with: "").nilIfEmpty,
-           let profile = profilesByID[rawProfileID] {
+           let profile = profilesByID[rawProfileID]
+        {
           name = "FlClash \(profile.displayName) Rules"
         } else {
           name = "FlClash Global Rules"
@@ -988,7 +993,7 @@ struct ClientMigrationParser {
       "dangerAcceptInvalidCerts": "report only",
       "selected": "report only",
       "extra": "report only",
-      "home": "report only"
+      "home": "report only",
     ]
     for (field, action) in unsupportedFields.sorted(by: { $0.key < $1.key }) where option[field] != nil {
       appendUnsupportedMapping(
@@ -1097,7 +1102,7 @@ struct ClientMigrationParser {
     var buffer = ""
     var depth = 0
     for character in rawRule {
-      if character == "," && depth == 0 {
+      if character == ",", depth == 0 {
         parts.append(buffer.trimmingCharacters(in: .whitespacesAndNewlines))
         buffer = ""
         continue
@@ -1170,7 +1175,7 @@ struct ClientMigrationParser {
       "config.json",
       "config.yaml",
       "config.yml",
-      "shared_preferences.json"
+      "shared_preferences.json",
     ]
     for name in candidateNames {
       let url = directoryURL.appendingPathComponent(name)
@@ -1178,7 +1183,8 @@ struct ClientMigrationParser {
             let root = loadMapping(from: url)
       else { continue }
       if root["configMap"] != nil
-        || (root["profiles"] != nil && (root["links"] != nil || root["profile_rule_mapping"] != nil || root["profileRuleMapping"] != nil)) {
+        || (root["profiles"] != nil && (root["links"] != nil || root["profile_rule_mapping"] != nil || root["profileRuleMapping"] != nil))
+      {
         return url
       }
     }

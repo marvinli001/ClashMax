@@ -241,9 +241,9 @@ actor OutboundProxyEndpointStore {
   ) async throws -> OutboundProxyEndpointStoreRollbackSnapshot {
     try await withTransactionLock {
       let manifest = try await loadManifest()
-      return OutboundProxyEndpointStoreRollbackSnapshot(
+      return try OutboundProxyEndpointStoreRollbackSnapshot(
         manifest: manifest,
-        passwords: try passwordSnapshots(
+        passwords: passwordSnapshots(
           for: manifest.endpoints.map(\.id) + additionalAffectedEndpointIDs
         )
       )
@@ -313,9 +313,9 @@ actor OutboundProxyEndpointStore {
         restoredEndpoints.append((originalID: originalID, endpoint: restoredEndpoint))
       }
 
-      let rollbackSnapshot = OutboundProxyEndpointStoreRollbackSnapshot(
+      let rollbackSnapshot = try OutboundProxyEndpointStoreRollbackSnapshot(
         manifest: currentManifest,
-        passwords: try passwordSnapshots(
+        passwords: passwordSnapshots(
           for: currentManifest.endpoints.map(\.id) + restoredEndpoints.map(\.endpoint.id)
         )
       )
@@ -400,7 +400,7 @@ actor OutboundProxyEndpointStore {
           OutboundProxyEndpointPasswordSnapshot(
             endpointID: endpoint.id,
             password: previousPassword
-          )
+          ),
         ],
         manifest: previousManifest,
         restoreManifest: true
@@ -441,7 +441,7 @@ actor OutboundProxyEndpointStore {
           OutboundProxyEndpointPasswordSnapshot(
             endpointID: endpoint.id,
             password: oldPassword
-          )
+          ),
         ],
         manifest: previousManifest,
         restoreManifest: true
@@ -471,7 +471,7 @@ actor OutboundProxyEndpointStore {
           OutboundProxyEndpointPasswordSnapshot(
             endpointID: id,
             password: oldPassword
-          )
+          ),
         ],
         manifest: previousManifest,
         restoreManifest: true
@@ -684,10 +684,10 @@ actor OutboundProxyEndpointStore {
     var seen = Set<UUID>()
     var snapshots: [OutboundProxyEndpointPasswordSnapshot] = []
     for endpointID in endpointIDs where seen.insert(endpointID).inserted {
-      snapshots.append(
+      try snapshots.append(
         OutboundProxyEndpointPasswordSnapshot(
           endpointID: endpointID,
-          password: try secretStore.load(account: Self.passwordAccount(for: endpointID))
+          password: secretStore.load(account: Self.passwordAccount(for: endpointID))
         )
       )
     }

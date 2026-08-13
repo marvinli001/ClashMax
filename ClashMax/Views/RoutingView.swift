@@ -62,7 +62,7 @@ final class RuleMatchSimulationDebouncer {
         return
       }
       guard let self, !Task.isCancelled else { return }
-      self.task = nil
+      task = nil
       action()
     }
   }
@@ -436,12 +436,12 @@ struct RoutingView: View {
         RuntimeDNSPatchEditor(settings: dnsPayloadBinding)
       }
 
-        if let validationError = draftSnippet.validationError {
-          Label(validationError, systemImage: "exclamationmark.triangle.fill")
-            .font(.caption)
-            .foregroundStyle(.orange)
-            .lineLimit(3)
-        }
+      if let validationError = draftSnippet.validationError {
+        Label(validationError, systemImage: "exclamationmark.triangle.fill")
+          .font(.caption)
+          .foregroundStyle(.orange)
+          .lineLimit(3)
+      }
     }
   }
 
@@ -551,7 +551,7 @@ struct RoutingView: View {
         LazyVGrid(
           columns: [
             GridItem(.flexible(minimum: 96), spacing: 10, alignment: .leading),
-            GridItem(.flexible(minimum: 96), spacing: 10, alignment: .leading)
+            GridItem(.flexible(minimum: 96), spacing: 10, alignment: .leading),
           ],
           alignment: .leading,
           spacing: 8
@@ -569,7 +569,7 @@ struct RoutingView: View {
       RoutingCompactFact(title: "Profile", value: profileStore.activeProfile?.name ?? String(localized: "No Profile")),
       RoutingCompactFact(title: "Snippet Binding", value: draftSnippet.binding.displayName),
       RoutingCompactFact(title: "Applies Here", value: draftAppliesToActiveProfile ? String(localized: "Yes") : String(localized: "No")),
-      RoutingCompactFact(title: "Active Snippets", value: "\(activePreviewSnippets.count)")
+      RoutingCompactFact(title: "Active Snippets", value: "\(activePreviewSnippets.count)"),
     ]
   }
 
@@ -984,7 +984,8 @@ struct RoutingView: View {
     guard let activeProfileID = profileStore.activeProfileID else { return [] }
     var snippets = snippetLibrary.snippets
     if let selectedSnippetID,
-       let index = snippets.firstIndex(where: { $0.id == selectedSnippetID }) {
+       let index = snippets.firstIndex(where: { $0.id == selectedSnippetID })
+    {
       snippets[index] = draftSnippet
     } else if selectedSnippet == nil {
       snippets.append(draftSnippet)
@@ -1077,7 +1078,8 @@ struct RoutingView: View {
 
   private func reconcileDraftWithLibrary() {
     if let selectedSnippetID,
-       let snippet = snippetLibrary.snippets.first(where: { $0.id == selectedSnippetID }) {
+       let snippet = snippetLibrary.snippets.first(where: { $0.id == selectedSnippetID })
+    {
       if snippet == draftSnippet {
         loadedSnippetSnapshot = snippet
       } else if !draftHasUnsavedChanges {
@@ -1648,7 +1650,7 @@ private struct RoutingCompactFact: Identifiable {
   let value: String
 
   init(title: LocalizedStringResource, value: String) {
-    self.id = String(localized: title)
+    id = String(localized: title)
     self.title = title
     self.value = value
   }

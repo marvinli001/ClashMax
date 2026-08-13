@@ -1,6 +1,6 @@
+@testable import ClashMax
 import SwiftUI
 import XCTest
-@testable import ClashMax
 
 @MainActor
 final class TrafficChartGeometryTests: XCTestCase {

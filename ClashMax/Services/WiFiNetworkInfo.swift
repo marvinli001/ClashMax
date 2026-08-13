@@ -276,7 +276,7 @@ final class WiFiLocationAuthorization {
     let candidates = [
       URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_LocationServices"),
       URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices"),
-      URL(fileURLWithPath: "/System/Applications/System Settings.app")
+      URL(fileURLWithPath: "/System/Applications/System Settings.app"),
     ].compactMap(\.self)
 
     for url in candidates where NSWorkspace.shared.open(url) {

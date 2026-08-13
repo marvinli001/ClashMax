@@ -12,7 +12,6 @@ import Foundation
 /// Retention is bounded: the pending buffer never holds more than `maximumLineBytes + 1`
 /// bytes, so a producer that emits an endless line cannot grow this into memory pressure.
 struct SanitizedLineAccumulator {
-
   /// Appended to a line that had to be cut short.
   static let truncationMarker = " <truncated>"
 

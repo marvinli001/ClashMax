@@ -104,7 +104,7 @@ struct NetworkExtensionRoutingSettings: Codable, Equatable, Sendable {
     "169.254.0.0/16",
     "::1/128",
     "fe80::/10",
-    "fc00::/7"
+    "fc00::/7",
   ]
 
   var excludeLAN: Bool
@@ -269,7 +269,7 @@ struct NetworkExtensionRoutingSettings: Codable, Equatable, Sendable {
   }
 
   static func normalizedCIDRs(_ values: [String]) -> [String] {
-    normalizedRouteExcludeCIDRs(values).filter(Self.isValidCIDR)
+    normalizedRouteExcludeCIDRs(values).filter(isValidCIDR)
   }
 
   static func normalizedRouteExcludeCIDRs(_ values: [String]) -> [String] {

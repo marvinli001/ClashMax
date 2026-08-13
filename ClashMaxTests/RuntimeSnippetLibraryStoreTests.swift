@@ -1,6 +1,6 @@
+@testable import ClashMax
 import Foundation
 import XCTest
-@testable import ClashMax
 
 @MainActor
 final class RuntimeSnippetLibraryStoreTests: XCTestCase {
@@ -109,7 +109,7 @@ final class RuntimeSnippetLibraryStoreTests: XCTestCase {
         RuleOverlaySettings(
           enabled: true,
           prependRules: [
-            ManagedRuleOverlayRule(kind: .domainSuffix, value: "invalid.example", policy: "DIRECT")
+            ManagedRuleOverlayRule(kind: .domainSuffix, value: "invalid.example", policy: "DIRECT"),
           ]
         )
       )
@@ -206,7 +206,7 @@ final class RuntimeSnippetLibraryStoreTests: XCTestCase {
         RuleOverlaySettings(
           enabled: true,
           prependRules: [
-            ManagedRuleOverlayRule(kind: .domainSuffix, value: domain, policy: "DIRECT")
+            ManagedRuleOverlayRule(kind: .domainSuffix, value: domain, policy: "DIRECT"),
           ]
         )
       )

@@ -522,7 +522,7 @@ struct SubscriptionFetcher {
     usesProfileUpstream: Bool,
     requestHeaders: [SubscriptionHeaderDiagnostic]
   ) -> SubscriptionFetchError {
-    return SubscriptionFetchError(
+    SubscriptionFetchError(
       kind: Self.failureKind(for: error),
       message: usesProfileUpstream
         ? "Subscription fetch through the profile upstream proxy failed."
@@ -701,7 +701,7 @@ struct SubscriptionFetcher {
       "tokens",
       "profile",
       "profiles",
-      "download"
+      "download",
     ].contains(normalized)
   }
 
@@ -797,7 +797,7 @@ struct SubscriptionFetcher {
     guard !trimmed.isEmpty else { return nil }
     let sensitiveValues = [
       resolvedEndpoint.endpoint.authentication?.username,
-      resolvedEndpoint.password
+      resolvedEndpoint.password,
     ].compactMap { value -> String? in
       guard let value else { return nil }
       let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -892,7 +892,8 @@ struct SubscriptionFetcher {
   private func decodedString(from data: Data, response: HTTPURLResponse) -> (source: String, decodedCharset: String)? {
     var encodings: [(String.Encoding, String)] = []
     if let contentType = response.value(forHTTPHeaderField: "Content-Type"),
-       let declaredEncoding = encoding(fromContentType: contentType) {
+       let declaredEncoding = encoding(fromContentType: contentType)
+    {
       encodings.append(declaredEncoding)
     }
     encodings.append((.utf8, "utf-8"))
@@ -972,7 +973,8 @@ struct SubscriptionFetcher {
     if lowercased.hasPrefix("<!doctype html") ||
       lowercased.hasPrefix("<html") ||
       lowercased.contains("<title>") ||
-      lowercased.contains("<form") {
+      lowercased.contains("<form")
+    {
       return true
     }
 
@@ -1026,7 +1028,7 @@ private final class SubscriptionSessionDelegate: NSObject, URLSessionTaskDelegat
     guard
       allowsInsecureTLS,
       challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-          let trust = challenge.protectionSpace.serverTrust
+      let trust = challenge.protectionSpace.serverTrust
     else {
       completionHandler(.performDefaultHandling, nil)
       return
@@ -1056,7 +1058,7 @@ private final class SubscriptionSessionDelegate: NSObject, URLSessionTaskDelegat
     let supportedMethods = [
       NSURLAuthenticationMethodDefault,
       NSURLAuthenticationMethodHTTPBasic,
-      NSURLAuthenticationMethodHTTPDigest
+      NSURLAuthenticationMethodHTTPDigest,
     ]
     guard
       challenge.protectionSpace.isProxy(),
@@ -1083,7 +1085,7 @@ private func proxyDictionary(
   case .direct:
     return [
       kCFNetworkProxiesHTTPEnable as String: false,
-      kCFNetworkProxiesHTTPSEnable as String: false
+      kCFNetworkProxiesHTTPSEnable as String: false,
     ]
   case .localClashProxy:
     return [
@@ -1092,7 +1094,7 @@ private func proxyDictionary(
       kCFNetworkProxiesHTTPPort as String: options.localProxyPort,
       kCFNetworkProxiesHTTPSEnable as String: true,
       kCFNetworkProxiesHTTPSProxy as String: options.localProxyHost,
-      kCFNetworkProxiesHTTPSPort as String: options.localProxyPort
+      kCFNetworkProxiesHTTPSPort as String: options.localProxyPort,
     ]
   case .systemProxy:
     return nil

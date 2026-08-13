@@ -104,7 +104,7 @@ extension PublicIPInfoClient.Provider {
     provider("ipapi.is", "https://api.ipapi.is/"),
     provider("ipwho.is", "https://ipwho.is/"),
     provider("skk cf-geoip", "https://ip.api.skk.moe/cf-geoip"),
-    provider("geojs", "https://get.geojs.io/v1/ip/geo.json")
+    provider("geojs", "https://get.geojs.io/v1/ip/geo.json"),
   ]
 
   private static func provider(_ name: String, _ urlString: String) -> PublicIPInfoClient.Provider {
@@ -136,47 +136,47 @@ private enum PublicIPInfoMapper {
       ipAddress: ip,
       countryCode: firstString([
         string(in: object, keys: ["country_code", "countryCode", "countryCodeAlpha2"]),
-        string(in: location, keys: ["country_code", "countryCode"])
+        string(in: location, keys: ["country_code", "countryCode"]),
       ]),
       countryName: firstString([
         string(in: object, keys: ["country", "country_name", "countryName"]),
-        string(in: location, keys: ["country", "country_name"])
+        string(in: location, keys: ["country", "country_name"]),
       ]),
       region: firstString([
         string(in: object, keys: ["region", "regionName", "state"]),
-        string(in: location, keys: ["region", "regionName", "state"])
+        string(in: location, keys: ["region", "regionName", "state"]),
       ]),
       city: firstString([
         string(in: object, keys: ["city"]),
-        string(in: location, keys: ["city"])
+        string(in: location, keys: ["city"]),
       ]),
       asn: normalizedASN(firstString([
         string(in: object, keys: ["asn", "as"]),
         string(in: connection, keys: ["asn"]),
-        string(in: asnObject, keys: ["asn", "number"])
+        string(in: asnObject, keys: ["asn", "number"]),
       ])),
       isp: firstString([
         string(in: object, keys: ["isp"]),
         string(in: connection, keys: ["isp"]),
-        string(in: asnObject, keys: ["isp"])
+        string(in: asnObject, keys: ["isp"]),
       ]),
       organization: firstString([
         string(in: object, keys: ["organization", "org", "asOrganization"]),
         string(in: connection, keys: ["org", "organization"]),
-        string(in: asnObject, keys: ["org", "organization", "name"])
+        string(in: asnObject, keys: ["org", "organization", "name"]),
       ]),
       timezone: firstString([
         string(in: object, keys: ["timezone", "time_zone"]),
         string(in: timezoneObject, keys: ["id", "name"]),
-        string(in: location, keys: ["timezone", "time_zone"])
+        string(in: location, keys: ["timezone", "time_zone"]),
       ]),
       latitude: firstDouble([
         double(in: object, keys: ["latitude", "lat"]),
-        double(in: location, keys: ["latitude", "lat"])
+        double(in: location, keys: ["latitude", "lat"]),
       ]),
       longitude: firstDouble([
         double(in: object, keys: ["longitude", "lon", "lng"]),
-        double(in: location, keys: ["longitude", "lon", "lng"])
+        double(in: location, keys: ["longitude", "lon", "lng"]),
       ]),
       sourceName: sourceName,
       fetchedAt: fetchedAt
@@ -214,7 +214,8 @@ private enum PublicIPInfoMapper {
         return value.doubleValue
       }
       if let value = object[key] as? String,
-         let parsed = Double(value.trimmingCharacters(in: .whitespacesAndNewlines)) {
+         let parsed = Double(value.trimmingCharacters(in: .whitespacesAndNewlines))
+      {
         return parsed
       }
     }
@@ -222,11 +223,11 @@ private enum PublicIPInfoMapper {
   }
 
   private static func firstString(_ values: [String?]) -> String? {
-    values.compactMap { $0 }.first
+    values.compactMap(\.self).first
   }
 
   private static func firstDouble(_ values: [Double?]) -> Double? {
-    values.compactMap { $0 }.first
+    values.compactMap(\.self).first
   }
 
   private static func normalizedASN(_ value: String?) -> String? {

@@ -39,17 +39,17 @@ final class PublicIPCoordinator {
       do {
         let info = try await self.client.fetchPublicIPInfo()
         guard !Task.isCancelled else { return }
-        self.state = .loaded(info)
+        state = .loaded(info)
       } catch is CancellationError {
       } catch {
         guard !Task.isCancelled else { return }
-        self.state = .failed(
+        state = .failed(
           message: UserFacingError.message(for: error),
           previous: previous,
           failedAt: Date()
         )
       }
-      self.task = nil
+      task = nil
     }
   }
 

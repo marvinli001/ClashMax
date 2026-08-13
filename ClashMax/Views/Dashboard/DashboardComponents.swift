@@ -362,11 +362,11 @@ private struct DiagnosticEventList: View {
     let context = [
       event.flowProtocol?.displayName,
       event.remoteEndpoint,
-      event.sourceAppSigningIdentifier.map { "source=\($0)" }
+      event.sourceAppSigningIdentifier.map { "source=\($0)" },
     ]
-      .compactMap { $0 }
-      .filter { !$0.isEmpty }
-      .joined(separator: " ")
+    .compactMap(\.self)
+    .filter { !$0.isEmpty }
+    .joined(separator: " ")
     if !context.isEmpty {
       return "\(event.message) \(context)"
     }

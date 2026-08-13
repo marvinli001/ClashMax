@@ -1,6 +1,6 @@
+@testable import ClashMax
 import XCTest
 import Yams
-@testable import ClashMax
 
 final class ConfigNormalizerTests: XCTestCase {
   func testManualSocksEndpointBuildsRuntimeConfigWithoutReadingSource() throws {
@@ -55,7 +55,7 @@ final class ConfigNormalizerTests: XCTestCase {
         "IP-CIDR6,::1/128,DIRECT,no-resolve",
         "IP-CIDR6,fc00::/7,DIRECT,no-resolve",
         "IP-CIDR6,fe80::/10,DIRECT,no-resolve",
-        "MATCH,Proxy"
+        "MATCH,Proxy",
       ]
     )
   }
@@ -248,7 +248,7 @@ final class ConfigNormalizerTests: XCTestCase {
           proxies: [Node]
       rules:
         - MATCH,Proxy
-      """
+      """,
     ]
 
     for source in conflictingSources {
@@ -411,7 +411,7 @@ final class ConfigNormalizerTests: XCTestCase {
             kind: .domainSuffix,
             value: "managed.example",
             policy: "DIRECT"
-          )
+          ),
         ]
       )
 
@@ -1157,7 +1157,7 @@ final class ConfigNormalizerTests: XCTestCase {
       allowPrivateNetwork: true,
       allowedOrigins: [
         "https://custom.example",
-        "https://yacd.metacubex.one"
+        "https://yacd.metacubex.one",
       ]
     )
 
@@ -1174,7 +1174,7 @@ final class ConfigNormalizerTests: XCTestCase {
         "http://tauri.localhost",
         "http://localhost:3000",
         "https://custom.example",
-        "https://yacd.metacubex.one"
+        "https://yacd.metacubex.one",
       ]
     )
   }
@@ -1402,7 +1402,7 @@ final class ConfigNormalizerTests: XCTestCase {
       root.appendingPathComponent("profile.runtime.not-a-uuid.yaml"),
       root.appendingPathComponent("profile.provider.not-a-uuid.txt"),
       root.appendingPathComponent(".profile.runtime.\(UUID().uuidString).yaml.tmp"),
-      root.appendingPathComponent("other-profile.runtime.\(UUID().uuidString).yaml")
+      root.appendingPathComponent("other-profile.runtime.\(UUID().uuidString).yaml"),
     ]
     for url in unmanagedURLs {
       try "unmanaged".write(to: url, atomically: true, encoding: .utf8)
@@ -1485,7 +1485,7 @@ final class ConfigNormalizerTests: XCTestCase {
         ruleOverlay: RuleOverlaySettings(
           enabled: true,
           appendRules: [
-            ManagedRuleOverlayRule(kind: .domainSuffix, value: "profile.example", policy: "DIRECT")
+            ManagedRuleOverlayRule(kind: .domainSuffix, value: "profile.example", policy: "DIRECT"),
           ]
         )
       )
@@ -1494,7 +1494,7 @@ final class ConfigNormalizerTests: XCTestCase {
     overrides.ruleOverlay = RuleOverlaySettings(
       enabled: true,
       prependRules: [
-        ManagedRuleOverlayRule(kind: .domainSuffix, value: "global.example", policy: "DIRECT")
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "global.example", policy: "DIRECT"),
       ]
     )
     let snippet = RuntimeSnippet(
@@ -1505,7 +1505,7 @@ final class ConfigNormalizerTests: XCTestCase {
         RuleOverlaySettings(
           enabled: true,
           appendRules: [
-            ManagedRuleOverlayRule(kind: .domainSuffix, value: "snippet.example", policy: "DIRECT")
+            ManagedRuleOverlayRule(kind: .domainSuffix, value: "snippet.example", policy: "DIRECT"),
           ]
         )
       )
@@ -1529,7 +1529,7 @@ final class ConfigNormalizerTests: XCTestCase {
       "Manual Proxy",
       "Upstream Proxy",
       "DNS override",
-      "Final runtime YAML"
+      "Final runtime YAML",
     ])
     XCTAssertEqual(snapshot.preflightStatus, .notRun)
     let exported = snapshot.redactedReportText
@@ -1816,8 +1816,7 @@ final class ConfigNormalizerTests: XCTestCase {
           proxies: [DIRECT]
       rules:
         - MATCH,DIRECT
-      """
-      ),
+      """),
       .clashConfig
     )
     XCTAssertEqual(
@@ -1860,7 +1859,7 @@ final class ConfigNormalizerTests: XCTestCase {
         "GEOIP,private,DIRECT,no-resolve",
         "GEOSITE,cn,DIRECT",
         "GEOIP,CN,DIRECT,no-resolve",
-        "MATCH,Proxy"
+        "MATCH,Proxy",
       ]
     )
   }
@@ -2020,10 +2019,10 @@ final class ConfigNormalizerTests: XCTestCase {
     overrides.ruleOverlay = RuleOverlaySettings(
       enabled: true,
       prependRules: [
-        ManagedRuleOverlayRule(kind: .domainSuffix, value: "corp.example", policy: "DIRECT")
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "corp.example", policy: "DIRECT"),
       ],
       appendRules: [
-        ManagedRuleOverlayRule(kind: .match, policy: "Proxy")
+        ManagedRuleOverlayRule(kind: .match, policy: "Proxy"),
       ]
     )
 
@@ -2036,7 +2035,7 @@ final class ConfigNormalizerTests: XCTestCase {
         "DOMAIN-SUFFIX,corp.example,DIRECT",
         "DOMAIN-SUFFIX,example.org,Proxy",
         "MATCH,DIRECT",
-        "MATCH,Proxy"
+        "MATCH,Proxy",
       ]
     )
     XCTAssertTrue(source.contains("DOMAIN-SUFFIX,example.org,Proxy"))
@@ -2067,7 +2066,7 @@ final class ConfigNormalizerTests: XCTestCase {
         ManagedRuleOverlayRule(kind: .srcIPSuffix, value: "192.168.1.1/24", policy: "DIRECT"),
         ManagedRuleOverlayRule(kind: .dstPort, value: "443", policy: "Proxy"),
         ManagedRuleOverlayRule(kind: .srcPort, value: "50000-50100", policy: "DIRECT"),
-        ManagedRuleOverlayRule(kind: .inPort, value: "7890", policy: "Proxy")
+        ManagedRuleOverlayRule(kind: .inPort, value: "7890", policy: "Proxy"),
       ]
     )
 
@@ -2086,7 +2085,7 @@ final class ConfigNormalizerTests: XCTestCase {
         "DST-PORT,443,Proxy",
         "SRC-PORT,50000-50100,DIRECT",
         "IN-PORT,7890,Proxy",
-        "MATCH,DIRECT"
+        "MATCH,DIRECT",
       ]
     )
     XCTAssertFalse(source.contains("RemoteRules"))
@@ -2097,7 +2096,7 @@ final class ConfigNormalizerTests: XCTestCase {
     invalidCIDR.ruleOverlay = RuleOverlaySettings(
       enabled: true,
       prependRules: [
-        ManagedRuleOverlayRule(kind: .srcIPCIDR, value: "192.168.1.1", policy: "DIRECT")
+        ManagedRuleOverlayRule(kind: .srcIPCIDR, value: "192.168.1.1", policy: "DIRECT"),
       ]
     )
     XCTAssertThrowsError(
@@ -2113,7 +2112,7 @@ final class ConfigNormalizerTests: XCTestCase {
     invalidPort.ruleOverlay = RuleOverlaySettings(
       enabled: true,
       prependRules: [
-        ManagedRuleOverlayRule(kind: .dstPort, value: "70000", policy: "Proxy")
+        ManagedRuleOverlayRule(kind: .dstPort, value: "70000", policy: "Proxy"),
       ]
     )
     XCTAssertThrowsError(
@@ -2132,7 +2131,7 @@ final class ConfigNormalizerTests: XCTestCase {
     invalidSubRule.ruleOverlay = RuleOverlaySettings(
       enabled: true,
       prependRules: [
-        ManagedRuleOverlayRule(kind: .subRule, value: "DOMAIN,example.com", policy: "sub")
+        ManagedRuleOverlayRule(kind: .subRule, value: "DOMAIN,example.com", policy: "sub"),
       ]
     )
     XCTAssertThrowsError(
@@ -2164,15 +2163,15 @@ final class ConfigNormalizerTests: XCTestCase {
     overrides.ruleOverlay = RuleOverlaySettings(
       enabled: true,
       prependRules: [
-        ManagedRuleOverlayRule(kind: .domainSuffix, value: "trusted.example", policy: "DIRECT")
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "trusted.example", policy: "DIRECT"),
       ],
       appendRules: [
-        ManagedRuleOverlayRule(kind: .match, policy: "Proxy")
+        ManagedRuleOverlayRule(kind: .match, policy: "Proxy"),
       ],
       disabledRuleMatchers: [
         ManagedRuleDisableMatcher(mode: .contains, pattern: "ads.example"),
         ManagedRuleDisableMatcher(mode: .exact, pattern: "MATCH,DIRECT"),
-        ManagedRuleDisableMatcher(mode: .regex, pattern: #"IP-CIDR,10\."#)
+        ManagedRuleDisableMatcher(mode: .regex, pattern: #"IP-CIDR,10\."#),
       ]
     )
 
@@ -2184,7 +2183,7 @@ final class ConfigNormalizerTests: XCTestCase {
       [
         "DOMAIN-SUFFIX,trusted.example,DIRECT",
         "DOMAIN-SUFFIX,corp.example,Proxy",
-        "MATCH,Proxy"
+        "MATCH,Proxy",
       ]
     )
     XCTAssertTrue(source.contains("DOMAIN-SUFFIX,ads.example,REJECT"))
@@ -2208,13 +2207,13 @@ final class ConfigNormalizerTests: XCTestCase {
     overrides.ruleOverlay = RuleOverlaySettings(
       enabled: true,
       prependRules: [
-        ManagedRuleOverlayRule(kind: .domainSuffix, value: "global.example", policy: "DIRECT")
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "global.example", policy: "DIRECT"),
       ],
       appendRules: [
-        ManagedRuleOverlayRule(kind: .domainSuffix, value: "global-after.example", policy: "Proxy")
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "global-after.example", policy: "Proxy"),
       ],
       disabledRuleMatchers: [
-        ManagedRuleDisableMatcher(mode: .contains, pattern: "ads.example")
+        ManagedRuleDisableMatcher(mode: .contains, pattern: "ads.example"),
       ]
     )
     var options = RuntimeConfigOptions.default
@@ -2222,13 +2221,13 @@ final class ConfigNormalizerTests: XCTestCase {
       ruleOverlay: RuleOverlaySettings(
         enabled: true,
         prependRules: [
-          ManagedRuleOverlayRule(kind: .domainSuffix, value: "profile.example", policy: "DIRECT")
+          ManagedRuleOverlayRule(kind: .domainSuffix, value: "profile.example", policy: "DIRECT"),
         ],
         appendRules: [
-          ManagedRuleOverlayRule(kind: .match, policy: "Proxy")
+          ManagedRuleOverlayRule(kind: .match, policy: "Proxy"),
         ],
         disabledRuleMatchers: [
-          ManagedRuleDisableMatcher(mode: .exact, pattern: "MATCH,DIRECT")
+          ManagedRuleDisableMatcher(mode: .exact, pattern: "MATCH,DIRECT"),
         ]
       )
     )
@@ -2243,7 +2242,7 @@ final class ConfigNormalizerTests: XCTestCase {
         "DOMAIN-SUFFIX,profile.example,DIRECT",
         "DOMAIN-SUFFIX,corp.example,Proxy",
         "MATCH,Proxy",
-        "DOMAIN-SUFFIX,global-after.example,Proxy"
+        "DOMAIN-SUFFIX,global-after.example,Proxy",
       ]
     )
   }
@@ -2273,7 +2272,7 @@ final class ConfigNormalizerTests: XCTestCase {
           RuleOverlaySettings(
             enabled: true,
             prependRules: [
-              ManagedRuleOverlayRule(kind: .domainSuffix, value: "disabled.example", policy: "DIRECT")
+              ManagedRuleOverlayRule(kind: .domainSuffix, value: "disabled.example", policy: "DIRECT"),
             ]
           )
         )
@@ -2293,13 +2292,13 @@ final class ConfigNormalizerTests: XCTestCase {
           RuleOverlaySettings(
             enabled: true,
             prependRules: [
-              ManagedRuleOverlayRule(kind: .domainSuffix, value: "a.example", policy: "DIRECT")
+              ManagedRuleOverlayRule(kind: .domainSuffix, value: "a.example", policy: "DIRECT"),
             ],
             appendRules: [
-              ManagedRuleOverlayRule(kind: .match, policy: "Proxy")
+              ManagedRuleOverlayRule(kind: .match, policy: "Proxy"),
             ],
             disabledRuleMatchers: [
-              ManagedRuleDisableMatcher(mode: .contains, pattern: "ads.example")
+              ManagedRuleDisableMatcher(mode: .contains, pattern: "ads.example"),
             ]
           )
         )
@@ -2310,11 +2309,11 @@ final class ConfigNormalizerTests: XCTestCase {
           RuleOverlaySettings(
             enabled: true,
             prependRules: [
-              ManagedRuleOverlayRule(kind: .domainSuffix, value: "b.example", policy: "Proxy")
+              ManagedRuleOverlayRule(kind: .domainSuffix, value: "b.example", policy: "Proxy"),
             ]
           )
         )
-      )
+      ),
     ]
 
     let output = try ConfigNormalizer().runtimeConfig(
@@ -2331,7 +2330,7 @@ final class ConfigNormalizerTests: XCTestCase {
         "DOMAIN-SUFFIX,a.example,DIRECT",
         "DOMAIN-SUFFIX,b.example,Proxy",
         "MATCH,DIRECT",
-        "MATCH,Proxy"
+        "MATCH,Proxy",
       ]
     )
     XCTAssertEqual(dns["nameserver"] as? [String], ["https://existing.example/dns-query", "https://dns.example/dns-query"])
@@ -2378,7 +2377,7 @@ final class ConfigNormalizerTests: XCTestCase {
             proxyServerNameserver: ["https://doh.pub/dns-query"]
           )
         )
-      )
+      ),
     ]
 
     let output = try ConfigNormalizer().runtimeConfig(from: source, overrides: overrides, options: options)
@@ -2407,7 +2406,7 @@ final class ConfigNormalizerTests: XCTestCase {
       RuntimeSnippet(
         name: "Corp DNS",
         payload: .dnsPatch(TunDNSSettings(nameserver: ["https://corp.example/dns-query"]))
-      )
+      ),
     ]
 
     let output = try ConfigNormalizer().runtimeConfig(
@@ -2415,7 +2414,7 @@ final class ConfigNormalizerTests: XCTestCase {
       overrides: .defaultForLaunch(secret: "secret-token"),
       options: options
     )
-    let dns = try XCTUnwrap((try Yams.load(yaml: output) as? [String: Any])?["dns"] as? [String: Any])
+    let dns = try XCTUnwrap(try (Yams.load(yaml: output) as? [String: Any])?["dns"] as? [String: Any])
 
     XCTAssertEqual(dns["enable"] as? Bool, true)
     XCTAssertEqual(dns["nameserver"] as? [String], ["https://corp.example/dns-query"])
@@ -2429,7 +2428,7 @@ final class ConfigNormalizerTests: XCTestCase {
       RuntimeSnippet(
         name: "Corp DNS",
         payload: .dnsPatch(TunDNSSettings(nameserver: ["https://corp.example/dns-query"]))
-      )
+      ),
     ]
 
     let output = try ConfigNormalizer().runtimeConfig(
@@ -2437,7 +2436,7 @@ final class ConfigNormalizerTests: XCTestCase {
       overrides: overrides,
       options: options
     )
-    let dns = try XCTUnwrap((try Yams.load(yaml: output) as? [String: Any])?["dns"] as? [String: Any])
+    let dns = try XCTUnwrap(try (Yams.load(yaml: output) as? [String: Any])?["dns"] as? [String: Any])
 
     XCTAssertEqual(dns["enable"] as? Bool, false)
     XCTAssertEqual(dns["nameserver"] as? [String], ["https://corp.example/dns-query"])
@@ -2449,7 +2448,7 @@ final class ConfigNormalizerTests: XCTestCase {
       RuntimeSnippet(
         name: "Corp DNS",
         payload: .dnsPatch(TunDNSSettings(useHosts: true))
-      )
+      ),
     ]
 
     let output = try ConfigNormalizer().runtimeConfig(
@@ -2462,7 +2461,7 @@ final class ConfigNormalizerTests: XCTestCase {
       overrides: .defaultForLaunch(secret: "secret-token"),
       options: options
     )
-    let dns = try XCTUnwrap((try Yams.load(yaml: output) as? [String: Any])?["dns"] as? [String: Any])
+    let dns = try XCTUnwrap(try (Yams.load(yaml: output) as? [String: Any])?["dns"] as? [String: Any])
 
     // The profile explicitly said `false`, but nothing else does — enable it so the patch is real.
     XCTAssertEqual(dns["enable"] as? Bool, true)
@@ -2476,7 +2475,7 @@ final class ConfigNormalizerTests: XCTestCase {
       RuntimeSnippet(
         name: "Corp DNS",
         payload: .dnsPatch(TunDNSSettings(respectRules: true, nameserver: ["https://corp.example/dns-query"]))
-      )
+      ),
     ]
 
     XCTAssertThrowsError(
@@ -2503,7 +2502,7 @@ final class ConfigNormalizerTests: XCTestCase {
       RuntimeSnippet(
         name: "Corp DNS",
         payload: .dnsPatch(TunDNSSettings(respectRules: true))
-      )
+      ),
     ]
 
     let output = try ConfigNormalizer().runtimeConfig(
@@ -2516,7 +2515,7 @@ final class ConfigNormalizerTests: XCTestCase {
       overrides: .defaultForLaunch(secret: "secret-token"),
       options: options
     )
-    let dns = try XCTUnwrap((try Yams.load(yaml: output) as? [String: Any])?["dns"] as? [String: Any])
+    let dns = try XCTUnwrap(try (Yams.load(yaml: output) as? [String: Any])?["dns"] as? [String: Any])
 
     XCTAssertEqual(dns["enable"] as? Bool, true)
     XCTAssertEqual(dns["respect-rules"] as? Bool, true)
@@ -2530,7 +2529,7 @@ final class ConfigNormalizerTests: XCTestCase {
     overrides.dnsEnabled = false
     var options = RuntimeConfigOptions.default
     options.runtimeSnippets = [
-      RuntimeSnippet(name: "Corp DNS", payload: .dnsPatch(TunDNSSettings(respectRules: true)))
+      RuntimeSnippet(name: "Corp DNS", payload: .dnsPatch(TunDNSSettings(respectRules: true))),
     ]
 
     XCTAssertThrowsError(
@@ -2551,7 +2550,7 @@ final class ConfigNormalizerTests: XCTestCase {
       overrides: .defaultForLaunch(secret: "secret-token"),
       options: options
     )
-    let dns = try XCTUnwrap((try Yams.load(yaml: output) as? [String: Any])?["dns"] as? [String: Any])
+    let dns = try XCTUnwrap(try (Yams.load(yaml: output) as? [String: Any])?["dns"] as? [String: Any])
 
     XCTAssertEqual(dns["enable"] as? Bool, true)
     XCTAssertEqual(dns["respect-rules"] as? Bool, true)
@@ -2609,7 +2608,7 @@ final class ConfigNormalizerTests: XCTestCase {
       "proxy-groups: []\n",
       "tun:\n  enable: true\n",
       "dns:\n  listen: 0.0.0.0:53\n",
-      "dns:\n  fallback-filter:\n    script: true\n"
+      "dns:\n  fallback-filter:\n    script: true\n",
     ] {
       XCTAssertThrowsError(try RuntimeSnippetYAMLPatchParser.dnsPatch(from: unsafePatch))
     }
@@ -2691,7 +2690,7 @@ final class ConfigNormalizerTests: XCTestCase {
     overrides.ruleOverlay = RuleOverlaySettings(
       enabled: true,
       prependRules: [
-        ManagedRuleOverlayRule(kind: .domainSuffix, value: "bad,example", policy: "DIRECT")
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "bad,example", policy: "DIRECT"),
       ]
     )
 
@@ -2713,7 +2712,7 @@ final class ConfigNormalizerTests: XCTestCase {
     overrides.ruleOverlay = RuleOverlaySettings(
       enabled: true,
       disabledRuleMatchers: [
-        ManagedRuleDisableMatcher(mode: .regex, pattern: "[")
+        ManagedRuleDisableMatcher(mode: .regex, pattern: "["),
       ]
     )
 
@@ -2739,7 +2738,7 @@ final class ConfigNormalizerTests: XCTestCase {
         RuntimeRuleCandidate(
           rule: RuntimeRule(index: 1, type: "MATCH", payload: "", policy: "Proxy"),
           source: .runtimeProfile
-        )
+        ),
       ]
     }
 
@@ -2756,7 +2755,7 @@ final class ConfigNormalizerTests: XCTestCase {
         RuntimeRuleCandidate(
           rule: RuntimeRule(index: 1, type: "DOMAIN-SUFFIX", payload: "example.com", policy: "DIRECT"),
           source: .runtimeProfile
-        )
+        ),
       ]
     }
 
@@ -2777,7 +2776,7 @@ final class ConfigNormalizerTests: XCTestCase {
         RuntimeRuleCandidate(
           rule: RuntimeRule(index: 1, type: "DOMAIN-SUFFIX", payload: "example.com", policy: "DIRECT"),
           source: .globalPrepend
-        )
+        ),
       ]
     }
 
@@ -2793,7 +2792,7 @@ final class ConfigNormalizerTests: XCTestCase {
     let rules = [
       RuntimeRule(index: 1, type: "DOMAIN-SUFFIX", payload: "example.com", policy: "DIRECT"),
       RuntimeRule(index: 2, type: "DOMAIN-KEYWORD", payload: "example", policy: "Proxy"),
-      RuntimeRule(index: 3, type: "MATCH", payload: "", policy: "Proxy")
+      RuntimeRule(index: 3, type: "MATCH", payload: "", policy: "Proxy"),
     ]
 
     let outcome = RuleMatchSimulator().simulate(target: "api.example.com", rules: rules)
@@ -2809,7 +2808,7 @@ final class ConfigNormalizerTests: XCTestCase {
     let rules = [
       RuntimeRule(index: 1, type: "IP-CIDR", payload: "10.0.0.0/8", policy: "DIRECT"),
       RuntimeRule(index: 2, type: "IP-CIDR6", payload: "fd00::/8", policy: "DIRECT"),
-      RuntimeRule(index: 3, type: "MATCH", payload: "", policy: "Proxy")
+      RuntimeRule(index: 3, type: "MATCH", payload: "", policy: "Proxy"),
     ]
 
     let ipv4Outcome = RuleMatchSimulator().simulate(target: "10.1.2.3", rules: rules)
@@ -2833,7 +2832,7 @@ final class ConfigNormalizerTests: XCTestCase {
   func testRuleMatchSimulatorSupportsProcessRules() throws {
     let rules = [
       RuntimeRule(index: 1, type: "PROCESS-NAME", payload: "Safari", policy: "DIRECT"),
-      RuntimeRule(index: 2, type: "MATCH", payload: "", policy: "Proxy")
+      RuntimeRule(index: 2, type: "MATCH", payload: "", policy: "Proxy"),
     ]
 
     let outcome = RuleMatchSimulator().simulate(target: "/Applications/Safari.app", rules: rules)
@@ -2866,7 +2865,7 @@ final class ConfigNormalizerTests: XCTestCase {
       RuntimeRuleCandidate(
         rule: RuntimeRule(index: 5, type: "MATCH", payload: "", policy: "Fallback"),
         source: .globalAppend
-      )
+      ),
     ]
     let simulator = RuleMatchSimulator()
 
@@ -2904,28 +2903,28 @@ final class ConfigNormalizerTests: XCTestCase {
     let globalOverlay = RuleOverlaySettings(
       enabled: true,
       prependRules: [
-        ManagedRuleOverlayRule(kind: .domainSuffix, value: "global-pre.example", policy: "DIRECT")
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "global-pre.example", policy: "DIRECT"),
       ],
       appendRules: [
-        ManagedRuleOverlayRule(kind: .domainSuffix, value: "global-append.example", policy: "DIRECT")
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "global-append.example", policy: "DIRECT"),
       ]
     )
     let profileOverlay = RuleOverlaySettings(
       enabled: true,
       prependRules: [
-        ManagedRuleOverlayRule(kind: .domainSuffix, value: "profile-pre.example", policy: "Proxy")
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "profile-pre.example", policy: "Proxy"),
       ],
       appendRules: [
-        ManagedRuleOverlayRule(kind: .domainSuffix, value: "profile-append.example", policy: "Proxy")
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "profile-append.example", policy: "Proxy"),
       ]
     )
     let snippetOverlay = RuleOverlaySettings(
       enabled: true,
       prependRules: [
-        ManagedRuleOverlayRule(kind: .domainSuffix, value: "snippet-pre.example", policy: "DIRECT")
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "snippet-pre.example", policy: "DIRECT"),
       ],
       appendRules: [
-        ManagedRuleOverlayRule(kind: .domainSuffix, value: "snippet-append.example", policy: "DIRECT")
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "snippet-append.example", policy: "DIRECT"),
       ]
     )
     let runtimeRule = RuntimeRule(
@@ -2952,7 +2951,7 @@ final class ConfigNormalizerTests: XCTestCase {
         .runtimeProfile,
         .profileAppend,
         .globalAppend,
-        .runtimeSnippetAppend
+        .runtimeSnippetAppend,
       ]
     )
     XCTAssertEqual(candidates.map(\.rule.index), [1, 2, 3, 4, 5, 6, 7])
@@ -2965,7 +2964,7 @@ final class ConfigNormalizerTests: XCTestCase {
       ("api.runtime.example", .runtimeProfile),
       ("api.profile-append.example", .profileAppend),
       ("api.global-append.example", .globalAppend),
-      ("api.snippet-append.example", .runtimeSnippetAppend)
+      ("api.snippet-append.example", .runtimeSnippetAppend),
     ]
     for (destination, expectedSource) in matches {
       let trace = simulator.simulate(
@@ -3015,7 +3014,7 @@ final class ConfigNormalizerTests: XCTestCase {
       RuntimeRule(index: 2, type: "IP-CIDR", payload: "10.0.0.0/8", policy: "DIRECT"),
       RuntimeRule(index: 3, type: "PROCESS-NAME", payload: "Safari", policy: "DIRECT"),
       RuntimeRule(index: 4, type: "RULE-SET", payload: "OpenAI", policy: "Proxy"),
-      RuntimeRule(index: 5, type: "MATCH", payload: "", policy: "Fallback")
+      RuntimeRule(index: 5, type: "MATCH", payload: "", policy: "Fallback"),
     ]
     let builder = RuleExplanationBuilder()
 
@@ -3080,28 +3079,28 @@ final class ConfigNormalizerTests: XCTestCase {
       for: connection,
       rules: [
         RuntimeRule(index: 1, type: "DST-PORT", payload: "443", policy: "Proxy"),
-        RuntimeRule(index: 2, type: "MATCH", payload: "", policy: "Fallback")
+        RuntimeRule(index: 2, type: "MATCH", payload: "", policy: "Fallback"),
       ]
     )
     let sourcePort = builder.explanation(
       for: connection,
       rules: [
         RuntimeRule(index: 1, type: "SRC-PORT", payload: "50000-50100", policy: "DIRECT"),
-        RuntimeRule(index: 2, type: "MATCH", payload: "", policy: "Fallback")
+        RuntimeRule(index: 2, type: "MATCH", payload: "", policy: "Fallback"),
       ]
     )
     let inboundPort = builder.explanation(
       for: connection,
       rules: [
         RuntimeRule(index: 1, type: "IN-PORT", payload: "7890", policy: "Proxy"),
-        RuntimeRule(index: 2, type: "MATCH", payload: "", policy: "Fallback")
+        RuntimeRule(index: 2, type: "MATCH", payload: "", policy: "Fallback"),
       ]
     )
     let sourceIP = builder.explanation(
       for: connection,
       rules: [
         RuntimeRule(index: 1, type: "SRC-IP-CIDR", payload: "192.168.1.0/24", policy: "DIRECT"),
-        RuntimeRule(index: 2, type: "MATCH", payload: "", policy: "Fallback")
+        RuntimeRule(index: 2, type: "MATCH", payload: "", policy: "Fallback"),
       ]
     )
 

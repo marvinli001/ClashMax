@@ -70,7 +70,7 @@ struct MihomoAPIClient: Sendable {
 
   func configs() async throws -> [String: Any] {
     let data = try await data(for: request(path: "/configs"))
-    return (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+    return try (JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
   }
 
   func updateMode(_ mode: RunMode) async throws {
@@ -165,7 +165,7 @@ struct MihomoAPIClient: Sendable {
 
   func proxyProviders() async throws -> [String: Any] {
     let data = try await data(for: request(path: "/providers/proxies"))
-    return (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+    return try (JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
   }
 
   func structuredProxyProviders() async throws -> [ProxyProvider] {
@@ -203,7 +203,7 @@ struct MihomoAPIClient: Sendable {
 
   func ruleProviders() async throws -> [RuleProvider] {
     let data = try await data(for: request(path: "/providers/rules"))
-    let object = (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+    let object = try (JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
     let providers = object["providers"] as? [String: Any] ?? object
     return providers.compactMap { name, value in
       guard let provider = value as? [String: Any] else { return nil }
@@ -259,10 +259,10 @@ struct MihomoAPIClient: Sendable {
         path: apiPath("proxies", proxy, "delay"),
         queryItems: [
           URLQueryItem(name: "url", value: testURL.absoluteString),
-          URLQueryItem(name: "timeout", value: String(timeout))
+          URLQueryItem(name: "timeout", value: String(timeout)),
         ]
       ))
-    } catch ClientError.httpStatus(let status) where status == 503 || status == 504 {
+    } catch let ClientError.httpStatus(status) where status == 503 || status == 504 {
       // Mihomo uses 503/504 when the controller itself is reachable but the
       // selected node or probe target cannot complete the delay check. Keep
       // those distinct from controller-unavailable failures without masking
@@ -391,7 +391,7 @@ struct MihomoAPIClient: Sendable {
               @unknown default:
                 data = Data()
               }
-              continuation.yield(try decode(data))
+              try continuation.yield(decode(data))
               receiveNext()
             } catch {
               continuation.finish(throwing: error)
@@ -562,7 +562,8 @@ struct MihomoAPIClient: Sendable {
         return value
       }
       if let matchingKey = object.keys.first(where: { $0.caseInsensitiveCompare(key) == .orderedSame }),
-         let value = object[matchingKey] as? [String: Any] {
+         let value = object[matchingKey] as? [String: Any]
+      {
         return value
       }
     }

@@ -11,6 +11,7 @@ final class ProxyPreviewStore {
       onProfilePreviewGroupsChange?(profilePreviewGroups)
     }
   }
+
   var previewRuntimeActive = false
   var previewSelections: [String: String] = [:]
 
@@ -54,8 +55,8 @@ final class ProxyPreviewStore {
         groups = []
       }
       guard !Task.isCancelled else { return }
-      guard let self, self.refreshGeneration == generation else { return }
-      self.profilePreviewGroups = groups
+      guard let self, refreshGeneration == generation else { return }
+      profilePreviewGroups = groups
     }
     refreshTask = task
     return task
@@ -126,7 +127,8 @@ final class ProxyPreviewStore {
     return groups.map { group in
       var group = group
       if let chosen = previewSelections[group.name],
-         group.nodes.contains(where: { $0.name == chosen }) {
+         group.nodes.contains(where: { $0.name == chosen })
+      {
         group.selected = chosen
       }
       return group

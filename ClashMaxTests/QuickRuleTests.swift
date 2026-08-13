@@ -1,5 +1,5 @@
-import XCTest
 @testable import ClashMax
+import XCTest
 
 /// Issue #15 phase B: adding a rule from the row that showed the problem, and then being told
 /// whether that rule is actually the one deciding the route.
@@ -196,7 +196,7 @@ final class QuickRuleTests: XCTestCase {
     let draft = QuickRuleDraft.targeting(host: "example.com", policy: "Proxy")
     let rules = [
       RuntimeRule(index: 1, type: "DomainKeyword", payload: "example", policy: "DIRECT", raw: "DOMAIN-KEYWORD,example,DIRECT"),
-      RuntimeRule(index: 2, type: "DomainSuffix", payload: "example.com", policy: "Proxy", raw: "DOMAIN-SUFFIX,example.com,Proxy")
+      RuntimeRule(index: 2, type: "DomainSuffix", payload: "example.com", policy: "Proxy", raw: "DOMAIN-SUFFIX,example.com,Proxy"),
     ]
 
     let input = try? XCTUnwrap(draft.verificationInput)
@@ -216,7 +216,7 @@ final class QuickRuleTests: XCTestCase {
     let draft = QuickRuleDraft.targeting(host: "example.com", policy: "Proxy")
     let rules = [
       RuntimeRule(index: 1, type: "DomainSuffix", payload: "example.com", policy: "Proxy", raw: "DOMAIN-SUFFIX,example.com,Proxy"),
-      RuntimeRule(index: 2, type: "DomainKeyword", payload: "example", policy: "DIRECT", raw: "DOMAIN-KEYWORD,example,DIRECT")
+      RuntimeRule(index: 2, type: "DomainKeyword", payload: "example", policy: "DIRECT", raw: "DOMAIN-KEYWORD,example,DIRECT"),
     ]
 
     let trace = RuleMatchSimulator().simulate(
@@ -433,7 +433,7 @@ final class QuickRuleTests: XCTestCase {
     let snippet = QuickRuleLibrary.disabling(raw, in: QuickRuleLibrary.targetSnippet(in: [], activeProfileID: nil))
     let runtimeRules = [
       RuntimeRule(index: 1, type: "DomainSuffix", payload: "ads.example.com", policy: "REJECT", raw: raw),
-      RuntimeRule(index: 2, type: "Match", payload: "", policy: "DIRECT", raw: "MATCH,DIRECT")
+      RuntimeRule(index: 2, type: "Match", payload: "", policy: "DIRECT", raw: "MATCH,DIRECT"),
     ]
 
     let candidates = RuntimeRuleCandidateBuilder.candidates(

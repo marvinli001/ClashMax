@@ -74,7 +74,7 @@ struct SocksProxyReadinessProbe: ProxyPortReadinessProbing {
     }.value
   }
 
-  nonisolated private static func performGreeting(host: String, port: Int, timeout: TimeInterval) throws {
+  private nonisolated static func performGreeting(host: String, port: Int, timeout: TimeInterval) throws {
     var hints = addrinfo()
     hints.ai_family = AF_UNSPEC
     hints.ai_socktype = SOCK_STREAM
@@ -102,7 +102,7 @@ struct SocksProxyReadinessProbe: ProxyPortReadinessProbing {
     throw lastError ?? AppError.coreNotReady("Could not connect to mixed-port.")
   }
 
-  nonisolated private static func performConnect(host: String, port: Int, timeout: TimeInterval) throws {
+  private nonisolated static func performConnect(host: String, port: Int, timeout: TimeInterval) throws {
     var hints = addrinfo()
     hints.ai_family = AF_UNSPEC
     hints.ai_socktype = SOCK_STREAM
@@ -131,7 +131,7 @@ struct SocksProxyReadinessProbe: ProxyPortReadinessProbing {
     throw lastError ?? AppError.coreNotReady("Could not connect to TCP listener.")
   }
 
-  nonisolated private static func connectAndVerifySOCKS(candidate: UnsafeMutablePointer<addrinfo>, timeout: TimeInterval) throws {
+  private nonisolated static func connectAndVerifySOCKS(candidate: UnsafeMutablePointer<addrinfo>, timeout: TimeInterval) throws {
     let descriptor = try connect(candidate: candidate, timeout: timeout)
     defer { close(descriptor) }
 
@@ -167,7 +167,7 @@ struct SocksProxyReadinessProbe: ProxyPortReadinessProbing {
     }
   }
 
-  nonisolated private static func connect(candidate: UnsafeMutablePointer<addrinfo>, timeout: TimeInterval) throws -> Int32 {
+  private nonisolated static func connect(candidate: UnsafeMutablePointer<addrinfo>, timeout: TimeInterval) throws -> Int32 {
     let address = candidate.pointee
     let descriptor = socket(address.ai_family, address.ai_socktype, address.ai_protocol)
     guard descriptor >= 0 else {
@@ -188,7 +188,7 @@ struct SocksProxyReadinessProbe: ProxyPortReadinessProbing {
     return descriptor
   }
 
-  nonisolated private static func setTimeout(_ timeout: TimeInterval, descriptor: Int32, option: Int32) {
+  private nonisolated static func setTimeout(_ timeout: TimeInterval, descriptor: Int32, option: Int32) {
     let seconds = Int(timeout)
     let microseconds = Int((timeout - TimeInterval(seconds)) * 1_000_000)
     var value = timeval(tv_sec: seconds, tv_usec: Int32(microseconds))

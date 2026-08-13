@@ -1,6 +1,6 @@
+@testable import ClashMax
 import CoreLocation
 import XCTest
-@testable import ClashMax
 
 /// Issue #26: macOS 14+ withholds `CWInterface.ssid()` from apps without Location Services access,
 /// so ClashMax reported a bare "No Wi-Fi SSID detected." while the Mac was plainly on Wi-Fi.
@@ -42,7 +42,7 @@ final class WiFiNetworkInfoTests: XCTestCase {
       (.notDetermined, .locationAuthorizationNotDetermined, .requestLocationAuthorization),
       (.denied, .locationAuthorizationDenied, .openLocationSettings),
       (.restricted, .locationAuthorizationDenied, .openLocationSettings),
-      (.servicesDisabled, .locationServicesDisabled, .openLocationSettings)
+      (.servicesDisabled, .locationServicesDisabled, .openLocationSettings),
     ]
 
     for (authorization, expectedReason, expectedAction) in cases {

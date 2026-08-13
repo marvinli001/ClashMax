@@ -54,8 +54,7 @@ final class AppUpdateController: NSObject {
   }
 
   var versionSummary: String {
-    let displayVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.0"
-    return displayVersion
+    Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.0"
   }
 
   func checkForUpdates() {

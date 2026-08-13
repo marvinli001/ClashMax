@@ -1,6 +1,6 @@
+@testable import ClashMax
 import SwiftUI
 import XCTest
-@testable import ClashMax
 
 /// Issue #27: sections whose height grew with their row count used to push a page past the window.
 /// SwiftUI grows a flexible frame to fit an oversized child instead of clipping it, so the overflow

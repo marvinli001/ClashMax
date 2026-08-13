@@ -1,6 +1,6 @@
+@testable import ClashMax
 import Foundation
 import XCTest
-@testable import ClashMax
 
 /// Sparkle filters appcast items by minimum system version only. An
 /// Apple-silicon-only build therefore has to be published under a channel that

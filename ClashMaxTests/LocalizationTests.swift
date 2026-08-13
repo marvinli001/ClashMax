@@ -1,6 +1,6 @@
+@testable import ClashMax
 import Foundation
 import XCTest
-@testable import ClashMax
 
 final class LocalizationTests: XCTestCase {
   private let activeCatalogKeysThatMustRemainExtracted = [
@@ -34,7 +34,7 @@ final class LocalizationTests: XCTestCase {
     "Src Port",
     "Stop Core",
     "Trust this dashboard to receive the API secret automatically",
-    "Trusted for automatic secret autofill"
+    "Trusted for automatic secret autofill",
   ]
 
   func testStatusSectionAppearsAfterHome() {
@@ -449,7 +449,7 @@ final class LocalizationTests: XCTestCase {
         "所有网络代理节点和远程 Provider 均使用此上游。",
       "Not configured.": "未配置。",
       "Connection test failed. You can still save this endpoint for offline use.":
-        "连接测试失败。仍可保存此端点以供离线使用。"
+        "连接测试失败。仍可保存此端点以供离线使用。",
     ]
 
     for (key, expected) in expectedTranslations {
@@ -532,7 +532,7 @@ final class LocalizationTests: XCTestCase {
       "Sub-rule name": "子规则名称",
       "Sub-rule condition must be NETWORK,tcp or NETWORK,udp.": "子规则条件必须是 NETWORK,tcp 或 NETWORK,udp。",
       "Source IP CIDR must be a valid CIDR range.": "源 IP CIDR 必须是有效的 CIDR 网段。",
-      "Port rule value must be a port or range between 1 and 65535.": "端口规则值必须是 1 到 65535 之间的端口或范围。"
+      "Port rule value must be a port or range between 1 and 65535.": "端口规则值必须是 1 到 65535 之间的端口或范围。",
     ]
 
     for (key, expected) in expectedTranslations {

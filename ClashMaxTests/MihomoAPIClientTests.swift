@@ -1,5 +1,5 @@
-import XCTest
 @testable import ClashMax
+import XCTest
 
 final class MihomoAPIClientTests: XCTestCase {
   func testCoreAPIEndpointBuildsBracketedIPv6BaseURL() throws {
@@ -40,8 +40,7 @@ final class MihomoAPIClientTests: XCTestCase {
     do {
       _ = try await iterator.next()
       XCTFail("Expected invalid URL to throw")
-    } catch MihomoAPIClient.ClientError.invalidURL {
-    }
+    } catch MihomoAPIClient.ClientError.invalidURL {}
   }
 
   func testVersionRequestUsesConfiguredTimeout() async throws {
@@ -103,7 +102,8 @@ final class MihomoAPIClientTests: XCTestCase {
       XCTFail("Expected the delay probe to fail")
     } catch {
       guard let clientError = error as? MihomoAPIClient.ClientError,
-            case let .delayTestHTTPStatus(status) = clientError else {
+            case let .delayTestHTTPStatus(status) = clientError
+      else {
         return XCTFail("Expected delayTestHTTPStatus, got \(error)")
       }
       XCTAssertEqual(status, 503)
@@ -131,7 +131,8 @@ final class MihomoAPIClientTests: XCTestCase {
       XCTFail("Expected the delay probe to fail")
     } catch {
       guard let clientError = error as? MihomoAPIClient.ClientError,
-            case let .httpStatus(status) = clientError else {
+            case let .httpStatus(status) = clientError
+      else {
         return XCTFail("Expected httpStatus, got \(error)")
       }
       XCTAssertEqual(status, 401)
@@ -149,7 +150,7 @@ final class MihomoAPIClientTests: XCTestCase {
     try await client.selectProxy(group: "Auto/Asia", proxy: "HK 01")
 
     let request = try XCTUnwrap(recorder.lastRequest)
-    XCTAssertEqual(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.percentEncodedPath, "/proxies/Auto%2FAsia")
+    XCTAssertEqual(try URLComponents(url: XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.percentEncodedPath, "/proxies/Auto%2FAsia")
   }
 
   func testProxyGroupsUseRuntimeProxyTypesForNodeRows() async throws {
@@ -231,7 +232,7 @@ final class MihomoAPIClientTests: XCTestCase {
 
     let request = try XCTUnwrap(recorder.lastRequest)
     XCTAssertEqual(request.httpMethod, "GET")
-    XCTAssertEqual(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.percentEncodedPath, "/providers/proxies/remote%2Fsub/healthcheck")
+    XCTAssertEqual(try URLComponents(url: XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.percentEncodedPath, "/providers/proxies/remote%2Fsub/healthcheck")
   }
 
   func testProxyProvidersAreDecodedIntoStructuredRows() async throws {
@@ -276,9 +277,9 @@ final class MihomoAPIClientTests: XCTestCase {
         ),
         proxies: [
           ProxyNode(name: "Japan", type: "Vless", delay: nil, isSelectable: true, providerName: "remote"),
-          ProxyNode(name: "DIRECT", type: "Direct", delay: nil, isSelectable: true, providerName: "remote")
+          ProxyNode(name: "DIRECT", type: "Direct", delay: nil, isSelectable: true, providerName: "remote"),
         ]
-      )
+      ),
     ])
   }
 
@@ -312,7 +313,7 @@ final class MihomoAPIClientTests: XCTestCase {
         format: "yaml",
         updatedAt: ISO8601DateFormatter().date(from: "2026-05-05T09:30:00Z"),
         ruleCount: 42
-      )
+      ),
     ])
   }
 
@@ -339,7 +340,7 @@ final class MihomoAPIClientTests: XCTestCase {
         providerName: "local",
         raw: "DOMAIN-SUFFIX,example.com,DIRECT"
       ),
-      RuntimeRule(index: 2, type: "MATCH", payload: "", policy: "Proxy", raw: "MATCH,Proxy")
+      RuntimeRule(index: 2, type: "MATCH", payload: "", policy: "Proxy", raw: "MATCH,Proxy"),
     ])
   }
 
@@ -352,7 +353,7 @@ final class MihomoAPIClientTests: XCTestCase {
     var request = try XCTUnwrap(recorder.lastRequest)
     XCTAssertEqual(request.httpMethod, "PUT")
     XCTAssertEqual(
-      URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.percentEncodedPath,
+      try URLComponents(url: XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.percentEncodedPath,
       "/providers/proxies/remote%2Fsub"
     )
     XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer abc")
@@ -361,7 +362,7 @@ final class MihomoAPIClientTests: XCTestCase {
     request = try XCTUnwrap(recorder.lastRequest)
     XCTAssertEqual(request.httpMethod, "PUT")
     XCTAssertEqual(
-      URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.percentEncodedPath,
+      try URLComponents(url: XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.percentEncodedPath,
       "/providers/rules/rules%2Fsub"
     )
   }
@@ -415,7 +416,7 @@ final class MihomoAPIClientTests: XCTestCase {
     try await client.closeConnection(id: "abc/123")
     var request = try XCTUnwrap(recorder.lastRequest)
     XCTAssertEqual(request.httpMethod, "DELETE")
-    XCTAssertEqual(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.percentEncodedPath, "/connections/abc%2F123")
+    XCTAssertEqual(try URLComponents(url: XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.percentEncodedPath, "/connections/abc%2F123")
     XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer abc")
 
     try await client.closeAllConnections()
@@ -428,18 +429,18 @@ final class MihomoAPIClientTests: XCTestCase {
     XCTAssertEqual(request.httpMethod, "PUT")
     XCTAssertEqual(request.url?.path, "/configs")
     XCTAssertEqual(request.url?.query, "force=true")
-    XCTAssertEqual(String(data: try XCTUnwrap(recorder.lastBody), encoding: .utf8), #"{"path":"/tmp/runtime.yaml"}"#)
+    XCTAssertEqual(try String(data: XCTUnwrap(recorder.lastBody), encoding: .utf8), #"{"path":"/tmp/runtime.yaml"}"#)
 
     try await client.updateIPv6(true)
     request = try XCTUnwrap(recorder.lastRequest)
     XCTAssertEqual(request.httpMethod, "PATCH")
     XCTAssertEqual(request.url?.path, "/configs")
-    XCTAssertEqual(String(data: try XCTUnwrap(recorder.lastBody), encoding: .utf8), #"{"ipv6":true}"#)
+    XCTAssertEqual(try String(data: XCTUnwrap(recorder.lastBody), encoding: .utf8), #"{"ipv6":true}"#)
 
     try await client.setTunEnabled(false)
     request = try XCTUnwrap(recorder.lastRequest)
     XCTAssertEqual(request.httpMethod, "PATCH")
     XCTAssertEqual(request.url?.path, "/configs")
-    XCTAssertEqual(String(data: try XCTUnwrap(recorder.lastBody), encoding: .utf8), #"{"tun":{"enable":false}}"#)
+    XCTAssertEqual(try String(data: XCTUnwrap(recorder.lastBody), encoding: .utf8), #"{"tun":{"enable":false}}"#)
   }
 }

@@ -59,7 +59,6 @@ enum DashboardHomeBackgroundStyle {
 }
 
 private struct DashboardSceneBackground: View {
-
   var body: some View {
     Color(nsColor: .windowBackgroundColor)
       .ignoresSafeArea()

@@ -1,6 +1,6 @@
-import XCTest
-import SQLite3
 @testable import ClashMax
+import SQLite3
+import XCTest
 
 final class ClashXMigrationParserTests: XCTestCase {
   func testParserExtractsProviderURLsDuplicatesPortsBypassSystemProxyAndUnsupportedKeys() throws {
@@ -52,7 +52,7 @@ final class ClashXMigrationParserTests: XCTestCase {
       [
         "https://example.com/sub.yaml",
         "https://mirror.example.com/sub.yaml",
-        "https://airport.example.com/api"
+        "https://airport.example.com/api",
       ]
     )
     XCTAssertEqual(report.duplicateSubscriptionURLs, ["https://example.com/sub.yaml"])
@@ -70,7 +70,7 @@ final class ClashXMigrationParserTests: XCTestCase {
         // identity is "<carbon modifier mask>-<carbon key code>": ⇧⌘R, ⇧⌘P, ⌃⌥S.
         "restartCore:restart:768-15",
         "toggleProxy:startStop:768-35",
-        "systemProxy:toggleSystemProxy:6144-1"
+        "systemProxy:toggleSystemProxy:6144-1",
       ]
     )
     XCTAssertTrue(report.warnings.contains { $0.contains("unknownAction") })

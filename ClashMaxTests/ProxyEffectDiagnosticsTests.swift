@@ -1,8 +1,7 @@
-import XCTest
 @testable import ClashMax
+import XCTest
 
 final class ProxyEffectDiagnosticsTests: XCTestCase {
-
   // MARK: Helpers
 
   private func makeInfo(
@@ -95,7 +94,7 @@ final class ProxyEffectDiagnosticsTests: XCTestCase {
           title: "Default route",
           status: .fail,
           message: "No utun default route present"
-        )
+        ),
       ],
       updatedAt: Date(timeIntervalSince1970: 1_700_000_000),
       externalProbeIncluded: true
@@ -243,7 +242,7 @@ final class ProxyEffectDiagnosticsTests: XCTestCase {
 
   func testProbeHostMatchingDirectRuleIsReportedWithRuleAndPolicy() {
     let rules = [
-      RuntimeRule(index: 1, type: "DOMAIN-SUFFIX", payload: "ip.sb", policy: "DIRECT")
+      RuntimeRule(index: 1, type: "DOMAIN-SUFFIX", payload: "ip.sb", policy: "DIRECT"),
     ]
 
     let snapshot = ProxyEffectDiagnosticsBuilder.build(

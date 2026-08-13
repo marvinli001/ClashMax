@@ -27,7 +27,7 @@ struct ConfigNormalizer {
     "IP-CIDR6,::1/128,DIRECT,no-resolve",
     "IP-CIDR6,fc00::/7,DIRECT,no-resolve",
     "IP-CIDR6,fe80::/10,DIRECT,no-resolve",
-    "MATCH,Proxy"
+    "MATCH,Proxy",
   ]
 
   enum NormalizerError: Error, CustomStringConvertible, LocalizedError, Sendable {
@@ -115,7 +115,7 @@ struct ConfigNormalizer {
     if overrides.externalControllerCORS.enabled {
       root["external-controller-cors"] = [
         "allow-origins": overrides.externalControllerCORS.effectiveAllowedOrigins,
-        "allow-private-network": overrides.externalControllerCORS.allowPrivateNetwork
+        "allow-private-network": overrides.externalControllerCORS.allowPrivateNetwork,
       ]
     } else {
       root.removeValue(forKey: "external-controller-cors")
@@ -212,7 +212,8 @@ struct ConfigNormalizer {
     }
 
     if !selectionOverrides.isEmpty,
-       var groups = root["proxy-groups"] as? [Any] {
+       var groups = root["proxy-groups"] as? [Any]
+    {
       for index in groups.indices {
         guard var group = groups[index] as? [String: Any],
               let groupName = group["name"] as? String,
@@ -239,11 +240,11 @@ struct ConfigNormalizer {
       root = try applyingUpstreamProxy(upstreamProxyEndpoint, to: root)
     }
     applyOutboundProxyDNSBootstrap(
-      for: [options.manualProxyEndpoint, options.upstreamProxyEndpoint].compactMap { $0 },
+      for: [options.manualProxyEndpoint, options.upstreamProxyEndpoint].compactMap(\.self),
       to: &root
     )
     try applyTCPOnlyOutboundPolicy(
-      for: [options.manualProxyEndpoint, options.upstreamProxyEndpoint].compactMap { $0 },
+      for: [options.manualProxyEndpoint, options.upstreamProxyEndpoint].compactMap(\.self),
       overrides: overrides,
       options: options,
       to: &root
@@ -273,13 +274,14 @@ struct ConfigNormalizer {
   ) throws {
     if let manualProxyEndpoint = options.manualProxyEndpoint,
        let upstreamProxyEndpoint = options.upstreamProxyEndpoint,
-       manualProxyEndpoint.endpoint.id == upstreamProxyEndpoint.endpoint.id {
+       manualProxyEndpoint.endpoint.id == upstreamProxyEndpoint.endpoint.id
+    {
       throw NormalizerError.invalidProfile(
         "The manual proxy and upstream proxy cannot use the same endpoint."
       )
     }
 
-    for resolvedEndpoint in [options.manualProxyEndpoint, options.upstreamProxyEndpoint].compactMap({ $0 }) {
+    for resolvedEndpoint in [options.manualProxyEndpoint, options.upstreamProxyEndpoint].compactMap(\.self) {
       let endpoint = resolvedEndpoint.endpoint
       guard resolvedEndpoint.isReady else {
         throw NormalizerError.invalidProfile(
@@ -325,7 +327,8 @@ struct ConfigNormalizer {
 
     for group in (root["proxy-groups"] as? [Any] ?? []).compactMap({ $0 as? [String: Any] }) {
       if let name = Self.trimmedString(group["name"]),
-         Self.isReservedOutboundProxyName(name) {
+         Self.isReservedOutboundProxyName(name)
+      {
         throw NormalizerError.invalidProfile(
           "Runtime config contains a name reserved for ClashMax outbound proxies."
         )
@@ -359,10 +362,10 @@ struct ConfigNormalizer {
         [
           "name": "Proxy",
           "type": "select",
-          "proxies": [name]
-        ]
+          "proxies": [name],
+        ],
       ],
-      "rules": Self.manualProxyRules
+      "rules": Self.manualProxyRules,
     ]
   }
 
@@ -385,7 +388,7 @@ struct ConfigNormalizer {
       "reject-drop",
       "dns",
       "pass",
-      "compatible"
+      "compatible",
     ]
 
     var proxies = root["proxies"] as? [Any] ?? []
@@ -498,7 +501,7 @@ struct ConfigNormalizer {
       "name": Self.outboundProxyName(for: endpoint.id),
       "type": endpoint.kind.rawValue,
       "server": endpoint.host,
-      "port": endpoint.port
+      "port": endpoint.port,
     ]
     switch endpoint.kind {
     case .socks5:
@@ -561,7 +564,7 @@ struct ConfigNormalizer {
 
     var ipv4 = in_addr()
     if normalized.withCString({ inet_pton(AF_INET, $0, &ipv4) }) == 1 {
-      return UInt32(bigEndian: ipv4.s_addr) & 0xFF00_0000 == 0x7F00_0000
+      return UInt32(bigEndian: ipv4.s_addr) & 0xff00_0000 == 0x7f00_0000
     }
 
     var ipv6 = in6_addr()
@@ -580,7 +583,7 @@ struct ConfigNormalizer {
       return true
     }
     var ipv6 = in6_addr()
-    return normalized.withCString({ inet_pton(AF_INET6, $0, &ipv6) }) == 1
+    return normalized.withCString { inet_pton(AF_INET6, $0, &ipv6) } == 1
   }
 
   private static func normalizedIPAddressHost(_ host: String) -> String {
@@ -635,11 +638,13 @@ struct ConfigNormalizer {
 
   private func mergedRuntimeValue(base: Any, overlay: Any) -> Any {
     if let baseMap = base as? [String: Any],
-       let overlayMap = overlay as? [String: Any] {
+       let overlayMap = overlay as? [String: Any]
+    {
       return mergedRuntimeMapping(base: baseMap, overlay: overlayMap)
     }
     if let baseList = base as? [Any],
-       let overlayList = overlay as? [Any] {
+       let overlayList = overlay as? [Any]
+    {
       return baseList + overlayList
     }
     return overlay
@@ -894,8 +899,8 @@ struct ConfigNormalizer {
         "url": AppConstants.defaultDelayTestURL.absoluteString,
         "interval": 300,
         "timeout": 5000,
-        "lazy": true
-      ]
+        "lazy": true,
+      ],
     ]
     let filter = options.filter.trimmingCharacters(in: .whitespacesAndNewlines)
     if !filter.isEmpty {
@@ -928,8 +933,8 @@ struct ConfigNormalizer {
         "name": primaryGroupName,
         "type": "select",
         "use": [providerName],
-        "proxies": ([autoGroupName.isEmpty ? nil : autoGroupName, "DIRECT"] as [String?]).compactMap { $0 }
-      ]
+        "proxies": ([autoGroupName.isEmpty ? nil : autoGroupName, "DIRECT"] as [String?]).compactMap(\.self),
+      ],
     ]
     if !autoGroupName.isEmpty {
       proxyGroups.append([
@@ -938,16 +943,16 @@ struct ConfigNormalizer {
         "use": [providerName],
         "url": AppConstants.defaultDelayTestURL.absoluteString,
         "interval": 300,
-        "lazy": true
+        "lazy": true,
       ])
     }
 
     var root: [String: Any] = [
       "proxy-providers": [
-        providerName: provider
+        providerName: provider,
       ],
       "proxy-groups": proxyGroups,
-      "rules": generatedRules(template: options.generatedTemplate, finalRulePolicy: finalRulePolicy)
+      "rules": generatedRules(template: options.generatedTemplate, finalRulePolicy: finalRulePolicy),
     ]
     if SubscriptionTemplateKind.emitsDNSBase(version: options.generatedTemplateVersion) {
       root["dns"] = providerTemplateDNS(ipv6Enabled: ipv6Enabled)
@@ -965,7 +970,7 @@ struct ConfigNormalizer {
       "fake-ip-range": TunSettings.defaultFakeIPRange,
       "default-nameserver": [
         "223.5.5.5",
-        "119.29.29.29"
+        "119.29.29.29",
       ],
       // Required by the `respect-rules: true` above: Mihomo refuses to start without it, so the
       // generated template used to produce a config the core rejected outright (issue #16). Plain
@@ -973,15 +978,15 @@ struct ConfigNormalizer {
       // work before any proxy is reachable.
       "proxy-server-nameserver": [
         "223.5.5.5",
-        "119.29.29.29"
+        "119.29.29.29",
       ],
       "fallback-filter": [
         "geoip": true,
         "geoip-code": "CN",
         "ipcidr": [
-          "240.0.0.0/4"
-        ]
-      ]
+          "240.0.0.0/4",
+        ],
+      ],
     ]
     applyTunDNSOverlay(.chinaNetworkDefault, to: &dns)
     return dns
@@ -998,7 +1003,7 @@ struct ConfigNormalizer {
         "IP-CIDR,10.0.0.0/8,DIRECT,no-resolve",
         "IP-CIDR,172.16.0.0/12,DIRECT,no-resolve",
         "IP-CIDR,192.168.0.0/16,DIRECT,no-resolve",
-        "MATCH,\(finalRulePolicy)"
+        "MATCH,\(finalRulePolicy)",
       ]
     case .cnDirect:
       return [
@@ -1007,7 +1012,7 @@ struct ConfigNormalizer {
         "GEOIP,private,DIRECT,no-resolve",
         "GEOSITE,cn,DIRECT",
         "GEOIP,CN,DIRECT,no-resolve",
-        "MATCH,\(finalRulePolicy)"
+        "MATCH,\(finalRulePolicy)",
       ]
     }
   }
@@ -1072,7 +1077,7 @@ enum ProfileConfigInspector {
     "ovpn",
     "gost",
     "sudoku",
-    "hy"
+    "hy",
   ]
 
   static func format(of source: String) throws -> ProfileConfigFormat {
@@ -1113,7 +1118,8 @@ enum ProfileConfigInspector {
       throw ProfileConfigFormatError.empty
     }
     if let decoded = decodedBase64ProviderContent(from: source),
-       isProviderContentText(decoded) {
+       isProviderContentText(decoded)
+    {
       return .base64ShareLinkList
     }
     do {
@@ -1182,7 +1188,7 @@ enum ProfileConfigInspector {
       "tproxy-port",
       "tun",
       "dns",
-      "mode"
+      "mode",
     ].contains { root[$0] != nil }
   }
 
@@ -1295,7 +1301,7 @@ struct ProfilePreviewBuilder {
             delay: nil,
             isSelectable: false,
             providerName: providerName
-          )
+          ),
         ]
       }
       if nodes.isEmpty {
@@ -1366,15 +1372,15 @@ struct ProfilePreviewBuilder {
         type: "url-test",
         selected: nil,
         nodes: providerNodes
-      )
+      ),
     ]
   }
 
   private func providerURINodes(from source: String) -> [ProxyNode] {
     let candidates = [
       source,
-      ProfileConfigInspector.decodedBase64ProviderContent(from: source)
-    ].compactMap { $0 }
+      ProfileConfigInspector.decodedBase64ProviderContent(from: source),
+    ].compactMap(\.self)
 
     for candidate in candidates {
       let nodes = candidate
@@ -1415,7 +1421,8 @@ struct ProfilePreviewBuilder {
     if let fragmentStart = uri.firstIndex(of: "#") {
       let encodedName = String(uri[uri.index(after: fragmentStart)...])
       if let decoded = encodedName.removingPercentEncoding,
-         !decoded.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+         !decoded.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      {
         return decoded
       }
     }

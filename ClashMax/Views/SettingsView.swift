@@ -151,7 +151,6 @@ struct SettingsView: View {
             }
             .help("Open System Settings > General > Login Items & Extensions.")
           }
-
         }
 
         if appModel.developerMode {
@@ -413,11 +412,11 @@ struct SettingsView: View {
                   appModel.resolveCurrentNetworkSSIDAvailability()
                 }
               )
-                .frame(width: 560)
-                .padding(18)
-                .onAppear {
-                  appModel.refreshCurrentNetworkPolicyState()
-                }
+              .frame(width: 560)
+              .padding(18)
+              .onAppear {
+                appModel.refreshCurrentNetworkPolicyState()
+              }
             }
           }
 
@@ -1075,10 +1074,10 @@ private struct NetworkPolicySettingsPopover: View {
           statusMessage ?? String(localized: "Current network not checked."),
           systemImage: currentNetwork.statusSymbolName
         )
-          .font(.caption)
-          .foregroundStyle(currentNetwork.isBlockedByLocationAuthorization ? .orange : .secondary)
-          .lineLimit(2)
-          .fixedSize(horizontal: false, vertical: true)
+        .font(.caption)
+        .foregroundStyle(currentNetwork.isBlockedByLocationAuthorization ? .orange : .secondary)
+        .lineLimit(2)
+        .fixedSize(horizontal: false, vertical: true)
         Spacer()
         if let recoveryTitle = NetworkPolicyStatusPresenter.recoveryActionTitle(for: currentNetwork) {
           Button(recoveryTitle) {
@@ -1125,12 +1124,12 @@ private struct NetworkPolicySettingsPopover: View {
           .toggleStyle(.checkbox)
 
         HStack {
-            if let error = draftRule.validationError {
-              Label(error, systemImage: "exclamationmark.triangle.fill")
-                .font(.caption)
-                .foregroundStyle(.orange)
-                .lineLimit(2)
-            }
+          if let error = draftRule.validationError {
+            Label(error, systemImage: "exclamationmark.triangle.fill")
+              .font(.caption)
+              .foregroundStyle(.orange)
+              .lineLimit(2)
+          }
           Spacer()
           Button {
             addRule()
@@ -1313,7 +1312,7 @@ private struct ExternalDashboardProfilesPopover: View {
                   .foregroundStyle(.secondary)
                   .help("Secret stored in Keychain")
               }
-              if !profile.readOnly && profile.trustedForSecretAutofill {
+              if !profile.readOnly, profile.trustedForSecretAutofill {
                 Image(systemName: "shield.checkered")
                   .foregroundStyle(.secondary)
                   .help("Trusted for automatic secret autofill")
@@ -1370,7 +1369,7 @@ struct RuleOverlayDraftPopover: View {
     self.isApplying = isApplying
     self.errorMessage = errorMessage
     self.onApply = onApply
-    self._draft = State(initialValue: baseline)
+    _draft = State(initialValue: baseline)
   }
 
   private var pendingChangeCount: Int {
@@ -1466,7 +1465,7 @@ struct RuleOverlaySettingsEditor: View {
     showsHeader: Bool = true,
     showsEnableToggle: Bool = true
   ) {
-    self._settings = settings
+    _settings = settings
     self.showsHeader = showsHeader
     self.showsEnableToggle = showsEnableToggle
   }
@@ -1575,12 +1574,12 @@ struct RuleOverlaySettingsEditor: View {
         }
 
         HStack {
-            if let error = draftRule.validationError {
-              Label(error, systemImage: "exclamationmark.triangle.fill")
-                .font(.caption)
-                .foregroundStyle(.orange)
-                .lineLimit(2)
-            }
+          if let error = draftRule.validationError {
+            Label(error, systemImage: "exclamationmark.triangle.fill")
+              .font(.caption)
+              .foregroundStyle(.orange)
+              .lineLimit(2)
+          }
           Spacer()
           Button {
             addRule()
@@ -1607,12 +1606,12 @@ struct RuleOverlaySettingsEditor: View {
           .textFieldStyle(.roundedBorder)
 
         HStack {
-            if let error = draftDisabledRuleMatcher.validationError {
-              Label(error, systemImage: "exclamationmark.triangle.fill")
-                .font(.caption)
-                .foregroundStyle(.orange)
-                .lineLimit(2)
-            }
+          if let error = draftDisabledRuleMatcher.validationError {
+            Label(error, systemImage: "exclamationmark.triangle.fill")
+              .font(.caption)
+              .foregroundStyle(.orange)
+              .lineLimit(2)
+          }
           Spacer()
           Button {
             addDisabledRuleMatcher()
@@ -2027,10 +2026,10 @@ private struct RuleOverlayEditableRuleRow: View {
         )
       }
 
-        Text(rule.runtimeRule)
-          .font(.system(.caption2, design: .monospaced))
-          .foregroundStyle(rule.validationError == nil ? Color.secondary : Color.orange)
-          .lineLimit(1)
+      Text(rule.runtimeRule)
+        .font(.system(.caption2, design: .monospaced))
+        .foregroundStyle(rule.validationError == nil ? Color.secondary : Color.orange)
+        .lineLimit(1)
         .truncationMode(.middle)
     }
     .padding(.horizontal, 8)
@@ -2961,7 +2960,6 @@ private struct ExternalControlSettingsSheet: View {
     }
   }
 
-  @ViewBuilder
   private func labeledField<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
     HStack(alignment: .center, spacing: 14) {
       Text(localizedSettingsText(title))

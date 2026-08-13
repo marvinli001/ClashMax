@@ -188,7 +188,6 @@ struct QuickRuleSheet: View {
 
   /// The point of phase B3: after applying, say what the rule actually does now — including the
   /// case that matters most, a rule that is live but loses to something earlier in the list.
-  @ViewBuilder
   private var verdictSection: some View {
     VStack(alignment: .leading, spacing: 6) {
       Text("Effect")
@@ -263,7 +262,8 @@ struct QuickRuleSheet: View {
     var seen = Set<String>()
     var suggestions: [String] = []
     for name in runtimeData.proxyGroups.map(\.name) + ["DIRECT", "REJECT", "REJECT-DROP", "PASS"]
-    where !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      where !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    {
       if seen.insert(name.uppercased()).inserted {
         suggestions.append(name)
       }
@@ -452,7 +452,7 @@ enum QuickRuleVerdict: Equatable {
       (String(localized: "destination port"), input.destinationPort),
       (String(localized: "source port"), input.sourcePort),
       (String(localized: "inbound port"), input.inboundPort),
-      (String(localized: "process"), input.process)
+      (String(localized: "process"), input.process),
     ]
     let described = fields
       .filter { !$0.1.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
