@@ -63,6 +63,13 @@ cd "$ROOT_DIR"
 # reformats different lines and CI disagrees with the machine the change was
 # written on. .swiftformat carries the pinned version as --minversion, which is
 # also what the CI install step downloads, so this is the one place it lives.
+#
+# The match is exact, in both directions. A newer build is not "good enough"
+# here: .swiftformat opts rules *out* with --disable rather than listing the set
+# it wants with --rules, so a rule that a later release adds and enables by
+# default applies to this repo too. Formatting with it produces a diff that CI,
+# which downloads exactly the pinned version, then rejects -- which is the
+# disagreement this check exists to prevent.
 # ---------------------------------------------------------------------------
 
 SWIFTFORMAT="${SWIFTFORMAT:-swiftformat}"
@@ -78,15 +85,22 @@ EOF
   exit 2
 fi
 
-MIN_VERSION="$(sed -n 's/^--minversion[[:space:]]\{1,\}//p' "$CONFIG" | tr -d '[:space:]')"
-HAVE_VERSION="$("$SWIFTFORMAT" --version)"
-if [ -n "$MIN_VERSION" ]; then
-  oldest="$(printf '%s\n%s\n' "$MIN_VERSION" "$HAVE_VERSION" | sort -V | head -1)"
-  if [ "$oldest" != "$MIN_VERSION" ]; then
-    printf 'swiftformat %s is older than the pinned %s; run `brew upgrade swiftformat`.\n' \
-      "$HAVE_VERSION" "$MIN_VERSION" >&2
-    exit 2
-  fi
+PINNED_VERSION="$(sed -n 's/^--minversion[[:space:]]\{1,\}//p' "$CONFIG" | tr -d '[:space:]')"
+HAVE_VERSION="$("$SWIFTFORMAT" --version | tr -d '[:space:]')"
+if [ -n "$PINNED_VERSION" ] && [ "$HAVE_VERSION" != "$PINNED_VERSION" ]; then
+  cat >&2 <<EOF
+swiftformat $HAVE_VERSION is installed; this repository is pinned to $PINNED_VERSION.
+
+Install the pinned build:
+
+  https://github.com/nicklockwood/SwiftFormat/releases/tag/$PINNED_VERSION
+
+or point SWIFTFORMAT at a $PINNED_VERSION binary. If the intent is to move the
+pin, bump --minversion in .swiftformat together with SWIFTFORMAT_VERSION and
+SWIFTFORMAT_LINUX_SHA256 in .github/workflows/ci.yml; CI asserts the two agree,
+and the whole tree has to be reformatted with the new build in that same commit.
+EOF
+  exit 2
 fi
 
 # ---------------------------------------------------------------------------

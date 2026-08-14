@@ -76,6 +76,16 @@ Formatting is enforced by [SwiftFormat](https://github.com/nicklockwood/SwiftFor
 The pinned version lives in one place — the `--minversion` line in
 `.swiftformat` — and CI asserts that the version it installs matches it.
 
+The gate requires that exact version, not merely a new enough one. `.swiftformat`
+opts rules *out* with `--disable` instead of listing the set it wants with
+`--rules`, so a rule a later release adds and enables by default would apply here
+too: formatting with a newer build produces a diff that CI, pinned to the older
+one, rejects. `brew install swiftformat` tracks latest, so once Homebrew moves
+past the pin, install the pinned release directly or point `SWIFTFORMAT` at it —
+the script's error message carries the download link. Moving the pin means
+bumping `.swiftformat` and `.github/workflows/ci.yml` together and reformatting
+the tree with the new build in that same commit.
+
 ```bash
 brew install swiftformat
 script/swiftformat_lint.sh          # check the files this change touches
