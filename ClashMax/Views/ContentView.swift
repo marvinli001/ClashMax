@@ -25,32 +25,32 @@ struct ContentView: View {
         }
         .clipped()
       }
-        .toolbar {
-          // Deliberately the default placement, not `.navigation`: `.navigation` sits
-          // *before* the window title and pushes the app name off the leading edge.
-          // The title owns the leading edge, these global runtime controls own the
-          // trailing side, and they are the only things in here — per-page controls
-          // stay inside the page (see `AdaptivePage.pageActionBar`) so they never read
-          // as an extension of the run-mode picker.
-          ToolbarItemGroup {
-            RunModePicker(selection: Binding(
-              get: { appModel.overrides.mode },
-              set: { appModel.requestMode($0) }
-            ))
+      .toolbar {
+        // Deliberately the default placement, not `.navigation`: `.navigation` sits
+        // *before* the window title and pushes the app name off the leading edge.
+        // The title owns the leading edge, these global runtime controls own the
+        // trailing side, and they are the only things in here — per-page controls
+        // stay inside the page (see `AdaptivePage.pageActionBar`) so they never read
+        // as an extension of the run-mode picker.
+        ToolbarItemGroup {
+          RunModePicker(selection: Binding(
+            get: { appModel.overrides.mode },
+            set: { appModel.requestMode($0) }
+          ))
 
-            Button {
-              if appModel.canStopRuntime {
-                appModel.stop()
-              } else {
-                appModel.start()
-              }
-            } label: {
-              Label(toolbarRunTitle, systemImage: toolbarRunSymbol)
+          Button {
+            if appModel.canStopRuntime {
+              appModel.stop()
+            } else {
+              appModel.start()
             }
-            .keyboardShortcut("r", modifiers: [.command])
-            .disabled(!appModel.canStopRuntime && appModel.readinessIssue != nil)
+          } label: {
+            Label(toolbarRunTitle, systemImage: toolbarRunSymbol)
           }
+          .keyboardShortcut("r", modifiers: [.command])
+          .disabled(!appModel.canStopRuntime && appModel.readinessIssue != nil)
         }
+      }
     }
     .sheet(isPresented: initialTunHelperPromptPresented) {
       if let prompt = appModel.initialTunHelperPrompt {
@@ -205,7 +205,6 @@ private struct InitialTunHelperPromptSheet: View {
     }
   }
 
-  @ViewBuilder
   private var statusLine: some View {
     HStack(alignment: .firstTextBaseline, spacing: 8) {
       if prompt.isWaitingOnSystemSettings {
@@ -382,13 +381,13 @@ enum StatusStripSupplemental {
       switch tone {
       case .info:
         return .blue
-        case .success:
-          return .green
-        case .warning:
-          return .orange
-        }
+      case .success:
+        return .green
+      case .warning:
+        return .orange
       }
     }
+  }
 }
 
 struct StatusStripContent: View {

@@ -1,5 +1,5 @@
-import XCTest
 @testable import ClashMax
+import XCTest
 
 final class ExternalControlHealthCheckerTests: XCTestCase {
   func testControllerHealthCheckUsesVersionEndpointAndBearerSecret() async throws {
@@ -33,7 +33,7 @@ final class ExternalControlHealthCheckerTests: XCTestCase {
     XCTAssertEqual(request.httpMethod, "HEAD")
     XCTAssertEqual(request.url?.host, "dashboard.example")
     XCTAssertEqual(request.url?.path, "/app")
-    XCTAssertNil(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems)
+    XCTAssertNil(try URLComponents(url: XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems)
     XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
   }
 
@@ -44,7 +44,7 @@ final class ExternalControlHealthCheckerTests: XCTestCase {
       timeout: 0.5
     )
 
-    let result = await checker.checkDashboard(baseURL: try XCTUnwrap(URL(string: "https://dashboard.example")))
+    let result = try await checker.checkDashboard(baseURL: XCTUnwrap(URL(string: "https://dashboard.example")))
 
     XCTAssertEqual(result.status, .healthy)
     XCTAssertEqual(recorder.requests.map(\.httpMethod), ["HEAD", "GET"])
@@ -57,7 +57,7 @@ final class ExternalControlHealthCheckerTests: XCTestCase {
       timeout: 0.5
     )
 
-    let result = await checker.checkDashboard(baseURL: try XCTUnwrap(URL(string: "https://dashboard.example")))
+    let result = try await checker.checkDashboard(baseURL: XCTUnwrap(URL(string: "https://dashboard.example")))
 
     XCTAssertEqual(result.status, .failed)
     XCTAssertEqual(result.httpStatus, 503)

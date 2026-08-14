@@ -681,11 +681,10 @@ final class TunnelHelperClient {
     }
 
     automaticBootstrapRepairFingerprint = fingerprint
-    let repairedState = try await reregisterEnabledHelper(
+    return try await reregisterEnabledHelper(
       fingerprint: fingerprint,
       openSystemSettingsWhenApprovalRequired: openSystemSettingsWhenApprovalRequired
     )
-    return repairedState
   }
 
   private func reregisterEnabledHelper(
@@ -936,7 +935,7 @@ final class ContinuationBox<Value: Sendable>: @unchecked Sendable {
     if let pendingResult {
       resultToResume = pendingResult
       didAttach = false
-      if shouldRunPendingCleanup && !cleanupHasRun {
+      if shouldRunPendingCleanup, !cleanupHasRun {
         cleanupToRun = cleanup
         cleanupHasRun = true
       } else {
@@ -977,15 +976,15 @@ final class ContinuationBox<Value: Sendable>: @unchecked Sendable {
     }
     pendingResult = result
     shouldRunPendingCleanup = runCleanup
-    continuationToResume = self.continuation
+    continuationToResume = continuation
     if continuationToResume != nil, runCleanup, !cleanupHasRun {
-      cleanupToRun = self.cleanup
+      cleanupToRun = cleanup
       cleanupHasRun = true
     } else {
       cleanupToRun = nil
     }
-    self.continuation = nil
-    self.cleanup = nil
+    continuation = nil
+    cleanup = nil
     lock.unlock()
 
     if let continuationToResume {

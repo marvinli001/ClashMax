@@ -20,7 +20,7 @@ enum MenuBarPanelLayout {
   static let statusCornerRadius: CGFloat = 8
   static let trafficChartHeight: CGFloat = 52
   static let footerButtonMinWidth: CGFloat = 0
-  static let plannedWidthRange: ClosedRange<CGFloat> = 300 ... 330
+  static let plannedWidthRange: ClosedRange<CGFloat> = 300...330
 }
 
 /// The whole panel presented by `MenuBarExtra(...).menuBarExtraStyle(.window)`.
@@ -194,7 +194,6 @@ struct MenuBarView: View {
         }
 
         HStack(spacing: 5) {
-
           Button {
             NSApp.terminate(nil)
           } label: {

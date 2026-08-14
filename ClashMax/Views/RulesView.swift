@@ -185,7 +185,7 @@ private struct RuleSearchQuery {
         return (rule.providerName ?? "").localizedCaseInsensitiveContains(value(after: "provider=", in: term))
       }
       return [rule.type, rule.payload, rule.policy, rule.providerName, rule.raw]
-        .compactMap { $0 }
+        .compactMap(\.self)
         .joined(separator: " ")
         .localizedCaseInsensitiveContains(term)
     }
@@ -307,9 +307,9 @@ private struct RuleProviderList: View {
       provider.vehicleType,
       provider.behavior,
       provider.format,
-      provider.ruleCount.map { "\($0) rules" }
+      provider.ruleCount.map { "\($0) rules" },
     ]
-    .compactMap { $0 }
+    .compactMap(\.self)
     .filter { !$0.isEmpty }
     .joined(separator: " - ")
   }

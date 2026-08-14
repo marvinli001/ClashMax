@@ -1,6 +1,6 @@
+@testable import ClashMax
 import Darwin
 import XCTest
-@testable import ClashMax
 
 final class TunnelHelperValidationTests: XCTestCase {
   func testBundledCoreRootUsesExecutableURLWhenLaunchDaemonProgramIsRelative() {
@@ -297,7 +297,7 @@ final class TunnelHelperValidationTests: XCTestCase {
       DispatchQueue.global().async {
         startGate.wait()
         responseRecorder.append(Result {
-          (secret, try start(service, fixture: fixture, secret: secret))
+          try (secret, start(service, fixture: fixture, secret: secret))
         })
         done.leave()
       }
@@ -308,7 +308,7 @@ final class TunnelHelperValidationTests: XCTestCase {
 
     XCTAssertEqual(done.wait(timeout: .now() + 5), .success)
     let responses = try responseRecorder.values.map { try $0.get() }
-    let accepted = responses.filter { $0.1.ok }
+    let accepted = responses.filter(\.1.ok)
     let rejected = responses.filter { !$0.1.ok }
 
     XCTAssertEqual(accepted.count, 1)
@@ -389,7 +389,7 @@ final class TunnelHelperValidationTests: XCTestCase {
     service.status { response in
       payload = response
     }
-    let status = HelperClientResponse(payload: try XCTUnwrap(payload))
+    let status = try HelperClientResponse(payload: XCTUnwrap(payload))
 
     XCTAssertFalse(status.running)
     XCTAssertNil(outputHandle.readabilityHandler)
@@ -533,7 +533,7 @@ private func start(_ service: HelperService, fixture: PathFixture, secret: Strin
   ) { response in
     payload = response
   }
-  return HelperClientResponse(payload: try XCTUnwrap(payload))
+  return try HelperClientResponse(payload: XCTUnwrap(payload))
 }
 
 private func restart(_ service: HelperService, fixture: PathFixture, secret: String) throws -> HelperClientResponse {
@@ -546,7 +546,7 @@ private func restart(_ service: HelperService, fixture: PathFixture, secret: Str
   ) { response in
     payload = response
   }
-  return HelperClientResponse(payload: try XCTUnwrap(payload))
+  return try HelperClientResponse(payload: XCTUnwrap(payload))
 }
 
 private func stop(_ service: HelperService) {
@@ -559,7 +559,8 @@ private func waitForLaunchState(fixture: PathFixture, expected: String) throws -
   var lastState = ""
   while Date() < deadline {
     if let state = try? String(contentsOf: stateURL, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
-       !state.isEmpty {
+       !state.isEmpty
+    {
       lastState = state
       if state == expected {
         return state
@@ -579,7 +580,7 @@ private func isProcessAlive(_ pid: pid_t) -> Bool {
 
 private func waitForProcessExit(_ process: Process) {
   let deadline = Date().addingTimeInterval(3)
-  while process.isRunning && Date() < deadline {
+  while process.isRunning, Date() < deadline {
     Thread.sleep(forTimeInterval: 0.02)
   }
 }

@@ -1,0 +1,114 @@
+# SwiftFormat configuration for ClashMax.
+#
+# Rollout is deliberately two-step (see docs/DEVELOPMENT.md):
+#   1. this file + a CI gate that only lints files a change already touches;
+#   2. one separate, mechanical "format the whole tree" commit later.
+# So a large residual violation count in untouched files is expected for now.
+#
+# Every option below was measured against the tree, not guessed: the settings
+# describe the style the codebase already uses, so adopting the formatter is a
+# normalization pass rather than a restyle.
+#
+# Run `script/swiftformat_lint.sh --help` for the local workflow.
+
+# Pinned so a stale local binary cannot disagree with CI about what is legal.
+# script/swiftformat_lint.sh parses this line; CI installs exactly this version.
+--minversion 0.62.1
+
+# Matches SWIFT_VERSION in project.yml. Keeps SwiftFormat from applying
+# rewrites that need a newer language mode than the project builds with.
+--swiftversion 6.0
+
+
+# MARK: - House style (measured against the existing tree)
+
+# 2 spaces. Measured: 298 offending lines at --indent 2 vs 86,990 at --indent 4.
+--indent 2
+
+# `0..<count`, `1...65_535`. Measured: 361 unspaced vs 19 spaced.
+--ranges no-space
+
+# `0xc0`, not `0xC0`. Measured: 32 lowercase vs 10 uppercase.
+--hex-literal-case lowercase
+
+# Digit grouping is a readability decision the author already made
+# (`16_384`, `65_535`); the default thresholds would strip those underscores.
+--decimal-grouping ignore
+--hex-grouping ignore
+--binary-grouping ignore
+--octal-grouping ignore
+
+# os.Logger builds its message from @escaping autoclosures, so a property
+# referenced inside `\(...)` is captured in an escaping closure and Swift
+# requires the explicit `self.`. SwiftFormat does not model that and stripped it,
+# which broke the ClashMaxNetworkExtension build. Naming the log methods here is
+# what keeps `redundantSelf` from producing code that does not compile.
+--self-required log,trace,debug,info,notice,warning,error,critical,fault
+
+# Only rename unused *closure* parameters to `_`. Renaming an unused function
+# parameter to `bar _: Int` deletes the name that documented the call site,
+# which matters for protocol conformances and delegate methods.
+--strip-unused-args closure-only
+
+# No --max-width on purpose: re-wrapping long lines is the single largest and
+# least reviewable diff a formatter can produce, and line length here is
+# already sane (p99 = 114 columns).
+
+
+# MARK: - Disabled rules
+#
+# The dividing line: the formatter normalizes mechanical syntax (whitespace,
+# indentation, ordering, redundant tokens, trailing commas). It does not
+# restructure or delete code a human wrote deliberately — that belongs in code
+# review, where someone can judge intent.
+
+# Wrapping single-line bodies. `var id: String { rawValue }` and
+# `if index != nil { isDiscarding = false }` are deliberate and idiomatic;
+# expanding them adds ~630 lines of pure noise across the tree.
+--disable wrapPropertyBodies
+--disable wrapIfStatementBodies
+--disable wrapIfExpressionBodies
+--disable wrapFunctionBodies
+--disable wrapLoopBodies
+
+# Rewrites `var x: T; if … { x = a } else { x = b }` into
+# `var x: T = if … { a } else { b }`. Restructures control flow, and the result
+# reads worse for the multi-branch `if let` chains this codebase uses.
+--disable conditionalAssignment
+
+# Promotes an explanatory `//` above a declaration to `///`, which changes what
+# Quick Help shows. Implementation rationale is not API documentation, and this
+# codebase writes a lot of the former.
+--disable docComments
+
+# Deletes hand-written memberwise initializers. Code deletion, not formatting.
+--disable redundantMemberwiseInit
+
+# Removing a SwiftUI `Group` changes ViewBuilder view identity, which can change
+# animation and @State behavior. Not a formatting concern.
+--disable redundantSwiftUIGroup
+
+# Rewrites `!` / `try!` in tests into XCTUnwrap-shaped code. That is a test
+# authoring decision (187 sites), not whitespace.
+--disable noForceUnwrapInTests
+--disable noForceTryInTests
+
+# Strips `throws` / `async` from a declaration that no longer needs it. That is
+# an API change, not a formatting one: 53 of the 55 sites here are XCTest
+# methods, where `throws` is deliberate headroom so the next `try XCTUnwrap`
+# does not have to touch the signature.
+--disable redundantThrows
+--disable redundantAsync
+
+# Rewrites `<T: Encodable>` into `some Encodable`. Also a declaration change,
+# and it degrades where the parameter had no constraint to speak of --
+# `<T>` becomes `some Any`.
+--disable opaqueGenericParameters
+
+
+# MARK: - Excluded paths
+
+# DerivedData* holds the checked-out SPM dependencies (Sparkle, Yams, Pow, …):
+# ~170 Swift files that are not ours. Only these directories contain Swift at
+# all, so the list stays short on purpose.
+--exclude DerivedData*,.build,.worktrees

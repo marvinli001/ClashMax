@@ -36,8 +36,8 @@ struct TrafficChartGeometry: Equatable {
     let ceiling = Self.niceCeiling(atLeast: max(peak, Self.minimumCeiling))
     let divisor = Double(ceiling)
     self.ceiling = ceiling
-    self.download = window.map { min(Double($0.download) / divisor, 1) }
-    self.upload = window.map { min(Double($0.upload) / divisor, 1) }
+    download = window.map { min(Double($0.download) / divisor, 1) }
+    upload = window.map { min(Double($0.upload) / divisor, 1) }
   }
 
   private static func window(_ samples: [TrafficSample], slots: Int) -> [TrafficSample] {
@@ -118,7 +118,7 @@ struct AnimatableVector: VectorArithmetic {
     let count = max(lhs.values.count, rhs.values.count)
     var result = [Double]()
     result.reserveCapacity(count)
-    for index in 0 ..< count {
+    for index in 0..<count {
       let left = index < lhs.values.count ? lhs.values[index] : 0
       let right = index < rhs.values.count ? rhs.values[index] : 0
       result.append(operation(left, right))
@@ -162,7 +162,7 @@ struct TrafficSeriesShape: Shape {
     }
 
     path.move(to: points[0])
-    for index in 0 ..< (points.count - 1) {
+    for index in 0..<(points.count - 1) {
       let previous = points[max(index - 1, 0)]
       let start = points[index]
       let end = points[index + 1]

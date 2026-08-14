@@ -1,7 +1,7 @@
+@testable import ClashMax
 import Foundation
 import ServiceManagement
 import XCTest
-@testable import ClashMax
 
 @MainActor
 final class BackupRestoreServiceTests: XCTestCase {
@@ -18,7 +18,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       profileStore: sourceStore,
       settings: makeSettings(defaults: source.defaults),
       proxyPreview: ProxyPreviewStore(defaults: source.defaults),
-      runtimeSnippetLibrary: await makeSnippetLibrary(paths: source.paths),
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: source.paths),
       includeSecrets: false,
       password: nil
     )
@@ -54,7 +54,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       profileStore: restoreStore,
       settings: makeSettings(defaults: restore.defaults),
       proxyPreview: ProxyPreviewStore(defaults: restore.defaults),
-      runtimeSnippetLibrary: await makeSnippetLibrary(paths: restore.paths)
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: restore.paths)
     )
 
     XCTAssertEqual(summary.importedProfileCount, 0)
@@ -122,7 +122,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       profileStore: sourceProfileStore,
       settings: makeSettings(defaults: source.defaults),
       proxyPreview: ProxyPreviewStore(defaults: source.defaults),
-      runtimeSnippetLibrary: await makeSnippetLibrary(paths: source.paths),
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: source.paths),
       outboundProxyStore: sourceEndpointStore,
       includeSecrets: false,
       password: nil
@@ -153,7 +153,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       profileStore: restoreProfileStore,
       settings: makeSettings(defaults: restore.defaults),
       proxyPreview: ProxyPreviewStore(defaults: restore.defaults),
-      runtimeSnippetLibrary: await makeSnippetLibrary(paths: restore.paths),
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: restore.paths),
       outboundProxyStore: restoreEndpointStore
     )
 
@@ -189,7 +189,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       profileStore: sourceProfileStore,
       settings: makeSettings(defaults: source.defaults),
       proxyPreview: ProxyPreviewStore(defaults: source.defaults),
-      runtimeSnippetLibrary: await makeSnippetLibrary(paths: source.paths),
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: source.paths),
       outboundProxyStore: sourceEndpointStore,
       includeSecrets: true,
       password: "correct-password"
@@ -216,7 +216,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       profileStore: restoreProfileStore,
       settings: makeSettings(defaults: restore.defaults),
       proxyPreview: ProxyPreviewStore(defaults: restore.defaults),
-      runtimeSnippetLibrary: await makeSnippetLibrary(paths: restore.paths),
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: restore.paths),
       outboundProxyStore: restoreEndpointStore
     )
 
@@ -242,7 +242,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       profileStore: skippedProfileStore,
       settings: makeSettings(defaults: skippedRestore.defaults),
       proxyPreview: ProxyPreviewStore(defaults: skippedRestore.defaults),
-      runtimeSnippetLibrary: await makeSnippetLibrary(paths: skippedRestore.paths),
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: skippedRestore.paths),
       outboundProxyStore: skippedEndpointStore
     )
     let skippedResolved = try await skippedEndpointStore.resolve(id: endpoint.id)
@@ -296,7 +296,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       profileStore: sourceProfileStore,
       settings: makeSettings(defaults: source.defaults),
       proxyPreview: ProxyPreviewStore(defaults: source.defaults),
-      runtimeSnippetLibrary: await makeSnippetLibrary(paths: source.paths),
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: source.paths),
       outboundProxyStore: sourceEndpointStore,
       includeSecrets: false,
       password: nil
@@ -354,7 +354,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       profileStore: restoreProfileStore,
       settings: makeSettings(defaults: restore.defaults),
       proxyPreview: ProxyPreviewStore(defaults: restore.defaults),
-      runtimeSnippetLibrary: await makeSnippetLibrary(paths: restore.paths),
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: restore.paths),
       outboundProxyStore: restoreEndpointStore
     )
 
@@ -423,7 +423,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       profileStore: sourceProfileStore,
       settings: makeSettings(defaults: source.defaults),
       proxyPreview: ProxyPreviewStore(defaults: source.defaults),
-      runtimeSnippetLibrary: await makeSnippetLibrary(paths: source.paths),
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: source.paths),
       outboundProxyStore: sourceEndpointStore,
       includeSecrets: false,
       password: nil
@@ -455,7 +455,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       profileStore: restoreProfileStore,
       settings: makeSettings(defaults: restore.defaults),
       proxyPreview: ProxyPreviewStore(defaults: restore.defaults),
-      runtimeSnippetLibrary: await makeSnippetLibrary(paths: restore.paths),
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: restore.paths),
       outboundProxyStore: restoreEndpointStore
     )
 
@@ -483,7 +483,7 @@ final class BackupRestoreServiceTests: XCTestCase {
             kind: .http,
             host: "invalid.example",
             port: 0
-          )
+          ),
         ]
       ),
       (
@@ -502,7 +502,7 @@ final class BackupRestoreServiceTests: XCTestCase {
             kind: .socks5,
             host: "second.example",
             port: 1080
-          )
+          ),
         ]
       ),
       (
@@ -519,9 +519,9 @@ final class BackupRestoreServiceTests: XCTestCase {
             kind: .socks5,
             host: "two.example",
             port: 1080
-          )
+          ),
         ]
-      )
+      ),
     ]
 
     for (name, endpoints) in cases {
@@ -580,7 +580,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       profileStore: sourceProfileStore,
       settings: makeSettings(defaults: source.defaults),
       proxyPreview: ProxyPreviewStore(defaults: source.defaults),
-      runtimeSnippetLibrary: await makeSnippetLibrary(paths: source.paths),
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: source.paths),
       outboundProxyStore: sourceEndpointStore,
       includeSecrets: true,
       password: "correct-password"
@@ -611,7 +611,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       profileStore: store,
       settings: settings,
       proxyPreview: preview,
-      runtimeSnippetLibrary: await makeSnippetLibrary(paths: fixture.paths),
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: fixture.paths),
       includeSecrets: false,
       password: nil
     )
@@ -637,7 +637,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       profileStore: sourceStore,
       settings: sourceSettings,
       proxyPreview: sourcePreview,
-      runtimeSnippetLibrary: await makeSnippetLibrary(paths: source.paths),
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: source.paths),
       includeSecrets: true,
       password: "correct-password"
     )
@@ -658,7 +658,7 @@ final class BackupRestoreServiceTests: XCTestCase {
         profileStore: wrongPasswordStore,
         settings: makeSettings(defaults: wrongPasswordFixture.defaults),
         proxyPreview: ProxyPreviewStore(defaults: wrongPasswordFixture.defaults),
-        runtimeSnippetLibrary: await makeSnippetLibrary(paths: wrongPasswordFixture.paths)
+        runtimeSnippetLibrary: makeSnippetLibrary(paths: wrongPasswordFixture.paths)
       )
     } handler: { error in
       XCTAssertEqual(error as? BackupRestoreError, .invalidPassword)
@@ -674,7 +674,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       profileStore: restoreStore,
       settings: makeSettings(defaults: restore.defaults),
       proxyPreview: ProxyPreviewStore(defaults: restore.defaults),
-      runtimeSnippetLibrary: await makeSnippetLibrary(paths: restore.paths)
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: restore.paths)
     )
 
     let restoredProfile = try XCTUnwrap(restoreStore.profiles.first)
@@ -696,7 +696,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       profileStore: sourceStore,
       settings: makeSettings(defaults: source.defaults),
       proxyPreview: ProxyPreviewStore(defaults: source.defaults),
-      runtimeSnippetLibrary: await makeSnippetLibrary(paths: source.paths),
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: source.paths),
       includeSecrets: true,
       password: "correct-password"
     )
@@ -721,7 +721,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       profileStore: restoreStore,
       settings: makeSettings(defaults: restore.defaults),
       proxyPreview: ProxyPreviewStore(defaults: restore.defaults),
-      runtimeSnippetLibrary: await makeSnippetLibrary(paths: restore.paths)
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: restore.paths)
     )
 
     let restoredProfile = try XCTUnwrap(restoreStore.profiles.first)
@@ -743,7 +743,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       profileStore: sourceStore,
       settings: makeSettings(defaults: source.defaults),
       proxyPreview: ProxyPreviewStore(defaults: source.defaults),
-      runtimeSnippetLibrary: await makeSnippetLibrary(paths: source.paths),
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: source.paths),
       includeSecrets: false,
       password: nil
     )
@@ -768,7 +768,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       profileStore: restoreStore,
       settings: makeSettings(defaults: restore.defaults),
       proxyPreview: ProxyPreviewStore(defaults: restore.defaults),
-      runtimeSnippetLibrary: await makeSnippetLibrary(paths: restore.paths)
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: restore.paths)
     )
 
     let restoredProfile = try XCTUnwrap(restoreStore.profiles.first)
@@ -791,7 +791,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       profileStore: sourceStore,
       settings: makeSettings(defaults: source.defaults),
       proxyPreview: ProxyPreviewStore(defaults: source.defaults),
-      runtimeSnippetLibrary: await makeSnippetLibrary(paths: source.paths),
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: source.paths),
       includeSecrets: true,
       password: "correct-password"
     )
@@ -805,7 +805,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       profileStore: restoreStore,
       settings: makeSettings(defaults: restore.defaults),
       proxyPreview: ProxyPreviewStore(defaults: restore.defaults),
-      runtimeSnippetLibrary: await makeSnippetLibrary(paths: restore.paths)
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: restore.paths)
     )
 
     let restoredProfile = try XCTUnwrap(restoreStore.profiles.first)
@@ -826,7 +826,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       profileStore: sourceStore,
       settings: makeSettings(defaults: source.defaults),
       proxyPreview: ProxyPreviewStore(defaults: source.defaults),
-      runtimeSnippetLibrary: await makeSnippetLibrary(paths: source.paths),
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: source.paths),
       includeSecrets: true,
       password: "correct-password"
     )
@@ -847,7 +847,7 @@ final class BackupRestoreServiceTests: XCTestCase {
         profileStore: restoreStore,
         settings: makeSettings(defaults: restore.defaults),
         proxyPreview: ProxyPreviewStore(defaults: restore.defaults),
-        runtimeSnippetLibrary: await makeSnippetLibrary(paths: restore.paths)
+        runtimeSnippetLibrary: makeSnippetLibrary(paths: restore.paths)
       )
     } handler: { error in
       XCTAssertEqual(error as? BackupRestoreError, .invalidPassword)
@@ -868,7 +868,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       profileStore: store,
       settings: makeSettings(defaults: fixture.defaults),
       proxyPreview: preview,
-      runtimeSnippetLibrary: await makeSnippetLibrary(paths: fixture.paths),
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: fixture.paths),
       includeSecrets: false,
       password: nil
     )
@@ -878,7 +878,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       profileStore: store,
       settings: makeSettings(defaults: fixture.defaults),
       proxyPreview: preview,
-      runtimeSnippetLibrary: await makeSnippetLibrary(paths: fixture.paths)
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: fixture.paths)
     )
 
     XCTAssertEqual(summary.importedProfileCount, 1)
@@ -911,7 +911,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       profileStore: sourceStore,
       settings: sourceSettings,
       proxyPreview: ProxyPreviewStore(defaults: source.defaults),
-      runtimeSnippetLibrary: await makeSnippetLibrary(paths: source.paths),
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: source.paths),
       includeSecrets: false,
       password: nil
     )
@@ -937,7 +937,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       profileStore: restoreStore,
       settings: restoreSettings,
       proxyPreview: ProxyPreviewStore(defaults: restore.defaults),
-      runtimeSnippetLibrary: await makeSnippetLibrary(paths: restore.paths)
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: restore.paths)
     )
 
     XCTAssertEqual(restoreSettings.overrides.mixedPort, 17_777)
@@ -958,7 +958,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       profileStore: sourceStore,
       settings: makeSettings(defaults: source.defaults),
       proxyPreview: ProxyPreviewStore(defaults: source.defaults),
-      runtimeSnippetLibrary: await makeSnippetLibrary(paths: source.paths),
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: source.paths),
       includeSecrets: true,
       password: "correct-password"
     )
@@ -972,7 +972,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       profileStore: restoreStore,
       settings: makeSettings(defaults: restore.defaults),
       proxyPreview: ProxyPreviewStore(defaults: restore.defaults),
-      runtimeSnippetLibrary: await makeSnippetLibrary(paths: restore.paths)
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: restore.paths)
     )
 
     let restoredProfile = try XCTUnwrap(restoreStore.profiles.first)
@@ -1002,7 +1002,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       }),
       ("short-payload", { secrets in
         secrets.sealedPayload = Data(repeating: 0, count: 27)
-      })
+      }),
     ]
 
     for (name, mutate) in malformedBackups {
@@ -1027,7 +1027,7 @@ final class BackupRestoreServiceTests: XCTestCase {
           profileStore: restoreStore,
           settings: makeSettings(defaults: restore.defaults),
           proxyPreview: ProxyPreviewStore(defaults: restore.defaults),
-          runtimeSnippetLibrary: await makeSnippetLibrary(paths: restore.paths)
+          runtimeSnippetLibrary: makeSnippetLibrary(paths: restore.paths)
         )
       } handler: { error in
         self.assertInvalidBackup(error)
@@ -1041,7 +1041,7 @@ final class BackupRestoreServiceTests: XCTestCase {
     let manifestProfile = try XCTUnwrap(backup.profilesManifest.profiles.first)
     let manifestIndex = try XCTUnwrap(backup.profilesManifest.profiles.firstIndex(where: { $0.id == manifestProfile.id }))
     backup.profilesManifest.profiles[manifestIndex].subscriptionProviderOptions.requestHeaders = [
-      SubscriptionRequestHeader(id: UUID(), name: "Authorization", value: "")
+      SubscriptionRequestHeader(id: UUID(), name: "Authorization", value: ""),
     ]
     let malformedURL = source.root.appendingPathComponent("unknown-encrypted-header.clashmax-backup")
     try writeBackup(backup, to: malformedURL)
@@ -1062,7 +1062,7 @@ final class BackupRestoreServiceTests: XCTestCase {
         profileStore: restoreStore,
         settings: settings,
         proxyPreview: ProxyPreviewStore(defaults: restore.defaults),
-        runtimeSnippetLibrary: await makeSnippetLibrary(paths: restore.paths)
+        runtimeSnippetLibrary: makeSnippetLibrary(paths: restore.paths)
       )
     } handler: { error in
       self.assertInvalidBackup(error)
@@ -1077,7 +1077,7 @@ final class BackupRestoreServiceTests: XCTestCase {
   func testPreviewRejectsDuplicateManifestProfileIDs() async throws {
     let fixture = try BackupFixture()
     var backup = try await exportLocalBackup(in: fixture)
-    backup.profilesManifest.profiles.append(try XCTUnwrap(backup.profilesManifest.profiles.first))
+    try backup.profilesManifest.profiles.append(XCTUnwrap(backup.profilesManifest.profiles.first))
     let malformedURL = fixture.root.appendingPathComponent("duplicate-manifest.clashmax-backup")
     try writeBackup(backup, to: malformedURL)
 
@@ -1089,7 +1089,7 @@ final class BackupRestoreServiceTests: XCTestCase {
   func testPreviewRejectsDuplicateProfileSourceIDs() async throws {
     let fixture = try BackupFixture()
     var backup = try await exportLocalBackup(in: fixture)
-    backup.profileSources.append(try XCTUnwrap(backup.profileSources.first))
+    try backup.profileSources.append(XCTUnwrap(backup.profileSources.first))
     let malformedURL = fixture.root.appendingPathComponent("duplicate-sources.clashmax-backup")
     try writeBackup(backup, to: malformedURL)
 
@@ -1143,7 +1143,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       id: profileID,
       source: .subscription(id: profileID),
       requestHeaders: [
-        SubscriptionRequestHeader(id: headerID, name: "Authorization", value: "")
+        SubscriptionRequestHeader(id: headerID, name: "Authorization", value: ""),
       ]
     )
     let source = BackupProfileSource(
@@ -1158,10 +1158,10 @@ final class BackupRestoreServiceTests: XCTestCase {
           subscriptionURL: nil,
           requestHeaders: [
             BackupRequestHeaderSecret(headerID: headerID, value: "Bearer one"),
-            BackupRequestHeaderSecret(headerID: headerID, value: "Bearer two")
+            BackupRequestHeaderSecret(headerID: headerID, value: "Bearer two"),
           ],
           runtimeMergeYAML: nil
-        )
+        ),
       ]
     )
 
@@ -1188,7 +1188,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       id: profileID,
       source: .subscription(id: profileID),
       requestHeaders: [
-        SubscriptionRequestHeader(id: headerID, name: "Authorization", value: "")
+        SubscriptionRequestHeader(id: headerID, name: "Authorization", value: ""),
       ]
     )
     let source = BackupProfileSource(
@@ -1202,10 +1202,10 @@ final class BackupRestoreServiceTests: XCTestCase {
           profileID: profileID,
           subscriptionURL: nil,
           requestHeaders: [
-            BackupRequestHeaderSecret(headerID: unknownHeaderID, value: "Bearer hidden")
+            BackupRequestHeaderSecret(headerID: unknownHeaderID, value: "Bearer hidden"),
           ],
           runtimeMergeYAML: nil
-        )
+        ),
       ]
     )
 
@@ -1234,7 +1234,7 @@ final class BackupRestoreServiceTests: XCTestCase {
         RuleOverlaySettings(
           enabled: true,
           prependRules: [
-            ManagedRuleOverlayRule(kind: .domainSuffix, value: "snippet.example", policy: "DIRECT")
+            ManagedRuleOverlayRule(kind: .domainSuffix, value: "snippet.example", policy: "DIRECT"),
           ]
         )
       )
@@ -1363,11 +1363,11 @@ final class BackupRestoreServiceTests: XCTestCase {
           RuleOverlaySettings(
             enabled: true,
             prependRules: [
-              ManagedRuleOverlayRule(kind: .domainSuffix, value: "bad.example", policy: "DIRECT")
+              ManagedRuleOverlayRule(kind: .domainSuffix, value: "bad.example", policy: "DIRECT"),
             ]
           )
         )
-      )
+      ),
     ]
     let backupURL = source.root.appendingPathComponent("invalid-snippet.clashmax-backup")
     try writeBackup(backup, to: backupURL)
@@ -1818,7 +1818,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       requestHeaders: [header]
     )
     try await store.updateSubscriptionProviderOptions(profile, options: options)
-    return (store, try XCTUnwrap(store.profiles.first))
+    return try (store, XCTUnwrap(store.profiles.first))
   }
 
   private func exportLocalBackup(in fixture: BackupFixture) async throws -> ClashMaxBackupFile {
@@ -1830,7 +1830,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       profileStore: store,
       settings: makeSettings(defaults: fixture.defaults),
       proxyPreview: ProxyPreviewStore(defaults: fixture.defaults),
-      runtimeSnippetLibrary: await makeSnippetLibrary(paths: fixture.paths),
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: fixture.paths),
       includeSecrets: false,
       password: nil
     )
@@ -1849,7 +1849,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       profileStore: store,
       settings: makeSettings(defaults: fixture.defaults),
       proxyPreview: ProxyPreviewStore(defaults: fixture.defaults),
-      runtimeSnippetLibrary: await makeSnippetLibrary(paths: fixture.paths),
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: fixture.paths),
       includeSecrets: true,
       password: password
     )
@@ -2029,7 +2029,8 @@ private actor FailOnceAfterStoringRuntimeSnippetLibraryDiskIO: RuntimeSnippetLib
 }
 
 private actor FailOnSecondOutboundProxyEndpointManifestSave:
-  OutboundProxyEndpointManifestStoring {
+  OutboundProxyEndpointManifestStoring
+{
   private let base = OutboundProxyEndpointDiskIO()
   private var saveCount = 0
 

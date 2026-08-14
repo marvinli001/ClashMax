@@ -8,4 +8,3 @@ enum DisplayFormatters {
     return formatter
   }()
 }
-

@@ -1,6 +1,6 @@
+@testable import ClashMax
 import Foundation
 import XCTest
-@testable import ClashMax
 
 @MainActor
 final class CoreProcessControllerTests: XCTestCase {
@@ -173,7 +173,7 @@ final class CoreProcessControllerTests: XCTestCase {
     let signalSpy = ReaperSignalSpy(mode: .allow)
     let rowsProvider = ReaperRowsProvider(rows: [
       [(pid: fixture.pid, command: fixture.command)],
-      [(pid: fixture.pid, command: "/usr/bin/yes")]
+      [(pid: fixture.pid, command: "/usr/bin/yes")],
     ])
     let reaper = MihomoOrphanProcessReaper(
       terminationGracePeriod: 0,
@@ -282,7 +282,7 @@ final class CoreProcessControllerTests: XCTestCase {
     let launcher = FakeProcessLauncher()
     let portChecker = FakePortChecker(listeners: [
       PortListener(port: 9097, pid: 1234, command: "/opt/homebrew/bin/mihomo -f /tmp/other.yaml"),
-      PortListener(port: 7890, pid: 4321, command: "/usr/local/bin/proxy")
+      PortListener(port: 7890, pid: 4321, command: "/usr/local/bin/proxy"),
     ])
     let controller = CoreProcessController(
       launcher: launcher,

@@ -10,7 +10,7 @@ struct RuntimeConfigMaterializationRequest: Sendable {
   var options: RuntimeConfigOptions = .default
   var protectedArtifactURLs: [URL] = []
   var retainedGenerationCount: Int = 2
-  var sideLoadedProviderContentPath: String? = nil
+  var sideLoadedProviderContentPath: String?
 }
 
 struct RuntimeConfigMaterializationResult: Sendable, Equatable {
@@ -18,7 +18,7 @@ struct RuntimeConfigMaterializationResult: Sendable, Equatable {
   var providerContentURL: URL?
 
   var artifactURLs: [URL] {
-    [runtimeConfigURL] + [providerContentURL].compactMap { $0 }
+    [runtimeConfigURL] + [providerContentURL].compactMap(\.self)
   }
 }
 

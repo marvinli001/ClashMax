@@ -8,7 +8,6 @@ import Foundation
 /// auth headers, and profile file names — while keeping the parts that make a log useful:
 /// schemes, hosts, ports, directory structure, error domains, and error codes.
 enum StructuredLogRedactor {
-
   /// The single replacement token. Every rule reuses it so a second pass over already
   /// redacted text is a no-op, which is what makes redaction idempotent.
   static let placeholder = "<redacted>"
@@ -86,7 +85,7 @@ enum StructuredLogRedactor {
   ) -> NSRegularExpression {
     // Every pattern here is a compile-time literal; a throw would be a programmer error.
     // swiftlint:disable:next force_try
-    return try! NSRegularExpression(pattern: pattern, options: options)
+    try! NSRegularExpression(pattern: pattern, options: options)
   }
 
   // MARK: - Public API

@@ -28,6 +28,24 @@ Open the generated `ClashMax.xcodeproj`, or run the main verification command:
 xcodebuild test -project ClashMax.xcodeproj -scheme ClashMax -destination 'platform=macOS' -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO
 ```
 
+Formatting is enforced by SwiftFormat, pinned to the exact version in
+`.swiftformat`:
+
+```bash
+brew install swiftformat
+script/swiftformat_lint.sh --fix
+```
+
+A newer SwiftFormat is rejected as well as an older one, because new releases
+enable new rules by default and would produce a diff CI does not accept. If
+Homebrew has moved past the pin, the script's error message links the release to
+install instead.
+
+CI checks only the files your change touches, so a file you did not open is
+allowed to be unformatted for now — the tree is being formatted incrementally.
+If `--fix` produces more churn than your change, that file simply had never been
+formatted; keep it as its own commit so the review stays readable.
+
 Run the localization gate before release, and whenever a change touches
 user-visible strings:
 
@@ -67,6 +85,7 @@ Before opening a PR, please confirm:
 - The PR explains the problem, the user-visible behavior, and the chosen fix.
 - Relevant screenshots or screen recordings are included for visible UI changes.
 - The narrowest useful verification command was run, and the result is included in the PR.
+- `script/swiftformat_lint.sh` passes for the files the change touches.
 - `script/localization_gate.sh` was run when the PR touches user-visible strings or release preparation.
 - New user-visible strings have a `zh-Hans` translation in `Resources/Localizable.xcstrings`; `script/localization_new_key_gate.sh` passes. Growing `script/localization_untranslated_allowlist.txt` needs a reason in the PR.
 - Documentation was updated when behavior, installation, release, or security expectations changed.

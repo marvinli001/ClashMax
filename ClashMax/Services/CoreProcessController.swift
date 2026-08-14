@@ -116,6 +116,7 @@ final class CoreProcessController {
       onStatusChange?(status)
     }
   }
+
   private(set) var recentCoreLog: String = ""
   private(set) var startupDiagnostics: [String] = []
   private let launcher: CoreProcessLaunching
@@ -169,7 +170,7 @@ final class CoreProcessController {
       await reaper.reapOrphans(coreURL: coreURL, configURL: configURL, workDirectory: workDirectory)
       try Task.checkCancellation()
 
-      let portsToCheck = Array(Set(([api.port] + [proxyPort].compactMap { $0 }))).sorted()
+      let portsToCheck = Array(Set([api.port] + [proxyPort].compactMap(\.self))).sorted()
       recordStartup("Checking runtime ports: \(portsToCheck.map(String.init).joined(separator: ", "))")
       let listeners = await portChecker.listeners(on: portsToCheck)
       if !listeners.isEmpty {
@@ -186,7 +187,7 @@ final class CoreProcessController {
         environment: [
           "SAFE_PATHS": workDirectory.path,
           "CLASHMAX_API_HOST": api.host,
-          "CLASHMAX_API_PORT": String(api.port)
+          "CLASHMAX_API_PORT": String(api.port),
         ],
         workDirectory: workDirectory
       )
@@ -198,19 +199,19 @@ final class CoreProcessController {
       runningProcess = process
       process.onTermination = { [weak self, weak process] exitCode in
         guard let self else { return }
-        guard self.runningProcess?.processIdentifier == launchedProcessID else { return }
-        if self.stopWasRequested || (startupCompleted && exitCode == 0) {
-          self.status = .stopped
+        guard runningProcess?.processIdentifier == launchedProcessID else { return }
+        if stopWasRequested || (startupCompleted && exitCode == 0) {
+          status = .stopped
         } else {
           let tail = process?.recentOutputTail(maxBytes: 4096) ?? ""
           let message = Self.processExitMessage(exitCode: exitCode, outputTail: tail)
           if !startupCompleted {
             startupTerminationMessage = message
-            self.recentCoreLog = tail
+            recentCoreLog = tail
           }
-          self.status = .crashed(message: message)
+          status = .crashed(message: message)
         }
-        self.runningProcess = nil
+        runningProcess = nil
       }
       if let startupTerminationMessage {
         recordStartup("Mihomo exited before controller readiness: \(startupTerminationMessage)")
@@ -350,7 +351,7 @@ final class CoreProcessController {
 
   private func waitForExit(_ process: RunningCoreProcess, processIdentifier: Int32, timeout: TimeInterval) async -> Bool {
     let deadline = Date().addingTimeInterval(timeout)
-    while process.isRunning && Date() < deadline {
+    while process.isRunning, Date() < deadline {
       if runningProcess?.processIdentifier != processIdentifier {
         return true
       }
@@ -407,7 +408,7 @@ struct MihomoRuntimePortChecker: RuntimePortChecking {
   func listeners(on ports: [Int]) async -> [PortListener] {
     var listeners: [PortListener] = []
     for port in ports {
-      listeners.append(contentsOf: await Self.listeners(on: port))
+      await listeners.append(contentsOf: Self.listeners(on: port))
     }
     return listeners
   }
@@ -478,7 +479,7 @@ struct ProcessOutputCapture: Sendable {
           domain: "ClashMax.ProcessOutputCapture",
           code: Int(ETIMEDOUT),
           userInfo: [
-            NSLocalizedDescriptionKey: "Command timed out after \(timeout)s: \(command)\(output.isEmpty ? "" : "\n\(output)")"
+            NSLocalizedDescriptionKey: "Command timed out after \(timeout)s: \(command)\(output.isEmpty ? "" : "\n\(output)")",
           ]
         )
       },
@@ -588,8 +589,7 @@ final class CancellableProcessExecution: @unchecked Sendable {
       do {
         try await Task.sleep(nanoseconds: Self.nanoseconds(for: self?.timeout ?? 0))
         self?.requestStop(.timedOut)
-      } catch {
-      }
+      } catch {}
     }
   }
 
@@ -755,13 +755,13 @@ struct MihomoOrphanProcessReaper: CoreProcessReaping {
     guard !signaledPIDs.isEmpty else { return }
 
     let deadline = now().addingTimeInterval(terminationGracePeriod)
-    while now() < deadline && signaledPIDs.contains(where: { pid in
+    while now() < deadline, signaledPIDs.contains(where: { pid in
       Self.isProcessSignalableAlive(pid, signalSender: signalSender, eventLogger: eventLogger)
     }) {
       await sleeper(Self.terminationPollIntervalNanoseconds)
     }
-    let latestManagedPIDs = Set(Self.managedPIDs(
-      from: await processRowsProvider(),
+    let latestManagedPIDs = await Set(Self.managedPIDs(
+      from: processRowsProvider(),
       currentPID: currentPID,
       coreURL: coreURL,
       configURL: configURL,
@@ -788,7 +788,7 @@ struct MihomoOrphanProcessReaper: CoreProcessReaping {
 
     let pathComponents = workDirectory.pathComponents
     let isClashMaxRuntime = pathComponents.suffix(2) == ["ClashMax", "Runtime"]
-    if isClashMaxRuntime && command.contains(workDirectory.path) {
+    if isClashMaxRuntime, command.contains(workDirectory.path) {
       return true
     }
 
@@ -895,7 +895,7 @@ struct MihomoRuntimeConfigValidator: RuntimeConfigValidating {
     try await Self.validateAsync(coreURL: coreURL, configURL: configURL, workDirectory: workDirectory, timeout: timeout)
   }
 
-  nonisolated private static func validateAsync(coreURL: URL, configURL: URL, workDirectory: URL, timeout: TimeInterval) async throws {
+  private nonisolated static func validateAsync(coreURL: URL, configURL: URL, workDirectory: URL, timeout: TimeInterval) async throws {
     let process = Process()
     let stdoutPipe = Pipe()
     let stderrPipe = Pipe()
@@ -903,7 +903,7 @@ struct MihomoRuntimeConfigValidator: RuntimeConfigValidating {
     process.arguments = ["-t", "-f", configURL.path, "-d", workDirectory.path]
     process.currentDirectoryURL = workDirectory
     process.environment = ProcessInfo.processInfo.environment.merging([
-      "SAFE_PATHS": workDirectory.path
+      "SAFE_PATHS": workDirectory.path,
     ]) { _, new in new }
     process.standardOutput = stdoutPipe
     process.standardError = stderrPipe
@@ -920,7 +920,7 @@ struct MihomoRuntimeConfigValidator: RuntimeConfigValidating {
           domain: "ClashMax.CoreValidation",
           code: Int(ETIMEDOUT),
           userInfo: [
-            NSLocalizedDescriptionKey: "Runtime config validation timed out after \(timeout)s.\(output.isEmpty ? "" : "\n\(output)")"
+            NSLocalizedDescriptionKey: "Runtime config validation timed out after \(timeout)s.\(output.isEmpty ? "" : "\n\(output)")",
           ]
         )
       },
@@ -961,8 +961,8 @@ struct MihomoCoreReadinessProbe: CoreReadinessProbing {
   }
 
   func waitUntilReady(api: CoreAPIEndpoint) async throws -> String {
-    let client = MihomoAPIClient(
-      baseURL: try api.baseURL,
+    let client = try MihomoAPIClient(
+      baseURL: api.baseURL,
       secret: api.secret,
       session: session,
       requestTimeout: requestTimeout
@@ -1149,7 +1149,7 @@ final class LiveOutputDrain: @unchecked Sendable {
     onOutput: (@Sendable (ProcessOutputLine) -> Void)? = nil
   ) {
     self.maxRetainedBytes = maxRetainedBytes
-    self.isSanitized = sanitized
+    isSanitized = sanitized
     self.onOutput = onOutput
     guard sanitized else { return }
     let home = homeDirectory ?? NSHomeDirectory()

@@ -15,7 +15,7 @@ enum RuntimeSnippetBinding: Codable, Equatable, Sendable {
     let kind = try container.decodeIfPresent(String.self, forKey: .kind) ?? "allProfiles"
     switch kind {
     case "profiles":
-      self = .profiles(Self.normalizedProfileIDs(try container.decodeIfPresent([UUID].self, forKey: .profileIDs) ?? []))
+      self = try .profiles(Self.normalizedProfileIDs(container.decodeIfPresent([UUID].self, forKey: .profileIDs) ?? []))
     default:
       self = .allProfiles
     }
@@ -123,9 +123,9 @@ enum RuntimeSnippetPayload: Codable, Equatable, Sendable {
     let kind = try container.decodeIfPresent(RuntimeSnippetPayloadKind.self, forKey: .kind) ?? .rules
     switch kind {
     case .rules:
-      self = .rules(try container.decodeIfPresent(RuleOverlaySettings.self, forKey: .rules) ?? .disabled)
+      self = try .rules(container.decodeIfPresent(RuleOverlaySettings.self, forKey: .rules) ?? .disabled)
     case .dnsPatch:
-      self = .dnsPatch(try container.decodeIfPresent(TunDNSSettings.self, forKey: .dnsPatch) ?? .profileDefault)
+      self = try .dnsPatch(container.decodeIfPresent(TunDNSSettings.self, forKey: .dnsPatch) ?? .profileDefault)
     }
   }
 
@@ -221,12 +221,12 @@ struct RuntimeSnippet: Identifiable, Codable, Equatable, Sendable {
 
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    let decoded = RuntimeSnippet(
-      id: try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID(),
-      name: try container.decodeIfPresent(String.self, forKey: .name) ?? "",
-      enabled: try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true,
-      binding: try container.decodeIfPresent(RuntimeSnippetBinding.self, forKey: .binding) ?? .allProfiles,
-      payload: try container.decodeIfPresent(RuntimeSnippetPayload.self, forKey: .payload)
+    let decoded = try RuntimeSnippet(
+      id: container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID(),
+      name: container.decodeIfPresent(String.self, forKey: .name) ?? "",
+      enabled: container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true,
+      binding: container.decodeIfPresent(RuntimeSnippetBinding.self, forKey: .binding) ?? .allProfiles,
+      payload: container.decodeIfPresent(RuntimeSnippetPayload.self, forKey: .payload)
         ?? .rules(.disabled)
     )
     self = decoded.foldingRulePayloadEnablementIntoSnippet()
@@ -332,7 +332,7 @@ struct RuntimeSnippetApplication: Equatable, Sendable {
       }
     }
     self.dnsPatches = dnsPatches
-    self.ruleOverlay = RuleOverlaySettings.combinedRuntimeSnippetOverlays(ruleOverlays)
+    ruleOverlay = RuleOverlaySettings.combinedRuntimeSnippetOverlays(ruleOverlays)
   }
 }
 
@@ -407,7 +407,7 @@ enum RuntimeSnippetYAMLPatchParser {
   }
 
   private static func dnsSettings(from dns: [String: Any]) throws -> TunDNSSettings {
-    let allowedKeys: Set<String> = [
+    let allowedKeys: Set = [
       "prefer-h3",
       "use-hosts",
       "use-system-hosts",
@@ -422,12 +422,12 @@ enum RuntimeSnippetYAMLPatchParser {
       "nameserver-policy",
       "proxy-server-nameserver-policy",
       "hosts",
-      "fallback-filter"
+      "fallback-filter",
     ]
     for key in dns.keys where !allowedKeys.contains(key) {
       throw ParserError.unsupportedDNSKey(key)
     }
-    return TunDNSSettings(
+    return try TunDNSSettings(
       preferH3: dns["prefer-h3"] as? Bool,
       useHosts: dns["use-hosts"] as? Bool,
       useSystemHosts: dns["use-system-hosts"] as? Bool,
@@ -442,7 +442,7 @@ enum RuntimeSnippetYAMLPatchParser {
       nameserverPolicy: stringMap(dns["nameserver-policy"]),
       proxyServerNameserverPolicy: stringMap(dns["proxy-server-nameserver-policy"]),
       hosts: stringMap(dns["hosts"]),
-      fallbackFilter: try fallbackFilter(dns["fallback-filter"])
+      fallbackFilter: fallbackFilter(dns["fallback-filter"])
     )
   }
 
@@ -469,7 +469,7 @@ enum RuntimeSnippetYAMLPatchParser {
 
   private static func fallbackFilter(_ value: Any?) throws -> TunDNSFallbackFilter {
     guard let map = value as? [String: Any] else { return .empty }
-    let allowedKeys: Set<String> = ["geoip", "geoip-code", "geosite", "ipcidr", "domain"]
+    let allowedKeys: Set = ["geoip", "geoip-code", "geosite", "ipcidr", "domain"]
     for key in map.keys where !allowedKeys.contains(key) {
       throw ParserError.unsupportedDNSKey("fallback-filter.\(key)")
     }

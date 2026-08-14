@@ -1,0 +1,16 @@
+# Commits that are pure mechanical reformatting. `git blame` skips these so it
+# still points at whoever last wrote the line, not at the formatter.
+#
+# Enable locally with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# GitHub reads this file automatically.
+#
+# Entries must be full 40-character SHAs of commits that exist on master. That
+# makes the merge method load-bearing: squash and rebase both rewrite a branch
+# into new commits, so a SHA recorded on the branch would name a commit master
+# never receives and the entry would silently do nothing. Merge a branch that
+# adds an entry here with a real merge commit, which is what this repository
+# already does, or record the post-merge SHA in a follow-up commit instead.
+
+# Format the tree with SwiftFormat (step 2 of the SwiftFormat adoption)
+d2fd50af4ff9476bcd6ce02dc92655881e2404f3

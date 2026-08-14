@@ -1,6 +1,6 @@
+@testable import ClashMax
 import Foundation
 import XCTest
-@testable import ClashMax
 
 @MainActor
 final class CoreRuntimePreflightTests: XCTestCase {
@@ -521,7 +521,8 @@ private func waitForRecordedPID(at url: URL, timeout: TimeInterval = 1) async th
     if let text = try? String(contentsOf: url, encoding: .utf8)
       .trimmingCharacters(in: .whitespacesAndNewlines),
       let pid = pid_t(text),
-      pid > 1 {
+      pid > 1
+    {
       return pid
     }
     try await Task.sleep(nanoseconds: 20_000_000)
@@ -549,7 +550,7 @@ private func terminateTestProcessIfNeeded(_ pid: pid_t) {
   guard isProcessAlive(pid) else { return }
   kill(pid, SIGTERM)
   let deadline = Date().addingTimeInterval(1)
-  while Date() < deadline && isProcessAlive(pid) {
+  while Date() < deadline, isProcessAlive(pid) {
     usleep(20_000)
   }
   if isProcessAlive(pid) {

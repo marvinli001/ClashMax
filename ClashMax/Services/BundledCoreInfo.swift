@@ -45,7 +45,8 @@ struct BundledCoreInfo: Equatable {
   private static func manifestURL(in bundle: Bundle) -> URL? {
     if let bundleManifestURL = bundle.resourceURL?
       .appendingPathComponent("Core", isDirectory: true)
-      .appendingPathComponent("mihomo-manifest.json") {
+      .appendingPathComponent("mihomo-manifest.json")
+    {
       return bundleManifestURL
     }
 

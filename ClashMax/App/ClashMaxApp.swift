@@ -198,7 +198,7 @@ private struct MenuBarStatusLabel: View {
 
   init(appModel: AppModel) {
     self.appModel = appModel
-    self.runtimeData = appModel.runtimeData
+    runtimeData = appModel.runtimeData
   }
 
   var body: some View {
@@ -423,9 +423,9 @@ enum AppActivationPolicyResolver {
 enum LaunchAtLoginRepairLaunchGate {
   static var shouldRun: Bool {
     #if DEBUG
-    false
+      false
     #else
-    true
+      true
     #endif
   }
 }
@@ -485,7 +485,7 @@ enum AppLaunchWarmupPolicy {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-  private static weak var sharedDelegate: AppDelegate?
+  private weak static var sharedDelegate: AppDelegate?
 
   weak var appModel: AppModel?
   private var terminationCleanupInFlight = false
@@ -535,7 +535,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       // app windows so the status item's own window is never ordered out.
       DispatchQueue.main.async {
         for window in NSApp.windows
-        where AppActivationPolicyWindowSnapshot(window: window).isRegularAppWindow {
+          where AppActivationPolicyWindowSnapshot(window: window).isRegularAppWindow
+        {
           window.orderOut(nil)
         }
         Self.refreshActivationPolicyForCurrentWindows()
@@ -640,7 +641,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     NSApp.setActivationPolicy(.regular)
     NSApp.unhide(nil)
     for window in NSApp.windows
-    where AppActivationPolicyWindowSnapshot(window: window).isRegularAppWindow {
+      where AppActivationPolicyWindowSnapshot(window: window).isRegularAppWindow
+    {
       if window.isMiniaturized {
         window.deminiaturize(nil)
       }

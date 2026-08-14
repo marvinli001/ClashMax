@@ -1,6 +1,6 @@
+@testable import ClashMax
 import XCTest
 import Yams
-@testable import ClashMax
 
 /// Covers the pure classifier behind the Routing › DNS Override panel (issue #16).
 final class DNSOverridePlanTests: XCTestCase {
@@ -361,9 +361,9 @@ final class DNSOverridePlanTests: XCTestCase {
     finalYAML: String,
     sources: DNSOverrideSources = DNSOverrideSources()
   ) throws -> DNSOverridePlan {
-    DNSOverridePlanBuilder.plan(
-      baseline: try dnsFactsAllowingAbsent(baselineYAML),
-      final: try dnsFactsAllowingAbsent(finalYAML),
+    try DNSOverridePlanBuilder.plan(
+      baseline: dnsFactsAllowingAbsent(baselineYAML),
+      final: dnsFactsAllowingAbsent(finalYAML),
       sources: sources
     )
   }

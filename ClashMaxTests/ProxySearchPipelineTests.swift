@@ -1,6 +1,5 @@
-import XCTest
-
 @testable import ClashMax
+import XCTest
 
 /// Regression coverage for issue #10 (large proxy-list search performance).
 ///
@@ -10,7 +9,6 @@ import XCTest
 /// main thread only publishes finished snapshots.
 @MainActor
 final class ProxySearchPipelineTests: XCTestCase {
-
   // MARK: - Fixtures
 
   /// Builds a catalog with 1600+ resolvable nodes spread across regions, fronted by a provider
@@ -115,9 +113,9 @@ final class ProxySearchPipelineTests: XCTestCase {
         selected: nil,
         nodes: [
           ProxyNode(name: "JP Tokyo", type: "vless", delay: 83, isSelectable: true, providerName: "Remote"),
-          ProxyNode(name: "US Relay", type: "trojan", delay: 260, isSelectable: true, providerName: "Backup")
+          ProxyNode(name: "US Relay", type: "trojan", delay: 260, isSelectable: true, providerName: "Backup"),
         ]
-      )
+      ),
     ]
     func run(_ text: String) -> [String] {
       ProxySearchPipeline.run(
@@ -141,9 +139,9 @@ final class ProxySearchPipelineTests: XCTestCase {
         nodes: [
           ProxyNode(name: "z-node", type: "vless", delay: 200, isSelectable: true),
           ProxyNode(name: "a-node", type: "vless", delay: 50, isSelectable: true),
-          ProxyNode(name: "m-node", type: "vless", delay: 120, isSelectable: true)
+          ProxyNode(name: "m-node", type: "vless", delay: 120, isSelectable: true),
         ]
-      )
+      ),
     ]
     func order(_ sort: ProxyNodeSort) -> [String] {
       ProxySearchPipeline.run(
@@ -421,7 +419,7 @@ final class ProxySearchPipelineTests: XCTestCase {
       [
         ProxyNode(name: "z-node", type: "trojan", delay: delays[0], isSelectable: true),
         ProxyNode(name: "a-node", type: "vless", delay: delays[1], isSelectable: true),
-        ProxyNode(name: "m-node", type: "vmess", delay: delays[2], isSelectable: true)
+        ProxyNode(name: "m-node", type: "vmess", delay: delays[2], isSelectable: true),
       ]
     }
     func order(_ sort: ProxyNodeSort, _ delays: [Int]) -> [String] {
@@ -583,7 +581,7 @@ final class ProxySearchPipelineTests: XCTestCase {
       nodes: [
         ProxyNode(name: "韩国 001", type: "vless", delay: 80, isSelectable: true),
         ProxyNode(name: "美国 001", type: "vless", delay: 80, isSelectable: true),
-        ProxyNode(name: "日本 001", type: "vless", delay: 80, isSelectable: true)
+        ProxyNode(name: "日本 001", type: "vless", delay: 80, isSelectable: true),
       ]
     )
     func run(_ text: String) -> [String] {

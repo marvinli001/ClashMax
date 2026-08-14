@@ -1,5 +1,5 @@
-import XCTest
 @testable import ClashMax
+import XCTest
 
 @MainActor
 final class NetworkExtensionControllerTests: XCTestCase {
@@ -52,7 +52,7 @@ final class NetworkExtensionControllerTests: XCTestCase {
           isEnabled: false,
           isAwaitingUserApproval: true,
           isUninstalling: false
-        )
+        ),
       ]
     )
     let proxyManager = RecordingTransparentProxyManager(currentStatus: .connecting)
@@ -75,7 +75,7 @@ final class NetworkExtensionControllerTests: XCTestCase {
           isEnabled: true,
           isAwaitingUserApproval: false,
           isUninstalling: false
-        )
+        ),
       ]
     )
     let proxyManager = RecordingTransparentProxyManager(currentStatus: .notConfigured)
@@ -108,7 +108,7 @@ final class NetworkExtensionControllerTests: XCTestCase {
           isEnabled: true,
           isAwaitingUserApproval: false,
           isUninstalling: false
-        )
+        ),
       ]
     )
     let controller = NetworkExtensionController(
@@ -147,7 +147,7 @@ final class NetworkExtensionControllerTests: XCTestCase {
           isEnabled: true,
           isAwaitingUserApproval: false,
           isUninstalling: true
-        )
+        ),
       ]
     )
     let controller = NetworkExtensionController(
@@ -220,7 +220,7 @@ final class NetworkExtensionControllerTests: XCTestCase {
       "192.168.0.0/33",
       "fe80::/129",
       "example.com/24",
-      "192.168.0.0/not-a-prefix"
+      "192.168.0.0/not-a-prefix",
     ]
 
     for value in invalidValues {
@@ -260,7 +260,7 @@ final class NetworkExtensionControllerTests: XCTestCase {
           sourceAppSigningIdentifier: "io.github.clashmax.ClashMax",
           flowProtocol: .udp,
           remoteEndpoint: "127.0.0.1:53"
-        )
+        ),
       ],
       recentErrors: [
         NetworkExtensionDiagnosticEvent(
@@ -268,7 +268,7 @@ final class NetworkExtensionControllerTests: XCTestCase {
           message: "SOCKS5 failed.",
           flowProtocol: .tcp,
           remoteEndpoint: "example.com:443"
-        )
+        ),
       ],
       updatedAt: Date()
     )

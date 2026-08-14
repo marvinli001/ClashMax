@@ -1,6 +1,6 @@
+@testable import ClashMax
 import Foundation
 import XCTest
-@testable import ClashMax
 
 final class BundledCoreInfoTests: XCTestCase {
   func testReadsBundledCoreVersionFromManifest() throws {

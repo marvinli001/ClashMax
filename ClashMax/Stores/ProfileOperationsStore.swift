@@ -25,7 +25,7 @@ final class ProfileCoordinator {
   ) {
     self.profileStore = profileStore
     self.proxyPreview = proxyPreview
-    self.subscriptionScheduler = SubscriptionAutoUpdateScheduler(retryDelay: subscriptionAutoUpdateRetryDelay)
+    subscriptionScheduler = SubscriptionAutoUpdateScheduler(retryDelay: subscriptionAutoUpdateRetryDelay)
   }
 
   func configureRuntimeHooks(
@@ -483,7 +483,7 @@ final class ProfileCoordinator {
         let updated = try await updateSubscriptionWithoutPostActions(
           profile,
           session: .shared,
-          fetchOptions: try await hooks.subscriptionFetchOptions(profile),
+          fetchOptions: hooks.subscriptionFetchOptions(profile),
           preflightValidator: hooks.preflightValidator(),
           trigger: cancelScheduledTask ? .manual : .automatic
         )
@@ -526,9 +526,11 @@ private struct ProfileCoordinatorHooks {
   var subscriptionFetchOptions: (Profile?) async throws -> SubscriptionFetchOptions = {
     _ in SubscriptionFetchOptions()
   }
+
   var preflightValidator: () -> any SubscriptionProfilePreflightValidating = {
     NoopSubscriptionProfilePreflightValidator()
   }
+
   var reloadActiveRuntimeConfigIfNeeded: (Profile.ID, String) async throws -> Void = { _, _ in }
   var appendAppLog: (String, String) -> Void = { _, _ in }
   var notifySubscriptionUpdateFailure: (String, String) -> Void = { _, _ in }
@@ -544,7 +546,7 @@ private final class SubscriptionAutoUpdateScheduler {
   private var task: Task<Void, Never>?
 
   init(retryDelay: TimeInterval) {
-    self.initialRetryDelay = retryDelay
+    initialRetryDelay = retryDelay
   }
 
   func cancel() {
@@ -612,7 +614,8 @@ private final class SubscriptionAutoUpdateScheduler {
       .addingTimeInterval(TimeInterval(intervalMinutes * 60))
     if let backoffDate = profile.subscriptionUpdateStatus.backoffUntil,
        backoffDate > now,
-       baseDate <= now {
+       baseDate <= now
+    {
       return backoffDate
     }
     return baseDate

@@ -1,6 +1,6 @@
 import AppKit
-import XCTest
 @testable import ClashMax
+import XCTest
 
 final class AppActivationPolicyTests: XCTestCase {
   func testLaunchWarmupsAreSuppressedForXCTestEnvironment() {
@@ -43,7 +43,7 @@ final class AppActivationPolicyTests: XCTestCase {
         canBecomeMain: true,
         isVisible: true,
         isMiniaturized: false
-      )
+      ),
     ]
 
     XCTAssertEqual(AppActivationPolicyResolver.policy(for: windows), .regular)
@@ -55,7 +55,7 @@ final class AppActivationPolicyTests: XCTestCase {
         canBecomeMain: true,
         isVisible: true,
         isMiniaturized: false
-      )
+      ),
     ]
 
     XCTAssertEqual(AppActivationPolicyResolver.policy(for: windows), .regular)
@@ -67,7 +67,7 @@ final class AppActivationPolicyTests: XCTestCase {
         canBecomeMain: true,
         isVisible: false,
         isMiniaturized: true
-      )
+      ),
     ]
 
     XCTAssertEqual(AppActivationPolicyResolver.policy(for: windows), .regular)
@@ -80,7 +80,7 @@ final class AppActivationPolicyTests: XCTestCase {
         isVisible: true,
         isMiniaturized: false,
         isPanel: true
-      )
+      ),
     ]
 
     XCTAssertEqual(AppActivationPolicyResolver.policy(for: windows), .accessory)
@@ -92,7 +92,7 @@ final class AppActivationPolicyTests: XCTestCase {
         canBecomeMain: true,
         isVisible: false,
         isMiniaturized: false
-      )
+      ),
     ]
 
     XCTAssertEqual(AppActivationPolicyResolver.policy(for: windows), .accessory)
@@ -105,7 +105,7 @@ final class AppActivationPolicyTests: XCTestCase {
         isVisible: true,
         isMiniaturized: false,
         isPanel: true
-      )
+      ),
     ]
 
     XCTAssertEqual(AppActivationPolicyResolver.policy(for: windows), .accessory)
@@ -142,7 +142,7 @@ final class AppActivationPolicyTests: XCTestCase {
         canBecomeMain: true,
         isVisible: true,
         isMiniaturized: false
-      )
+      ),
     ]
 
     XCTAssertFalse(AppActivationPolicyResolver.shouldOpenMainWindow(for: windows))
@@ -154,7 +154,7 @@ final class AppActivationPolicyTests: XCTestCase {
         canBecomeMain: true,
         isVisible: false,
         isMiniaturized: true
-      )
+      ),
     ]
 
     XCTAssertFalse(AppActivationPolicyResolver.shouldOpenMainWindow(for: windows))
@@ -166,7 +166,7 @@ final class AppActivationPolicyTests: XCTestCase {
         canBecomeMain: true,
         isVisible: false,
         isMiniaturized: false
-      )
+      ),
     ]
 
     XCTAssertFalse(AppActivationPolicyResolver.shouldOpenMainWindow(for: windows))
@@ -179,7 +179,7 @@ final class AppActivationPolicyTests: XCTestCase {
         isVisible: true,
         isMiniaturized: false,
         isPanel: true
-      )
+      ),
     ]
 
     XCTAssertTrue(AppActivationPolicyResolver.shouldOpenMainWindow(for: windows))
@@ -242,7 +242,7 @@ final class AppActivationPolicyTests: XCTestCase {
     let event = Self.launchEvent()
     // 'othr': any launch property that is not the login-item marker.
     event.setParam(
-      NSAppleEventDescriptor(enumCode: OSType(0x6F74_6872)),
+      NSAppleEventDescriptor(enumCode: OSType(0x6f74_6872)),
       forKeyword: OSType(keyAEPropData)
     )
 

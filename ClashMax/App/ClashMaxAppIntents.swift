@@ -86,7 +86,7 @@ struct ClashMaxAppShortcuts: AppShortcutsProvider {
       intent: StartClashMaxIntent(),
       phrases: [
         "Start \(.applicationName)",
-        "Start proxy in \(.applicationName)"
+        "Start proxy in \(.applicationName)",
       ],
       shortTitle: "Start",
       systemImageName: "play.fill"
@@ -95,7 +95,7 @@ struct ClashMaxAppShortcuts: AppShortcutsProvider {
       intent: StopClashMaxIntent(),
       phrases: [
         "Stop \(.applicationName)",
-        "Stop proxy in \(.applicationName)"
+        "Stop proxy in \(.applicationName)",
       ],
       shortTitle: "Stop",
       systemImageName: "stop.fill"
@@ -104,7 +104,7 @@ struct ClashMaxAppShortcuts: AppShortcutsProvider {
       intent: RestartClashMaxIntent(),
       phrases: [
         "Restart \(.applicationName)",
-        "Restart proxy in \(.applicationName)"
+        "Restart proxy in \(.applicationName)",
       ],
       shortTitle: "Restart",
       systemImageName: "arrow.clockwise"
@@ -113,7 +113,7 @@ struct ClashMaxAppShortcuts: AppShortcutsProvider {
       intent: ToggleSystemProxyIntent(),
       phrases: [
         "Toggle system proxy in \(.applicationName)",
-        "Switch system proxy in \(.applicationName)"
+        "Switch system proxy in \(.applicationName)",
       ],
       shortTitle: "System Proxy",
       systemImageName: "network.badge.shield.half.filled"
@@ -122,7 +122,7 @@ struct ClashMaxAppShortcuts: AppShortcutsProvider {
       intent: UpdateClashMaxSubscriptionsIntent(),
       phrases: [
         "Update subscriptions in \(.applicationName)",
-        "Refresh subscriptions in \(.applicationName)"
+        "Refresh subscriptions in \(.applicationName)",
       ],
       shortTitle: "Update Subs",
       systemImageName: "arrow.triangle.2.circlepath"
@@ -131,7 +131,7 @@ struct ClashMaxAppShortcuts: AppShortcutsProvider {
       intent: ApplyClashMaxNetworkPolicyIntent(),
       phrases: [
         "Apply network policy in \(.applicationName)",
-        "Use current network policy in \(.applicationName)"
+        "Use current network policy in \(.applicationName)",
       ],
       shortTitle: "Network Policy",
       systemImageName: "wifi.router"

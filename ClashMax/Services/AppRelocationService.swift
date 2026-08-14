@@ -12,16 +12,16 @@ enum AppRelocationError: LocalizedError, Equatable {
     case let .destinationOccupied(path):
       return String(
         localized: """
-          Another copy of ClashMax is already at \(path). Delete or rename it first, then move this \
-          copy into the Applications folder.
-          """
+        Another copy of ClashMax is already at \(path). Delete or rename it first, then move this \
+        copy into the Applications folder.
+        """
       )
     case .cannotRelocateTranslocatedBundle:
       return String(
         localized: """
-          macOS is running ClashMax from a protected temporary copy that cannot move itself. Drag \
-          ClashMax into your Applications folder in Finder, then open it from there.
-          """
+        macOS is running ClashMax from a protected temporary copy that cannot move itself. Drag \
+        ClashMax into your Applications folder in Finder, then open it from there.
+        """
       )
     case let .copyFailed(message):
       return String(localized: "Could not copy ClashMax into the Applications folder: \(message)")

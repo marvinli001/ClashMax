@@ -105,7 +105,7 @@ enum Socks5ConnectRequest {
     switch endpoint.host {
     case let .ipv4(address):
       data.append(0x01)
-      data.append(try bytes(forIPv4Address: address))
+      try data.append(bytes(forIPv4Address: address))
     case let .domain(domain):
       let bytes = Array(domain.utf8)
       guard bytes.count <= 255 else {
@@ -116,7 +116,7 @@ enum Socks5ConnectRequest {
       data.append(contentsOf: bytes)
     case let .ipv6(address):
       data.append(0x04)
-      data.append(try bytes(forIPv6Address: address))
+      try data.append(bytes(forIPv6Address: address))
     }
 
     guard let portValue = UInt16(exactly: endpoint.port) else {
@@ -275,7 +275,8 @@ struct DNSResponseEndpointMapper: Sendable {
   mutating func responseEndpoint(for payload: Data) -> Socks5Endpoint? {
     guard let key = DNSMessageCorrelationKey(payload: payload),
           var endpoints = pendingEndpoints[key],
-          !endpoints.isEmpty else {
+          !endpoints.isEmpty
+    else {
       return nil
     }
     let endpoint = endpoints.removeFirst()

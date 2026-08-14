@@ -1,5 +1,5 @@
-import XCTest
 @testable import ClashMax
+import XCTest
 
 final class SystemProxyControllerTests: XCTestCase {
   func testRunScriptUsesXcodeManagedSigningAndVerifyOnlyChecks() throws {
@@ -480,7 +480,7 @@ final class SystemProxyControllerTests: XCTestCase {
 
   func testSystemPingTesterUsesFixedExecutableAndParsesLatency() async throws {
     let runner = RecordingCommandRunner(outputs: [
-      "/sbin/ping -c 1 -W 5000 example.com": "64 bytes from 93.184.216.34: icmp_seq=0 ttl=56 time=12.4 ms"
+      "/sbin/ping -c 1 -W 5000 example.com": "64 bytes from 93.184.216.34: icmp_seq=0 ttl=56 time=12.4 ms",
     ])
     let tester = SystemPingTester(commandRunner: runner)
 
@@ -505,7 +505,7 @@ final class SystemProxyControllerTests: XCTestCase {
 
   func testApplySystemProxyTargetsAllActiveServices() async throws {
     let runner = RecordingCommandRunner(outputs: [
-      "/usr/sbin/networksetup -listallnetworkservices": "An asterisk (*) denotes that a network service is disabled.\nWi-Fi\nThunderbolt Bridge\n"
+      "/usr/sbin/networksetup -listallnetworkservices": "An asterisk (*) denotes that a network service is disabled.\nWi-Fi\nThunderbolt Bridge\n",
     ])
     let controller = SystemProxyController(commandRunner: runner)
 
@@ -527,7 +527,7 @@ final class SystemProxyControllerTests: XCTestCase {
       "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi": "Enabled: No\nServer: 127.0.0.1\nPort: 17890\n",
       // Enabled but not loopback: somebody else's proxy, not a ClashMax leftover.
       "/usr/sbin/networksetup -getsocksfirewallproxy Wi-Fi": "Enabled: Yes\nServer: 10.0.0.2\nPort: 8080\n",
-      "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": "There aren't any bypass domains set.\n"
+      "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": "There aren't any bypass domains set.\n",
     ])
     let controller = SystemProxyController(commandRunner: runner)
 
@@ -581,7 +581,7 @@ final class SystemProxyControllerTests: XCTestCase {
            en1 : flags      : 0x5 (IPv4,DNS)
 
       Network interfaces: en0 en1
-      """
+      """,
     ])
     let controller = SystemProxyController(commandRunner: runner)
 
@@ -619,10 +619,10 @@ final class SystemProxyControllerTests: XCTestCase {
         "/usr/sbin/networksetup -getwebproxy Ethernet": "Enabled: No\nServer:\nPort: 0\n",
         "/usr/sbin/networksetup -getsecurewebproxy Ethernet": "Enabled: No\nServer:\nPort: 0\n",
         "/usr/sbin/networksetup -getsocksfirewallproxy Ethernet": "Enabled: No\nServer:\nPort: 0\n",
-        "/usr/sbin/networksetup -getproxybypassdomains Ethernet": "There aren't any bypass domains set.\n"
+        "/usr/sbin/networksetup -getproxybypassdomains Ethernet": "There aren't any bypass domains set.\n",
       ],
       failingCommands: [
-        "/usr/sbin/scutil --nwi"
+        "/usr/sbin/scutil --nwi",
       ]
     )
     let controller = SystemProxyController(commandRunner: runner)
@@ -636,7 +636,7 @@ final class SystemProxyControllerTests: XCTestCase {
 
   func testApplySystemProxyAcceptsCustomBypassDomains() async throws {
     let runner = RecordingCommandRunner(outputs: [
-      "/usr/sbin/networksetup -listallnetworkservices": "Wi-Fi\n"
+      "/usr/sbin/networksetup -listallnetworkservices": "Wi-Fi\n",
     ])
     let controller = SystemProxyController(commandRunner: runner)
 
@@ -648,7 +648,7 @@ final class SystemProxyControllerTests: XCTestCase {
   func testApplySystemDNSCapturesAndRestoresEmptyDNS() async throws {
     let runner = RecordingCommandRunner(outputs: [
       "/usr/sbin/networksetup -listallnetworkservices": "Wi-Fi\n",
-      "/usr/sbin/networksetup -getdnsservers Wi-Fi": "There aren't any DNS Servers set on Wi-Fi.\n"
+      "/usr/sbin/networksetup -getdnsservers Wi-Fi": "There aren't any DNS Servers set on Wi-Fi.\n",
     ])
     let controller = SystemProxyController(commandRunner: runner)
 
@@ -666,7 +666,7 @@ final class SystemProxyControllerTests: XCTestCase {
   func testApplySystemDNSRestoresMultipleOriginalServers() async throws {
     let runner = RecordingCommandRunner(outputs: [
       "/usr/sbin/networksetup -listallnetworkservices": "Wi-Fi\n",
-      "/usr/sbin/networksetup -getdnsservers Wi-Fi": "1.1.1.1\n2606:4700:4700::1111\n"
+      "/usr/sbin/networksetup -getdnsservers Wi-Fi": "1.1.1.1\n2606:4700:4700::1111\n",
     ])
     let controller = SystemProxyController(commandRunner: runner)
 
@@ -695,7 +695,7 @@ final class SystemProxyControllerTests: XCTestCase {
     let defaults = try Self.makeIsolatedDefaults()
     let firstRunner = RecordingCommandRunner(outputs: [
       "/usr/sbin/networksetup -listallnetworkservices": "Wi-Fi\n",
-      "/usr/sbin/networksetup -getdnsservers Wi-Fi": "8.8.8.8\n"
+      "/usr/sbin/networksetup -getdnsservers Wi-Fi": "8.8.8.8\n",
     ])
     let firstController = SystemProxyController(commandRunner: firstRunner, snapshotDefaults: defaults)
 
@@ -721,10 +721,10 @@ final class SystemProxyControllerTests: XCTestCase {
         "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
         "/usr/sbin/networksetup -getsocksfirewallproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
         "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": "There aren't any bypass domains set.\n",
-        "/usr/sbin/networksetup -getwebproxy Ethernet": "Enabled: No\nServer:\nPort: 0\n"
+        "/usr/sbin/networksetup -getwebproxy Ethernet": "Enabled: No\nServer:\nPort: 0\n",
       ],
       failingCommands: [
-        "/usr/sbin/networksetup -getsecurewebproxy Ethernet"
+        "/usr/sbin/networksetup -getsecurewebproxy Ethernet",
       ]
     )
     let controller = SystemProxyController(commandRunner: runner)
@@ -749,7 +749,7 @@ final class SystemProxyControllerTests: XCTestCase {
       "/usr/sbin/networksetup -getwebproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
       "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi": "Enabled: Yes\nServer: other.proxy\nPort: 8080\n",
       "/usr/sbin/networksetup -getsocksfirewallproxy Wi-Fi": "Enabled: Yes\nServer: 127.0.0.1\nPort: 7890\n",
-      "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": "Exceptions List\nlocalhost\n"
+      "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": "Exceptions List\nlocalhost\n",
     ])
     let controller = SystemProxyController(commandRunner: runner)
 
@@ -768,7 +768,7 @@ final class SystemProxyControllerTests: XCTestCase {
       "/usr/sbin/networksetup -getwebproxy Wi-Fi": "Enabled: Yes\nServer: myhost.lan\nPort: 7890\n",
       "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi": "Enabled: Yes\nServer: myhost.lan\nPort: 7890\n",
       "/usr/sbin/networksetup -getsocksfirewallproxy Wi-Fi": "Enabled: Yes\nServer: myhost.lan\nPort: 7890\n",
-      "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": "Exceptions List\nlocalhost\n"
+      "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": "Exceptions List\nlocalhost\n",
     ])
     let controller = SystemProxyController(commandRunner: runner)
 
@@ -786,10 +786,10 @@ final class SystemProxyControllerTests: XCTestCase {
     let runner = FailingCommandRunner(
       outputs: [
         "/usr/sbin/networksetup -listallnetworkservices": "Wi-Fi\n",
-        "/usr/sbin/networksetup -getwebproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n"
+        "/usr/sbin/networksetup -getwebproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
       ],
       failingCommands: [
-        "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi"
+        "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi",
       ]
     )
     let controller = SystemProxyController(commandRunner: runner)
@@ -809,7 +809,7 @@ final class SystemProxyControllerTests: XCTestCase {
       "/usr/sbin/networksetup -getwebproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
       "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
       "/usr/sbin/networksetup -getsocksfirewallproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
-      "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": "There aren't any bypass domains set.\n"
+      "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": "There aren't any bypass domains set.\n",
     ])
     let controller = SystemProxyController(commandRunner: runner)
 
@@ -865,7 +865,7 @@ final class SystemProxyControllerTests: XCTestCase {
 
   func testRestoreTurnsProxyStatesOff() async throws {
     let runner = RecordingCommandRunner(outputs: [
-      "/usr/sbin/networksetup -listallnetworkservices": "Wi-Fi\n"
+      "/usr/sbin/networksetup -listallnetworkservices": "Wi-Fi\n",
     ])
     let controller = SystemProxyController(commandRunner: runner)
 
@@ -901,7 +901,7 @@ final class SystemProxyControllerTests: XCTestCase {
       Exceptions List
       corp.internal
       *.corp
-      """
+      """,
     ])
     let controller = SystemProxyController(commandRunner: runner)
 
@@ -922,7 +922,7 @@ final class SystemProxyControllerTests: XCTestCase {
       "/usr/sbin/networksetup -getwebproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
       "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
       "/usr/sbin/networksetup -getsocksfirewallproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
-      "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": "There aren't any bypass domains set.\n"
+      "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": "There aren't any bypass domains set.\n",
     ])
     let firstController = SystemProxyController(commandRunner: firstRunner, snapshotDefaults: defaults)
 
@@ -933,7 +933,7 @@ final class SystemProxyControllerTests: XCTestCase {
       "/usr/sbin/networksetup -getwebproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
       "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
       "/usr/sbin/networksetup -getsocksfirewallproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
-      "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": "There aren't any bypass domains set.\n"
+      "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": "There aren't any bypass domains set.\n",
     ])
     let secondController = SystemProxyController(commandRunner: secondRunner, snapshotDefaults: defaults)
 
@@ -961,32 +961,32 @@ final class SystemProxyControllerTests: XCTestCase {
         "Wi-Fi\n",
         "Wi-Fi\n",
         "Wi-Fi\n",
-        "Wi-Fi\n"
+        "Wi-Fi\n",
       ],
       "/usr/sbin/networksetup -getwebproxy Wi-Fi": [
         "Enabled: No\nServer:\nPort: 0\n",
         "Enabled: Yes\nServer: 127.0.0.1\nPort: 7890\n",
         "Enabled: Yes\nServer: 127.0.0.1\nPort: 7890\n",
-        "Enabled: No\nServer:\nPort: 0\n"
+        "Enabled: No\nServer:\nPort: 0\n",
       ],
       "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi": [
         "Enabled: No\nServer:\nPort: 0\n",
         "Enabled: Yes\nServer: 127.0.0.1\nPort: 7890\n",
         "Enabled: Yes\nServer: 127.0.0.1\nPort: 7890\n",
-        "Enabled: No\nServer:\nPort: 0\n"
+        "Enabled: No\nServer:\nPort: 0\n",
       ],
       "/usr/sbin/networksetup -getsocksfirewallproxy Wi-Fi": [
         "Enabled: No\nServer:\nPort: 0\n",
         "Enabled: Yes\nServer: 127.0.0.1\nPort: 7890\n",
         "Enabled: Yes\nServer: 127.0.0.1\nPort: 7890\n",
-        "Enabled: No\nServer:\nPort: 0\n"
+        "Enabled: No\nServer:\nPort: 0\n",
       ],
       "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": [
         "There aren't any bypass domains set.\n",
         "Exceptions List\n\(SystemProxySettings.defaultBypassDomains.joined(separator: "\n"))\n",
         "Exceptions List\n\(SystemProxySettings.defaultBypassDomains.joined(separator: "\n"))\n",
-        "There aren't any bypass domains set.\n"
-      ]
+        "There aren't any bypass domains set.\n",
+      ],
     ])
     let controller = SystemProxyController(commandRunner: runner, snapshotDefaults: defaults)
 
@@ -1019,11 +1019,11 @@ final class SystemProxyControllerTests: XCTestCase {
         "Enabled: Yes\nServer: 127.0.0.1\nPort: 17890\n",
         "Enabled: Yes\nServer: 127.0.0.1\nPort: 17890\n",
         "Enabled: No\nServer:\nPort: 0\n",
-        "Enabled: No\nServer:\nPort: 0\n"
+        "Enabled: No\nServer:\nPort: 0\n",
       ],
       "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi": Array(repeating: "Enabled: No\nServer:\nPort: 0\n", count: 6),
       "/usr/sbin/networksetup -getsocksfirewallproxy Wi-Fi": Array(repeating: "Enabled: No\nServer:\nPort: 0\n", count: 6),
-      "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": Array(repeating: "There aren't any bypass domains set.\n", count: 6)
+      "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": Array(repeating: "There aren't any bypass domains set.\n", count: 6),
     ])
     let controller = SystemProxyController(commandRunner: runner, snapshotDefaults: defaults)
     let coordinator = SystemProxyCoordinator(controller: controller, defaults: defaults)
@@ -1046,28 +1046,28 @@ final class SystemProxyControllerTests: XCTestCase {
         "Wi-Fi\n",
         "Wi-Fi\n",
         "Wi-Fi\n",
-        "Wi-Fi\n"
+        "Wi-Fi\n",
       ],
       "/usr/sbin/networksetup -getwebproxy Wi-Fi": [
         "Enabled: Yes\nServer: myhost.lan\nPort: 7890\n",
         "Enabled: Yes\nServer: myhost.lan\nPort: 7890\n",
-        "Enabled: No\nServer:\nPort: 0\n"
+        "Enabled: No\nServer:\nPort: 0\n",
       ],
       "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi": [
         "Enabled: No\nServer:\nPort: 0\n",
         "Enabled: No\nServer:\nPort: 0\n",
-        "Enabled: No\nServer:\nPort: 0\n"
+        "Enabled: No\nServer:\nPort: 0\n",
       ],
       "/usr/sbin/networksetup -getsocksfirewallproxy Wi-Fi": [
         "Enabled: No\nServer:\nPort: 0\n",
         "Enabled: No\nServer:\nPort: 0\n",
-        "Enabled: No\nServer:\nPort: 0\n"
+        "Enabled: No\nServer:\nPort: 0\n",
       ],
       "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": [
         "There aren't any bypass domains set.\n",
         "There aren't any bypass domains set.\n",
-        "There aren't any bypass domains set.\n"
-      ]
+        "There aren't any bypass domains set.\n",
+      ],
     ])
     let controller = SystemProxyController(commandRunner: runner)
 
@@ -1082,7 +1082,7 @@ final class SystemProxyControllerTests: XCTestCase {
 
   func testRestoreClearsBypassDomainsWhenNoSnapshotExists() async throws {
     let runner = RecordingCommandRunner(outputs: [
-      "/usr/sbin/networksetup -listallnetworkservices": "Wi-Fi\n"
+      "/usr/sbin/networksetup -listallnetworkservices": "Wi-Fi\n",
     ])
     let controller = SystemProxyController(commandRunner: runner)
 
@@ -1193,7 +1193,8 @@ private func waitForRecordedPID(at url: URL, timeout: TimeInterval = 1) async th
     if let text = try? String(contentsOf: url, encoding: .utf8)
       .trimmingCharacters(in: .whitespacesAndNewlines),
       let pid = pid_t(text),
-      pid > 1 {
+      pid > 1
+    {
       return pid
     }
     try await Task.sleep(nanoseconds: 20_000_000)
@@ -1221,7 +1222,7 @@ private func terminateTestProcessIfNeeded(_ pid: pid_t) {
   guard isProcessAlive(pid) else { return }
   kill(pid, SIGTERM)
   let deadline = Date().addingTimeInterval(1)
-  while Date() < deadline && isProcessAlive(pid) {
+  while Date() < deadline, isProcessAlive(pid) {
     usleep(20_000)
   }
   if isProcessAlive(pid) {

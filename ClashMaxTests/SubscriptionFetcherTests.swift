@@ -1,7 +1,7 @@
+@testable import ClashMax
 import Foundation
 import Network
 import XCTest
-@testable import ClashMax
 
 final class SubscriptionFetcherTests: XCTestCase {
   func testProfileUpstreamBindingForcesStrictRetryAndProviderCannotOverrideIt() async throws {
@@ -51,7 +51,7 @@ final class SubscriptionFetcherTests: XCTestCase {
     for fetchProxy in [
       SubscriptionProviderFetchProxy.direct,
       .localClashProxy,
-      .systemProxy
+      .systemProxy,
     ] {
       let options = SubscriptionProviderOptions(fetchProxy: fetchProxy)
         .fetchOptions(from: base)
@@ -213,7 +213,7 @@ final class SubscriptionFetcherTests: XCTestCase {
   func testProfileUpstreamWrongPasswordFailsClosedForLocalSOCKS5AndHTTPConnect() async throws {
     for kind in [
       LocalSubscriptionProxyServer.Kind.socks5,
-      .httpConnect
+      .httpConnect,
     ] {
       let proxy = try LocalSubscriptionProxyServer(
         kind: kind,
@@ -234,7 +234,7 @@ final class SubscriptionFetcherTests: XCTestCase {
 
       do {
         _ = try await SubscriptionFetcher().fetch(
-          url: try XCTUnwrap(URL(string: "https://subscription.invalid/profile")),
+          url: XCTUnwrap(URL(string: "https://subscription.invalid/profile")),
           options: SubscriptionFetchOptions(
             timeout: 2,
             retryOrder: [.direct, .systemProxy],
@@ -379,7 +379,7 @@ final class SubscriptionFetcherTests: XCTestCase {
       ("bad host", 1080),
       ("https://proxy.example.com", 1080),
       ("proxy.example.com", 0),
-      ("proxy.example.com", 65_536)
+      ("proxy.example.com", 65_536),
     ]
     for (host, port) in invalidEndpoints {
       let endpoint = ResolvedOutboundProxyEndpoint(
@@ -412,7 +412,7 @@ final class SubscriptionFetcherTests: XCTestCase {
     let options = SubscriptionFetchOptions(
       customHeaders: [
         "Proxy-Authorization": "Basic sensitive-auth-header",
-        "X-Safe": "present"
+        "X-Safe": "present",
       ],
       profileUpstreamEndpoint: endpoint
     )
@@ -427,27 +427,27 @@ final class SubscriptionFetcherTests: XCTestCase {
           code: 1,
           userInfo: [
             NSLocalizedDescriptionKey:
-              "sensitive-password Proxy-Authorization Basic sensitive-auth-header"
+              "sensitive-password Proxy-Authorization Basic sensitive-auth-header",
           ]
         )
       }
       XCTFail("Expected transport failure")
     } catch let error as SubscriptionFetchError {
-      let diagnosticsJSON = String(
-        decoding: try JSONEncoder().encode(error.diagnostics),
+      let diagnosticsJSON = try String(
+        decoding: JSONEncoder().encode(error.diagnostics),
         as: UTF8.self
       )
       let combined = [
         error.message,
         error.description,
         error.localizedDescription,
-        diagnosticsJSON
+        diagnosticsJSON,
       ].joined(separator: "\n")
       for sensitiveValue in [
         "sensitive-user",
         "sensitive-password",
         "sensitive-auth-header",
-        "Proxy-Authorization"
+        "Proxy-Authorization",
       ] {
         XCTAssertFalse(combined.contains(sensitiveValue), "Leaked \(sensitiveValue)")
       }
@@ -483,8 +483,8 @@ final class SubscriptionFetcherTests: XCTestCase {
         }
         XCTFail("Expected transport failure")
       } catch let error as SubscriptionFetchError {
-        let diagnosticsJSON = String(
-          decoding: try JSONEncoder().encode(error.diagnostics),
+        let diagnosticsJSON = try String(
+          decoding: JSONEncoder().encode(error.diagnostics),
           as: UTF8.self
         )
         let combined = "\(error.message)\n\(error.localizedDescription)\n\(diagnosticsJSON)"
@@ -511,7 +511,7 @@ final class SubscriptionFetcherTests: XCTestCase {
         "response"
       ),
       (
-        Data([0xFF, 0xFE, 0xFF]),
+        Data([0xff, 0xfe, 0xff]),
         HTTPURLResponse(
           url: url,
           statusCode: 200,
@@ -531,7 +531,7 @@ final class SubscriptionFetcherTests: XCTestCase {
         )!,
         .invalidProfile,
         "validation"
-      )
+      ),
     ]
 
     for (data, response, expectedKind, expectedStage) in cases {
@@ -584,8 +584,8 @@ final class SubscriptionFetcherTests: XCTestCase {
       )
     }
 
-    let diagnosticsJSON = String(
-      decoding: try JSONEncoder().encode(result.diagnostics),
+    let diagnosticsJSON = try String(
+      decoding: JSONEncoder().encode(result.diagnostics),
       as: UTF8.self
     )
     XCTAssertEqual(result.diagnostics.endpointName, "Safe endpoint name")
@@ -594,7 +594,7 @@ final class SubscriptionFetcherTests: XCTestCase {
       "sensitive-user",
       "sensitive-password",
       "sensitive-auth-header",
-      "Proxy-Authorization"
+      "Proxy-Authorization",
     ] {
       XCTAssertFalse(diagnosticsJSON.contains(sensitiveValue), "Leaked \(sensitiveValue)")
     }
@@ -655,7 +655,7 @@ final class SubscriptionFetcherTests: XCTestCase {
     let url = URL(string: "https://example.com/sub")!
     let customHeaders = [
       "pRoXy-AuThOrIzAtIoN": "Basic sensitive-proxy-credential",
-      "X-Panel-Token": "safe-custom-header"
+      "X-Panel-Token": "safe-custom-header",
     ]
 
     var endpointBoundOptions = SubscriptionFetchOptions(
@@ -734,7 +734,7 @@ final class SubscriptionFetcherTests: XCTestCase {
     let providerOptions = SubscriptionProviderOptions(
       requestHeaders: [
         SubscriptionRequestHeader(name: " X-Token ", value: " secret "),
-        SubscriptionRequestHeader(name: " ", value: "ignored")
+        SubscriptionRequestHeader(name: " ", value: "ignored"),
       ],
       fetchProxy: .localClashProxy
     )
@@ -748,14 +748,14 @@ final class SubscriptionFetcherTests: XCTestCase {
   func testResolverAcceptsAdditionalClashDeepLinkSchemes() throws {
     let cases = [
       "clashmeta://install-config?url=https%3A%2F%2Fexample.com%2Fsub%3Ftoken%3Dabc&name=Meta",
-      "flclash://install-config?url=https%3A%2F%2Fexample.com%2Fsub%3Ftoken%3Ddef&name=FlClash"
+      "flclash://install-config?url=https%3A%2F%2Fexample.com%2Fsub%3Ftoken%3Ddef&name=FlClash",
     ]
 
     let resolved = cases.compactMap { SubscriptionURLResolver.resolve(rawInput: $0) }
 
     XCTAssertEqual(resolved.map(\.url.absoluteString), [
       "https://example.com/sub?token=abc",
-      "https://example.com/sub?token=def"
+      "https://example.com/sub?token=def",
     ])
     XCTAssertEqual(resolved.map(\.displayNameHint), ["Meta", "FlClash"])
   }
@@ -772,7 +772,7 @@ final class SubscriptionFetcherTests: XCTestCase {
         "subscription-userinfo": "upload=1024; download=2048; total=4096; expire=1893456000",
         "content-disposition": "attachment; filename*=UTF-8''Remote%20Profile.yaml",
         "profile-update-interval": "12",
-        "profile-web-page-url": "https://example.com/dashboard"
+        "profile-web-page-url": "https://example.com/dashboard",
       ]
     )!
 
@@ -840,7 +840,7 @@ final class SubscriptionFetcherTests: XCTestCase {
       statusCode: 200,
       httpVersion: nil,
       headerFields: [
-        "x-amz-meta-subscription-userinfo": "upload=512; download=1024; total=2048"
+        "x-amz-meta-subscription-userinfo": "upload=512; download=1024; total=2048",
       ]
     )!
 
@@ -892,7 +892,7 @@ final class SubscriptionFetcherTests: XCTestCase {
       headerFields: [
         "Content-Type": "text/html; charset=UTF-8",
         "subscription-userinfo": "upload=1; download=2; total=3",
-        "content-disposition": "attachment; filename*=UTF-8''Remote%20Profile.yaml"
+        "content-disposition": "attachment; filename*=UTF-8''Remote%20Profile.yaml",
       ]
     )!
 
@@ -1210,7 +1210,6 @@ private actor StrategyAttemptRecorder {
   func strategies() -> [SubscriptionFetchStrategy] {
     attemptedStrategies
   }
-
 }
 
 private actor UserAgentAttemptRecorder {
@@ -1223,7 +1222,6 @@ private actor UserAgentAttemptRecorder {
   func userAgents() -> [String] {
     recordedUserAgents
   }
-
 }
 
 private func profileUpstreamEndpoint() -> ResolvedOutboundProxyEndpoint {
@@ -1292,7 +1290,7 @@ private final class LocalOpenSSLSubscriptionOrigin: @unchecked Sendable {
         "-cert", "cert.pem",
         "-key", "key.pem",
         "-WWW",
-        "-quiet"
+        "-quiet",
       ]
       process.currentDirectoryURL = directoryURL
       process.standardOutput = FileHandle.nullDevice
@@ -1340,7 +1338,7 @@ private final class LocalOpenSSLSubscriptionOrigin: @unchecked Sendable {
       "-keyout", "key.pem",
       "-out", "cert.pem",
       "-subj", "/CN=subscription.local",
-      "-days", "1"
+      "-days", "1",
     ]
     generator.currentDirectoryURL = directoryURL
     generator.standardOutput = FileHandle.nullDevice
@@ -1703,15 +1701,15 @@ private final class LocalSubscriptionProxyConnectionHandler: @unchecked Sendable
         return
       }
       let methodCount = Int(header[header.index(after: header.startIndex)])
-      self.readExactly(methodCount) { [weak self] methods in
+      readExactly(methodCount) { [weak self] methods in
         guard let self else { return }
-        let requiresAuthentication = self.username != nil || self.password != nil
+        let requiresAuthentication = username != nil || password != nil
         let method: UInt8 = requiresAuthentication ? 0x02 : 0x00
         guard methods.contains(method) else {
-          self.send(Data([0x05, 0xFF]), closeAfterSending: true)
+          send(Data([0x05, 0xff]), closeAfterSending: true)
           return
         }
-        self.send(Data([0x05, method])) { [weak self] in
+        send(Data([0x05, method])) { [weak self] in
           if requiresAuthentication {
             self?.readSOCKS5Authentication()
           } else {
@@ -1730,7 +1728,7 @@ private final class LocalSubscriptionProxyConnectionHandler: @unchecked Sendable
         return
       }
       let usernameLength = Int(header[header.index(after: header.startIndex)])
-      self.readExactly(usernameLength + 1) { [weak self] usernameAndPasswordLength in
+      readExactly(usernameLength + 1) { [weak self] usernameAndPasswordLength in
         guard let self,
               let passwordLengthByte = usernameAndPasswordLength.last
         else {
@@ -1741,13 +1739,13 @@ private final class LocalSubscriptionProxyConnectionHandler: @unchecked Sendable
           decoding: usernameAndPasswordLength.dropLast(),
           as: UTF8.self
         )
-        self.readExactly(Int(passwordLengthByte)) { [weak self] passwordData in
+        readExactly(Int(passwordLengthByte)) { [weak self] passwordData in
           guard let self else { return }
           let receivedPassword = String(decoding: passwordData, as: UTF8.self)
-          let accepted = receivedUsername == self.username
-            && receivedPassword == self.password
-          self.recordAuthentication(accepted)
-          self.send(Data([0x01, accepted ? 0x00 : 0x01]), closeAfterSending: !accepted) { [weak self] in
+          let accepted = receivedUsername == username
+            && receivedPassword == password
+          recordAuthentication(accepted)
+          send(Data([0x01, accepted ? 0x00 : 0x01]), closeAfterSending: !accepted) { [weak self] in
             self?.readSOCKS5ConnectRequest()
           }
         }
@@ -1767,15 +1765,15 @@ private final class LocalSubscriptionProxyConnectionHandler: @unchecked Sendable
       let addressType = header[header.index(header.startIndex, offsetBy: 3)]
       switch addressType {
       case 0x01:
-        self.readExactly(6) { [weak self] addressAndPort in
+        readExactly(6) { [weak self] addressAndPort in
           let bytes = Array(addressAndPort)
           let target = "\(bytes[0]).\(bytes[1]).\(bytes[2]).\(bytes[3]):\(Int(bytes[4]) << 8 | Int(bytes[5]))"
           self?.completeSOCKS5Connect(target: target)
         }
       case 0x03:
-        self.readExactly(1) { [weak self] lengthData in
+        readExactly(1) { [weak self] lengthData in
           guard let self, let length = lengthData.first else { return }
-          self.readExactly(Int(length) + 2) { [weak self] hostAndPort in
+          readExactly(Int(length) + 2) { [weak self] hostAndPort in
             let hostBytes = hostAndPort.dropLast(2)
             let portBytes = hostAndPort.suffix(2)
             let port = Int(portBytes[portBytes.startIndex]) << 8
@@ -1786,7 +1784,7 @@ private final class LocalSubscriptionProxyConnectionHandler: @unchecked Sendable
           }
         }
       case 0x04:
-        self.readExactly(18) { [weak self] addressAndPort in
+        readExactly(18) { [weak self] addressAndPort in
           let bytes = Array(addressAndPort)
           let groups = stride(from: 0, to: 16, by: 2).map {
             String(format: "%02x%02x", bytes[$0], bytes[$0 + 1])
@@ -1822,13 +1820,13 @@ private final class LocalSubscriptionProxyConnectionHandler: @unchecked Sendable
         guard let separator = line.firstIndex(of: ":") else { return nil }
         return String(line[..<separator]).lowercased()
       }
-      self.recordTarget(
+      recordTarget(
         "\(requestLine) headers=\(headerNames.sorted().joined(separator: ","))"
       )
-      let accepted = self.httpProxyAuthorizationIsValid(header)
-      self.recordAuthentication(accepted)
+      let accepted = httpProxyAuthorizationIsValid(header)
+      recordAuthentication(accepted)
       guard accepted else {
-        self.sendFinal(
+        sendFinal(
           Data((
             "HTTP/1.1 407 Proxy Authentication Required\r\n"
               + "Proxy-Authenticate: Basic realm=\"ClashMax Tests\"\r\n"
@@ -1843,15 +1841,15 @@ private final class LocalSubscriptionProxyConnectionHandler: @unchecked Sendable
 
       if requestLine.uppercased().hasPrefix("CONNECT ") {
         let successResponse = Data("HTTP/1.1 200 Connection Established\r\n\r\n".utf8)
-        if self.relayPort != nil {
-          self.connectToRelay(proxySuccessResponse: successResponse)
+        if relayPort != nil {
+          connectToRelay(proxySuccessResponse: successResponse)
         } else {
-          self.send(successResponse) { [weak self] in
+          send(successResponse) { [weak self] in
             self?.readTunneledHTTPRequest()
           }
         }
       } else {
-        self.sendSubscriptionResponse()
+        sendSubscriptionResponse()
       }
     }
   }
@@ -1919,13 +1917,13 @@ private final class LocalSubscriptionProxyConnectionHandler: @unchecked Sendable
       switch state {
       case .ready:
         upstream.stateUpdateHandler = nil
-        self.send(proxySuccessResponse) { [weak self, weak upstream] in
+        send(proxySuccessResponse) { [weak self, weak upstream] in
           guard let self, let upstream else { return }
-          self.relay(from: self.connection, to: upstream, recordsResponse: false)
-          self.relay(from: upstream, to: self.connection, recordsResponse: true)
+          relay(from: connection, to: upstream, recordsResponse: false)
+          relay(from: upstream, to: connection, recordsResponse: true)
         }
       case .failed, .cancelled:
-        self.finish()
+        finish()
       default:
         break
       }
@@ -1944,16 +1942,16 @@ private final class LocalSubscriptionProxyConnectionHandler: @unchecked Sendable
     ) { [weak self, weak source, weak destination] data, _, isComplete, error in
       guard let self, let source, let destination else { return }
       if let data, !data.isEmpty {
-        if recordsResponse, !self.recordedRelayResponse {
-          self.recordedRelayResponse = true
-          self.recordResponse()
+        if recordsResponse, !recordedRelayResponse {
+          recordedRelayResponse = true
+          recordResponse()
         }
         destination.send(content: data, completion: .contentProcessed { [weak self] sendError in
           guard let self else { return }
           if sendError != nil || isComplete {
-            self.finish()
+            finish()
           } else {
-            self.relay(
+            relay(
               from: source,
               to: destination,
               recordsResponse: recordsResponse
@@ -1961,9 +1959,9 @@ private final class LocalSubscriptionProxyConnectionHandler: @unchecked Sendable
           }
         })
       } else if error != nil || isComplete {
-        self.finish()
+        finish()
       } else {
-        self.relay(
+        relay(
           from: source,
           to: destination,
           recordsResponse: recordsResponse
@@ -2015,10 +2013,10 @@ private final class LocalSubscriptionProxyConnectionHandler: @unchecked Sendable
     ) { [weak self] data, _, isComplete, error in
       guard let self else { return }
       if let data, !data.isEmpty {
-        self.buffer.append(data)
+        buffer.append(data)
       }
-      if error != nil || (isComplete && self.buffer.isEmpty) {
-        self.finish()
+      if error != nil || (isComplete && buffer.isEmpty) {
+        finish()
       } else {
         completion()
       }
@@ -2033,12 +2031,12 @@ private final class LocalSubscriptionProxyConnectionHandler: @unchecked Sendable
     connection.send(content: data, completion: .contentProcessed { [weak self] error in
       guard let self else { return }
       guard error == nil else {
-        self.finish()
+        finish()
         return
       }
       if closeAfterSending {
-        self.connection.cancel()
-        self.finish()
+        connection.cancel()
+        finish()
       } else {
         completion?()
       }
@@ -2049,10 +2047,10 @@ private final class LocalSubscriptionProxyConnectionHandler: @unchecked Sendable
     connection.send(content: data, completion: .contentProcessed { [weak self] error in
       guard let self else { return }
       guard error == nil else {
-        self.finish()
+        finish()
         return
       }
-      self.queue.asyncAfter(deadline: .now() + .milliseconds(100)) {
+      queue.asyncAfter(deadline: .now() + .milliseconds(100)) {
         self.finish()
       }
     })

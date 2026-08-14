@@ -328,7 +328,7 @@ struct PublicIPInfoCard: View {
     let minimum: CGFloat = isCompact ? 118 : 150
     return [
       GridItem(.flexible(minimum: minimum), spacing: 10),
-      GridItem(.flexible(minimum: minimum), spacing: 10)
+      GridItem(.flexible(minimum: minimum), spacing: 10),
     ]
   }
 
@@ -355,7 +355,7 @@ struct PublicIPInfoCard: View {
 
   private func asnISPSummary(for info: PublicIPInfo) -> String {
     [info.asn, info.isp]
-      .compactMap { $0 }
+      .compactMap(\.self)
       .filter { !$0.isEmpty }
       .joined(separator: " / ")
       .nonEmpty ?? "--"
@@ -363,7 +363,7 @@ struct PublicIPInfoCard: View {
 
   private func locationSummary(for info: PublicIPInfo) -> String {
     [info.city, info.region]
-      .compactMap { $0 }
+      .compactMap(\.self)
       .filter { !$0.isEmpty }
       .joined(separator: ", ")
       .nonEmpty ?? "--"
@@ -375,7 +375,6 @@ struct PublicIPInfoCard: View {
     }
     return String(format: "%.2f, %.2f", latitude, longitude)
   }
-
 }
 
 struct PublicIPProxyEffectPresentation: Equatable {

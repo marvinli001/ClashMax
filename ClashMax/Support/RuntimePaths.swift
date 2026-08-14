@@ -201,7 +201,7 @@ enum UserFacingError {
       return networkMessage
     }
 
-    if localized.contains("The operation couldn") && !described.isEmpty {
+    if localized.contains("The operation couldn"), !described.isEmpty {
       return message(from: described)
     }
     return message(from: localized)
@@ -231,7 +231,8 @@ enum UserFacingError {
     let helperRegistrationFailed = domain == "SMAppServiceErrorDomain" && code == 3
     if helperRegistrationFailed
       || message.localizedCaseInsensitiveContains("Codesigning failure")
-      || message.contains("-67056") {
+      || message.contains("-67056")
+    {
       return helperCodeSigningRecovery
     }
     return nil

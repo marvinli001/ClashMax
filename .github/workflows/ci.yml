@@ -20,6 +20,14 @@ env:
   # version is no longer installed on the image.
   XCODE_VERSION: "26.5"
 
+  # A formatter is only a gate if CI and every workstation run the same build:
+  # a different version reformats different lines and the two disagree about
+  # what "formatted" means. This must match the --minversion line in
+  # .swiftformat, which the install step asserts. The checksum is for that
+  # release's swiftformat_linux.zip, so bump both in the same commit.
+  SWIFTFORMAT_VERSION: "0.62.1"
+  SWIFTFORMAT_LINUX_SHA256: "61ff55f3581e2144a4ad114831167102c38be853df75c1477d20b40a8e8120aa"
+
 jobs:
   hygiene:
     name: Repo hygiene
@@ -46,6 +54,47 @@ jobs:
 
       - name: Translation gate fixtures
         run: script/test_localization_new_key_gate.sh
+
+      # The release ships a fully static Linux binary (built against the static
+      # Swift SDK), so no Swift toolchain is needed on this runner and the whole
+      # step is a download plus a checksum.
+      - name: Install SwiftFormat
+        run: |
+          set -euo pipefail
+          pinned="$(sed -n 's/^--minversion[[:space:]]\{1,\}//p' .swiftformat | tr -d '[:space:]')"
+          if [ "$pinned" != "$SWIFTFORMAT_VERSION" ]; then
+            echo "::error file=.swiftformat::.swiftformat pins SwiftFormat $pinned but this workflow installs $SWIFTFORMAT_VERSION; the two must be bumped together."
+            exit 1
+          fi
+          zip="$RUNNER_TEMP/swiftformat_linux.zip"
+          curl -fsSL --retry 3 -o "$zip" \
+            "https://github.com/nicklockwood/SwiftFormat/releases/download/${SWIFTFORMAT_VERSION}/swiftformat_linux.zip"
+          echo "${SWIFTFORMAT_LINUX_SHA256}  ${zip}" | sha256sum -c -
+          unzip -q "$zip" -d "$RUNNER_TEMP/swiftformat"
+          chmod +x "$RUNNER_TEMP/swiftformat/swiftformat_linux"
+          echo "SWIFTFORMAT=$RUNNER_TEMP/swiftformat/swiftformat_linux" >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/swiftformat/swiftformat_linux" --version
+
+      # Only the files this change touches. The tree was written for years
+      # without a formatter, so a repo-wide gate would be red on arrival; the
+      # scoped gate converges the tree as it is edited, and one mechanical
+      # commit will format the remainder later. See docs/DEVELOPMENT.md.
+      - name: SwiftFormat gate (files this change touches)
+        env:
+          # Push events only: the commit the branch was on before this push.
+          # Deliberately blank everywhere else so the script falls through to the
+          # pull request's base branch. `github.event.before` is empty when a PR
+          # is opened but carries the *previous head* on every later synchronize,
+          # so passing it unconditionally silently narrowed the gate to the last
+          # push's delta instead of everything the PR changes.
+          SWIFTFORMAT_LINT_BASE: ${{ github.event_name == 'push' && github.event.before || '' }}
+        run: script/swiftformat_lint.sh
+
+      # Never fails. This is the burn-down number for the step-2 commit, printed
+      # where it can be watched rather than re-derived by hand.
+      - name: SwiftFormat debt in the rest of the tree
+        if: always()
+        run: script/swiftformat_lint.sh --all --summary || true
 
       - name: Shell scripts are executable and have a shebang
         run: |

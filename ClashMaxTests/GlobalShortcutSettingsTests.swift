@@ -1,5 +1,5 @@
-import XCTest
 @testable import ClashMax
+import XCTest
 
 // Carbon key codes and modifier masks, spelled out so these expectations do not depend on
 // the machine's keyboard layout the way a rendered `displayName` does.
@@ -46,7 +46,7 @@ final class GlobalShortcutSettingsTests: XCTestCase {
     let settings = GlobalShortcutSettings(bindings: [
       GlobalShortcutBinding(action: .startStop, shortcut: arrow, enabled: true),
       GlobalShortcutBinding(action: .stop, shortcut: punctuation, enabled: true),
-      GlobalShortcutBinding(action: .restart, shortcut: functionKey, enabled: true)
+      GlobalShortcutBinding(action: .restart, shortcut: functionKey, enabled: true),
     ])
 
     XCTAssertNil(settings.validationError)
@@ -117,7 +117,7 @@ final class GlobalShortcutSettingsTests: XCTestCase {
   func testSettingsRejectCommandOnlyShortcuts() throws {
     let shortcut = try XCTUnwrap(KeyboardShortcutDescriptor(string: "cmd+p"))
     let settings = GlobalShortcutSettings(bindings: [
-      GlobalShortcutBinding(action: .startStop, shortcut: shortcut, enabled: true)
+      GlobalShortcutBinding(action: .startStop, shortcut: shortcut, enabled: true),
     ])
 
     XCTAssertEqual(shortcut.carbonModifiers, modifiersCommand)
@@ -132,7 +132,7 @@ final class GlobalShortcutSettingsTests: XCTestCase {
     let shortcut = try XCTUnwrap(KeyboardShortcutDescriptor(string: "cmd+shift+p"))
     let settings = GlobalShortcutSettings(bindings: [
       GlobalShortcutBinding(action: .startStop, shortcut: shortcut, enabled: true),
-      GlobalShortcutBinding(action: .toggleSystemProxy, shortcut: shortcut, enabled: true)
+      GlobalShortcutBinding(action: .toggleSystemProxy, shortcut: shortcut, enabled: true),
     ])
 
     XCTAssertNotNil(settings.validationError)
@@ -140,17 +140,17 @@ final class GlobalShortcutSettingsTests: XCTestCase {
   }
 
   func testAliasPairsConflictBeforeRegistration() throws {
-    let settings = GlobalShortcutSettings(bindings: [
+    let settings = try GlobalShortcutSettings(bindings: [
       GlobalShortcutBinding(
         action: .startStop,
-        shortcut: try XCTUnwrap(KeyboardShortcutDescriptor(string: "cmd+shift+enter")),
+        shortcut: XCTUnwrap(KeyboardShortcutDescriptor(string: "cmd+shift+enter")),
         enabled: true
       ),
       GlobalShortcutBinding(
         action: .toggleSystemProxy,
-        shortcut: try XCTUnwrap(KeyboardShortcutDescriptor(string: "cmd+shift+return")),
+        shortcut: XCTUnwrap(KeyboardShortcutDescriptor(string: "cmd+shift+return")),
         enabled: true
-      )
+      ),
     ])
 
     XCTAssertEqual(settings.conflictDescriptions.count, 1)
@@ -164,17 +164,17 @@ final class GlobalShortcutSettingsTests: XCTestCase {
   func testManagerRegistersOnlyEnabledValidBindings() throws {
     let registrar = RecordingGlobalShortcutRegistrar()
     let manager = GlobalShortcutManager(registrar: registrar)
-    let settings = GlobalShortcutSettings(bindings: [
+    let settings = try GlobalShortcutSettings(bindings: [
       GlobalShortcutBinding(
         action: .startStop,
-        shortcut: try XCTUnwrap(KeyboardShortcutDescriptor(string: "cmd+shift+p")),
+        shortcut: XCTUnwrap(KeyboardShortcutDescriptor(string: "cmd+shift+p")),
         enabled: true
       ),
       GlobalShortcutBinding(
         action: .stop,
-        shortcut: try XCTUnwrap(KeyboardShortcutDescriptor(string: "cmd+shift+s")),
+        shortcut: XCTUnwrap(KeyboardShortcutDescriptor(string: "cmd+shift+s")),
         enabled: false
-      )
+      ),
     ])
 
     let failures = manager.apply(settings) { _ in }
@@ -189,7 +189,7 @@ final class GlobalShortcutSettingsTests: XCTestCase {
     let registrar = RecordingGlobalShortcutRegistrar(failuresToReturn: [failure])
     let manager = GlobalShortcutManager(registrar: registrar)
     let settings = GlobalShortcutSettings(bindings: [
-      GlobalShortcutBinding(action: .startStop, shortcut: shortcut, enabled: true)
+      GlobalShortcutBinding(action: .startStop, shortcut: shortcut, enabled: true),
     ])
 
     let failures = manager.apply(settings) { _ in }

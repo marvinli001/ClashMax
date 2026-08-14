@@ -139,7 +139,7 @@ struct DNSOverridePlan: Equatable, Sendable {
   var plainTextLines: [String] {
     var lines = [
       "DNS Override: \(hasOverride ? "Active" : "None")",
-      "DNS Enabled: \(isEnabled ? "yes" : "no") (\(enablement.rawValue))"
+      "DNS Enabled: \(isEnabled ? "yes" : "no") (\(enablement.rawValue))",
     ]
     if !overriddenFields.isEmpty {
       lines.append("Overridden Keys: \(overriddenFieldNames.joined(separator: ", "))")

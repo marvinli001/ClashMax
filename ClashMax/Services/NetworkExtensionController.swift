@@ -50,7 +50,7 @@ struct NetworkExtensionRuntimeConfiguration: Equatable, Sendable {
       "dnsFakeIPEnabled": dnsFakeIPEnabled,
       "systemDNSOverrideEnabled": systemDNSOverrideEnabled,
       "systemDNSServers": systemDNSServers,
-      "systemDNSOverrideApplied": systemDNSOverrideApplied
+      "systemDNSOverrideApplied": systemDNSOverrideApplied,
     ]
   }
 }
@@ -356,7 +356,7 @@ final class NetworkExtensionController {
     self.systemExtensionRequester = systemExtensionRequester
     self.transparentProxyManager = transparentProxyManager
     self.launchServicesRegistrar = launchServicesRegistrar
-    self.diagnosticsStore = diagnosticsURL.map { NetworkExtensionDiagnosticsFileStore(fileURL: $0) } ?? Self.defaultDiagnosticsStore()
+    diagnosticsStore = diagnosticsURL.map { NetworkExtensionDiagnosticsFileStore(fileURL: $0) } ?? Self.defaultDiagnosticsStore()
   }
 
   private static func defaultDiagnosticsStore() -> NetworkExtensionDiagnosticsFileStore {
@@ -468,7 +468,7 @@ final class NetworkExtensionController {
         throw error
       }
     } catch {
-      vpnStatus = (try? await transparentProxyManager.status(
+      vpnStatus = await (try? transparentProxyManager.status(
         forProviderBundleIdentifier: configuration.providerBundleIdentifier
       )) ?? .disconnected
       let message = UserFacingError.message(for: error)
@@ -522,7 +522,7 @@ final class NetworkExtensionController {
     let candidates = [
       Self.networkExtensionsSettingsURL,
       URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension"),
-      URL(fileURLWithPath: "/System/Applications/System Settings.app")
+      URL(fileURLWithPath: "/System/Applications/System Settings.app"),
     ].compactMap(\.self)
 
     for url in candidates where NSWorkspace.shared.open(url) {
@@ -746,8 +746,8 @@ final class LaunchServicesAppRegistrar: LaunchServicesRegistering {
         userInfo: [
           NSLocalizedDescriptionKey: [
             "Could not refresh LaunchServices registration for /Applications/ClashMax.app.",
-            output
-          ].filter { !$0.isEmpty }.joined(separator: " ")
+            output,
+          ].filter { !$0.isEmpty }.joined(separator: " "),
         ]
       )
     }
@@ -787,7 +787,7 @@ final class NETransparentProxyManagerAdapter: TransparentProxyManaging {
       "dnsFakeIPEnabled": NSNumber(value: configuration.dnsFakeIPEnabled),
       "systemDNSOverrideEnabled": NSNumber(value: configuration.systemDNSOverrideEnabled),
       "systemDNSServers": configuration.systemDNSServers as NSArray,
-      "systemDNSOverrideApplied": NSNumber(value: configuration.systemDNSOverrideApplied)
+      "systemDNSOverrideApplied": NSNumber(value: configuration.systemDNSOverrideApplied),
     ])
     return try await waitForStartResult(manager)
   }

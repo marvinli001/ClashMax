@@ -1,5 +1,5 @@
-import XCTest
 @testable import ClashMax
+import XCTest
 
 @MainActor
 final class ProviderAnalyticsStoreTests: XCTestCase {
@@ -172,7 +172,7 @@ final class ProviderAnalyticsStoreTests: XCTestCase {
       updatedAt: nil,
       proxies: [
         Self.proxyNode(name: "Japan", type: "Vless"),
-        Self.proxyNode(name: "Singapore", type: "Vless")
+        Self.proxyNode(name: "Singapore", type: "Vless"),
       ]
     )
     let currentRuleProvider = RuleProvider(

@@ -231,7 +231,8 @@ enum ProxyEffectDiagnosticsBuilder {
     }
     if input.routingMode == .neProxy,
        input.networkExtensionEnabled,
-       let neIssue = networkExtensionIssue(input.networkExtensionDiagnostics) {
+       let neIssue = networkExtensionIssue(input.networkExtensionDiagnostics)
+    {
       return make(
         status: .warn,
         cause: .networkExtensionDegraded,

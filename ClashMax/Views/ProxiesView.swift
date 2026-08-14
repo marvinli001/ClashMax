@@ -477,12 +477,12 @@ private struct ProxyGroupListAnimationState: Equatable {
     searchQuery: String,
     sortOrder: ProxyNodeSort
   ) {
-    self.groupIDs = groups.map(\.id)
+    groupIDs = groups.map(\.id)
     self.expandedGroupIDs = expandedGroupIDs.sorted()
-    self.nodeIDsByGroup = groups.map { group in
+    nodeIDsByGroup = groups.map { group in
       group.nodes.map(\.id)
     }
-    self.selections = groups.map { group in
+    selections = groups.map { group in
       group.selected ?? ""
     }
     self.searchQuery = searchQuery
@@ -530,7 +530,7 @@ enum ProxyGroupExpansionPolicy {
       return defaultExpandedIDs(for: groups)
     }
     let retained = current.intersection(groupIDs)
-    if !current.isEmpty && retained.isEmpty {
+    if !current.isEmpty, retained.isEmpty {
       return defaultExpandedIDs(for: groups)
     }
     return retained
@@ -540,7 +540,7 @@ enum ProxyGroupExpansionPolicy {
     guard let current else { return nil }
     let groupIDs = Set(groups.map(\.id))
     let retained = current.intersection(groupIDs)
-    if !current.isEmpty && retained.isEmpty {
+    if !current.isEmpty, retained.isEmpty {
       return defaultExpandedIDs(for: groups)
     }
     return retained
@@ -616,7 +616,7 @@ enum ProxyGroupSelectionPolicy {
   }
 }
 
-struct ProxyGroupSearchFilter {
+enum ProxyGroupSearchFilter {
   static func filteredGroups(from groups: [ProxyGroup], searchQuery: ProxySearchQuery) -> [ProxyGroup] {
     guard !searchQuery.isEmpty else { return groups }
     return groups.compactMap { group in
@@ -650,9 +650,9 @@ struct ProxySearchQuery: Equatable, Sendable {
         parsedTerms.append(term)
       }
     }
-    self.terms = parsedTerms
-    self.isCaseSensitive = parsedCaseSensitive
-    self.isWholeWord = parsedWholeWord
+    terms = parsedTerms
+    isCaseSensitive = parsedCaseSensitive
+    isWholeWord = parsedWholeWord
   }
 
   var isEmpty: Bool {
@@ -716,9 +716,9 @@ struct ProxySearchQuery: Equatable, Sendable {
       node.name,
       node.type,
       node.providerName,
-      node.endpointSummary
+      node.endpointSummary,
     ]
-    .compactMap { $0 }
+    .compactMap(\.self)
     .joined(separator: " ")
   }
 
@@ -830,12 +830,12 @@ private struct ProxyGroupSplitView: View {
     customDelayTestURLText: Binding<String>
   ) {
     self.groups = groups
-    self._selectedGroupID = selectedGroupID
+    _selectedGroupID = selectedGroupID
     self.nodePresentation = nodePresentation
     self.showsNodeDetails = showsNodeDetails
     self.closesOldConnectionsAfterSwitch = closesOldConnectionsAfterSwitch
     self.isDelayBatchRunning = isDelayBatchRunning
-    self._customDelayTestURLText = customDelayTestURLText
+    _customDelayTestURLText = customDelayTestURLText
   }
 
   var body: some View {
@@ -866,7 +866,8 @@ private struct ProxyGroupSplitView: View {
 
   private var selectedGroup: ProxyGroup? {
     if let selectedGroupID,
-       let group = groups.first(where: { $0.id == selectedGroupID }) {
+       let group = groups.first(where: { $0.id == selectedGroupID })
+    {
       return group
     }
     return groups.first
@@ -937,7 +938,7 @@ private struct ProxyGroupNavigatorRow: View {
 
   private var subtitle: String {
     let selected = group.selected ?? "No selection"
-    let best = group.nodes.compactMap { $0.resolvedDelayState.measuredDelay }.min()
+    let best = group.nodes.compactMap(\.resolvedDelayState.measuredDelay).min()
     if let best {
       return "\(group.nodes.count) nodes - \(selected) - best \(best) ms"
     }
@@ -997,7 +998,6 @@ private struct ProxyGroupDetailPane: View {
     }
   }
 
-  @ViewBuilder
   private var nodeCards: some View {
     ForEach(group.nodes) { node in
       ProxyNodeCard(
@@ -1184,12 +1184,12 @@ private struct ProxyDelayBatchProgressStrip: View {
     switch progress.status {
     case .running, .completed:
       return .secondary
-      case .partiallyCompleted, .cancelled:
-        return .orange
-      case .failed:
-        return .orange
-      }
+    case .partiallyCompleted, .cancelled:
+      return .orange
+    case .failed:
+      return .orange
     }
+  }
 
   private var metrics: some View {
     HStack(spacing: 8) {
@@ -1212,11 +1212,11 @@ private struct ProxyDelayBatchProgressStrip: View {
         systemImage: ProxyDelayFailureKind.timeout.systemImage,
         color: .orange
       )
-        ProxyDelayBatchMetric(
-          text: "\(progress.failed)",
-          systemImage: ProxyDelayFailureKind.other.systemImage,
-          color: .orange
-        )
+      ProxyDelayBatchMetric(
+        text: "\(progress.failed)",
+        systemImage: ProxyDelayFailureKind.other.systemImage,
+        color: .orange
+      )
       if progress.cancelled > 0 {
         ProxyDelayBatchMetric(
           text: "\(progress.cancelled)",
@@ -1304,9 +1304,9 @@ private struct ProxyDelayBatchProgressStrip: View {
     failures: [ProxyDelayBatchFailure]
   ) -> some View {
     VStack(alignment: .leading, spacing: 3) {
-        Label("\(kind.displayName) \(count)", systemImage: kind.systemImage)
-          .font(.caption)
-          .foregroundStyle(.orange)
+      Label("\(kind.displayName) \(count)", systemImage: kind.systemImage)
+        .font(.caption)
+        .foregroundStyle(.orange)
       ForEach(failures.prefix(3)) { failure in
         Text("\(failure.displayName): \(failure.message)")
           .font(.caption2)
@@ -1497,7 +1497,7 @@ private struct ProxyGroupCard: View {
             closesOldConnectionsAfterSwitch: closesOldConnectionsAfterSwitch,
             isDelayBatchRunning: isDelayBatchRunning
           )
-            .transition(ProxyInteractionAnimation.nodeTransition(reduceMotion: reduceMotion))
+          .transition(ProxyInteractionAnimation.nodeTransition(reduceMotion: reduceMotion))
         }
       }
       .padding(10)
@@ -1564,7 +1564,7 @@ private struct ProxyGroupCard: View {
   }
 
   private var groupHeaderAccessibilityLabel: String {
-    return "\(isExpanded ? "Collapse" : "Expand") \(group.name)"
+    "\(isExpanded ? "Collapse" : "Expand") \(group.name)"
   }
 
   private var nodeCountLabel: some View {
@@ -1594,8 +1594,6 @@ private struct ProxyGroupCard: View {
         let delayDisplay = ProxyDelayDisplay(state: selectedNode.resolvedDelayState)
         Text(delayDisplay.label)
           .foregroundStyle(delayDisplay.tone.color)
-      } else {
-        EmptyView()
       }
     }
     .font(.caption.monospacedDigit())
@@ -1900,14 +1898,14 @@ struct ProxyDelayDisplay: Equatable {
     case let .measured(delay):
       label = "\(delay) ms"
       tone = ProxyDelayTone(delay: delay)
-      case .timeout:
-        label = "Timeout"
-        tone = .timeout
-      case .error:
-        label = "No result"
-        tone = .error
-      }
+    case .timeout:
+      label = "Timeout"
+      tone = .timeout
+    case .error:
+      label = "No result"
+      tone = .error
     }
+  }
 }
 
 enum ProxyDelayTone: Equatable {
@@ -1943,17 +1941,17 @@ enum ProxyDelayTone: Equatable {
       return .green
     case .good:
       return .mint
-      case .moderate:
-        return .yellow
-      case .slow:
-        return .orange
-      case .timeout:
-        return .orange
-      case .error:
-        return .orange
-      }
+    case .moderate:
+      return .yellow
+    case .slow:
+      return .orange
+    case .timeout:
+      return .orange
+    case .error:
+      return .orange
     }
   }
+}
 
 private struct DelayChip: View {
   let display: ProxyDelayDisplay

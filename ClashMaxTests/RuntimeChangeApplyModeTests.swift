@@ -1,5 +1,5 @@
-import XCTest
 @testable import ClashMax
+import XCTest
 
 final class RuntimeChangeApplyModeTests: XCTestCase {
   func testRuleAndDNSEditsHotReloadForEveryRunningOwner() {
@@ -23,7 +23,7 @@ final class RuntimeChangeApplyModeTests: XCTestCase {
       .profileOptions,
       .inboundPort,
       .controllerEndpoint,
-      .networkExtensionRouting
+      .networkExtensionRouting,
     ] {
       XCTAssertEqual(RuntimeChangeApplyMode.resolve(change, in: .stopped), .appliesOnNextStart)
     }
@@ -82,7 +82,7 @@ final class RuntimeChangeApplyModeTests: XCTestCase {
     for outcome: RuntimeApplyOutcome in [
       .applied(.rules),
       .restartNeeded(.inboundPort, .networkExtensionEndpointPinned),
-      .savedForNextStart(.dns)
+      .savedForNextStart(.dns),
     ] {
       XCTAssertFalse(outcome.isFailure)
       XCTAssertFalse(outcome.title.isEmpty)

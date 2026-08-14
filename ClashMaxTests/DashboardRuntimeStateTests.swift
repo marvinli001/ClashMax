@@ -1,10 +1,10 @@
 import AppKit
+@testable import ClashMax
 import Observation
 import ServiceManagement
 import SwiftUI
 import XCTest
 import Yams
-@testable import ClashMax
 
 @MainActor
 final class DashboardRuntimeStateTests: XCTestCase {
@@ -36,10 +36,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
   func testNoActiveProfileBlocksDashboard() throws {
     let paths = try Self.makeRuntimePaths()
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
 
     guard case let .blocked(reason) = model.dashboardRuntimeState else {
@@ -95,11 +95,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
       in: paths.appSupport,
       rejectedToken: "never-matched"
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: profileStore,
       outboundProxyEndpointStore: endpointStore,
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       bundledCoreURLProvider: { preflightCore }
     )
 
@@ -133,11 +133,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
       in: paths.appSupport,
       rejectedToken: "never-matched"
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: profileStore,
       outboundProxyEndpointStore: endpointStore,
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       bundledCoreURLProvider: { preflightCore }
     )
     let endpoint = OutboundProxyEndpoint(
@@ -192,11 +192,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
       in: paths.appSupport,
       rejectedToken: "never-matched"
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: profileStore,
       outboundProxyEndpointStore: endpointStore,
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       bundledCoreURLProvider: { preflightCore }
     )
 
@@ -226,11 +226,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
     try await endpointStore.add(endpoint, password: nil)
     _ = try await profileStore.addManualProxyProfile(name: "Manual reference", endpointID: endpoint.id)
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: profileStore,
       outboundProxyEndpointStore: endpointStore,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
 
     let didDelete = await model.deleteOutboundProxyEndpoint(endpoint.id)
@@ -284,13 +284,13 @@ final class DashboardRuntimeStateTests: XCTestCase {
       in: paths.appSupport,
       rejectedToken: "never-matched"
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: profileStore,
       outboundProxyEndpointStore: endpointStore,
       coreController: controller,
       apiClient: client,
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       bundledCoreURLProvider: { preflightCore }
     )
     try await controller.startUserMode(
@@ -452,12 +452,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
     let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
     let preflightCore = try Self.makeRuleOverlayPreflightCore(in: paths.appSupport, rejectedToken: "never-matched")
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       apiClient: client,
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       bundledCoreURLProvider: { preflightCore }
     )
     try await controller.startUserMode(
@@ -523,12 +523,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
     // Validate the snippet preflight against a stub core instead of spawning the
     // real bundled mihomo, which the unsigned test host kills (SIGKILL → exit 9).
     let preflightCore = try Self.makeRuleOverlayPreflightCore(in: paths.appSupport, rejectedToken: "never-matched")
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       apiClient: client,
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       bundledCoreURLProvider: { preflightCore }
     )
     try await controller.startUserMode(
@@ -544,7 +544,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         RuleOverlaySettings(
           enabled: true,
           prependRules: [
-            ManagedRuleOverlayRule(kind: .domainSuffix, value: "inactive.example", policy: "DIRECT")
+            ManagedRuleOverlayRule(kind: .domainSuffix, value: "inactive.example", policy: "DIRECT"),
           ]
         )
       )
@@ -556,7 +556,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         RuleOverlaySettings(
           enabled: true,
           prependRules: [
-            ManagedRuleOverlayRule(kind: .domainSuffix, value: "active.example", policy: "DIRECT")
+            ManagedRuleOverlayRule(kind: .domainSuffix, value: "active.example", policy: "DIRECT"),
           ]
         )
       )
@@ -575,7 +575,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(model.lastRuntimeApplyOutcome, .applied(.rules))
     let reloadPaths = await client.reloadRequestPaths()
     XCTAssertEqual(reloadPaths.count, 1)
-    let runtimeConfig = try String(contentsOfFile: try XCTUnwrap(reloadPaths.first), encoding: .utf8)
+    let runtimeConfig = try String(contentsOfFile: XCTUnwrap(reloadPaths.first), encoding: .utf8)
     XCTAssertTrue(runtimeConfig.contains("DOMAIN-SUFFIX,active.example,DIRECT"))
     XCTAssertFalse(runtimeConfig.contains("inactive.example"))
   }
@@ -599,12 +599,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
       reloadFailureMessage: "reload rejected"
     )
     let preflightCore = try Self.makeRuleOverlayPreflightCore(in: paths.appSupport, rejectedToken: "never-matched")
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       apiClient: client,
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       bundledCoreURLProvider: { preflightCore }
     )
     await model.runtimeSnippetLibrary.waitForLoad()
@@ -615,7 +615,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         RuleOverlaySettings(
           enabled: true,
           prependRules: [
-            ManagedRuleOverlayRule(kind: .domainSuffix, value: "stable.example", policy: "DIRECT")
+            ManagedRuleOverlayRule(kind: .domainSuffix, value: "stable.example", policy: "DIRECT"),
           ]
         )
       )
@@ -634,7 +634,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         RuleOverlaySettings(
           enabled: true,
           prependRules: [
-            ManagedRuleOverlayRule(kind: .domainSuffix, value: "rejected.example", policy: "DIRECT")
+            ManagedRuleOverlayRule(kind: .domainSuffix, value: "rejected.example", policy: "DIRECT"),
           ]
         )
       )
@@ -691,12 +691,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
     // Stub the preflight core (real bundled mihomo is SIGKILLed in the unsigned
     // test host); the preflight must pass so the reload step can be exercised.
     let preflightCore = try Self.makeRuleOverlayPreflightCore(in: paths.appSupport, rejectedToken: "never-matched")
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       apiClient: client,
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       bundledCoreURLProvider: { preflightCore }
     )
     try await controller.startUserMode(
@@ -750,12 +750,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
     exit 0
     """.write(to: fakeCoreURL, atomically: true, encoding: .utf8)
     try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeCoreURL.path)
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       apiClient: client,
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       bundledCoreURLProvider: { fakeCoreURL }
     )
     try await controller.startUserMode(
@@ -885,11 +885,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
       nodes: [ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true)]
     )
     let client = RecordingMihomoController(proxyGroupsResponse: [group], testDelayResult: 73)
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       apiClient: client,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
 
     XCTAssertFalse(model.canControlRuntimeProxies)
@@ -917,12 +917,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
       reaper: RecordingCoreProcessReaper(),
       portChecker: EmptyRuntimePortChecker()
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       bundledCoreURLProvider: { URL(fileURLWithPath: "/tmp/mihomo") }
     )
     await model.waitForProfilePreviewRefresh()
@@ -993,12 +993,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
       reaper: RecordingCoreProcessReaper(),
       portChecker: EmptyRuntimePortChecker()
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       bundledCoreURLProvider: { URL(fileURLWithPath: "/tmp/mihomo") }
     )
     await model.waitForProfilePreviewRefresh()
@@ -1030,12 +1030,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
       reaper: RecordingCoreProcessReaper(),
       portChecker: EmptyRuntimePortChecker()
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     let group = ProxyGroup(
       name: "Proxy",
@@ -1074,12 +1074,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
       reaper: RecordingCoreProcessReaper(),
       portChecker: EmptyRuntimePortChecker()
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     await model.waitForProfilePreviewRefresh()
     model.warmPreviewRuntimeOnLaunch()
@@ -1115,12 +1115,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
       reaper: RecordingCoreProcessReaper(),
       portChecker: EmptyRuntimePortChecker()
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     await model.waitForProfilePreviewRefresh()
     model.warmPreviewRuntimeOnLaunch()
@@ -1164,12 +1164,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
       reaper: RecordingCoreProcessReaper(),
       portChecker: EmptyRuntimePortChecker()
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       bundledCoreURLProvider: { URL(fileURLWithPath: "/tmp/mihomo") }
     )
     let didSelectFirstProfile = await model.selectProfileAsync(firstProfile)
@@ -1216,12 +1216,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
       nodes: [ProxyNode(name: "Japan", type: "direct", delay: nil, isSelectable: true)]
     )
     let client = RecordingMihomoController(proxyGroupsResponse: [group], testDelayResult: 73)
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       apiClient: client,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.proxyGroups = [group]
     try await controller.startUserMode(
@@ -1409,10 +1409,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
   func testRuntimeDiagnosticsReportRedactsControllerSecret() throws {
     let paths = try Self.makeRuntimePaths()
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.externalControllerSettings = ExternalControllerSettings(
       host: "127.0.0.1",
@@ -1512,11 +1512,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
       countryName: "United States"
     )
     let paths = try Self.makeRuntimePaths()
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       publicIPInfoClient: RecordingPublicIPInfoFetcher(infos: [info]),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.tunnelCoreRunning = true
     model.proxyRoutingMode = ProxyRoutingMode.systemProxy
@@ -1528,9 +1528,9 @@ final class DashboardRuntimeStateTests: XCTestCase {
         selected: korean,
         nodes: [
           ProxyNode(name: "Provider: Remote", type: "provider", delay: nil, isSelectable: true),
-          ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: true)
+          ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: true),
         ]
-      )
+      ),
     ]
     model.proxyProviders = [
       ProxyProvider(
@@ -1539,7 +1539,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         vehicleType: nil,
         updatedAt: nil,
         proxies: [ProxyNode(name: korean, type: "trojan", delay: 142, isSelectable: true)]
-      )
+      ),
     ]
     model.refreshPublicIPInfo(force: true)
     try await Self.waitForPublicIPInfo(model, expectedIP: "198.51.100.9")
@@ -1602,13 +1602,13 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let overlay = RuleOverlaySettings(
       enabled: true,
       prependRules: [
-        ManagedRuleOverlayRule(kind: .domainSuffix, value: "corp.example", policy: "DIRECT")
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "corp.example", policy: "DIRECT"),
       ],
       appendRules: [
-        ManagedRuleOverlayRule(kind: .match, policy: "Proxy")
+        ManagedRuleOverlayRule(kind: .match, policy: "Proxy"),
       ],
       disabledRuleMatchers: [
-        ManagedRuleDisableMatcher(mode: .contains, pattern: "ads.example")
+        ManagedRuleDisableMatcher(mode: .contains, pattern: "ads.example"),
       ]
     )
 
@@ -1654,7 +1654,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let overlay = RuleOverlaySettings(
       enabled: true,
       prependRules: [
-        ManagedRuleOverlayRule(kind: .domainSuffix, value: "bad-preflight.example", policy: "DIRECT")
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "bad-preflight.example", policy: "DIRECT"),
       ]
     )
 
@@ -1691,7 +1691,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let overlay = RuleOverlaySettings(
       enabled: true,
       prependRules: [
-        ManagedRuleOverlayRule(kind: .domainSuffix, value: "bad-preflight.example", policy: "DIRECT")
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "bad-preflight.example", policy: "DIRECT"),
       ]
     )
 
@@ -1720,12 +1720,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
     let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
     let preflightCore = try Self.makeRuleOverlayPreflightCore(in: paths.appSupport, rejectedToken: "never-matched")
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       apiClient: client,
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       bundledCoreURLProvider: { preflightCore }
     )
     try await controller.startUserMode(
@@ -1737,7 +1737,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let overlay = RuleOverlaySettings(
       enabled: true,
       prependRules: [
-        ManagedRuleOverlayRule(kind: .domainSuffix, value: "live.example", policy: "DIRECT")
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "live.example", policy: "DIRECT"),
       ]
     )
 
@@ -1748,7 +1748,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(model.lastRuntimeApplyOutcome, .applied(.rules))
     let reloadPaths = await client.reloadRequestPaths()
     XCTAssertEqual(reloadPaths.count, 1)
-    let runtimeConfig = try String(contentsOfFile: try XCTUnwrap(reloadPaths.first), encoding: .utf8)
+    let runtimeConfig = try String(contentsOfFile: XCTUnwrap(reloadPaths.first), encoding: .utf8)
     XCTAssertTrue(runtimeConfig.contains("DOMAIN-SUFFIX,live.example,DIRECT"))
   }
 
@@ -1783,7 +1783,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let stableOverlay = RuleOverlaySettings(
       enabled: true,
       prependRules: [
-        ManagedRuleOverlayRule(kind: .domainSuffix, value: "stable.example", policy: "DIRECT")
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "stable.example", policy: "DIRECT"),
       ]
     )
     model.ruleOverlaySettings = stableOverlay
@@ -1796,7 +1796,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let rejectedOverlay = RuleOverlaySettings(
       enabled: true,
       prependRules: [
-        ManagedRuleOverlayRule(kind: .domainSuffix, value: "rejected.example", policy: "DIRECT")
+        ManagedRuleOverlayRule(kind: .domainSuffix, value: "rejected.example", policy: "DIRECT"),
       ]
     )
 
@@ -1833,7 +1833,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         "strictRoute": true,
         "autoDetectInterface": false,
         "dnsHijack": ["any:53"],
-        "mtu": 1400
+        "mtu": 1400,
       ],
       forKey: Self.tunSettingsDefaultsKey,
       defaults: defaults
@@ -1894,7 +1894,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         "fakeIPRange": "198.18.0.1/16",
         "systemDNSOverrideEnabled": true,
         "systemDNSServers": ["114.114.114.114"],
-        "dns": [:]
+        "dns": [:],
       ],
       forKey: Self.tunSettingsDefaultsKey,
       defaults: defaults
@@ -1929,8 +1929,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
         "systemDNSServers": ["114.114.114.114"],
         "dns": [
           "nameserver": ["https://dns.example/dns-query"],
-          "fakeIPFilter": ["*.custom"]
-        ]
+          "fakeIPFilter": ["*.custom"],
+        ],
       ],
       forKey: Self.tunSettingsDefaultsKey,
       defaults: defaults
@@ -1997,10 +1997,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
   func testUpdatingTunSettingsRejectsInvalidCIDRAndSystemDNS() throws {
     let paths = try Self.makeRuntimePaths()
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
 
     var settings = TunSettings.default
@@ -2048,7 +2048,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         "enabled": false,
         "host": "localhost",
         "port": 19197,
-        "secret": "saved-secret"
+        "secret": "saved-secret",
       ],
       forKey: Self.externalControllerSettingsDefaultsKey,
       defaults: defaults
@@ -2091,7 +2091,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(model.saveExternalDashboardProfile(profile, secret: "dashboard-secret"))
     let saved = try XCTUnwrap(model.externalDashboardProfiles.first { $0.name == "Local YACD" })
     let account = try XCTUnwrap(saved.secretAccount)
-    let encodedProfiles = String(data: try JSONEncoder().encode(model.externalDashboardProfiles), encoding: .utf8)
+    let encodedProfiles = try String(data: JSONEncoder().encode(model.externalDashboardProfiles), encoding: .utf8)
 
     XCTAssertEqual(dashboardSecrets.storedValues[account], "dashboard-secret")
     XCTAssertFalse(encodedProfiles?.contains("dashboard-secret") == true)
@@ -2217,8 +2217,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
         "port": 19198,
         "secret": "saved-secret",
         "cors": [
-          "enabled": true
-        ]
+          "enabled": true,
+        ],
       ],
       forKey: Self.externalControllerSettingsDefaultsKey,
       defaults: defaults
@@ -2258,9 +2258,9 @@ final class DashboardRuntimeStateTests: XCTestCase {
             "https://custom.example",
             "https://yacd.metacubex.one",
             "https://metacubex.github.io",
-            "https://board.zash.run.place"
-          ]
-        ]
+            "https://board.zash.run.place",
+          ],
+        ],
       ],
       forKey: Self.externalControllerSettingsDefaultsKey,
       defaults: defaults
@@ -2288,7 +2288,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         "logLevel": "debug",
         "unifiedDelay": true,
         "dnsEnabled": true,
-        "tunEnabled": true
+        "tunEnabled": true,
       ]
     )
 
@@ -2315,7 +2315,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     try Self.storeJSON(
       [
         "mode": "nativePing",
-        "unifiedDelay": true
+        "unifiedDelay": true,
       ],
       forKey: Self.delayTestSettingsDefaultsKey,
       defaults: defaults
@@ -2348,7 +2348,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       closesOldConnectionsAfterSwitch: true,
       customDelayTestURLsByGroupName: [
         "Proxy": " https://example.com/delay ",
-        "Auto": "https://example.com/auto"
+        "Auto": "https://example.com/auto",
       ]
     )
 
@@ -2380,8 +2380,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
         "sortOrder": "delay",
         "customDelayTestURLsByGroupName": [
           " Proxy ": " https://example.com/delay ",
-          "Empty": ""
-        ]
+          "Empty": "",
+        ],
       ],
       forKey: Self.proxyPageSettingsDefaultsKey,
       defaults: defaults
@@ -2439,7 +2439,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         "customBypassDomains": ["localhost", "*.corp"],
         "useDefaultBypass": false,
         "validateBypass": false,
-        "guardEnabled": true
+        "guardEnabled": true,
       ],
       forKey: Self.systemProxySettingsDefaultsKey,
       defaults: defaults
@@ -2467,7 +2467,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         "useDefaultBypass": false,
         "validateBypass": false,
         "guardEnabled": true,
-        "guardIntervalSeconds": "slow"
+        "guardIntervalSeconds": "slow",
       ]
     )
 
@@ -2490,8 +2490,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
           " https://custom.example ",
           "https://custom.example",
           "\n",
-          "HTTPS://PANEL.EXAMPLE"
-        ]
+          "HTTPS://PANEL.EXAMPLE",
+        ],
       ]
     )
 
@@ -2512,12 +2512,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
           "",
           "\n",
           " *.corp ",
-          "*.corp"
+          "*.corp",
         ],
         "useDefaultBypass": false,
         "validateBypass": true,
         "guardEnabled": true,
-        "guardIntervalSeconds": 10
+        "guardIntervalSeconds": 10,
       ]
     )
 
@@ -2569,7 +2569,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
             ssid: "CorpWiFi",
             proxyRoutingMode: .systemProxy,
             enableSystemProxy: true
-          )
+          ),
         ]
       )
     )
@@ -2796,11 +2796,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
   func testLaunchAtLoginRequiresApprovalReportsToggleOffWithApprovalMessage() async throws {
     let paths = try Self.makeRuntimePaths()
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       loginItemService: FakeLoginItemService(status: .requiresApproval),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
 
     XCTAssertFalse(model.launchSettings.launchAtLogin)
@@ -2850,11 +2850,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     // Not desired: never registers.
     let notDesired = FakeLoginItemService(status: .notRegistered)
-    let notDesiredModel = AppModel(
+    let notDesiredModel = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       loginItemService: notDesired,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     notDesiredModel.repairLaunchAtLoginRegistrationOnLaunch()
     XCTAssertEqual(notDesired.registerCount, 0)
@@ -2915,11 +2915,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
         userInfo: [NSLocalizedDescriptionKey: "registration denied"]
       )
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       loginItemService: service,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
 
     model.setLaunchAtLogin(true)
@@ -3132,10 +3132,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
   /// The bug as reported: connected to Wi-Fi, but Settings only ever said "No Wi-Fi SSID detected."
   func testRefreshReportsLocationAuthorizationInsteadOfBareNoSSIDMessage() throws {
     let paths = try Self.makeRuntimePaths()
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       currentNetworkProvider: StaticCurrentNetworkProvider(unavailable: .locationAuthorizationNotDetermined)
     )
 
@@ -3166,11 +3166,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
       proxyRoutingMode: .systemProxy,
       enableSystemProxy: true
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       systemProxyController: SystemProxyController(commandRunner: commandRunner),
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       currentNetworkProvider: provider
     )
     model.setProxyRoutingMode(.neProxy)
@@ -3218,12 +3218,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
       portChecker: EmptyRuntimePortChecker()
     )
     let runner = GateableCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       systemProxyController: SystemProxyController(commandRunner: runner),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
 
     // Bring the core up so leaving System Proxy will trigger a restart.
@@ -3308,12 +3308,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
       portChecker: EmptyRuntimePortChecker()
     )
     let runner = FailableCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       systemProxyController: SystemProxyController(commandRunner: runner),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
 
     try await controller.startUserMode(
@@ -3431,7 +3431,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       proxyRoutingMode: .neProxy,
       enableSystemProxy: false
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
@@ -3441,7 +3441,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         transparentProxyManager: proxyManager
       ),
       proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       currentNetworkProvider: provider,
       bundledCoreURLProvider: { URL(fileURLWithPath: "/tmp/mihomo") }
     )
@@ -3550,11 +3550,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
       proxyRoutingMode: .systemProxy,
       enableSystemProxy: true
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       systemProxyController: controller,
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       currentNetworkProvider: provider
     )
     model.networkPolicySettings = NetworkPolicySettings(rules: [rule], autoApplyEnabled: true)
@@ -3617,10 +3617,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let paths = try Self.makeRuntimePaths()
     let monitor = ManualNetworkEnvironmentMonitor()
     let rule = NetworkPolicyRule(name: "Office Wi-Fi", ssid: "CorpNet", proxyRoutingMode: .systemProxy)
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       currentNetworkProvider: StaticCurrentNetworkProvider(ssid: "corpnet"),
       networkEnvironmentMonitor: monitor
     )
@@ -3649,12 +3649,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
       reaper: RecordingCoreProcessReaper(),
       portChecker: EmptyRuntimePortChecker()
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       bundledCoreURLProvider: { URL(fileURLWithPath: "/tmp/mihomo") }
     )
     await model.waitForProfilePreviewRefresh()
@@ -3682,14 +3682,14 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let paths = try Self.makeRuntimePaths()
     let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
     let controller = SystemProxyController(commandRunner: commandRunner)
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       systemProxyController: controller,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
 
-    model.handleIncomingURL(try XCTUnwrap(URL(string: "clashmax://toggle-system-proxy")))
+    try model.handleIncomingURL(XCTUnwrap(URL(string: "clashmax://toggle-system-proxy")))
 
     for _ in 0..<40 where !model.systemProxyEnabled {
       await Task.yield()
@@ -3922,11 +3922,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
         "Enabled: Yes\nServer: 127.0.0.1\nPort: 17890\n",
         "Enabled: Yes\nServer: 127.0.0.1\nPort: 17890\n",
         "Enabled: No\nServer:\nPort: 0\n",
-        "Enabled: No\nServer:\nPort: 0\n"
+        "Enabled: No\nServer:\nPort: 0\n",
       ],
       "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi": Array(repeating: "Enabled: No\nServer:\nPort: 0\n", count: 6),
       "/usr/sbin/networksetup -getsocksfirewallproxy Wi-Fi": Array(repeating: "Enabled: No\nServer:\nPort: 0\n", count: 6),
-      "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": Array(repeating: "There aren't any bypass domains set.\n", count: 6)
+      "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": Array(repeating: "There aren't any bypass domains set.\n", count: 6),
     ])
     let controller = SystemProxyController(commandRunner: commandRunner, snapshotDefaults: defaults)
     let model = AppModel(
@@ -4107,7 +4107,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
   func testProxyNodeSorterKeepsProfileOrderButSortsByNameOnDemand() {
     let nodes = [
       ProxyNode(name: "z", type: "vless", delay: nil, isSelectable: true),
-      ProxyNode(name: "a", type: "vless", delay: nil, isSelectable: true)
+      ProxyNode(name: "a", type: "vless", delay: nil, isSelectable: true),
     ]
 
     XCTAssertEqual(ProxyNodeSorter.sorted(nodes, by: .profile).map(\.name), ["z", "a"])
@@ -4162,7 +4162,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         type: "select",
         selected: "Japan",
         nodes: [ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true)]
-      )
+      ),
     ]
 
     let initialExpansion = ProxyGroupExpansionPolicy.resolvedExpansion(
@@ -4180,7 +4180,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       LogEntry(level: "info", message: "Core ready"),
       LogEntry(level: "debug", message: "controller request body"),
       LogEntry(level: "info", message: "GET https://www.gstatic.com/generate_204"),
-      LogEntry(level: "trace", message: "raw stream frame")
+      LogEntry(level: "trace", message: "raw stream frame"),
     ]
 
     let normalMessages = LogVisibility.visibleEntries(in: entries, developerMode: false).map(\.message)
@@ -4198,7 +4198,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let entries = [
       LogEntry(level: "info", message: "Core ready"),
       LogEntry(level: "debug", message: "controller request body"),
-      LogEntry(level: "trace", message: "raw stream frame")
+      LogEntry(level: "trace", message: "raw stream frame"),
     ]
 
     let quietMessages = LogVisibility
@@ -4229,10 +4229,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
   func testUserVisibleLogsFollowSelectedLogLevel() throws {
     let paths = try Self.makeRuntimePaths()
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.overrides.logLevel = "info"
     model.runtimeData.appendLog(level: "info", message: "Core ready")
@@ -4254,10 +4254,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
   /// deliberately turned on has to be in it (discussion #25).
   func testRuntimeDiagnosticsReportIncludesDebugLogsAtDebugLevel() throws {
     let paths = try Self.makeRuntimePaths()
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.overrides.logLevel = "debug"
     model.runtimeData.appendLog(level: "debug", message: "dns resolve example.com")
@@ -4318,7 +4318,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
   func testProxyGroupExpansionDefaultsToSelectedGroup() {
     let groups = [
       ProxyGroup(name: "General", type: "select", selected: nil, nodes: []),
-      ProxyGroup(name: "Streaming", type: "select", selected: "Japan", nodes: [])
+      ProxyGroup(name: "Streaming", type: "select", selected: "Japan", nodes: []),
     ]
 
     XCTAssertEqual(
@@ -4330,7 +4330,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
   func testProxyGroupExpansionDefaultsToFirstGroupWithoutSelection() {
     let groups = [
       ProxyGroup(name: "General", type: "select", selected: nil, nodes: []),
-      ProxyGroup(name: "Streaming", type: "select", selected: nil, nodes: [])
+      ProxyGroup(name: "Streaming", type: "select", selected: nil, nodes: []),
     ]
 
     XCTAssertEqual(
@@ -4342,7 +4342,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
   func testProxyGroupExpansionRetainsExistingGroupsAfterRefresh() {
     let refreshedGroups = [
       ProxyGroup(name: "General", type: "select", selected: nil, nodes: []),
-      ProxyGroup(name: "Auto", type: "url-test", selected: nil, nodes: [])
+      ProxyGroup(name: "Auto", type: "url-test", selected: nil, nodes: []),
     ]
 
     XCTAssertEqual(
@@ -4354,7 +4354,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
   func testProxyGroupExpansionOpensSearchResults() {
     let groups = [
       ProxyGroup(name: "General", type: "select", selected: nil, nodes: []),
-      ProxyGroup(name: "Streaming", type: "select", selected: nil, nodes: [])
+      ProxyGroup(name: "Streaming", type: "select", selected: nil, nodes: []),
     ]
 
     XCTAssertEqual(
@@ -4371,7 +4371,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         selected: "Singapore",
         nodes: [
           ProxyNode(name: "Singapore", type: "proxy", delay: 82, isSelectable: true),
-          ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: false)
+          ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: false),
         ]
       ),
       ProxyGroup(
@@ -4380,9 +4380,9 @@ final class DashboardRuntimeStateTests: XCTestCase {
         selected: "Japan",
         nodes: [
           ProxyNode(name: "Japan", type: "hysteria2", delay: 157, isSelectable: true),
-          ProxyNode(name: "Hong Kong", type: "vless", delay: 64, isSelectable: true)
+          ProxyNode(name: "Hong Kong", type: "vless", delay: 64, isSelectable: true),
         ]
-      )
+      ),
     ]
 
     let group = try XCTUnwrap(DashboardProxySelectionState.resolvedGroup(from: groups, preferredName: "Streaming"))
@@ -4406,9 +4406,9 @@ final class DashboardRuntimeStateTests: XCTestCase {
         type: "Selector",
         selected: nil,
         nodes: [
-          ProxyNode(name: "Tokyo", type: "vless", delay: nil, isSelectable: true)
+          ProxyNode(name: "Tokyo", type: "vless", delay: nil, isSelectable: true),
         ]
-      )
+      ),
     ]
 
     let group = try XCTUnwrap(DashboardProxySelectionState.resolvedGroup(from: groups, preferredName: "Missing"))
@@ -4427,7 +4427,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         selected: "Japan",
         nodes: [
           ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
-          ProxyNode(name: "Singapore", type: "vless", delay: nil, isSelectable: true)
+          ProxyNode(name: "Singapore", type: "vless", delay: nil, isSelectable: true),
         ]
       ),
       ProxyGroup(
@@ -4436,7 +4436,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         selected: "Singapore",
         nodes: [
           ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
-          ProxyNode(name: "Singapore", type: "vless", delay: nil, isSelectable: true)
+          ProxyNode(name: "Singapore", type: "vless", delay: nil, isSelectable: true),
         ]
       ),
       ProxyGroup(
@@ -4445,9 +4445,9 @@ final class DashboardRuntimeStateTests: XCTestCase {
         selected: "Japan",
         nodes: [
           ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
-          ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: true)
+          ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: true),
         ]
-      )
+      ),
     ]
 
     XCTAssertEqual(DashboardProxySelectionState.selectableGroups(from: groups).map(\.name), ["Elite"])
@@ -4466,7 +4466,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       type: "select",
       selected: "韩国 SK[M][Trojan][倍率:0.6]",
       nodes: [
-        ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: true)
+        ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: true),
       ]
     )
 
@@ -4482,7 +4482,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       selected: nil,
       nodes: [
         ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: true),
-        ProxyNode(name: "Tokyo", type: "vless", delay: 64, isSelectable: true)
+        ProxyNode(name: "Tokyo", type: "vless", delay: 64, isSelectable: true),
       ]
     )
 
@@ -4500,7 +4500,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       selected: korean,
       nodes: [
         ProxyNode(name: "Provider: Remote", type: "provider", delay: nil, isSelectable: true),
-        ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: true)
+        ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: true),
       ]
     )
     let provider = ProxyProvider(
@@ -4511,7 +4511,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       proxies: [ProxyNode(name: korean, type: "trojan", delay: 142, isSelectable: true)]
     )
 
-    let model = AppModel(paths: try Self.makeRuntimePaths(), defaults: try Self.makeIsolatedDefaults())
+    let model = try AppModel(paths: Self.makeRuntimePaths(), defaults: Self.makeIsolatedDefaults())
     model.profilePreviewGroups = [group]
     model.proxyProviders = [provider]
 
@@ -4551,7 +4551,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       selected: korean,
       nodes: [
         ProxyNode(name: "Provider: Remote", type: "provider", delay: nil, isSelectable: true),
-        ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: true)
+        ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: true),
       ]
     )
     let provider = ProxyProvider(
@@ -4562,7 +4562,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       proxies: [ProxyNode(name: korean, type: "trojan", delay: 142, isSelectable: true)]
     )
 
-    let model = AppModel(paths: try Self.makeRuntimePaths(), defaults: try Self.makeIsolatedDefaults())
+    let model = try AppModel(paths: Self.makeRuntimePaths(), defaults: Self.makeIsolatedDefaults())
     model.profilePreviewGroups = [group]
     model.proxyProviders = [provider]
 
@@ -4637,12 +4637,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
       proxyGroupsResponse: [group],
       testDelayResult: 73
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       apiClient: client,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.proxyGroups = [group]
 
@@ -4691,12 +4691,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
       proxyGroupsResponse: [group],
       testDelayResults: [111, 73]
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       apiClient: client,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.delayTestSettings = DelayTestSettings(mode: .mihomoURL, unifiedDelay: true)
     model.proxyGroups = [group]
@@ -4744,13 +4744,13 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
     let client = RecordingMihomoController(proxyGroupsResponse: [group], testDelayResult: 99)
     let pingTester = RecordingPingTester(results: [44])
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       apiClient: client,
       pingTester: pingTester,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     await model.waitForProfilePreviewRefresh()
     model.delayTestSettings = DelayTestSettings(mode: .nativePing, unifiedDelay: false)
@@ -4807,13 +4807,13 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
     let client = RecordingMihomoController(proxyGroupsResponse: [runtimeGroup], testDelayResult: 99)
     let pingTester = RecordingPingTester(results: [51])
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       apiClient: client,
       pingTester: pingTester,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     await model.waitForProfilePreviewRefresh()
     model.delayTestSettings = DelayTestSettings(mode: .nativePing, unifiedDelay: false)
@@ -4886,7 +4886,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
           isSelectable: true,
           serverHost: "provider.example",
           serverPort: 443
-        )
+        ),
       ]
     )
     let client = RecordingMihomoController(
@@ -4895,13 +4895,13 @@ final class DashboardRuntimeStateTests: XCTestCase {
       testDelayResult: 99
     )
     let pingTester = RecordingPingTester(results: [62])
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       apiClient: client,
       pingTester: pingTester,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.delayTestSettings = DelayTestSettings(mode: .nativePing, unifiedDelay: false)
 
@@ -4958,13 +4958,13 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
     let client = RecordingMihomoController(proxyGroupsResponse: [group], testDelayResult: 99)
     let pingTester = RecordingPingTester(results: [44])
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       apiClient: client,
       pingTester: pingTester,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.delayTestSettings = DelayTestSettings(mode: .nativePing, unifiedDelay: false)
     model.proxyGroups = [group]
@@ -5042,7 +5042,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
           type: "select",
           selected: "Japan",
           nodes: [ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true)]
-        )
+        ),
       ],
       proxyProvidersResponse: [provider],
       ruleProvidersResponse: [ruleProvider],
@@ -5122,7 +5122,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
           type: "select",
           selected: "Japan",
           nodes: [ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true)]
-        )
+        ),
       ],
       testDelayResult: 73,
       proxyGroupsDelayNanoseconds: 200_000_000
@@ -5159,7 +5159,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
           type: "select",
           selected: "Japan",
           nodes: [ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true)]
-        )
+        ),
       ],
       testDelayResult: 73,
       proxyGroupsDelayNanoseconds: 200_000_000
@@ -5237,10 +5237,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
     for _ in 0..<80 {
       let healthCheckCount = await client.healthCheckRequestCount()
       let closedConnectionIDs = await client.closedConnectionIDs()
-      if healthCheckCount > 0
-        && !closedConnectionIDs.isEmpty
-        && model.closingConnectionIDs.isEmpty
-        && model.connections.isEmpty {
+      if healthCheckCount > 0,
+         !closedConnectionIDs.isEmpty,
+         model.closingConnectionIDs.isEmpty,
+         model.connections.isEmpty
+      {
         break
       }
       await Task.yield()
@@ -5258,7 +5259,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     for _ in 0..<80 {
       let closeAllRequestCount = await client.closeAllRequestCount()
-      if closeAllRequestCount > 0 && !model.closingAllConnections && model.connections.isEmpty {
+      if closeAllRequestCount > 0, !model.closingAllConnections, model.connections.isEmpty {
         break
       }
       await Task.yield()
@@ -5355,7 +5356,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
       if client.subscriptionCounts() == [1, 1, 1],
          client.connectionRequestCount() >= 1,
          !model.runtimeDataLoading,
-         model.runtimeSettingsApplyState == .idle {
+         model.runtimeSettingsApplyState == .idle
+      {
         break
       }
       await Task.yield()
@@ -5371,7 +5373,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
     for _ in 0..<300 {
       model.runtimeData.flushPendingLogs()
       if model.trafficSample == TrafficSample(upload: 11, download: 22),
-         model.logs.contains(where: { $0.message == "first stream" }) {
+         model.logs.contains(where: { $0.message == "first stream" })
+      {
         break
       }
       await Task.yield()
@@ -5407,7 +5410,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
       model.runtimeData.flushPendingLogs()
       if model.trafficSample == TrafficSample(upload: 33, download: 44),
          model.logs.contains(where: { $0.message == "reconnected stream" }),
-         model.connections.map(\.id) == ["second"] {
+         model.connections.map(\.id) == ["second"]
+      {
         break
       }
       await Task.yield()
@@ -5433,7 +5437,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
       if client.subscriptionCounts() == [1, 1, 1],
          client.connectionRequestCount() >= 1,
          !model.runtimeDataLoading,
-         model.runtimeSettingsApplyState == .idle {
+         model.runtimeSettingsApplyState == .idle
+      {
         break
       }
       await Task.yield()
@@ -5449,7 +5454,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
          client.firstGenerationWasTerminated(),
          client.connectionRequestCount() >= 2,
          !model.runtimeDataLoading,
-         model.runtimeSettingsApplyState == .idle {
+         model.runtimeSettingsApplyState == .idle
+      {
         break
       }
       await Task.yield()
@@ -5472,7 +5478,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
       model.runtimeData.flushPendingLogs()
       if model.trafficSample == TrafficSample(upload: 55, download: 66),
          model.logs.contains(where: { $0.message == "current generation" }),
-         model.connections.map(\.id) == ["current"] {
+         model.connections.map(\.id) == ["current"]
+      {
         break
       }
       await Task.yield()
@@ -5497,7 +5504,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
       if !model.isCoreRunning,
          !model.systemProxyEnabled,
          !model.needsTerminationCleanup,
-         client.logAndConnectionWereTerminated(subscription: 1) {
+         client.logAndConnectionWereTerminated(subscription: 1)
+      {
         break
       }
       await Task.yield()
@@ -5573,7 +5581,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
       if !paths.isEmpty,
          commandRunner.commands.contains("/usr/sbin/networksetup -setwebproxy Wi-Fi 127.0.0.1 17891"),
          model.settings.appliedRuntimeSettingsSnapshot?.overrides.mixedPort == 17_891,
-         model.runtimeSettingsApplyState == .idle {
+         model.runtimeSettingsApplyState == .idle
+      {
         break
       }
       await Task.yield()
@@ -5684,7 +5693,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
     for _ in 0..<120 {
       let reloadPaths = await client.reloadRequestPaths()
       if !reloadPaths.isEmpty,
-         case .appliedWithFollowUpFailure = model.runtimeSettingsApplyState {
+         case .appliedWithFollowUpFailure = model.runtimeSettingsApplyState
+      {
         break
       }
       await Task.yield()
@@ -5928,12 +5938,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
       nodes: [
         ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
         ProxyNode(name: "Hong Kong", type: "vless", delay: nil, isSelectable: true),
-        ProxyNode(name: "Singapore", type: "vless", delay: nil, isSelectable: true)
+        ProxyNode(name: "Singapore", type: "vless", delay: nil, isSelectable: true),
       ]
     )
     let client = RecordingMihomoController(
       proxyGroupsResponse: [
-        ProxyGroup(name: "Proxy", type: "select", selected: "Singapore", nodes: group.nodes)
+        ProxyGroup(name: "Proxy", type: "select", selected: "Singapore", nodes: group.nodes),
       ],
       testDelayResult: 73,
       selectProxyDelaysNanoseconds: [120_000_000, 10_000_000]
@@ -5959,7 +5969,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       selected: "Japan",
       nodes: [
         ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
-        ProxyNode(name: "Singapore", type: "vless", delay: nil, isSelectable: true)
+        ProxyNode(name: "Singapore", type: "vless", delay: nil, isSelectable: true),
       ]
     )
     let staleConnection = ConnectionSnapshot(
@@ -5984,7 +5994,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
     let client = RecordingMihomoController(
       proxyGroupsResponse: [
-        ProxyGroup(name: "Proxy", type: "select", selected: "Singapore", nodes: group.nodes)
+        ProxyGroup(name: "Proxy", type: "select", selected: "Singapore", nodes: group.nodes),
       ],
       connectionsResponse: [currentConnection],
       testDelayResult: 73
@@ -6019,7 +6029,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       selected: "Japan",
       nodes: [
         ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
-        ProxyNode(name: "Singapore", type: "vless", delay: nil, isSelectable: true)
+        ProxyNode(name: "Singapore", type: "vless", delay: nil, isSelectable: true),
       ]
     )
     let client = RecordingMihomoController(proxyGroupsResponse: [group], testDelayResult: 73)
@@ -6041,12 +6051,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
       selected: "Japan",
       nodes: [
         ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
-        ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: true)
+        ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: true),
       ]
     )
     let client = RecordingMihomoController(
       proxyGroupsResponse: [
-        ProxyGroup(name: "Proxy", type: "select", selected: "DIRECT", nodes: group.nodes)
+        ProxyGroup(name: "Proxy", type: "select", selected: "DIRECT", nodes: group.nodes),
       ],
       testDelayResult: 73
     )
@@ -6072,7 +6082,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       selected: "Japan",
       nodes: [
         ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
-        ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: true)
+        ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: true),
       ]
     )
     let client = RecordingMihomoController(
@@ -6101,12 +6111,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
       selected: "Japan",
       nodes: [
         ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
-        ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: true)
+        ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: true),
       ]
     )
     let client = RecordingMihomoController(
       proxyGroupsResponse: [
-        ProxyGroup(name: "Proxy", type: "select", selected: "DIRECT", nodes: group.nodes)
+        ProxyGroup(name: "Proxy", type: "select", selected: "DIRECT", nodes: group.nodes),
       ],
       testDelayResult: 73
     )
@@ -6255,7 +6265,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       nodes: [
         ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
         ProxyNode(name: "Singapore", type: "vless", delay: nil, isSelectable: true),
-        ProxyNode(name: "Provider: remote", type: "provider", delay: nil, isSelectable: false)
+        ProxyNode(name: "Provider: remote", type: "provider", delay: nil, isSelectable: false),
       ]
     )
     let client = RecordingMihomoController(
@@ -6285,7 +6295,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       nodes: [
         ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
         ProxyNode(name: "Singapore", type: "vless", delay: nil, isSelectable: true),
-        ProxyNode(name: "Provider: remote", type: "provider", delay: nil, isSelectable: false)
+        ProxyNode(name: "Provider: remote", type: "provider", delay: nil, isSelectable: false),
       ]
     )
     let groupB = ProxyGroup(
@@ -6293,7 +6303,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       type: "select",
       selected: "US",
       nodes: [
-        ProxyNode(name: "US", type: "vless", delay: nil, isSelectable: true)
+        ProxyNode(name: "US", type: "vless", delay: nil, isSelectable: true),
       ]
     )
     let client = RecordingMihomoController(
@@ -6333,7 +6343,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
         ProxyNode(name: "Timeout", type: "vless", delay: nil, isSelectable: true),
         ProxyNode(name: "Controller", type: "vless", delay: nil, isSelectable: true),
-        ProxyNode(name: "Broken", type: "vless", delay: nil, isSelectable: true)
+        ProxyNode(name: "Broken", type: "vless", delay: nil, isSelectable: true),
       ]
     )
     let client = RecordingMihomoController(
@@ -6343,7 +6353,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         nil,
         "request timed out",
         "Could not connect to the server.",
-        "provider failed"
+        "provider failed",
       ]
     )
     let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [group])
@@ -6424,7 +6434,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         ProxyNode(name: "REJECT-DROP", type: "RejectDrop", delay: nil, isSelectable: true),
         ProxyNode(name: "PASS", type: "Pass", delay: nil, isSelectable: true),
         ProxyNode(name: "COMPATIBLE", type: "Compatible", delay: nil, isSelectable: true),
-        ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true)
+        ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
       ]
     )
     let client = RecordingMihomoController(
@@ -6459,7 +6469,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       selected: "REJECT",
       nodes: [
         ProxyNode(name: "REJECT", type: "Reject", delay: nil, isSelectable: true),
-        ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true)
+        ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
       ]
     )
     let client = RecordingMihomoController(proxyGroupsResponse: [group], testDelayResult: 73)
@@ -6488,7 +6498,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       nodes: [
         ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
         ProxyNode(name: "PASS-RULE", type: "PassRule", delay: nil, isSelectable: true),
-        ProxyNode(name: "DIRECT", type: "Direct", delay: nil, isSelectable: true)
+        ProxyNode(name: "DIRECT", type: "Direct", delay: nil, isSelectable: true),
       ]
     )
     let client = RecordingMihomoController(
@@ -6551,7 +6561,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         600_000_000,
         600_000_000,
         600_000_000,
-        600_000_000
+        600_000_000,
       ]
     )
     let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [group])
@@ -6782,7 +6792,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         600_000_000,
         600_000_000,
         600_000_000,
-        600_000_000
+        600_000_000,
       ]
     )
     let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [group])
@@ -6811,7 +6821,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       selected: "Japan",
       nodes: [
         ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
-        ProxyNode(name: "Singapore", type: "vless", delay: nil, isSelectable: true)
+        ProxyNode(name: "Singapore", type: "vless", delay: nil, isSelectable: true),
       ]
     )
     let client = RecordingMihomoController(
@@ -6970,7 +6980,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
       let delayRequests = await client.delayRequestCount()
       let groupRequests = await client.proxyGroupsRequestCount()
       if delayRequests >= 1, groupRequests >= 1, !model.runtimeDataLoading,
-         model.proxyProviders.first?.proxies.first != nil {
+         model.proxyProviders.first?.proxies.first != nil
+      {
         break
       }
       await Task.yield()
@@ -7049,7 +7060,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     for _ in 0..<80 {
       let proxyUpdates = await client.updatedProxyProviders()
       let ruleUpdates = await client.updatedRuleProviders()
-      if proxyUpdates == ["Remote/sub"] && ruleUpdates == ["Rules/sub"] {
+      if proxyUpdates == ["Remote/sub"], ruleUpdates == ["Rules/sub"] {
         break
       }
       await Task.yield()
@@ -7092,7 +7103,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     for _ in 0..<120 {
       let updates = await client.updatedProxyProviders()
-      if updates.count == 1 && model.proxyProviderUpdatesInFlight.isEmpty {
+      if updates.count == 1, model.proxyProviderUpdatesInFlight.isEmpty {
         break
       }
       await Task.yield()
@@ -7185,7 +7196,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     for _ in 0..<80 {
       let updates = await client.updatedProxyProviders()
-      if updates.count == 2 && model.lastError?.contains("Remote A: proxy update refused") == true {
+      if updates.count == 2, model.lastError?.contains("Remote A: proxy update refused") == true {
         break
       }
       await Task.yield()
@@ -7202,7 +7213,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     for _ in 0..<80 {
       let updates = await client.updatedRuleProviders()
-      if updates.count == 2 && model.lastError?.contains("Rules A: rule update refused") == true {
+      if updates.count == 2, model.lastError?.contains("Rules A: rule update refused") == true {
         break
       }
       await Task.yield()
@@ -7262,7 +7273,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       selected: "Japan",
       nodes: [
         ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
-        ProxyNode(name: "Singapore", type: "vless", delay: nil, isSelectable: true)
+        ProxyNode(name: "Singapore", type: "vless", delay: nil, isSelectable: true),
       ]
     )
     let refreshedGroup = ProxyGroup(
@@ -7287,7 +7298,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     for _ in 0..<160 {
       let proxyGroupsRequestCount = await client.proxyGroupsRequestCount()
-      if proxyGroupsRequestCount == 2 && model.proxyGroups.first?.selected == "Singapore" {
+      if proxyGroupsRequestCount == 2, model.proxyGroups.first?.selected == "Singapore" {
         break
       }
       await Task.yield()
@@ -7383,9 +7394,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
     for _ in 0..<40 {
       let healthCheckRequestCount = await client.healthCheckRequestCount()
       let closedConnectionIDs = await client.closedConnectionIDs()
-      if healthCheckRequestCount > 0
-        && model.proxyProviderUpdatesInFlight.contains(provider.id)
-        && !closedConnectionIDs.isEmpty {
+      if healthCheckRequestCount > 0,
+         model.proxyProviderUpdatesInFlight.contains(provider.id),
+         !closedConnectionIDs.isEmpty
+      {
         break
       }
       await Task.yield()
@@ -7421,10 +7433,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
       url: URL(string: "https://example.com/sub")!,
       session: URLSession(configuration: URLProtocolRecorder.configurationReturning(originalSource))
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     let failureRecorder = URLProtocolRecorder(
       responseBody: "Forbidden",
@@ -7562,11 +7574,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
       fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
       registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       helperClient: helper,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
 
     model.start()
@@ -7620,12 +7632,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
       portChecker: EmptyRuntimePortChecker()
     )
     let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       systemProxyController: SystemProxyController(commandRunner: commandRunner),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
 
     model.start()
@@ -7670,7 +7682,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       systemExtensionRequester: StaticSystemExtensionRequester(activationState: .activated),
       transparentProxyManager: proxyManager
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
@@ -7678,7 +7690,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       helperClient: helper,
       networkExtensionController: networkExtensionController,
       proxyPortReadinessProbe: proxyPortReadiness,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     XCTAssertTrue(
       model.updateNetworkExtensionRoutingSettings(
@@ -7725,7 +7737,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       proxyPortReadiness.requests,
       [
         ProxyPortReadinessRequest(host: "127.0.0.1", port: 7890),
-        ProxyPortReadinessRequest(host: "127.0.0.1", port: 1053, serviceName: "Mihomo DNS")
+        ProxyPortReadinessRequest(host: "127.0.0.1", port: 1053, serviceName: "Mihomo DNS"),
       ]
     )
     XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setdnsservers Wi-Fi 114.114.114.114"))
@@ -7763,7 +7775,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
     let systemProxyController = SystemProxyController(commandRunner: commandRunner)
     let proxyManager = RecordingTransparentProxyManager(startStatus: .connected)
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
@@ -7773,7 +7785,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         transparentProxyManager: proxyManager
       ),
       proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.setProxyRoutingMode(.neProxy)
     model.start()
@@ -7795,7 +7807,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
       let commands = commandRunner.commands
       let newCommands = commands.dropFirst(commandsBeforeRepair.count)
       if commands.filter({ $0 == "/usr/sbin/networksetup -setdnsservers Wi-Fi 114.114.114.114" }).count >= 2
-          || newCommands.contains("/usr/sbin/networksetup -setdnsservers Wi-Fi Empty") {
+        || newCommands.contains("/usr/sbin/networksetup -setdnsservers Wi-Fi Empty")
+      {
         break
       }
       await Task.yield()
@@ -7833,7 +7846,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       portChecker: EmptyRuntimePortChecker()
     )
     let proxyManager = RecordingTransparentProxyManager(startStatus: .connected)
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
@@ -7843,7 +7856,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         transparentProxyManager: proxyManager
       ),
       proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.setProxyRoutingMode(.neProxy)
     model.start()
@@ -7873,7 +7886,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
   func testUpdatingNetworkExtensionRoutingSettingsOutsideNetworkExtensionModeOnlyPersists() throws {
     let paths = try Self.makeRuntimePaths()
     let launcher = CountingProcessLauncher()
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       coreController: CoreProcessController(
@@ -7883,7 +7896,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         reaper: RecordingCoreProcessReaper(),
         portChecker: EmptyRuntimePortChecker()
       ),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
 
     XCTAssertTrue(
@@ -7900,7 +7913,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
   func testUpdatingNetworkExtensionRoutingSettingsRejectsInvalidCIDR() throws {
     let paths = try Self.makeRuntimePaths()
     let launcher = CountingProcessLauncher()
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       coreController: CoreProcessController(
@@ -7910,7 +7923,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         reaper: RecordingCoreProcessReaper(),
         portChecker: EmptyRuntimePortChecker()
       ),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
 
     XCTAssertFalse(
@@ -7927,7 +7940,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
   func testUpdatingNetworkExtensionRoutingSettingsRejectsInvalidDNSSettings() throws {
     let paths = try Self.makeRuntimePaths()
     let launcher = CountingProcessLauncher()
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       coreController: CoreProcessController(
@@ -7937,7 +7950,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         reaper: RecordingCoreProcessReaper(),
         portChecker: EmptyRuntimePortChecker()
       ),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
 
     XCTAssertFalse(
@@ -7979,14 +7992,14 @@ final class DashboardRuntimeStateTests: XCTestCase {
       transparentProxyManager: proxyManager,
       diagnosticsURL: diagnosticsURL
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
       networkExtensionController: networkExtensionController,
       proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.setProxyRoutingMode(.neProxy)
     model.start()
@@ -8006,7 +8019,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
             id: "bypass-before-stop",
             message: "Bypassed self/core flow.",
             sourceAppSigningIdentifier: "io.github.clashmax.ClashMax"
-          )
+          ),
         ],
         recentErrors: [],
         updatedAt: Date()
@@ -8038,7 +8051,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         bypassCount: 2,
         errorCount: 0,
         recentBypasses: [
-          NetworkExtensionDiagnosticEvent(id: "bypass-after-stop", message: "After stop bypass.")
+          NetworkExtensionDiagnosticEvent(id: "bypass-after-stop", message: "After stop bypass."),
         ],
         recentErrors: [],
         updatedAt: Date()
@@ -8065,17 +8078,17 @@ final class DashboardRuntimeStateTests: XCTestCase {
             isEnabled: true,
             isAwaitingUserApproval: false,
             isUninstalling: false
-          )
+          ),
         ]
       ),
       transparentProxyManager: proxyManager,
       diagnosticsURL: diagnosticsURL
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       networkExtensionController: networkExtensionController,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     try Self.writeNetworkExtensionDiagnostics(
       NetworkExtensionDiagnosticsSnapshot(
@@ -8083,10 +8096,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
         bypassCount: 1,
         errorCount: 1,
         recentBypasses: [
-          NetworkExtensionDiagnosticEvent(id: "manual-refresh-bypass", message: "Manual refresh bypass.")
+          NetworkExtensionDiagnosticEvent(id: "manual-refresh-bypass", message: "Manual refresh bypass."),
         ],
         recentErrors: [
-          NetworkExtensionDiagnosticEvent(id: "manual-refresh-error", message: "Manual refresh error.")
+          NetworkExtensionDiagnosticEvent(id: "manual-refresh-error", message: "Manual refresh error."),
         ],
         updatedAt: Date()
       ),
@@ -8127,7 +8140,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     proxyManager.onStart = { events.append("networkExtensionStart") }
     let proxyPortReadiness = RecordingProxyPortReadinessProbe()
     proxyPortReadiness.onProbe = { events.append("proxyPortReady") }
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
@@ -8137,7 +8150,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         transparentProxyManager: proxyManager
       ),
       proxyPortReadinessProbe: proxyPortReadiness,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.setProxyRoutingMode(.neProxy)
 
@@ -8153,7 +8166,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       proxyPortReadiness.requests,
       [
         ProxyPortReadinessRequest(host: "127.0.0.1", port: 7890),
-        ProxyPortReadinessRequest(host: "127.0.0.1", port: 1053, serviceName: "Mihomo DNS")
+        ProxyPortReadinessRequest(host: "127.0.0.1", port: 1053, serviceName: "Mihomo DNS"),
       ]
     )
   }
@@ -8177,7 +8190,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let proxyPortReadiness = RecordingProxyPortReadinessProbe(
       result: .failure(AppError.coreNotReady("mixed-port refused"))
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
@@ -8187,7 +8200,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         transparentProxyManager: proxyManager
       ),
       proxyPortReadinessProbe: proxyPortReadiness,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.setProxyRoutingMode(.neProxy)
 
@@ -8227,14 +8240,14 @@ final class DashboardRuntimeStateTests: XCTestCase {
       systemExtensionRequester: StaticSystemExtensionRequester(activationState: .activated),
       transparentProxyManager: proxyManager
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       systemProxyController: SystemProxyController(commandRunner: commandRunner),
       networkExtensionController: networkExtensionController,
       proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.setProxyRoutingMode(.neProxy)
     model.start()
@@ -8271,7 +8284,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       portChecker: EmptyRuntimePortChecker()
     )
     let proxyManager = RecordingTransparentProxyManager(startStatus: .connected)
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
@@ -8281,7 +8294,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         transparentProxyManager: proxyManager
       ),
       proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.setProxyRoutingMode(.neProxy)
     model.start()
@@ -8341,7 +8354,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     proxyManager.onStop = { events.append("networkExtensionStop") }
     let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
     let systemProxyController = SystemProxyController(commandRunner: commandRunner)
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
@@ -8351,7 +8364,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         transparentProxyManager: proxyManager
       ),
       proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.setProxyRoutingMode(.neProxy)
     model.start()
@@ -8402,7 +8415,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     proxyManager.onStop = { events.append("networkExtensionStop") }
     let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
     let systemProxyController = SystemProxyController(commandRunner: commandRunner)
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
@@ -8412,7 +8425,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         transparentProxyManager: proxyManager
       ),
       proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.setProxyRoutingMode(.neProxy)
     model.start()
@@ -8465,7 +8478,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     proxyManager.onStop = { events.append("networkExtensionStop") }
     let publicIPInfo = Self.makePublicIPInfo(ip: "203.0.113.9", fetchedAt: Date(timeIntervalSince1970: 1_000))
     let publicIPFetcher = RecordingPublicIPInfoFetcher(infos: [publicIPInfo], delayNanoseconds: 800_000_000)
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
@@ -8476,7 +8489,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       ),
       proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
       publicIPInfoClient: publicIPFetcher,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.setProxyRoutingMode(.neProxy)
     model.start()
@@ -8516,7 +8529,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
     let proxyManager = RecordingTransparentProxyManager(startStatus: .connected, stopStatus: .disconnecting)
     proxyManager.onStop = { events.append("networkExtensionStop") }
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
@@ -8526,7 +8539,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         transparentProxyManager: proxyManager
       ),
       proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.setProxyRoutingMode(.neProxy)
     model.start()
@@ -8565,7 +8578,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let proxyManager = RecordingTransparentProxyManager(startStatus: .connected)
     proxyManager.stopError = AppError.coreNotReady("transparent proxy stop refused")
     proxyManager.onStop = { events.append("networkExtensionStop") }
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
@@ -8575,7 +8588,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         transparentProxyManager: proxyManager
       ),
       proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.setProxyRoutingMode(.neProxy)
     model.start()
@@ -8614,14 +8627,14 @@ final class DashboardRuntimeStateTests: XCTestCase {
       systemExtensionRequester: StaticSystemExtensionRequester(activationState: .activated),
       transparentProxyManager: proxyManager
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
       networkExtensionController: networkExtensionController,
       proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.setProxyRoutingMode(.neProxy)
     model.start()
@@ -8660,14 +8673,14 @@ final class DashboardRuntimeStateTests: XCTestCase {
       systemExtensionRequester: StaticSystemExtensionRequester(activationState: .activated),
       transparentProxyManager: proxyManager
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
       networkExtensionController: networkExtensionController,
       proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.setProxyRoutingMode(.neProxy)
     model.start()
@@ -8686,10 +8699,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
   func testProxyRoutingModesIncludeNEProxyWhenDeveloperModeIsOff() throws {
     let paths = try Self.makeRuntimePaths()
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
 
     XCTAssertFalse(model.developerMode)
@@ -8699,8 +8712,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
   func testNetworkExtensionLegacyPersistedModeLoadsWhenDeveloperModeIsOff() throws {
     let defaults = try Self.makeIsolatedDefaults()
-    defaults.set(
-      try XCTUnwrap("\"networkExtensionExperimental\"".data(using: .utf8)),
+    try defaults.set(
+      XCTUnwrap("\"networkExtensionExperimental\"".data(using: .utf8)),
       forKey: Self.proxyRoutingModeDefaultsKey
     )
     let paths = try Self.makeRuntimePaths()
@@ -8723,10 +8736,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
   func testNetworkExtensionCanBeSelectedWhenDeveloperModeIsOff() throws {
     let paths = try Self.makeRuntimePaths()
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
 
     XCTAssertFalse(model.developerMode)
@@ -8739,10 +8752,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
   func testDisablingDeveloperModeKeepsNetworkExtensionSelected() throws {
     let paths = try Self.makeRuntimePaths()
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
 
     model.developerMode = true
@@ -8757,16 +8770,16 @@ final class DashboardRuntimeStateTests: XCTestCase {
   func testDeveloperModeOffPreventsGlobalShortcutRegistration() throws {
     let paths = try Self.makeRuntimePaths()
     let registrar = RecordingAppGlobalShortcutRegistrar()
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       globalShortcutRegistrar: registrar
     )
     let shortcut = try XCTUnwrap(KeyboardShortcutDescriptor(string: "cmd+shift+p"))
 
     model.globalShortcutSettings = GlobalShortcutSettings(bindings: [
-      GlobalShortcutBinding(action: .startStop, shortcut: shortcut, enabled: true)
+      GlobalShortcutBinding(action: .startStop, shortcut: shortcut, enabled: true),
     ])
 
     XCTAssertFalse(model.developerMode)
@@ -8778,16 +8791,16 @@ final class DashboardRuntimeStateTests: XCTestCase {
   func testDeveloperModeToggleRegistersAndUnregistersGlobalShortcuts() throws {
     let paths = try Self.makeRuntimePaths()
     let registrar = RecordingAppGlobalShortcutRegistrar()
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       globalShortcutRegistrar: registrar
     )
     let shortcut = try XCTUnwrap(KeyboardShortcutDescriptor(string: "cmd+shift+p"))
 
     model.globalShortcutSettings = GlobalShortcutSettings(bindings: [
-      GlobalShortcutBinding(action: .startStop, shortcut: shortcut, enabled: true)
+      GlobalShortcutBinding(action: .startStop, shortcut: shortcut, enabled: true),
     ])
     model.setDeveloperMode(true)
 
@@ -8810,16 +8823,16 @@ final class DashboardRuntimeStateTests: XCTestCase {
       reason: "taken by the system"
     )
     let registrar = RecordingAppGlobalShortcutRegistrar(failuresToReturn: [failure])
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       globalShortcutRegistrar: registrar
     )
 
     model.setDeveloperMode(true)
     model.globalShortcutSettings = GlobalShortcutSettings(bindings: [
-      GlobalShortcutBinding(action: .startStop, shortcut: shortcut, enabled: true)
+      GlobalShortcutBinding(action: .startStop, shortcut: shortcut, enabled: true),
     ])
 
     XCTAssertEqual(model.shortcutRegistrationStatus?.failures, [failure])
@@ -8836,7 +8849,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let seed = PersistedSettingsStore(defaults: defaults)
     seed.developerMode = true
     seed.globalShortcutSettings = GlobalShortcutSettings(bindings: [
-      GlobalShortcutBinding(action: .startStop, shortcut: shortcut, enabled: true)
+      GlobalShortcutBinding(action: .startStop, shortcut: shortcut, enabled: true),
     ])
 
     let registrar = RecordingAppGlobalShortcutRegistrar()
@@ -8857,7 +8870,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
   }
 
   func testSubscriptionFetchSettingsHookObservesTheNewValue() throws {
-    let store = PersistedSettingsStore(defaults: try Self.makeIsolatedDefaults())
+    let store = try PersistedSettingsStore(defaults: Self.makeIsolatedDefaults())
 
     // The real handler takes no parameter and re-reads the store, exactly like
     // ProfileCoordinator.rescheduleSubscriptionAutoUpdates does.
@@ -8881,14 +8894,14 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let paths = try Self.makeRuntimePaths()
     let requester = StaticSystemExtensionRequester(activationState: .requiresApproval)
     let proxyManager = RecordingTransparentProxyManager(currentStatus: .notConfigured)
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       networkExtensionController: NetworkExtensionController(
         systemExtensionRequester: requester,
         transparentProxyManager: proxyManager
       ),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
 
     model.installNetworkExtension()
@@ -8903,7 +8916,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         isEnabled: true,
         isAwaitingUserApproval: false,
         isUninstalling: false
-      )
+      ),
     ]
     model.refreshNetworkExtensionStatus()
     for _ in 0..<60 where model.lastError != nil {
@@ -8924,18 +8937,18 @@ final class DashboardRuntimeStateTests: XCTestCase {
           isEnabled: true,
           isAwaitingUserApproval: false,
           isUninstalling: false
-        )
+        ),
       ]
     )
     let proxyManager = RecordingTransparentProxyManager(currentStatus: .notConfigured)
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       networkExtensionController: NetworkExtensionController(
         systemExtensionRequester: requester,
         transparentProxyManager: proxyManager
       ),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.lastError = "Non-NE validation failed."
 
@@ -9004,14 +9017,14 @@ final class DashboardRuntimeStateTests: XCTestCase {
       fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
       registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
       helperClient: helper,
       tunnelReadinessProbe: RecordingCoreReadinessProbe(),
       tunRuntimeInspector: RecordingTunRuntimeInspector(snapshots: [.empty]),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.requestProxyRoutingMode(.tun)
     for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
@@ -9058,14 +9071,14 @@ final class DashboardRuntimeStateTests: XCTestCase {
       fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
       registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
       helperClient: helper,
       tunnelReadinessProbe: RecordingCoreReadinessProbe(),
       tunRuntimeInspector: RecordingTunRuntimeInspector(snapshots: [.empty]),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.requestProxyRoutingMode(.tun)
     for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
@@ -9118,13 +9131,13 @@ final class DashboardRuntimeStateTests: XCTestCase {
       registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
     )
     let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       systemProxyController: SystemProxyController(commandRunner: commandRunner),
       helperClient: helper,
       tunnelReadinessProbe: RecordingCoreReadinessProbe(),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.requestProxyRoutingMode(.tun)
     for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
@@ -9170,13 +9183,13 @@ final class DashboardRuntimeStateTests: XCTestCase {
       registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
     )
     let commandRunner = FailingDNSApplyCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       systemProxyController: SystemProxyController(commandRunner: commandRunner),
       helperClient: helper,
       tunnelReadinessProbe: RecordingCoreReadinessProbe(),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.requestProxyRoutingMode(.tun)
     for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
@@ -9214,21 +9227,21 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let snapshot = Self.tunDiagnosticsSnapshot(
       checks: [
         TunDiagnosticCheck(id: "controller", title: "Controller", status: .pass, message: "ready"),
-        TunDiagnosticCheck(id: "system-dns", title: "System DNS", status: .pass, message: "applied")
+        TunDiagnosticCheck(id: "system-dns", title: "System DNS", status: .pass, message: "applied"),
       ],
       includeExternal: true,
       time: 1
     )
     let inspector = RecordingTunRuntimeInspector(snapshots: [snapshot])
     let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       systemProxyController: SystemProxyController(commandRunner: commandRunner),
       helperClient: helper,
       tunnelReadinessProbe: RecordingCoreReadinessProbe(),
       tunRuntimeInspector: inspector,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.requestProxyRoutingMode(.tun)
     for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
@@ -9270,20 +9283,20 @@ final class DashboardRuntimeStateTests: XCTestCase {
           title: "TUN Interface",
           status: .fail,
           message: "No utun interface was found."
-        )
+        ),
       ],
       includeExternal: true,
       time: 2
     )
     let inspector = RecordingTunRuntimeInspector(snapshots: [snapshot])
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
       helperClient: helper,
       tunnelReadinessProbe: RecordingCoreReadinessProbe(),
       tunRuntimeInspector: inspector,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.requestProxyRoutingMode(.tun)
     for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
@@ -9326,14 +9339,14 @@ final class DashboardRuntimeStateTests: XCTestCase {
       time: 4
     )
     let inspector = RecordingTunRuntimeInspector(snapshots: [first, second])
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
       helperClient: helper,
       tunnelReadinessProbe: RecordingCoreReadinessProbe(),
       tunRuntimeInspector: inspector,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.requestProxyRoutingMode(.tun)
     for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
@@ -9374,14 +9387,14 @@ final class DashboardRuntimeStateTests: XCTestCase {
       time: 41
     )
     let inspector = RecordingTunRuntimeInspector(snapshots: [snapshot])
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
       helperClient: helper,
       tunnelReadinessProbe: RecordingCoreReadinessProbe(),
       tunRuntimeInspector: inspector,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.requestProxyRoutingMode(.tun)
     for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
@@ -9448,7 +9461,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
     // config and after tunSystemDNSState is already .applied).
     for _ in 0..<500 where commandRunner.commands.filter({ $0 == applyCommand }).count <= initialApplyCount
       || model.tunSystemDNSState != .applied(serviceCount: 1)
-      || model.tunDiagnostics != repaired {
+      || model.tunDiagnostics != repaired
+    {
       await Task.yield()
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
@@ -9521,7 +9535,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
           title: "TUN Route",
           status: .warn,
           message: "Route to 1.1.1.1 is not using the configured TUN device."
-        )
+        ),
       ],
       includeExternal: false,
       time: 11
@@ -9533,7 +9547,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
           title: "TUN Route",
           status: .info,
           message: "Route to 1.1.1.1 is not using the configured TUN device. Live TCP and UDP probes still reached the network, so traffic is flowing."
-        )
+        ),
       ],
       includeExternal: true,
       time: 12
@@ -9743,7 +9757,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
       if currentRestartCount == 1,
          loggedFallback,
          loggedSuccess,
-         model.runtimeSettingsApplyState == .idle {
+         model.runtimeSettingsApplyState == .idle
+      {
         break
       }
       await Task.yield()
@@ -9787,7 +9802,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
     for _ in 0..<240 {
       if !model.tunnelCoreRunning,
          !model.tunEnabled,
-         model.lastError?.contains("stopped TUN safely") == true {
+         model.lastError?.contains("stopped TUN safely") == true
+      {
         break
       }
       await Task.yield()
@@ -9810,7 +9826,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let routeIssue = Self.tunDiagnosticsSnapshot(
       checks: [
         Self.nonRoutingControllerFailureCheck(),
-        TunDiagnosticCheck(id: "default-route", title: "Default Route", status: .fail, message: "stale")
+        TunDiagnosticCheck(id: "default-route", title: "Default Route", status: .fail, message: "stale"),
       ],
       includeExternal: false,
       time: 44
@@ -9853,7 +9869,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let routeIssue = Self.tunDiagnosticsSnapshot(
       checks: [
         Self.nonRoutingControllerFailureCheck(),
-        TunDiagnosticCheck(id: "default-route", title: "Default Route", status: .fail, message: "stale")
+        TunDiagnosticCheck(id: "default-route", title: "Default Route", status: .fail, message: "stale"),
       ],
       includeExternal: false,
       time: 46
@@ -9876,7 +9892,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
     for _ in 0..<240 {
       if !model.tunnelCoreRunning,
          !model.tunEnabled,
-         model.lastError?.contains("stopped TUN safely") == true {
+         model.lastError?.contains("stopped TUN safely") == true
+      {
         break
       }
       await Task.yield()
@@ -9957,7 +9974,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let routeIssue = Self.tunDiagnosticsSnapshot(
       checks: [
         Self.nonRoutingControllerFailureCheck(),
-        TunDiagnosticCheck(id: "default-route", title: "Default Route", status: .fail, message: "stale")
+        TunDiagnosticCheck(id: "default-route", title: "Default Route", status: .fail, message: "stale"),
       ],
       includeExternal: false,
       time: 57
@@ -10017,7 +10034,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let routeIssue = Self.tunDiagnosticsSnapshot(
       checks: [
         Self.nonRoutingControllerFailureCheck(),
-        TunDiagnosticCheck(id: "default-route", title: "Default Route", status: .fail, message: "stale")
+        TunDiagnosticCheck(id: "default-route", title: "Default Route", status: .fail, message: "stale"),
       ],
       includeExternal: false,
       time: 52
@@ -10058,7 +10075,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let routeIssue = Self.tunDiagnosticsSnapshot(
       checks: [
         Self.nonRoutingControllerFailureCheck(),
-        TunDiagnosticCheck(id: "default-route", title: "Default Route", status: .fail, message: "stale")
+        TunDiagnosticCheck(id: "default-route", title: "Default Route", status: .fail, message: "stale"),
       ],
       includeExternal: false,
       time: 54
@@ -10080,7 +10097,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
       if !model.tunnelCoreRunning,
          !model.tunEnabled,
          model.tunDiagnostics == .empty,
-         model.lastError?.contains("stopped TUN safely") == true {
+         model.lastError?.contains("stopped TUN safely") == true
+      {
         break
       }
       await Task.yield()
@@ -10109,7 +10127,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let routeIssue = Self.tunDiagnosticsSnapshot(
       checks: [
         Self.nonRoutingControllerFailureCheck(),
-        TunDiagnosticCheck(id: "default-route", title: "Default Route", status: .fail, message: "stale")
+        TunDiagnosticCheck(id: "default-route", title: "Default Route", status: .fail, message: "stale"),
       ],
       includeExternal: false,
       time: 56
@@ -10126,7 +10144,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
       if !model.tunnelCoreRunning,
          !model.tunEnabled,
          model.tunDiagnostics == .empty,
-         model.lastError?.contains("stopped TUN safely") == true {
+         model.lastError?.contains("stopped TUN safely") == true
+      {
         break
       }
       await Task.yield()
@@ -10159,7 +10178,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
       if !model.tunnelCoreRunning,
          !model.tunEnabled,
          model.tunDiagnostics == .empty,
-         model.lastError?.contains("stopped TUN safely") == true {
+         model.lastError?.contains("stopped TUN safely") == true
+      {
         break
       }
       await Task.yield()
@@ -10194,14 +10214,14 @@ final class DashboardRuntimeStateTests: XCTestCase {
       time: 7
     )
     let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       systemProxyController: SystemProxyController(commandRunner: commandRunner),
       helperClient: helper,
       tunnelReadinessProbe: RecordingCoreReadinessProbe(),
       tunRuntimeInspector: RecordingTunRuntimeInspector(snapshots: [snapshot]),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.requestProxyRoutingMode(.tun)
     for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
@@ -10242,12 +10262,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
       reaper: RecordingCoreProcessReaper(),
       portChecker: EmptyRuntimePortChecker()
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
 
     model.start()
@@ -10286,12 +10306,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
       reaper: RecordingCoreProcessReaper(),
       portChecker: EmptyRuntimePortChecker()
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
 
     model.start()
@@ -10330,12 +10350,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
       reaper: RecordingCoreProcessReaper(),
       portChecker: EmptyRuntimePortChecker()
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       coreController: controller,
       systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
 
     model.start()
@@ -10362,10 +10382,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
   func testSettingCurrentModeDoesNotPublishChanges() throws {
     let paths = try Self.makeRuntimePaths()
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     let counter = ObservationChangeCounter { _ = model.overrides }
 
@@ -10376,10 +10396,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
   func testRequestingModeDefersPublishedChangesUntilNextActorTurn() async throws {
     let paths = try Self.makeRuntimePaths()
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     let counter = ObservationChangeCounter { _ = model.overrides }
 
@@ -10466,11 +10486,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
       fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
       registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       helperClient: helper,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
 
     model.requestProxyRoutingMode(.tun)
@@ -10506,11 +10526,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
       fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
       registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       helperClient: helper,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
 
     model.warmTunHelperRegistrationOnLaunch()
@@ -10552,11 +10572,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
       fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
       registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       helperClient: helper,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.proxyRoutingMode = .tun
 
@@ -10578,11 +10598,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
       fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
       registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       helperClient: helper,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     XCTAssertEqual(model.proxyRoutingMode, .systemProxy)
 
@@ -10704,11 +10724,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
       fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
       registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       helperClient: helper,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.proxyRoutingMode = .tun
 
@@ -10736,11 +10756,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
       fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
       registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       helperClient: helper,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
 
     model.warmTunHelperRegistrationOnLaunch()
@@ -10775,11 +10795,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
       fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
       registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       helperClient: helper,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
 
     model.warmTunHelperRegistrationOnLaunch()
@@ -10798,11 +10818,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
       fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
       registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       helperClient: helper,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.proxyRoutingMode = .tun
 
@@ -10829,11 +10849,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
       fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
       registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       helperClient: helper,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.proxyRoutingMode = .tun
 
@@ -10861,12 +10881,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
       fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
       registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       helperClient: helper,
       installLocationInspector: StubInstallLocationInspector(issue: .outsideApplications(folderName: "Downloads")),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.proxyRoutingMode = .tun
 
@@ -10888,12 +10908,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
       fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
       registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       helperClient: helper,
       installLocationInspector: StubInstallLocationInspector(issue: .translocated),
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.proxyRoutingMode = .tun
 
@@ -10912,11 +10932,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
       fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
       registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       helperClient: helper,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.proxyRoutingMode = .tun
 
@@ -10953,11 +10973,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
       fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
       registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       helperClient: helper,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
 
     model.warmTunHelperRegistrationOnLaunch()
@@ -10976,11 +10996,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
       fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
       registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       helperClient: helper,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.proxyRoutingMode = .tun
 
@@ -11009,11 +11029,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
       fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
       registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       helperClient: helper,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.proxyRoutingMode = .tun
 
@@ -11041,11 +11061,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
       fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
       registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
       helperClient: helper,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
     model.proxyRoutingMode = .tun
 
@@ -11077,11 +11097,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
       fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
       registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: "test")
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       helperClient: helper,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
 
     model.requestProxyRoutingMode(.tun)
@@ -11116,11 +11136,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
       fingerprintProvider: StaticFingerprintProvider(fingerprint: "test"),
       registrationRecordStore: InMemoryHelperRegistrationRecordStore(storedFingerprint: nil)
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       helperClient: helper,
-      defaults: try Self.makeIsolatedDefaults()
+      defaults: Self.makeIsolatedDefaults()
     )
 
     model.requestProxyRoutingMode(.tun)
@@ -11220,7 +11240,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       code: NSURLErrorCannotConnectToHost,
       userInfo: [
         NSLocalizedDescriptionKey: "Could not connect to the server.",
-        NSURLErrorFailingURLErrorKey: URL(string: "http://127.0.0.1:9097/version")!
+        NSURLErrorFailingURLErrorKey: URL(string: "http://127.0.0.1:9097/version")!,
       ]
     )
 
@@ -11235,7 +11255,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       domain: "SMAppServiceErrorDomain",
       code: 3,
       userInfo: [
-        NSLocalizedDescriptionKey: "Codesigning failure loading plist: io.github.clashmax.ClashMax.Helper.plist code: -67056"
+        NSLocalizedDescriptionKey: "Codesigning failure loading plist: io.github.clashmax.ClashMax.Helper.plist code: -67056",
       ]
     )
 
@@ -11250,7 +11270,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       domain: "SMAppServiceErrorDomain",
       code: 1,
       userInfo: [
-        NSLocalizedDescriptionKey: "Operation not permitted"
+        NSLocalizedDescriptionKey: "Operation not permitted",
       ]
     )
 
@@ -11277,10 +11297,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
       in: paths.appSupport,
       rejectedToken: "bad-preflight.example"
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       bundledCoreURLProvider: { rejectingCore }
     )
     let snippet = RuntimeSnippet(
@@ -11291,7 +11311,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         RuleOverlaySettings(
           enabled: true,
           prependRules: [
-            ManagedRuleOverlayRule(kind: .domainSuffix, value: "bad-preflight.example", policy: "DIRECT")
+            ManagedRuleOverlayRule(kind: .domainSuffix, value: "bad-preflight.example", policy: "DIRECT"),
           ]
         )
       )
@@ -11311,10 +11331,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
     _ = try await store.importLocalConfig(from: configURL)
     let passingCore = try Self.makeRuleOverlayPreflightCore(in: paths.appSupport, rejectedToken: "never-matched")
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       bundledCoreURLProvider: { passingCore }
     )
     let draftSnippet = RuntimeSnippet(
@@ -11325,7 +11345,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         RuleOverlaySettings(
           enabled: true,
           appendRules: [
-            ManagedRuleOverlayRule(kind: .domainSuffix, value: "draft-only.example", policy: "DIRECT")
+            ManagedRuleOverlayRule(kind: .domainSuffix, value: "draft-only.example", policy: "DIRECT"),
           ]
         )
       )
@@ -11350,10 +11370,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let firstProfile = try await store.importLocalConfig(from: firstConfigURL)
     let secondProfile = try await store.importLocalConfig(from: secondConfigURL)
     try await store.select(firstProfile)
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       bundledCoreURLProvider: { throw AppError.missingBundledCore }
     )
 
@@ -11379,10 +11399,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
     try Self.writeProxyConfig(named: "Japan", to: configURL)
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
     let profile = try await store.importLocalConfig(from: configURL)
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       bundledCoreURLProvider: { throw AppError.missingBundledCore }
     )
 
@@ -11407,10 +11427,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
     try Self.writeProxyConfig(named: "Japan", to: configURL)
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
     _ = try await store.importLocalConfig(from: configURL)
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       bundledCoreURLProvider: { throw AppError.missingBundledCore }
     )
 
@@ -11443,10 +11463,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
       session: URLSession(configuration: URLProtocolRecorder.configurationReturning(oldSource))
     )
     let preflightCore = try Self.makeRuleOverlayPreflightCore(in: paths.appSupport, rejectedToken: "never-matched")
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       bundledCoreURLProvider: { preflightCore }
     )
     await model.refreshEffectiveRuntimeConfigPreview()
@@ -11478,10 +11498,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
     _ = try await store.importLocalConfig(from: configURL)
     let preflightCore = try Self.makeRuleOverlayPreflightCore(in: paths.appSupport, rejectedToken: "never-matched")
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       bundledCoreURLProvider: { preflightCore }
     )
     await model.refreshEffectiveRuntimeConfigPreview()
@@ -11495,7 +11515,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         RuleOverlaySettings(
           enabled: true,
           appendRules: [
-            ManagedRuleOverlayRule(kind: .domainSuffix, value: "snippet.example", policy: "DIRECT")
+            ManagedRuleOverlayRule(kind: .domainSuffix, value: "snippet.example", policy: "DIRECT"),
           ]
         )
       )
@@ -11514,7 +11534,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     """
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
     let profile = try await store.addSubscription(
-      url: try XCTUnwrap(URL(string: "https://example.com/sub")),
+      url: XCTUnwrap(URL(string: "https://example.com/sub")),
       session: URLSession(configuration: URLProtocolRecorder.configurationReturning(providerContent)),
       preflightValidator: NoopSubscriptionProfilePreflightValidator()
     )
@@ -11522,10 +11542,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
       in: paths.appSupport,
       rejectedToken: "active-snippet.example"
     )
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       bundledCoreURLProvider: { rejectingCore }
     )
     await model.runtimeSnippetLibrary.waitForLoad()
@@ -11538,7 +11558,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
           RuleOverlaySettings(
             enabled: true,
             appendRules: [
-              ManagedRuleOverlayRule(kind: .domainSuffix, value: "active-snippet.example", policy: "DIRECT")
+              ManagedRuleOverlayRule(kind: .domainSuffix, value: "active-snippet.example", policy: "DIRECT"),
             ]
           )
         )
@@ -11564,7 +11584,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     """
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
     let profile = try await store.addSubscription(
-      url: try XCTUnwrap(URL(string: "https://example.com/sub")),
+      url: XCTUnwrap(URL(string: "https://example.com/sub")),
       session: URLSession(configuration: URLProtocolRecorder.configurationReturning(providerContent)),
       preflightValidator: NoopSubscriptionProfilePreflightValidator()
     )
@@ -11573,11 +11593,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
       .write(to: localProviderURL, atomically: true, encoding: .utf8)
     let validator = RecordingRuntimeConfigValidator(result: .success(()))
     let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
       apiClient: client,
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       bundledCoreURLProvider: { URL(fileURLWithPath: "/tmp/mihomo") },
       providerSideLoadPreflightRunner: MihomoProviderSideLoadPreflightRunner(runtimeConfigValidator: validator)
     )
@@ -11615,7 +11635,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     """
     let profileStore = ProfileStore(paths: paths, keychain: secrets)
     let imported = try await profileStore.addSubscription(
-      url: try XCTUnwrap(URL(string: "https://example.com/sub")),
+      url: XCTUnwrap(URL(string: "https://example.com/sub")),
       session: URLSession(configuration: URLProtocolRecorder.configurationReturning(providerContent)),
       preflightValidator: NoopSubscriptionProfilePreflightValidator()
     )
@@ -11636,11 +11656,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
     try "vless://00000000-0000-0000-0000-000000000000@local.example:443?security=tls#Local\n"
       .write(to: localProviderURL, atomically: true, encoding: .utf8)
     let validator = RecordingRuntimeConfigValidator(result: .success(()))
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: profileStore,
       outboundProxyEndpointStore: endpointStore,
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       bundledCoreURLProvider: { URL(fileURLWithPath: "/tmp/mihomo") },
       providerSideLoadPreflightRunner: MihomoProviderSideLoadPreflightRunner(runtimeConfigValidator: validator)
     )
@@ -11672,17 +11692,17 @@ final class DashboardRuntimeStateTests: XCTestCase {
     """
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
     let profile = try await store.addSubscription(
-      url: try XCTUnwrap(URL(string: "https://example.com/sub")),
+      url: XCTUnwrap(URL(string: "https://example.com/sub")),
       session: URLSession(configuration: URLProtocolRecorder.configurationReturning(configContent)),
       preflightValidator: NoopSubscriptionProfilePreflightValidator()
     )
     let localProviderURL = paths.appSupport.appendingPathComponent("local-provider.txt")
     try "trojan://password@local.example:443#Local\n".write(to: localProviderURL, atomically: true, encoding: .utf8)
     let validator = RecordingRuntimeConfigValidator(result: .success(()))
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       bundledCoreURLProvider: { URL(fileURLWithPath: "/tmp/mihomo") },
       providerSideLoadPreflightRunner: MihomoProviderSideLoadPreflightRunner(runtimeConfigValidator: validator)
     )
@@ -11708,17 +11728,17 @@ final class DashboardRuntimeStateTests: XCTestCase {
     """
     let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
     let profile = try await store.addSubscription(
-      url: try XCTUnwrap(URL(string: "https://example.com/sub")),
+      url: XCTUnwrap(URL(string: "https://example.com/sub")),
       session: URLSession(configuration: URLProtocolRecorder.configurationReturning(providerContent)),
       preflightValidator: NoopSubscriptionProfilePreflightValidator()
     )
     let localProviderURL = paths.appSupport.appendingPathComponent("bad-local-provider.txt")
     try "trojan://bad-password@local.example:443#Bad\n".write(to: localProviderURL, atomically: true, encoding: .utf8)
     let validator = RecordingRuntimeConfigValidator(result: .failure(AppError.configValidationFailed("bad local provider")))
-    let model = AppModel(
+    let model = try AppModel(
       paths: paths,
       profileStore: store,
-      defaults: try Self.makeIsolatedDefaults(),
+      defaults: Self.makeIsolatedDefaults(),
       bundledCoreURLProvider: { URL(fileURLWithPath: "/tmp/mihomo") },
       providerSideLoadPreflightRunner: MihomoProviderSideLoadPreflightRunner(runtimeConfigValidator: validator)
     )
@@ -11776,7 +11796,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
       "/usr/sbin/networksetup -getsocksfirewallproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
       "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": "There aren't any bypass domains set.\n",
-      "/usr/sbin/networksetup -getdnsservers Wi-Fi": "There aren't any DNS Servers set on Wi-Fi.\n"
+      "/usr/sbin/networksetup -getdnsservers Wi-Fi": "There aren't any DNS Servers set on Wi-Fi.\n",
     ]
   }
 
@@ -12069,32 +12089,32 @@ final class DashboardRuntimeStateTests: XCTestCase {
         "Wi-Fi\n",
         "Wi-Fi\n",
         "Wi-Fi\n",
-        "Wi-Fi\n"
+        "Wi-Fi\n",
       ],
       "/usr/sbin/networksetup -getwebproxy Wi-Fi": [
         "Enabled: No\nServer:\nPort: 0\n",
         "Enabled: Yes\nServer: \(server)\nPort: 7890\n",
         "Enabled: Yes\nServer: \(server)\nPort: 7890\n",
-        "Enabled: No\nServer:\nPort: 0\n"
+        "Enabled: No\nServer:\nPort: 0\n",
       ],
       "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi": [
         "Enabled: No\nServer:\nPort: 0\n",
         "Enabled: No\nServer:\nPort: 0\n",
         "Enabled: No\nServer:\nPort: 0\n",
-        "Enabled: No\nServer:\nPort: 0\n"
+        "Enabled: No\nServer:\nPort: 0\n",
       ],
       "/usr/sbin/networksetup -getsocksfirewallproxy Wi-Fi": [
         "Enabled: No\nServer:\nPort: 0\n",
         "Enabled: No\nServer:\nPort: 0\n",
         "Enabled: No\nServer:\nPort: 0\n",
-        "Enabled: No\nServer:\nPort: 0\n"
+        "Enabled: No\nServer:\nPort: 0\n",
       ],
       "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": [
         "There aren't any bypass domains set.\n",
         "There aren't any bypass domains set.\n",
         "There aren't any bypass domains set.\n",
-        "There aren't any bypass domains set.\n"
-      ]
+        "There aren't any bypass domains set.\n",
+      ],
     ]
   }
 
@@ -12132,7 +12152,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
     for _ in 0..<120 {
       if let info = model.publicIPInfoState.info,
          !model.publicIPInfoState.isLoading,
-         expectedIP == nil || info.ipAddress == expectedIP {
+         expectedIP == nil || info.ipAddress == expectedIP
+      {
         return
       }
       await Task.yield()
@@ -13509,7 +13530,8 @@ private final class CountingProcessLauncher: CoreProcessLaunching {
   func launch(executable: URL, arguments: [String], environment: [String: String], workDirectory: URL) throws -> RunningCoreProcess {
     launchCount += 1
     if let configFlagIndex = arguments.firstIndex(of: "-f"),
-       arguments.indices.contains(configFlagIndex + 1) {
+       arguments.indices.contains(configFlagIndex + 1)
+    {
       launchedConfigPaths.append(arguments[configFlagIndex + 1])
     }
     return FakeRunningProcess(processIdentifier: Int32(1000 + launchCount))
@@ -13678,4 +13700,3 @@ private final class MutableCurrentNetworkProvider: CurrentNetworkProviding, @unc
     network
   }
 }
-

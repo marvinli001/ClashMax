@@ -1,8 +1,8 @@
 import AppKit
+@testable import ClashMax
 import ServiceManagement
 import SwiftUI
 import XCTest
-@testable import ClashMax
 
 @MainActor
 final class MenuBarPanelLayoutTests: XCTestCase {
@@ -44,7 +44,7 @@ final class MenuBarPanelLayoutTests: XCTestCase {
     XCTAssertEqual(size.width, MenuBarPanelLayout.width, accuracy: 1)
     // Content sits directly against the system panel's edge, inset only enough
     // to clear its rounded corners.
-    XCTAssertTrue((8 ... 16).contains(MenuBarPanelLayout.padding))
+    XCTAssertTrue((8...16).contains(MenuBarPanelLayout.padding))
   }
 
   func testFullPanelFitsPlannedWidthWithoutProfile() async throws {
@@ -296,7 +296,7 @@ final class MenuBarPanelLayoutTests: XCTestCase {
     // 312pt panel and on one compact line.
     let localizedTitles: [(locale: String, title: String)] = [
       ("en", "Proxy Mode"),
-      ("zh-Hans", "代理模式")
+      ("zh-Hans", "代理模式"),
     ]
 
     for testCase in localizedTitles {
@@ -399,7 +399,7 @@ final class MenuBarPanelLayoutTests: XCTestCase {
         "/Applications/One.app",
         "/Applications/Two.app",
         "/Applications/Three.app",
-        "/Applications/One.app"
+        "/Applications/One.app",
       ]
     )
   }
@@ -476,7 +476,7 @@ final class MenuBarPanelLayoutTests: XCTestCase {
       "/usr/sbin/networksetup -getsecurewebproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
       "/usr/sbin/networksetup -getsocksfirewallproxy Wi-Fi": "Enabled: No\nServer:\nPort: 0\n",
       "/usr/sbin/networksetup -getproxybypassdomains Wi-Fi": "There aren't any bypass domains set.\n",
-      "/usr/sbin/networksetup -getdnsservers Wi-Fi": "There aren't any DNS Servers set on Wi-Fi.\n"
+      "/usr/sbin/networksetup -getdnsservers Wi-Fi": "There aren't any DNS Servers set on Wi-Fi.\n",
     ]
   }
 
@@ -486,7 +486,7 @@ final class MenuBarPanelLayoutTests: XCTestCase {
     TrafficSample(upload: 4096, download: 32768),
     TrafficSample(upload: 1024, download: 8192),
     TrafficSample(upload: 8192, download: 65536),
-    TrafficSample(upload: 4096, download: 32768)
+    TrafficSample(upload: 4096, download: 32768),
   ]
 }
 

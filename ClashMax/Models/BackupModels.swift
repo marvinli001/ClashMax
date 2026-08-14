@@ -79,23 +79,23 @@ struct ClashMaxBackupFile: Codable, Equatable, Sendable {
         forKey: .outboundProxyManifest
       ) ?? OutboundProxyEndpointManifest()
     }
-    self.init(
+    try self.init(
       schemaVersion: schemaVersion,
-      appMetadata: try container.decode(BackupAppMetadata.self, forKey: .appMetadata),
-      profilesManifest: try container.decode(ProfileManifest.self, forKey: .profilesManifest),
+      appMetadata: container.decode(BackupAppMetadata.self, forKey: .appMetadata),
+      profilesManifest: container.decode(ProfileManifest.self, forKey: .profilesManifest),
       outboundProxyManifest: outboundProxyManifest,
-      profileSources: try container.decode([BackupProfileSource].self, forKey: .profileSources),
-      settings: try container.decode(BackupSettingsSnapshot.self, forKey: .settings),
-      proxySelections: try container.decode([String: [String: String]].self, forKey: .proxySelections),
-      runtimeSnippets: try container.decodeIfPresent([RuntimeSnippet].self, forKey: .runtimeSnippets),
-      omittedSecretSummary: try container.decodeIfPresent(BackupSecretSummary.self, forKey: .omittedSecretSummary)
+      profileSources: container.decode([BackupProfileSource].self, forKey: .profileSources),
+      settings: container.decode(BackupSettingsSnapshot.self, forKey: .settings),
+      proxySelections: container.decode([String: [String: String]].self, forKey: .proxySelections),
+      runtimeSnippets: container.decodeIfPresent([RuntimeSnippet].self, forKey: .runtimeSnippets),
+      omittedSecretSummary: container.decodeIfPresent(BackupSecretSummary.self, forKey: .omittedSecretSummary)
         ?? BackupSecretSummary(),
-      encryptedSecrets: try container.decodeIfPresent(BackupEncryptedSecrets.self, forKey: .encryptedSecrets),
-      encryptedProfileSources: try container.decodeIfPresent(
+      encryptedSecrets: container.decodeIfPresent(BackupEncryptedSecrets.self, forKey: .encryptedSecrets),
+      encryptedProfileSources: container.decodeIfPresent(
         BackupEncryptedProfileSources.self,
         forKey: .encryptedProfileSources
       ),
-      encryptedRuntimeSnippets: try container.decodeIfPresent(
+      encryptedRuntimeSnippets: container.decodeIfPresent(
         BackupEncryptedRuntimeSnippets.self,
         forKey: .encryptedRuntimeSnippets
       )
@@ -164,13 +164,13 @@ struct BackupSecretSummary: Codable, Equatable, Sendable {
 
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    self.init(
-      subscriptionURLCount: try container.decodeIfPresent(Int.self, forKey: .subscriptionURLCount) ?? 0,
-      requestHeaderValueCount: try container.decodeIfPresent(Int.self, forKey: .requestHeaderValueCount) ?? 0,
-      runtimeMergeYAMLCount: try container.decodeIfPresent(Int.self, forKey: .runtimeMergeYAMLCount) ?? 0,
-      profileSourceCredentialCount: try container.decodeIfPresent(Int.self, forKey: .profileSourceCredentialCount) ?? 0,
-      runtimeSnippetCount: try container.decodeIfPresent(Int.self, forKey: .runtimeSnippetCount) ?? 0,
-      outboundProxyPasswordCount: try container.decodeIfPresent(
+    try self.init(
+      subscriptionURLCount: container.decodeIfPresent(Int.self, forKey: .subscriptionURLCount) ?? 0,
+      requestHeaderValueCount: container.decodeIfPresent(Int.self, forKey: .requestHeaderValueCount) ?? 0,
+      runtimeMergeYAMLCount: container.decodeIfPresent(Int.self, forKey: .runtimeMergeYAMLCount) ?? 0,
+      profileSourceCredentialCount: container.decodeIfPresent(Int.self, forKey: .profileSourceCredentialCount) ?? 0,
+      runtimeSnippetCount: container.decodeIfPresent(Int.self, forKey: .runtimeSnippetCount) ?? 0,
+      outboundProxyPasswordCount: container.decodeIfPresent(
         Int.self,
         forKey: .outboundProxyPasswordCount
       ) ?? 0
@@ -206,9 +206,9 @@ struct BackupSecretsBundle: Codable, Equatable, Sendable {
 
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    self.init(
-      subscriptions: try container.decode([BackupSubscriptionSecrets].self, forKey: .subscriptions),
-      outboundProxyPasswords: try container.decodeIfPresent(
+    try self.init(
+      subscriptions: container.decode([BackupSubscriptionSecrets].self, forKey: .subscriptions),
+      outboundProxyPasswords: container.decodeIfPresent(
         [BackupOutboundProxyEndpointPassword].self,
         forKey: .outboundProxyPasswords
       ) ?? []
@@ -350,35 +350,35 @@ struct BackupSettingsSnapshot: Codable, Equatable, Sendable {
 
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    self.init(
-      runtimeSettings: try container.decode(PersistedRuntimeSettings.self, forKey: .runtimeSettings),
-      proxyRoutingMode: try container.decode(ProxyRoutingMode.self, forKey: .proxyRoutingMode),
-      systemProxySettings: try container.decode(SystemProxySettings.self, forKey: .systemProxySettings),
-      ipv6Enabled: try container.decode(Bool.self, forKey: .ipv6Enabled),
-      tunSettings: try container.decode(TunSettings.self, forKey: .tunSettings),
-      networkExtensionRoutingSettings: try container.decode(
+    try self.init(
+      runtimeSettings: container.decode(PersistedRuntimeSettings.self, forKey: .runtimeSettings),
+      proxyRoutingMode: container.decode(ProxyRoutingMode.self, forKey: .proxyRoutingMode),
+      systemProxySettings: container.decode(SystemProxySettings.self, forKey: .systemProxySettings),
+      ipv6Enabled: container.decode(Bool.self, forKey: .ipv6Enabled),
+      tunSettings: container.decode(TunSettings.self, forKey: .tunSettings),
+      networkExtensionRoutingSettings: container.decode(
         NetworkExtensionRoutingSettings.self,
         forKey: .networkExtensionRoutingSettings
       ),
-      ruleOverlaySettings: try container.decode(RuleOverlaySettings.self, forKey: .ruleOverlaySettings),
-      delayTestSettings: try container.decode(DelayTestSettings.self, forKey: .delayTestSettings),
-      subscriptionFetchSettings: try container.decode(
+      ruleOverlaySettings: container.decode(RuleOverlaySettings.self, forKey: .ruleOverlaySettings),
+      delayTestSettings: container.decode(DelayTestSettings.self, forKey: .delayTestSettings),
+      subscriptionFetchSettings: container.decode(
         SubscriptionFetchSettings.self,
         forKey: .subscriptionFetchSettings
       ),
-      menuBarPinnedGroupSettings: try container.decode(
+      menuBarPinnedGroupSettings: container.decode(
         MenuBarPinnedGroupSettings.self,
         forKey: .menuBarPinnedGroupSettings
       ),
-      proxyPageSettings: try container.decodeIfPresent(ProxyPageSettings.self, forKey: .proxyPageSettings) ?? .default,
-      globalShortcutSettings: try container.decode(GlobalShortcutSettings.self, forKey: .globalShortcutSettings),
-      externalDashboardProfiles: try container.decode(
+      proxyPageSettings: container.decodeIfPresent(ProxyPageSettings.self, forKey: .proxyPageSettings) ?? .default,
+      globalShortcutSettings: container.decode(GlobalShortcutSettings.self, forKey: .globalShortcutSettings),
+      externalDashboardProfiles: container.decode(
         [ExternalDashboardProfile].self,
         forKey: .externalDashboardProfiles
       ),
-      networkPolicySettings: try container.decode(NetworkPolicySettings.self, forKey: .networkPolicySettings),
-      appTheme: try container.decode(AppTheme.self, forKey: .appTheme),
-      externalControllerSettings: try container.decode(
+      networkPolicySettings: container.decode(NetworkPolicySettings.self, forKey: .networkPolicySettings),
+      appTheme: container.decode(AppTheme.self, forKey: .appTheme),
+      externalControllerSettings: container.decode(
         BackupExternalControllerSettings.self,
         forKey: .externalControllerSettings
       )

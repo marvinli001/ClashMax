@@ -45,7 +45,7 @@ final class ProxySearchCoordinator {
 
   init(run: @escaping @Sendable (ProxySearchPipeline.Input) -> ProxySearchSnapshot = { ProxySearchPipeline.run($0) }) {
     self.run = run
-    self.signposter = OSSignposter(logger: logger)
+    signposter = OSSignposter(logger: logger)
   }
 
   /// Schedule a search. Any in-flight request is cancelled so only the newest generation publishes.
@@ -55,8 +55,8 @@ final class ProxySearchCoordinator {
     isComputing = true
 
     let debounce = debounceInterval(for: reason)
-    let run = self.run
-    let signposter = self.signposter
+    let run = run
+    let signposter = signposter
 
     let task = Task { [weak self] in
       defer { self?.pending[token] = nil }

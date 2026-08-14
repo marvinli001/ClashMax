@@ -1,5 +1,5 @@
-import XCTest
 @testable import ClashMax
+import XCTest
 
 final class PublicIPInfoClientTests: XCTestCase {
   func testMapsAllConfiguredGeoIPProviders() async throws {
@@ -21,7 +21,7 @@ final class PublicIPInfoClientTests: XCTestCase {
       """),
       ("geojs", """
       {"ip":"203.0.113.1","country_code":"NZ","country":"New Zealand","region":"Auckland","city":"Auckland","asn":"23655","organization":"Two Degrees Networks Limited","timezone":"Pacific/Auckland","latitude":"-36.85","longitude":"174.76"}
-      """)
+      """),
     ]
 
     for (providerName, body) in cases {
@@ -52,7 +52,7 @@ final class PublicIPInfoClientTests: XCTestCase {
 
   func testRecordsProviderHostAsSource() async throws {
     PublicIPInfoURLProtocol.configure([
-      .init(body: #"{"ip":"203.0.113.1","country_code":"NZ"}"#)
+      .init(body: #"{"ip":"203.0.113.1","country_code":"NZ"}"#),
     ])
     let provider = try XCTUnwrap(PublicIPInfoClient.Provider.defaultProviders.first { $0.name == "api.ip.sb" })
     let client = PublicIPInfoClient(
@@ -69,7 +69,7 @@ final class PublicIPInfoClientTests: XCTestCase {
 
   func testRequestUsesClashMaxUserAgentAndFiveSecondTimeout() async throws {
     PublicIPInfoURLProtocol.configure([
-      .init(body: #"{"ip":"203.0.113.1"}"#)
+      .init(body: #"{"ip":"203.0.113.1"}"#),
     ])
     let provider = PublicIPInfoClient.Provider.defaultProviders[0]
     let client = PublicIPInfoClient(
@@ -90,7 +90,7 @@ final class PublicIPInfoClientTests: XCTestCase {
   func testFallsBackToNextProviderAfterFailure() async throws {
     PublicIPInfoURLProtocol.configure([
       .init(statusCode: 503, body: #"{"error":"down"}"#),
-      .init(body: #"{"ip":"198.51.100.9","country_code":"US","country":"United States"}"#)
+      .init(body: #"{"ip":"198.51.100.9","country_code":"US","country":"United States"}"#),
     ])
     let providers = Array(PublicIPInfoClient.Provider.defaultProviders.prefix(2))
     let client = PublicIPInfoClient(
@@ -110,7 +110,7 @@ final class PublicIPInfoClientTests: XCTestCase {
   func testAllProvidersFailedReturnsUserReadableError() async throws {
     PublicIPInfoURLProtocol.configure([
       .init(statusCode: 500, body: #"{"error":"one"}"#),
-      .init(statusCode: 502, body: #"{"error":"two"}"#)
+      .init(statusCode: 502, body: #"{"error":"two"}"#),
     ])
     let client = PublicIPInfoClient(
       providers: Array(PublicIPInfoClient.Provider.defaultProviders.prefix(2)),
@@ -141,8 +141,8 @@ private struct PublicIPMockResponse {
 
 private final class PublicIPInfoURLProtocol: URLProtocol, @unchecked Sendable {
   private static let lock = NSLock()
-  nonisolated(unsafe) private static var responses: [PublicIPMockResponse] = []
-  nonisolated(unsafe) private static var requests: [URLRequest] = []
+  private nonisolated(unsafe) static var responses: [PublicIPMockResponse] = []
+  private nonisolated(unsafe) static var requests: [URLRequest] = []
 
   static func configure(_ newResponses: [PublicIPMockResponse]) {
     lock.lock()

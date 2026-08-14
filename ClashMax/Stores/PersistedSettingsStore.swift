@@ -9,88 +9,104 @@ final class PersistedSettingsStore {
       saveRuntimeSettings(overrides)
     }
   }
+
   var proxyRoutingMode: ProxyRoutingMode = .systemProxy {
     didSet {
       saveCodable(proxyRoutingMode, forKey: Self.proxyRoutingModeDefaultsKey)
     }
   }
+
   var systemProxySettings = SystemProxySettings.default {
     didSet {
       saveCodable(systemProxySettings, forKey: Self.systemProxySettingsDefaultsKey)
     }
   }
+
   var ipv6Enabled = false {
     didSet {
       overrides.ipv6Enabled = ipv6Enabled
       defaults.set(ipv6Enabled, forKey: Self.ipv6EnabledDefaultsKey)
     }
   }
+
   var tunSettings = TunSettings.default {
     didSet {
       overrides.tunSettings = tunSettings
       saveCodable(tunSettings, forKey: Self.tunSettingsDefaultsKey)
     }
   }
+
   var networkExtensionRoutingSettings = NetworkExtensionRoutingSettings.default {
     didSet {
       saveCodable(networkExtensionRoutingSettings, forKey: Self.networkExtensionRoutingSettingsDefaultsKey)
     }
   }
+
   var ruleOverlaySettings = RuleOverlaySettings.disabled {
     didSet {
       overrides.ruleOverlay = ruleOverlaySettings
       saveCodable(ruleOverlaySettings, forKey: Self.ruleOverlaySettingsDefaultsKey)
     }
   }
+
   var delayTestSettings = DelayTestSettings.default {
     didSet {
       overrides.unifiedDelay = delayTestSettings.unifiedDelay
       saveCodable(delayTestSettings, forKey: Self.delayTestSettingsDefaultsKey)
     }
   }
+
   var subscriptionFetchSettings = SubscriptionFetchSettings.default {
     didSet {
       saveCodable(subscriptionFetchSettings, forKey: Self.subscriptionFetchSettingsDefaultsKey)
       onSubscriptionFetchSettingsChange?()
     }
   }
+
   var menuBarPinnedGroupSettings = MenuBarPinnedGroupSettings.default {
     didSet {
       saveCodable(menuBarPinnedGroupSettings, forKey: Self.menuBarPinnedGroupSettingsDefaultsKey)
     }
   }
+
   var proxyPageSettings = ProxyPageSettings.default {
     didSet {
       saveCodable(proxyPageSettings, forKey: Self.proxyPageSettingsDefaultsKey)
     }
   }
+
   var globalShortcutSettings = GlobalShortcutSettings.default {
     didSet {
       saveCodable(globalShortcutSettings, forKey: Self.globalShortcutSettingsDefaultsKey)
       onGlobalShortcutSettingsChange?(globalShortcutSettings)
     }
   }
+
   var externalDashboardProfiles: [ExternalDashboardProfile] = [] {
     didSet {
       saveCodable(externalDashboardProfiles, forKey: Self.externalDashboardProfilesDefaultsKey)
     }
   }
+
   var networkPolicySettings = NetworkPolicySettings.default {
     didSet {
       saveCodable(networkPolicySettings, forKey: Self.networkPolicySettingsDefaultsKey)
     }
   }
+
   var appTheme = AppTheme.system {
     didSet {
       saveCodable(appTheme, forKey: Self.appThemeDefaultsKey)
     }
   }
+
   var externalControllerSettings = ExternalControllerSettings.default {
     didSet {
       syncExternalControllerSettings()
       saveExternalControllerSettings(externalControllerSettings)
     }
   }
+
   private(set) var appliedRuntimeSettingsSnapshot: AppliedRuntimeSettingsSnapshot?
   private(set) var launchSettings = LaunchSettings.default
   private(set) var initialTunHelperPromptHandled: Bool
@@ -212,7 +228,7 @@ final class PersistedSettingsStore {
       defaults: defaults
     ) ?? [
       ExternalDashboardProfile(name: "YACD", url: URL(string: "https://yacd.metacubex.one")!, readOnly: true),
-      ExternalDashboardProfile(name: "MetaCubeX", url: URL(string: "https://metacubex.github.io/metacubexd")!, readOnly: true)
+      ExternalDashboardProfile(name: "MetaCubeX", url: URL(string: "https://metacubex.github.io/metacubexd")!, readOnly: true),
     ]
     networkPolicySettings = Self.loadCodable(
       NetworkPolicySettings.self,

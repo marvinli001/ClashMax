@@ -55,7 +55,7 @@ struct EffectiveRuntimeConfigSnapshot: Equatable, Sendable {
       "ClashMax Effective Runtime Config",
       "Generated: \(generatedAt.formatted(date: .numeric, time: .standard))",
       "Profile: \(profileName)",
-      "Preflight: \(preflightStatus.displayName)"
+      "Preflight: \(preflightStatus.displayName)",
     ]
     if let message = preflightStatus.message {
       lines.append("Preflight Detail: \(message)")

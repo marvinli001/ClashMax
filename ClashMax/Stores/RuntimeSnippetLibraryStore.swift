@@ -52,7 +52,7 @@ final class RuntimeSnippetLibraryStore {
     paths: RuntimePaths,
     diskIO: any RuntimeSnippetLibraryDiskIOProviding = RuntimeSnippetLibraryDiskIO()
   ) {
-    self.libraryURL = paths.runtimeSnippetLibraryURL
+    libraryURL = paths.runtimeSnippetLibraryURL
     self.diskIO = diskIO
     loadTask = Task { [weak self] in
       await self?.loadFromDisk()

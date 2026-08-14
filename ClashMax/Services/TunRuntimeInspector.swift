@@ -140,21 +140,21 @@ struct TunRuntimeInspector: TunRuntimeInspecting {
   }
 
   func inspect(_ configuration: TunRuntimeInspectionConfiguration) async -> TunDiagnosticsSnapshot {
-    var checks: [TunDiagnosticCheck] = [
-      await controllerCheck(configuration),
-      helperPIDCheck(configuration)
+    var checks: [TunDiagnosticCheck] = await [
+      controllerCheck(configuration),
+      helperPIDCheck(configuration),
     ]
 
-    checks.append(await interfaceCheck(configuration))
-    checks.append(await defaultRouteCheck(configuration))
-    checks.append(await routeExcludeCheck(configuration))
+    await checks.append(interfaceCheck(configuration))
+    await checks.append(defaultRouteCheck(configuration))
+    await checks.append(routeExcludeCheck(configuration))
     checks.append(systemProxyCheck(configuration))
     checks.append(systemDNSCheck(configuration))
-    checks.append(await dnsHijackCheck(configuration))
+    await checks.append(dnsHijackCheck(configuration))
 
     if configuration.includeExternal {
-      checks.append(await externalTCPCheck())
-      checks.append(await externalUDPCheck())
+      await checks.append(externalTCPCheck())
+      await checks.append(externalUDPCheck())
     } else {
       checks.append(TunDiagnosticCheck(
         id: "external-tcp",
@@ -201,7 +201,7 @@ struct TunRuntimeInspector: TunRuntimeInspecting {
       status: .info,
       message: "\(route.message) Live TCP and UDP probes still reached the network, so traffic is flowing.",
       detail: [route.detail, "external TCP and UDP probes passed"]
-        .compactMap { $0 }
+        .compactMap(\.self)
         .joined(separator: " · ")
     )
     return downgraded
@@ -236,7 +236,7 @@ struct TunRuntimeInspector: TunRuntimeInspecting {
             "2",
             "-H",
             authorizationHeader + configuration.api.secret,
-            versionURL.absoluteString
+            versionURL.absoluteString,
           ],
           displayDescription: [
             Command.curl,
@@ -245,7 +245,7 @@ struct TunRuntimeInspector: TunRuntimeInspecting {
             "2",
             "-H",
             authorizationHeader + StructuredLogRedactor.placeholder,
-            versionURL.absoluteString
+            versionURL.absoluteString,
           ].joined(separator: " ")
         )
       )
@@ -596,7 +596,7 @@ struct TunRuntimeInspector: TunRuntimeInspecting {
           "%{http_code}",
           "--max-time",
           "5",
-          AppConstants.defaultDelayTestURL.absoluteString
+          AppConstants.defaultDelayTestURL.absoluteString,
         ]
       )
       let statusCode = Int(output.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0

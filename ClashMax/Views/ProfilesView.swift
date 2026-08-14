@@ -281,7 +281,7 @@ struct ProfilesView: View {
         .adaptive(minimum: 280, maximum: 360),
         spacing: 12,
         alignment: .topLeading
-      )
+      ),
     ]
   }
 
@@ -476,7 +476,7 @@ struct ProfilesView: View {
         for candidate in report.subscriptions {
           var importedProviderOptions = candidate.providerOptions
           if options.importRuleSnippets {
-            importedProviderOptions = self.providerOptionsByApplyingRuleSnippets(
+            importedProviderOptions = providerOptionsByApplyingRuleSnippets(
               importedProviderOptions,
               applyingRuleSnippets: report.ruleSnippets.filter { $0.profileSourceID == candidate.id }
             )
@@ -580,7 +580,8 @@ struct ProfilesView: View {
   ) async {
     for candidate in snippets {
       if let profileSourceID = candidate.profileSourceID,
-         subscriptionSourceIDs.contains(profileSourceID) {
+         subscriptionSourceIDs.contains(profileSourceID)
+      {
         continue
       }
       let binding: RuntimeSnippetBinding
@@ -692,7 +693,7 @@ private struct ClientMigrationReportSheet: View {
             )
           )
         }
-          .keyboardShortcut(.defaultAction)
+        .keyboardShortcut(.defaultAction)
       }
     }
   }
@@ -700,7 +701,7 @@ private struct ClientMigrationReportSheet: View {
   private var sourceValues: [String] {
     [
       "Client: \(report.client.displayName)",
-      "Directory: \(report.configDirectory)"
+      "Directory: \(report.configDirectory)",
     ]
   }
 
@@ -734,9 +735,9 @@ private struct ClientMigrationReportSheet: View {
       report.systemProxyEnabled.map { "system proxy intent: \($0)" },
       report.ports.isEmpty ? nil : report.ports.map { "\($0.key): \($0.value)" }.sorted().joined(separator: ", "),
       report.bypassDomains.isEmpty ? nil : "bypass: \(report.bypassDomains.joined(separator: ", "))",
-      shortcutValues.isEmpty ? nil : "shortcuts: \(shortcutValues.joined(separator: ", "))"
+      shortcutValues.isEmpty ? nil : "shortcuts: \(shortcutValues.joined(separator: ", "))",
     ]
-    .compactMap { $0 }
+    .compactMap(\.self)
   }
 
   private var shortcutValues: [String] {
@@ -970,7 +971,7 @@ private struct ProfileMetricsRow: View {
   private var columns: [GridItem] {
     [
       GridItem(.flexible(minimum: 92), spacing: 8, alignment: .topLeading),
-      GridItem(.flexible(minimum: 92), spacing: 8, alignment: .topLeading)
+      GridItem(.flexible(minimum: 92), spacing: 8, alignment: .topLeading),
     ]
   }
 
@@ -1097,7 +1098,7 @@ private struct ProviderInsightsMetricGrid: View {
       GridItem(.flexible(minimum: 130), spacing: 10, alignment: .topLeading),
       GridItem(.flexible(minimum: 130), spacing: 10, alignment: .topLeading),
       GridItem(.flexible(minimum: 130), spacing: 10, alignment: .topLeading),
-      GridItem(.flexible(minimum: 130), spacing: 10, alignment: .topLeading)
+      GridItem(.flexible(minimum: 130), spacing: 10, alignment: .topLeading),
     ]
   }
 
@@ -1329,7 +1330,8 @@ private struct ProfileEditSheet: View {
           }
 
           if let upstreamEndpoint = outboundProxyEndpoints.first(where: { $0.id == upstreamEndpointID }),
-             upstreamEndpoint.isTCPOnly {
+             upstreamEndpoint.isTCPOnly
+          {
             ProfileEditContentRow {
               Label(
                 "TCP Only: System Proxy does not capture UDP; TUN and Network Extension reject UDP for this profile.",
@@ -1932,7 +1934,7 @@ private struct SubscriptionDiagnosticsView: View {
   private var diagnosticColumns: [GridItem] {
     [
       GridItem(.flexible(minimum: 170), spacing: 10, alignment: .topLeading),
-      GridItem(.flexible(minimum: 170), spacing: 10, alignment: .topLeading)
+      GridItem(.flexible(minimum: 170), spacing: 10, alignment: .topLeading),
     ]
   }
 

@@ -1,5 +1,5 @@
-import XCTest
 @testable import ClashMax
+import XCTest
 
 final class TunRuntimeInspectorTests: XCTestCase {
   func testInspectorReportsPassingDataPlaneChecks() async {
@@ -10,7 +10,7 @@ final class TunRuntimeInspectorTests: XCTestCase {
       "/usr/sbin/netstat -rn": "Destination Gateway Flags Netif\n10/8 link#1 UCS en0\n",
       "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n",
       "/usr/bin/curl -sS -o /dev/null -w %{http_code} --max-time 5 https://www.gstatic.com/generate_204": "204",
-      "/usr/bin/dig @1.1.1.1 +time=2 +tries=1 +short example.com A": "93.184.216.34\n"
+      "/usr/bin/dig @1.1.1.1 +time=2 +tries=1 +short example.com A": "93.184.216.34\n",
     ])
     let inspector = TunRuntimeInspector(commandRunner: runner)
     let snapshot = await inspector.inspect(configuration(routeExcludes: ["10.0.0.0/8"]))
@@ -35,7 +35,7 @@ final class TunRuntimeInspectorTests: XCTestCase {
       "/usr/sbin/netstat -rn": "Destination Gateway Flags Netif\n",
       "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "142.250.191.68\n",
       "/usr/bin/curl -sS -o /dev/null -w %{http_code} --max-time 5 https://www.gstatic.com/generate_204": "000",
-      "/usr/bin/dig @1.1.1.1 +time=2 +tries=1 +short example.com A": ""
+      "/usr/bin/dig @1.1.1.1 +time=2 +tries=1 +short example.com A": "",
     ])
     let inspector = TunRuntimeInspector(commandRunner: runner)
     let snapshot = await inspector.inspect(configuration(
@@ -60,7 +60,7 @@ final class TunRuntimeInspectorTests: XCTestCase {
       "/usr/bin/curl -fsS --max-time 2 -H Authorization: Bearer secret http://127.0.0.1:9097/version": #"{"version":"v1.19.24"}"#,
       "/sbin/ifconfig": "utun1024: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500\n",
       "/sbin/route -n get 1.1.1.1": "route to: 1.1.1.1\ninterface: utun1024\n",
-      "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n"
+      "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n",
     ])
     let inspector = TunRuntimeInspector(commandRunner: runner)
     let snapshot = await inspector.inspect(configuration(includeExternal: false))
@@ -79,7 +79,7 @@ final class TunRuntimeInspectorTests: XCTestCase {
         "/sbin/route -n get 1.1.1.1": "route to: 1.1.1.1\ninterface: utun1024\n",
         "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n",
         "/usr/bin/curl -sS -o /dev/null -w %{http_code} --max-time 5 https://www.gstatic.com/generate_204": "\(status)",
-        "/usr/bin/dig @1.1.1.1 +time=2 +tries=1 +short example.com A": "93.184.216.34\n"
+        "/usr/bin/dig @1.1.1.1 +time=2 +tries=1 +short example.com A": "93.184.216.34\n",
       ])
       let inspector = TunRuntimeInspector(commandRunner: runner)
 
@@ -99,7 +99,7 @@ final class TunRuntimeInspectorTests: XCTestCase {
     let runner = RecordingCommandRunner(outputs: [
       "/sbin/ifconfig": "utun1024: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500\n",
       "/sbin/route -n get 1.1.1.1": "route to: 1.1.1.1\ninterface: utun1024\n",
-      "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n"
+      "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n",
     ])
     let inspector = TunRuntimeInspector(commandRunner: runner)
 
@@ -139,7 +139,7 @@ final class TunRuntimeInspectorTests: XCTestCase {
       default            10.0.0.1           UGScg        utun1024
       192.168.0/24       link#10            UCS          en0
       """,
-      "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n"
+      "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n",
     ])
     let inspector = TunRuntimeInspector(commandRunner: runner)
 
@@ -153,7 +153,7 @@ final class TunRuntimeInspectorTests: XCTestCase {
       "/usr/bin/curl -fsS --max-time 2 -H Authorization: Bearer secret http://127.0.0.1:9097/version": #"{"version":"v1.19.24"}"#,
       "/sbin/ifconfig": "utun1024: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500\n",
       "/sbin/route -n get 1.1.1.1": "route to: 1.1.1.1\ninterface: utun999\n",
-      "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n"
+      "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n",
     ])
     let inspector = TunRuntimeInspector(commandRunner: runner)
 
@@ -172,7 +172,7 @@ final class TunRuntimeInspectorTests: XCTestCase {
       "/usr/bin/curl -fsS --max-time 2 -H Authorization: Bearer secret http://127.0.0.1:9097/version": #"{"version":"v1.19.24"}"#,
       "/sbin/ifconfig": "utun1024: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500\n",
       "/usr/sbin/netstat -rn": "Destination Gateway Flags Netif\n0/0 link#1 UCS en0\n",
-      "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n"
+      "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n",
     ])
     let inspector = TunRuntimeInspector(commandRunner: runner)
 
@@ -192,7 +192,7 @@ final class TunRuntimeInspectorTests: XCTestCase {
       includeExternal: false,
       systemProxyState: .entries([
         LocalSystemProxyEntry(service: "Wi-Fi", kind: "HTTP", host: "127.0.0.1", port: 17_890),
-        LocalSystemProxyEntry(service: "Wi-Fi", kind: "HTTPS", host: "127.0.0.1", port: 17_890)
+        LocalSystemProxyEntry(service: "Wi-Fi", kind: "HTTPS", host: "127.0.0.1", port: 17_890),
       ]),
       servedLocalProxyPorts: [7890]
     ))
@@ -214,7 +214,7 @@ final class TunRuntimeInspectorTests: XCTestCase {
     let snapshot = await inspector.inspect(configuration(
       includeExternal: false,
       systemProxyState: .entries([
-        LocalSystemProxyEntry(service: "Wi-Fi", kind: "HTTP", host: "127.0.0.1", port: 7890)
+        LocalSystemProxyEntry(service: "Wi-Fi", kind: "HTTP", host: "127.0.0.1", port: 7890),
       ]),
       servedLocalProxyPorts: [7890]
     ))
@@ -316,7 +316,7 @@ final class TunRuntimeInspectorTests: XCTestCase {
       "/sbin/route -n get 1.1.1.1": "route to: 1.1.1.1\ninterface: \(routeInterface)\n",
       "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n",
       "/usr/bin/curl -sS -o /dev/null -w %{http_code} --max-time 5 https://www.gstatic.com/generate_204": externalTCPOutput,
-      "/usr/bin/dig @1.1.1.1 +time=2 +tries=1 +short example.com A": externalUDPOutput
+      "/usr/bin/dig @1.1.1.1 +time=2 +tries=1 +short example.com A": externalUDPOutput,
     ])
   }
 

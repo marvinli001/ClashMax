@@ -1,8 +1,8 @@
 import AppKit
 import Foundation
-@preconcurrency import UserNotifications
 import ServiceManagement
 import UniformTypeIdentifiers
+@preconcurrency import UserNotifications
 
 private enum AppStartupAbort: Error {
   case waitingForTunHelper
@@ -81,7 +81,6 @@ private struct RuntimeStopResult {
     }
     return nil
   }
-
 }
 
 private struct NetworkExtensionStopCleanupResult {
@@ -94,7 +93,7 @@ private extension TunDiagnosticsSnapshot {
     "interface",
     "default-route",
     "route-exclude",
-    "dns-hijack"
+    "dns-hijack",
   ]
 
   var repairableRoutingIssue: TunDiagnosticCheck? {
@@ -200,27 +199,27 @@ private extension SystemDNSOverrideState {
   }
 }
 
-  struct AppNotice: Equatable {
-    enum Tone: Equatable {
-      case info
-      case success
-      case warning
-    }
+struct AppNotice: Equatable {
+  enum Tone: Equatable {
+    case info
+    case success
+    case warning
+  }
 
   var message: String
   var tone: Tone
 
   var symbolName: String {
-      switch tone {
-      case .info:
-        return "info.circle.fill"
-      case .success:
-        return "checkmark.circle.fill"
-      case .warning:
-        return "exclamationmark.triangle.fill"
-      }
+    switch tone {
+    case .info:
+      return "info.circle.fill"
+    case .success:
+      return "checkmark.circle.fill"
+    case .warning:
+      return "exclamationmark.triangle.fill"
     }
   }
+}
 
 struct InitialTunHelperPrompt: Equatable {
   enum PrimaryAction: Equatable {
@@ -248,7 +247,7 @@ struct InitialTunHelperPrompt: Equatable {
 
   var primaryButtonTitle: String {
     switch stage {
-    case .relocate(let issue):
+    case let .relocate(issue):
       return issue.allowsAutomaticRelocation
         ? String(localized: "Move to Applications")
         : String(localized: "Show in Finder")
@@ -294,9 +293,9 @@ struct RuntimeDiagnosticsReport: Equatable, Sendable {
   var lastError: String?
   var recentLogs: [String]
   var helperLogs: [String]
-  var publicIPInfo: PublicIPInfo? = nil
+  var publicIPInfo: PublicIPInfo?
   var probeHost: String = ""
-  var proxyEffect: ProxyEffectDiagnosticsSnapshot? = nil
+  var proxyEffect: ProxyEffectDiagnosticsSnapshot?
 
   var plainText: String {
     let lines = rawLines().map(redacted)
@@ -570,67 +569,83 @@ final class AppModel {
     get { settings.overrides }
     set { settings.overrides = newValue }
   }
+
   var proxyRoutingMode: ProxyRoutingMode {
     get { settings.proxyRoutingMode }
     set { settings.proxyRoutingMode = newValue }
   }
+
   var systemProxySettings: SystemProxySettings {
     get { settings.systemProxySettings }
     set { settings.systemProxySettings = newValue }
   }
+
   var ipv6Enabled: Bool {
     get { settings.ipv6Enabled }
     set { setIPv6Enabled(newValue) }
   }
+
   var tunSettings: TunSettings {
     get { settings.tunSettings }
     set { settings.tunSettings = newValue }
   }
+
   var networkExtensionRoutingSettings: NetworkExtensionRoutingSettings {
     get { settings.networkExtensionRoutingSettings }
     set { settings.networkExtensionRoutingSettings = newValue }
   }
+
   var ruleOverlaySettings: RuleOverlaySettings {
     get { settings.ruleOverlaySettings }
     set { settings.ruleOverlaySettings = newValue }
   }
+
   var delayTestSettings: DelayTestSettings {
     get { settings.delayTestSettings }
     set { settings.delayTestSettings = newValue }
   }
+
   var proxyPageSettings: ProxyPageSettings {
     get { settings.proxyPageSettings }
     set { settings.proxyPageSettings = newValue }
   }
+
   var appTheme: AppTheme {
     get { settings.appTheme }
     set { settings.appTheme = newValue }
   }
+
   var externalControllerSettings: ExternalControllerSettings {
     get { settings.externalControllerSettings }
     set { settings.externalControllerSettings = newValue }
   }
+
   var menuBarPinnedGroupSettings: MenuBarPinnedGroupSettings {
     get { settings.menuBarPinnedGroupSettings }
     set { settings.menuBarPinnedGroupSettings = newValue }
   }
+
   var globalShortcutSettings: GlobalShortcutSettings {
     get { settings.globalShortcutSettings }
     set { settings.globalShortcutSettings = newValue }
   }
+
   var externalDashboardProfiles: [ExternalDashboardProfile] {
     get { settings.externalDashboardProfiles }
     set { settings.externalDashboardProfiles = newValue }
   }
+
   var networkPolicySettings: NetworkPolicySettings {
     get { settings.networkPolicySettings }
     set { settings.networkPolicySettings = newValue }
   }
+
   var launchSettings: LaunchSettings { settings.launchSettings }
   var developerMode: Bool {
     get { settings.developerMode }
     set { setDeveloperMode(newValue) }
   }
+
   /// Log level the user currently has selected in Settings. Log views and the
   /// diagnostics report key their visibility off this so that choosing Debug
   /// actually surfaces debug entries instead of requiring Developer Mode too.
@@ -643,31 +658,37 @@ final class AppModel {
     get { systemProxy.enabled }
     set { systemProxy.enabled = newValue }
   }
+
   var tunEnabled = false
   private(set) var tunHelperPID: Int?
   var networkExtensionEnabled: Bool {
     runtimeOwner == .networkExtension && networkExtensionController.vpnStatus.isActive
   }
+
   var canRepairNetworkExtensionDNS: Bool {
     runtimeOwner == .networkExtension
       || networkExtensionController.vpnStatus.isActive
       || systemProxyController.hasManagedSystemDNSState
   }
+
   var canRepairTunDNS: Bool {
     runtimeOwner == .tunnel
       || tunEnabled
       || tunnelCoreRunning
       || systemProxyController.hasManagedSystemDNSState
   }
+
   /// Whether the last diagnostics pass saw macOS still pointing apps at a loopback proxy the
   /// running runtime does not serve. Gates the visibility of the "disable residual System Proxy"
   /// action, which stays hidden while there is nothing stranded to clean up.
   var hasResidualSystemProxy: Bool {
     !residualSystemProxyEntries.isEmpty
   }
+
   var canDisableResidualSystemProxy: Bool {
     hasResidualSystemProxy && !residualSystemProxyDisableInFlight
   }
+
   var canRepairTunRouting: Bool {
     runtimeOwner == .tunnel
       || tunEnabled
@@ -676,6 +697,7 @@ final class AppModel {
       || tunDiagnostics.primaryIssue != nil
       || systemProxyController.hasManagedSystemDNSState
   }
+
   var tunnelCoreRunning = false
   private(set) var networkExtensionSystemDNSState: SystemDNSOverrideState = .inactive
   private(set) var tunSystemDNSState: SystemDNSOverrideState = .inactive
@@ -696,25 +718,29 @@ final class AppModel {
     get { runtimeData.proxyGroups }
     set { runtimeData.proxyGroups = newValue }
   }
+
   var proxyProviders: [ProxyProvider] {
     get { runtimeData.proxyProviders }
     set { runtimeData.proxyProviders = newValue }
   }
+
   var ruleProviders: [RuleProvider] {
     get { runtimeData.ruleProviders }
     set { runtimeData.ruleProviders = newValue }
   }
+
   var rules: [RuntimeRule] {
     get { runtimeData.rules }
     set { runtimeData.rules = newValue }
   }
+
   var connections: [ConnectionSnapshot] {
     get { runtimeData.connections }
     set { runtimeData.replaceConnections(newValue) }
   }
-  var logs: [LogEntry] {
-    get { runtimeData.logs }
-  }
+
+  var logs: [LogEntry] { runtimeData.logs }
+
   var helperLogs: [String] = []
   private(set) var initialTunHelperPrompt: InitialTunHelperPrompt?
   private(set) var initialTunHelperPromptActionInFlight = false
@@ -724,10 +750,12 @@ final class AppModel {
     get { runtimeData.trafficSample }
     set { runtimeData.trafficSample = newValue }
   }
+
   var trafficHistory: [TrafficSample] {
     get { runtimeData.trafficHistory }
     set { runtimeData.trafficHistory = newValue }
   }
+
   var publicIPInfoState: PublicIPInfoState { publicIP.state }
   private(set) var appNotice: AppNotice?
   private(set) var runtimeSettingsApplyState: RuntimeSettingsApplyState = .idle
@@ -735,6 +763,7 @@ final class AppModel {
   var hasLoadedEffectiveRuntimeConfigForActiveProfile: Bool {
     effectiveRuntimeConfigSnapshotForActiveProfile != nil
   }
+
   private(set) var providerSideLoadPreflightStatus: ProviderSideLoadPreflightStatus = .idle
   private(set) var proxyDelayBatchProgress: ProxyDelayBatchProgress?
   var routingSimulationRequest: RoutingSimulationRequest?
@@ -755,6 +784,7 @@ final class AppModel {
       }
     }
   }
+
   private(set) var lastErrorDetails: String?
 
   func publishSubscriptionFailure(_ error: Error) {
@@ -774,6 +804,7 @@ final class AppModel {
     appNotice = AppNotice(message: message, tone: .warning)
     appendAppLog(level: "warn", message: logMessage ?? message)
   }
+
   private(set) var currentNetwork: WiFiNetworkSnapshot = .notChecked
   var currentNetworkSSID: String? { currentNetwork.ssid }
   private(set) var networkPolicyStatusMessage: String?
@@ -790,14 +821,17 @@ final class AppModel {
     get { proxyPreview.profilePreviewGroups }
     set { proxyPreview.profilePreviewGroups = newValue }
   }
+
   var previewRuntimeActive: Bool {
     get { proxyPreview.previewRuntimeActive }
     set { proxyPreview.previewRuntimeActive = newValue }
   }
+
   var previewSelections: [String: String] {
     get { proxyPreview.previewSelections }
     set { proxyPreview.previewSelections = newValue }
   }
+
   var providerHealthChecksInFlight: Set<ProxyProvider.ID> { runtimeData.providerHealthChecksInFlight }
   var proxyProviderUpdatesInFlight: Set<ProxyProvider.ID> { runtimeData.proxyProviderUpdatesInFlight }
   var ruleProviderUpdatesInFlight: Set<RuleProvider.ID> { runtimeData.ruleProviderUpdatesInFlight }
@@ -1005,7 +1039,7 @@ final class AppModel {
     self.currentNetworkProvider = currentNetworkProvider
     self.networkEnvironmentMonitor = networkEnvironmentMonitor ?? NetworkEnvironmentMonitor(currentNetworkProvider: currentNetworkProvider)
     self.wiFiLocationAuthorization = wiFiLocationAuthorization
-    self.globalShortcutManager = GlobalShortcutManager(registrar: globalShortcutRegistrar ?? KeyboardShortcutsRegistrar())
+    globalShortcutManager = GlobalShortcutManager(registrar: globalShortcutRegistrar ?? KeyboardShortcutsRegistrar())
     self.providerSideLoadPreflightRunner = providerSideLoadPreflightRunner
     self.bundledCoreURLProvider = bundledCoreURLProvider ?? Self.resolveBundledCoreURL
     self.profileStore = profileStore ?? ProfileStore(paths: paths)
@@ -1013,8 +1047,8 @@ final class AppModel {
       ?? OutboundProxyEndpointStore(manifestURL: paths.outboundProxyEndpointManifestURL)
     self.runtimeSnippetLibrary = runtimeSnippetLibrary ?? RuntimeSnippetLibraryStore(paths: paths)
     self.providerAnalytics = providerAnalytics ?? ProviderAnalyticsStore(paths: paths)
-    self.proxyPreview = ProxyPreviewStore(defaults: defaults)
-    self.profileCoordinator = ProfileCoordinator(profileStore: self.profileStore, proxyPreview: self.proxyPreview)
+    proxyPreview = ProxyPreviewStore(defaults: defaults)
+    profileCoordinator = ProfileCoordinator(profileStore: self.profileStore, proxyPreview: proxyPreview)
     self.coreController = coreController
     self.helperClient = helperClient
     self.installLocationInspector = installLocationInspector
@@ -1023,12 +1057,12 @@ final class AppModel {
     self.proxyPortReadinessProbe = proxyPortReadinessProbe
     self.tunRuntimeInspector = tunRuntimeInspector
     self.pingTester = pingTester
-    self.publicIP = PublicIPCoordinator(
+    publicIP = PublicIPCoordinator(
       client: publicIPInfoClient,
       refreshInterval: Self.publicIPRefreshInterval
     )
     self.apiClient = apiClient
-    self.systemProxy = SystemProxyCoordinator(
+    systemProxy = SystemProxyCoordinator(
       controller: systemProxyController ?? SystemProxyController(snapshotDefaults: defaults),
       defaults: defaults
     )
@@ -1043,17 +1077,17 @@ final class AppModel {
       subscriptionFetchOptions: { [weak self] profile in
         guard let self else { return SubscriptionFetchOptions() }
         if let profile {
-          return try await self.subscriptionFetchOptions(for: profile)
+          return try await subscriptionFetchOptions(for: profile)
         }
-        return self.subscriptionFetchOptions
+        return subscriptionFetchOptions
       },
       preflightValidator: { [weak self] in
         guard let self else { return NoopSubscriptionProfilePreflightValidator() }
-        return self.subscriptionPreflightValidator()
+        return subscriptionPreflightValidator()
       },
       reloadActiveRuntimeConfigIfNeeded: { [weak self] profileID, logMessage in
         guard let self else { return }
-        try await self.reloadActiveRuntimeConfigIfNeeded(for: profileID, logMessage: logMessage)
+        try await reloadActiveRuntimeConfigIfNeeded(for: profileID, logMessage: logMessage)
       },
       appendAppLog: { [weak self] level, message in
         self?.appendAppLog(level: level, message: message)
@@ -1066,7 +1100,7 @@ final class AppModel {
       },
       shouldSyncRuntimeAfterProfileChange: { [weak self] in
         guard let self else { return false }
-        return self.isRunning || self.startInFlight
+        return isRunning || startInFlight
       },
       restartRuntime: { [weak self] in
         self?.restart()
@@ -1128,9 +1162,9 @@ final class AppModel {
       Task { @MainActor [weak self] in
         guard let self else { return }
         await self.profileStore.waitForManifestLoad()
-        await self.refreshProfilePreviewAndWait()
-        self.loadPreviewSelectionsForActiveProfile()
-        self.profileCoordinator.rescheduleSubscriptionAutoUpdates()
+        await refreshProfilePreviewAndWait()
+        loadPreviewSelectionsForActiveProfile()
+        profileCoordinator.rescheduleSubscriptionAutoUpdates()
       }
     } else {
       profileCoordinator.rescheduleSubscriptionAutoUpdates()
@@ -1272,7 +1306,8 @@ final class AppModel {
       try await profileStore.updateUpstreamEndpoint(for: currentProfile, endpointID: endpointID)
       do {
         if currentProfile.id == profileStore.activeProfileID,
-           isRunning || previewRuntimeActive {
+           isRunning || previewRuntimeActive
+        {
           try await reloadActiveRuntimeConfigIfNeeded(
             for: currentProfile.id,
             logMessage: "Upstream proxy updated: Mihomo reloaded"
@@ -1347,7 +1382,8 @@ final class AppModel {
       do {
         if references.contains(where: { $0.profileID == profileStore.activeProfileID }),
            isRunning || previewRuntimeActive,
-           let activeProfileID = profileStore.activeProfileID {
+           let activeProfileID = profileStore.activeProfileID
+        {
           try await reloadActiveRuntimeConfigIfNeeded(
             for: activeProfileID,
             logMessage: "Outbound proxy updated: Mihomo reloaded"
@@ -1597,7 +1633,8 @@ final class AppModel {
 
   private var activeNetworkExtensionCoreCrashMessage: String? {
     if case let .crashed(message) = coreController.status,
-       runtimeOwner == .networkExtension || networkExtensionController.vpnStatus.isActive || networkExtensionCoreCrashMessage != nil {
+       runtimeOwner == .networkExtension || networkExtensionController.vpnStatus.isActive || networkExtensionCoreCrashMessage != nil
+    {
       return message
     }
     return networkExtensionCoreCrashMessage
@@ -1620,7 +1657,7 @@ final class AppModel {
   }
 
   var visibleProxyGroups: [ProxyGroup] {
-    if previewRuntimeActive && proxyGroups.isEmpty && !profilePreviewGroups.isEmpty {
+    if previewRuntimeActive, proxyGroups.isEmpty, !profilePreviewGroups.isEmpty {
       return mergedPreviewSelections(into: profilePreviewGroups)
     }
     if isCoreRunning {
@@ -1673,7 +1710,8 @@ final class AppModel {
   /// Uses the host of the most recent public-IP result, falling back to the default provider host.
   var proxyEffectProbeHost: String {
     if let host = publicIPInfoState.info?.sourceHost?.trimmingCharacters(in: .whitespacesAndNewlines),
-       !host.isEmpty {
+       !host.isEmpty
+    {
       return host
     }
     return ProxyEffectDiagnosticsInput.defaultProbeHost
@@ -2012,11 +2050,11 @@ final class AppModel {
         overrides: overrides,
         selectionOverrides: previewSelections,
         runtimeSnippets: runtimeSnippetLibrary.snippets(applyingTo: targetProfile.id),
-        runtimeOptions: try await resolvedRuntimeConfigOptions(
+        runtimeOptions: resolvedRuntimeConfigOptions(
           for: targetProfile,
           baseOptions: currentRoutingRuntimeConfigOptions()
         ),
-        coreURL: try bundledCoreURL()
+        coreURL: bundledCoreURL()
       )
       providerSideLoadPreflightStatus = .succeeded(
         ProviderSideLoadPreflightResult(
@@ -2357,7 +2395,8 @@ final class AppModel {
 
   private func commandURLAction(from url: URL) -> String {
     if let host = url.host(percentEncoded: false)?.trimmingCharacters(in: .whitespacesAndNewlines),
-       !host.isEmpty {
+       !host.isEmpty
+    {
       return host
     }
     return url.pathComponents
@@ -2476,7 +2515,7 @@ final class AppModel {
     let secret = profile.readOnly
       ? nil
       : profile.secretAccount.flatMap { try? externalDashboardSecretStore.load(account: $0) }
-        ?? externalControllerSettings.normalizedSecret
+      ?? externalControllerSettings.normalizedSecret
     return Self.dashboardOpenPlan(
       baseURL: profile.url,
       controllerHost: externalControllerSettings.normalizedHost,
@@ -2568,7 +2607,7 @@ final class AppModel {
     var items = components.queryItems ?? []
     let fixedValues = [
       URLQueryItem(name: "hostname", value: controllerHost),
-      URLQueryItem(name: "port", value: "\(controllerPort)")
+      URLQueryItem(name: "port", value: "\(controllerPort)"),
     ]
     for value in fixedValues {
       items.removeAll { $0.name.caseInsensitiveCompare(value.name) == .orderedSame }
@@ -2936,7 +2975,7 @@ final class AppModel {
       let updated = try await profileCoordinator.updateSubscription(
         profile,
         session: session,
-        fetchOptions: try await subscriptionFetchOptions(for: profile),
+        fetchOptions: subscriptionFetchOptions(for: profile),
         preflightValidator: subscriptionPreflightValidator()
       )
       if updated, profile.id == profileStore.activeProfileID {
@@ -2969,7 +3008,7 @@ final class AppModel {
         url: resolution.url,
         displayNameHint: resolution.displayNameHint,
         session: session,
-        fetchOptions: try await subscriptionFetchOptions(for: profile),
+        fetchOptions: subscriptionFetchOptions(for: profile),
         preflightValidator: subscriptionPreflightValidator()
       )
       if updated {
@@ -3043,7 +3082,7 @@ final class AppModel {
         displayNameHint: resolution.displayNameHint,
         options: options,
         session: session,
-        fetchOptions: try await subscriptionFetchOptions(for: profile, providerOptions: options),
+        fetchOptions: subscriptionFetchOptions(for: profile, providerOptions: options),
         preflightValidator: subscriptionPreflightValidator()
       )
       if updated {
@@ -3234,12 +3273,12 @@ final class AppModel {
       overrides: overrides,
       coreURLProvider: { [weak self] in
         guard let self else { throw AppError.missingBundledCore }
-        return try self.bundledCoreURL()
+        return try bundledCoreURL()
       },
       runtimeSnippetsProvider: { [weak self] profileID in
         guard let self, let profileID else { return [] }
-        await self.runtimeSnippetLibrary.waitForLoad()
-        return self.runtimeSnippetLibrary.snippets(applyingTo: profileID)
+        await runtimeSnippetLibrary.waitForLoad()
+        return runtimeSnippetLibrary.snippets(applyingTo: profileID)
       },
       runtimeEndpointOptionsProvider: { [weak self] profileID in
         if let fixedUpstreamEndpoint {
@@ -3250,11 +3289,11 @@ final class AppModel {
         guard
           let self,
           let profileID,
-          let profile = self.profileStore.profiles.first(where: { $0.id == profileID })
+          let profile = profileStore.profiles.first(where: { $0.id == profileID })
         else {
           return .default
         }
-        return try await self.resolvedRuntimeConfigOptions(for: profile)
+        return try await resolvedRuntimeConfigOptions(for: profile)
       }
     )
   }
@@ -3276,7 +3315,8 @@ final class AppModel {
       || tunLaunchInFlight
       || tunStartAwaitingHelperReply
       || tunHelperStopUnconfirmed
-      || tunHelperPID != nil {
+      || tunHelperPID != nil
+    {
       pendingStartAfterStop = userInitiated
       if !lifecycleStopInFlight {
         beginLifecycleStop(restartAfterStop: userInitiated)
@@ -3306,9 +3346,9 @@ final class AppModel {
     startTask = Task { [weak self] in
       await Task.yield()
       guard let self,
-            self.startTaskID == taskID,
+            startTaskID == taskID,
             !Task.isCancelled else { return }
-      await self.performStart(taskID: taskID)
+      await performStart(taskID: taskID)
     }
   }
 
@@ -3332,28 +3372,28 @@ final class AppModel {
     do {
       try await withTimeout(seconds: Self.startWallClockSeconds) { @Sendable [weak self] in
         guard let self else { return }
-        try await self.runStartSequence(startRequestID: taskID)
+        try await runStartSequence(startRequestID: taskID)
       }
       completedSuccessfully = true
     } catch is CancellationError {
       if !lifecycleStopInFlight {
-        handleStopResult(await stopRuntimeCoordinated())
+        await handleStopResult(stopRuntimeCoordinated())
       }
     } catch AppStartupAbort.waitingForTunHelper {
       guard startTaskID == taskID, !lifecycleStopInFlight else { return }
-      handleStopResult(await stopRuntimeCoordinated())
+      await handleStopResult(stopRuntimeCoordinated())
     } catch let error as OperationTimedOutError {
       guard startTaskID == taskID, !lifecycleStopInFlight else { return }
       publishStartupDiagnostics(level: "error")
       let helperOwnedCore = helperMayHoldCoreOutput
-      handleStopResult(await stopRuntimeCoordinated())
+      await handleStopResult(stopRuntimeCoordinated())
       let diagnostics = await startFailureDiagnostics(helperOwnedCore: helperOwnedCore)
       lastError = "ClashMax could not start within \(Int(error.seconds))s.\(diagnostics.isEmpty ? "" : "\n\(diagnostics)")"
     } catch {
       guard startTaskID == taskID, !lifecycleStopInFlight else { return }
       publishStartupDiagnostics(level: "error")
       let helperOwnedCore = helperMayHoldCoreOutput
-      handleStopResult(await stopRuntimeCoordinated())
+      await handleStopResult(stopRuntimeCoordinated())
       let message = UserFacingError.message(for: error)
       let diagnostics = await startFailureDiagnostics(
         helperOwnedCore: helperOwnedCore,
@@ -3488,7 +3528,7 @@ final class AppModel {
     let coreURL = try bundledCoreURL()
     appendAppLog(level: "info", message: "Runtime config path: \(runtimeConfig.path)")
     appendAppLog(level: "info", message: "Mihomo core path: \(coreURL.path)")
-    let client = MihomoAPIClient(baseURL: try startSnapshot.overrides.endpoint.baseURL, secret: startSnapshot.overrides.secret)
+    let client = try MihomoAPIClient(baseURL: startSnapshot.overrides.endpoint.baseURL, secret: startSnapshot.overrides.secret)
     apiClient = client
     try checkStartRequest(startRequestID)
 
@@ -3872,29 +3912,29 @@ final class AppModel {
           self.runtimeSettingsApplyToken = nil
         }
       }
-      while self.runtimeSettingsApplyToken == token, !Task.isCancelled {
+      while runtimeSettingsApplyToken == token, !Task.isCancelled {
         do {
           try await Task.sleep(nanoseconds: 50_000_000)
         } catch {
           return
         }
-        guard self.runtimeSettingsApplyToken == token, !Task.isCancelled else { return }
-        guard let reason = self.pendingRuntimeSettingsApplyReason else { return }
-        self.pendingRuntimeSettingsApplyReason = nil
-        self.runtimeSettingsApplyState = .applying
+        guard runtimeSettingsApplyToken == token, !Task.isCancelled else { return }
+        guard let reason = pendingRuntimeSettingsApplyReason else { return }
+        pendingRuntimeSettingsApplyReason = nil
+        runtimeSettingsApplyState = .applying
         do {
-          try await self.applyRunningRuntimeSettings(reason: reason)
-          guard self.runtimeSettingsApplyToken == token, !Task.isCancelled else { return }
-          if self.pendingRuntimeSettingsApplyReason == nil {
-            self.runtimeSettingsApplyState = .idle
-            self.lastError = nil
+          try await applyRunningRuntimeSettings(reason: reason)
+          guard runtimeSettingsApplyToken == token, !Task.isCancelled else { return }
+          if pendingRuntimeSettingsApplyReason == nil {
+            runtimeSettingsApplyState = .idle
+            lastError = nil
             return
           } else {
-            self.runtimeSettingsApplyState = .pending
+            runtimeSettingsApplyState = .pending
           }
         } catch is CancellationError {
           return
-        } catch RuntimeSettingsApplyFailure.followUpFailed(let message) {
+        } catch let RuntimeSettingsApplyFailure.followUpFailed(message) {
           guard self.runtimeSettingsApplyToken == token else { return }
           if self.pendingRuntimeSettingsApplyReason != nil {
             self.runtimeSettingsApplyState = .pending
@@ -3907,26 +3947,26 @@ final class AppModel {
           )
           return
         } catch {
-          guard self.runtimeSettingsApplyToken == token else { return }
+          guard runtimeSettingsApplyToken == token else { return }
           let message = UserFacingError.message(for: error)
-          if self.tunHelperStopUnconfirmed {
-            self.runtimeSettingsApplyTask = nil
-            self.runtimeSettingsApplyToken = nil
-            self.pendingRuntimeSettingsApplyReason = nil
-            let stopResult = await self.stopRuntimeCoordinated(.safetyShutdown)
-            self.handleStopResult(stopResult)
-            self.runtimeSettingsApplyState = .failed(message)
-            self.lastError = stopResult.succeeded
+          if tunHelperStopUnconfirmed {
+            runtimeSettingsApplyTask = nil
+            runtimeSettingsApplyToken = nil
+            pendingRuntimeSettingsApplyReason = nil
+            let stopResult = await stopRuntimeCoordinated(.safetyShutdown)
+            handleStopResult(stopResult)
+            runtimeSettingsApplyState = .failed(message)
+            lastError = stopResult.succeeded
               ? "Runtime settings could not be applied after a TUN helper restart, so ClashMax stopped TUN safely: \(message)"
               : "Runtime settings could not be applied and TUN cleanup also failed: \(message)"
             return
           }
-          if self.pendingRuntimeSettingsApplyReason != nil {
-            self.runtimeSettingsApplyState = .pending
+          if pendingRuntimeSettingsApplyReason != nil {
+            runtimeSettingsApplyState = .pending
             continue
           }
-          self.runtimeSettingsApplyState = .failed(message)
-          self.lastError = String(
+          runtimeSettingsApplyState = .failed(message)
+          lastError = String(
             format: String(localized: "Runtime settings saved but could not be applied: %@"),
             message
           )
@@ -3987,8 +4027,9 @@ final class AppModel {
 
     let clientForRuntime: any MihomoAPIControlling
     if let appliedEndpoint = previouslyAppliedEndpoint,
-       appliedEndpoint != target.overrides.endpoint {
-      clientForRuntime = MihomoAPIClient(baseURL: try target.overrides.endpoint.baseURL, secret: target.overrides.secret)
+       appliedEndpoint != target.overrides.endpoint
+    {
+      clientForRuntime = try MihomoAPIClient(baseURL: target.overrides.endpoint.baseURL, secret: target.overrides.secret)
     } else {
       clientForRuntime = currentClient
     }
@@ -4004,7 +4045,8 @@ final class AppModel {
       }
 
       if target.runtimeOwner == .networkExtension,
-         target.networkExtensionRoutingSettings.dnsCaptureEnabled {
+         target.networkExtensionRoutingSettings.dnsCaptureEnabled
+      {
         try await proxyPortReadinessProbe.waitUntilOpen(
           host: NetworkExtensionRoutingSettings.defaultDNSListenHost,
           port: target.networkExtensionRoutingSettings.normalizedDNSListenPort,
@@ -4035,11 +4077,11 @@ final class AppModel {
     do {
       try await withTimeout(seconds: Self.startWallClockSeconds) { @Sendable [weak self] in
         guard let self else { return }
-        try await self.runStartSequence()
+        try await runStartSequence()
       }
     } catch {
       if !lifecycleStopInFlight, stopTask == nil {
-        handleStopResult(await stopRuntimeCoordinated(.settingsApplyRestart))
+        await handleStopResult(stopRuntimeCoordinated(.settingsApplyRestart))
       }
       throw error
     }
@@ -4391,16 +4433,16 @@ final class AppModel {
         }
       }
       guard !Task.isCancelled else { return }
-      await self.applyNetworkPolicyRule(rule, trigger: trigger, matchedSSID: matchedSSID)
+      await applyNetworkPolicyRule(rule, trigger: trigger, matchedSSID: matchedSSID)
     }
   }
 
-    private func applyNetworkPolicyRule(_ rule: NetworkPolicyRule, trigger: String, matchedSSID: String?) async {
-      if let validationError = rule.validationError {
-        networkPolicyStatusMessage = validationError
-        publishWarningNotice(validationError)
-        return
-      }
+  private func applyNetworkPolicyRule(_ rule: NetworkPolicyRule, trigger: String, matchedSSID: String?) async {
+    if let validationError = rule.validationError {
+      networkPolicyStatusMessage = validationError
+      publishWarningNotice(validationError)
+      return
+    }
 
     let automatic = trigger != "manual"
     let policyStartedRuntime = rule.autoStartRuntime && !isRunning && !startInFlight
@@ -4470,7 +4512,7 @@ final class AppModel {
           self.networkPolicyApplyToken = nil
         }
       }
-      await self.restoreNetworkPolicyState(snapshot, reason: reason)
+      await restoreNetworkPolicyState(snapshot, reason: reason)
     }
     return true
   }
@@ -4911,7 +4953,7 @@ final class AppModel {
         lastError = nil
         try await helperClient.unregister()
         tunHelperPID = nil
-        if !tunEnabled && !tunnelCoreRunning {
+        if !tunEnabled, !tunnelCoreRunning {
           tunHelperPreparationState = .idle
         }
         await updateTunHelperStatusDetail()
@@ -4927,7 +4969,7 @@ final class AppModel {
 
   func resetHelperState() {
     helperClient.resetRegistrationState()
-    if !tunEnabled && !tunnelCoreRunning {
+    if !tunEnabled, !tunnelCoreRunning {
       tunHelperPreparationState = .idle
     }
     tunHelperStatusDetail = .unknown
@@ -4946,7 +4988,8 @@ final class AppModel {
       tunHelperPID = detail.pid
       if !tunLaunchInFlight,
          !tunStartAwaitingHelperReply,
-         runtimeOwner != .tunnel || !tunnelCoreRunning || lifecycleStopInFlight || stopTask != nil {
+         runtimeOwner != .tunnel || !tunnelCoreRunning || lifecycleStopInFlight || stopTask != nil
+      {
         // The helper can outlive the app after a crash or forced quit. Preserve
         // that fact so the next Start performs cleanup before launching another
         // helper-owned Mihomo process.
@@ -4956,7 +4999,8 @@ final class AppModel {
               detail.bootstrapped,
               runtimeOwner != .tunnel,
               !tunLaunchInFlight,
-              !tunStartAwaitingHelperReply {
+              !tunStartAwaitingHelperReply
+    {
       // Only an authoritative, protocol-compatible XPC reply can clear a
       // previously uncertain helper stop.
       tunHelperPID = nil
@@ -5278,7 +5322,7 @@ final class AppModel {
     let servedPorts: Set<Int> = [runtimeOverrides.mixedPort]
     tunDiagnosticsTask = Task { @MainActor [weak self] in
       let helperStatus = await self?.liveTunHelperStatus(using: helperClient)
-        ?? (pid: Optional<Int>.none, message: Optional<String>.none)
+        ?? (pid: Int?.none, message: String?.none)
       guard !Task.isCancelled else { return }
       self?.tunHelperPID = helperStatus.pid
       let systemProxyState = await self?.sampleLocalSystemProxyState(servedPorts: servedPorts) ?? .notSampled
@@ -5354,27 +5398,27 @@ final class AppModel {
         let state = try await withTimeout(seconds: 2.5) { @Sendable [helperClient] in
           await helperClient.currentPreparationState()
         }
-        self.applyTunHelperPreparationState(state)
-        await self.updateTunHelperStatusDetail()
-        } catch is OperationTimedOutError {
-          let message = TunnelHelperClient.notBootstrappedMessage
-          self.helperClient.statusMessage = message
-          self.tunHelperPreparationState = .notBootstrapped(message)
-          self.publishWarningNotice(message)
-          self.lastError = nil
-          await self.updateTunHelperStatusDetail()
-          if self.developerMode {
-            self.helperLogs = await self.helperLaunchdDiagnostics()
-          }
-        } catch {
-          let message = UserFacingError.message(for: error)
-          self.helperClient.statusMessage = message
-          self.tunHelperPreparationState = .notBootstrapped(message)
-          self.publishWarningNotice(message)
-          self.lastError = nil
-          await self.updateTunHelperStatusDetail()
-          if self.developerMode {
-            self.helperLogs = await self.helperLaunchdDiagnostics()
+        applyTunHelperPreparationState(state)
+        await updateTunHelperStatusDetail()
+      } catch is OperationTimedOutError {
+        let message = TunnelHelperClient.notBootstrappedMessage
+        helperClient.statusMessage = message
+        tunHelperPreparationState = .notBootstrapped(message)
+        publishWarningNotice(message)
+        lastError = nil
+        await updateTunHelperStatusDetail()
+        if developerMode {
+          helperLogs = await helperLaunchdDiagnostics()
+        }
+      } catch {
+        let message = UserFacingError.message(for: error)
+        helperClient.statusMessage = message
+        tunHelperPreparationState = .notBootstrapped(message)
+        publishWarningNotice(message)
+        lastError = nil
+        await updateTunHelperStatusDetail()
+        if developerMode {
+          helperLogs = await helperLaunchdDiagnostics()
         }
       }
     }
@@ -5387,26 +5431,26 @@ final class AppModel {
         let lines = try await withTimeout(seconds: 4) { @Sendable [helperClient] in
           try await helperClient.recentLogs()
         }
-        self.helperLogs = lines
-        await self.updateTunHelperStatusDetail()
-        } catch is OperationTimedOutError {
-          let message = TunnelHelperClient.notBootstrappedMessage
-          self.helperClient.statusMessage = message
-          self.helperLogs = await self.helperLaunchdDiagnostics()
-          self.publishWarningNotice(message)
-          self.lastError = nil
-          await self.updateTunHelperStatusDetail()
-        } catch {
-          let message = UserFacingError.message(for: error)
-          self.helperClient.statusMessage = message
-          if self.developerMode {
-            self.helperLogs = await self.helperLaunchdDiagnostics()
-          }
-          self.publishWarningNotice(message)
-          self.lastError = nil
-          await self.updateTunHelperStatusDetail()
+        helperLogs = lines
+        await updateTunHelperStatusDetail()
+      } catch is OperationTimedOutError {
+        let message = TunnelHelperClient.notBootstrappedMessage
+        helperClient.statusMessage = message
+        helperLogs = await helperLaunchdDiagnostics()
+        publishWarningNotice(message)
+        lastError = nil
+        await updateTunHelperStatusDetail()
+      } catch {
+        let message = UserFacingError.message(for: error)
+        helperClient.statusMessage = message
+        if developerMode {
+          helperLogs = await helperLaunchdDiagnostics()
         }
+        publishWarningNotice(message)
+        lastError = nil
+        await updateTunHelperStatusDetail()
       }
+    }
   }
 
   private func helperLaunchdDiagnostics() async -> [String] {
@@ -5421,7 +5465,7 @@ final class AppModel {
         "last exit code =",
         "program identifier =",
         "parent bundle version =",
-        "path ="
+        "path =",
       ]
       let lines = output
         .split(whereSeparator: \.isNewline)
@@ -5584,13 +5628,13 @@ final class AppModel {
         }
       } catch is CancellationError {
         return
-        } catch {
-          guard delayTestTokens[taskKey] == token else { return }
-          let message = UserFacingError.message(for: error)
-          applyDelayState(delayState(message: message), to: nodeKey)
-          publishDelayWarning(for: node, in: group, message: message)
-        }
+      } catch {
+        guard delayTestTokens[taskKey] == token else { return }
+        let message = UserFacingError.message(for: error)
+        applyDelayState(delayState(message: message), to: nodeKey)
+        publishDelayWarning(for: node, in: group, message: message)
       }
+    }
   }
 
   private func startProxyDelayBatch(overrideTestURL: URL?) {
@@ -5636,7 +5680,7 @@ final class AppModel {
 
     proxyDelayBatchTask = Task { @MainActor [weak self] in
       guard let self else { return }
-      await self.runProxyDelayBatch(
+      await runProxyDelayBatch(
         items: items,
         apiClient: apiClient,
         settings: settings,
@@ -5694,7 +5738,8 @@ final class AppModel {
         ? .greatestFiniteMagnitude
         : Double(DispatchTime.now().uptimeNanoseconds &- lastFlushNanos) / 1_000_000
       if processedSinceFlush >= Self.proxyDelayBatchFlushCount
-        || elapsedMs >= Self.proxyDelayBatchFlushIntervalMs {
+        || elapsedMs >= Self.proxyDelayBatchFlushIntervalMs
+      {
         flushPending()
       }
     }
@@ -5809,16 +5854,17 @@ final class AppModel {
       progress.finish()
     }
 
-      if cancelledItems.isEmpty,
-         let progress = proxyDelayBatchProgress,
-         progress.failureCount > 0 {
-        let message = String.localizedStringWithFormat(
-          NSLocalizedString("Batch delay test finished with %lld failures.", comment: ""),
-          Int64(progress.failureCount)
-        )
-        publishWarningNotice(message, logMessage: "\(message)\n\(progress.diagnosticText)")
-      }
-      reloadRuntimeData()
+    if cancelledItems.isEmpty,
+       let progress = proxyDelayBatchProgress,
+       progress.failureCount > 0
+    {
+      let message = String.localizedStringWithFormat(
+        NSLocalizedString("Batch delay test finished with %lld failures.", comment: ""),
+        Int64(progress.failureCount)
+      )
+      publishWarningNotice(message, logMessage: "\(message)\n\(progress.diagnosticText)")
+    }
+    reloadRuntimeData()
   }
 
   func healthCheckProvider(_ provider: ProxyProvider) {
@@ -5841,13 +5887,13 @@ final class AppModel {
       }
       do {
         try await apiClient.healthCheckProvider(named: provider.name)
-        guard self.providerHealthCheckTokens[provider.id] == token, !Task.isCancelled else { return }
-        self.reloadRuntimeData()
+        guard providerHealthCheckTokens[provider.id] == token, !Task.isCancelled else { return }
+        reloadRuntimeData()
       } catch is CancellationError {
         return
       } catch {
-        guard self.providerHealthCheckTokens[provider.id] == token, !Task.isCancelled else { return }
-        self.lastError = UserFacingError.message(for: error)
+        guard providerHealthCheckTokens[provider.id] == token, !Task.isCancelled else { return }
+        lastError = UserFacingError.message(for: error)
       }
     }
   }
@@ -5873,27 +5919,27 @@ final class AppModel {
       }
       do {
         try await apiClient.updateProxyProvider(named: provider.name)
-        guard self.proxyProviderUpdateTokens[provider.id] == token, !Task.isCancelled else { return }
-        self.providerAnalytics.recordUpdateAttempt(
+        guard proxyProviderUpdateTokens[provider.id] == token, !Task.isCancelled else { return }
+        providerAnalytics.recordUpdateAttempt(
           profileID: analyticsProfileID,
           kind: .proxy,
           providerName: provider.name,
           succeeded: true
         )
-        self.reloadRuntimeData()
+        reloadRuntimeData()
       } catch is CancellationError {
         return
       } catch {
-        guard self.proxyProviderUpdateTokens[provider.id] == token, !Task.isCancelled else { return }
+        guard proxyProviderUpdateTokens[provider.id] == token, !Task.isCancelled else { return }
         let message = UserFacingError.message(for: error)
-        self.providerAnalytics.recordUpdateAttempt(
+        providerAnalytics.recordUpdateAttempt(
           profileID: analyticsProfileID,
           kind: .proxy,
           providerName: provider.name,
           succeeded: false,
           errorMessage: message
         )
-        self.lastError = message
+        lastError = message
       }
     }
   }
@@ -5924,7 +5970,7 @@ final class AppModel {
       for provider in providers {
         do {
           try await apiClient.updateProxyProvider(named: provider.name)
-          self.providerAnalytics.recordUpdateAttempt(
+          providerAnalytics.recordUpdateAttempt(
             profileID: analyticsProfileID,
             kind: .proxy,
             providerName: provider.name,
@@ -5934,7 +5980,7 @@ final class AppModel {
           return
         } catch {
           let message = UserFacingError.message(for: error)
-          self.providerAnalytics.recordUpdateAttempt(
+          providerAnalytics.recordUpdateAttempt(
             profileID: analyticsProfileID,
             kind: .proxy,
             providerName: provider.name,
@@ -5944,11 +5990,11 @@ final class AppModel {
           failures.append((provider.name, message))
         }
       }
-      guard self.proxyProviderBatchUpdateToken == token, !Task.isCancelled else { return }
+      guard proxyProviderBatchUpdateToken == token, !Task.isCancelled else { return }
       if !failures.isEmpty {
-        self.lastError = Self.providerUpdateFailureSummary(kind: "proxy provider", failures: failures)
+        lastError = Self.providerUpdateFailureSummary(kind: "proxy provider", failures: failures)
       }
-      self.reloadRuntimeData()
+      reloadRuntimeData()
     }
   }
 
@@ -5973,27 +6019,27 @@ final class AppModel {
       }
       do {
         try await apiClient.updateRuleProvider(named: provider.name)
-        guard self.ruleProviderUpdateTokens[provider.id] == token, !Task.isCancelled else { return }
-        self.providerAnalytics.recordUpdateAttempt(
+        guard ruleProviderUpdateTokens[provider.id] == token, !Task.isCancelled else { return }
+        providerAnalytics.recordUpdateAttempt(
           profileID: analyticsProfileID,
           kind: .rule,
           providerName: provider.name,
           succeeded: true
         )
-        self.reloadRuntimeData()
+        reloadRuntimeData()
       } catch is CancellationError {
         return
       } catch {
-        guard self.ruleProviderUpdateTokens[provider.id] == token, !Task.isCancelled else { return }
+        guard ruleProviderUpdateTokens[provider.id] == token, !Task.isCancelled else { return }
         let message = UserFacingError.message(for: error)
-        self.providerAnalytics.recordUpdateAttempt(
+        providerAnalytics.recordUpdateAttempt(
           profileID: analyticsProfileID,
           kind: .rule,
           providerName: provider.name,
           succeeded: false,
           errorMessage: message
         )
-        self.lastError = message
+        lastError = message
       }
     }
   }
@@ -6024,7 +6070,7 @@ final class AppModel {
       for provider in providers {
         do {
           try await apiClient.updateRuleProvider(named: provider.name)
-          self.providerAnalytics.recordUpdateAttempt(
+          providerAnalytics.recordUpdateAttempt(
             profileID: analyticsProfileID,
             kind: .rule,
             providerName: provider.name,
@@ -6034,7 +6080,7 @@ final class AppModel {
           return
         } catch {
           let message = UserFacingError.message(for: error)
-          self.providerAnalytics.recordUpdateAttempt(
+          providerAnalytics.recordUpdateAttempt(
             profileID: analyticsProfileID,
             kind: .rule,
             providerName: provider.name,
@@ -6044,11 +6090,11 @@ final class AppModel {
           failures.append((provider.name, message))
         }
       }
-      guard self.ruleProviderBatchUpdateToken == token, !Task.isCancelled else { return }
+      guard ruleProviderBatchUpdateToken == token, !Task.isCancelled else { return }
       if !failures.isEmpty {
-        self.lastError = Self.providerUpdateFailureSummary(kind: "rule provider", failures: failures)
+        lastError = Self.providerUpdateFailureSummary(kind: "rule provider", failures: failures)
       }
-      self.reloadRuntimeData()
+      reloadRuntimeData()
     }
   }
 
@@ -6206,13 +6252,13 @@ final class AppModel {
       }
       do {
         try await apiClient.closeConnection(id: connection.id)
-        guard self.connectionCloseTokens[connection.id] == token, !Task.isCancelled else { return }
-        self.removeConnection(id: connection.id)
+        guard connectionCloseTokens[connection.id] == token, !Task.isCancelled else { return }
+        removeConnection(id: connection.id)
       } catch is CancellationError {
         return
       } catch {
-        guard self.connectionCloseTokens[connection.id] == token, !Task.isCancelled else { return }
-        self.lastError = UserFacingError.message(for: error)
+        guard connectionCloseTokens[connection.id] == token, !Task.isCancelled else { return }
+        lastError = UserFacingError.message(for: error)
       }
     }
   }
@@ -6240,13 +6286,13 @@ final class AppModel {
       }
       do {
         try await apiClient.closeAllConnections()
-        guard self.closeAllConnectionsToken == token, !Task.isCancelled else { return }
-        self.runtimeData.replaceConnections([])
+        guard closeAllConnectionsToken == token, !Task.isCancelled else { return }
+        runtimeData.replaceConnections([])
       } catch is CancellationError {
         return
       } catch {
-        guard self.closeAllConnectionsToken == token else { return }
-        self.lastError = UserFacingError.message(for: error)
+        guard closeAllConnectionsToken == token else { return }
+        lastError = UserFacingError.message(for: error)
       }
     }
   }
@@ -6336,37 +6382,37 @@ final class AppModel {
           self.tunSettingsApplyToken = nil
         }
       }
-      while self.tunSettingsApplyToken == token, !Task.isCancelled {
-        guard let settings = self.pendingTunSettingsApply else { return }
-        self.pendingTunSettingsApply = nil
+      while tunSettingsApplyToken == token, !Task.isCancelled {
+        guard let settings = pendingTunSettingsApply else { return }
+        pendingTunSettingsApply = nil
         do {
           try await applyRunningTunSettings(settings, reason: "TUN settings updated")
         } catch is CancellationError {
           return
         } catch {
-          guard self.tunSettingsApplyToken == token else { return }
+          guard tunSettingsApplyToken == token else { return }
           let message = UserFacingError.message(for: error)
-          if self.tunHelperStopUnconfirmed {
-            self.tunSettingsApplyTask = nil
-            self.tunSettingsApplyToken = nil
-            self.pendingTunSettingsApply = nil
-            let stopResult = await self.stopRuntimeCoordinated(.safetyShutdown)
-            self.handleStopResult(stopResult)
-            self.lastError = stopResult.succeeded
+          if tunHelperStopUnconfirmed {
+            tunSettingsApplyTask = nil
+            tunSettingsApplyToken = nil
+            pendingTunSettingsApply = nil
+            let stopResult = await stopRuntimeCoordinated(.safetyShutdown)
+            handleStopResult(stopResult)
+            lastError = stopResult.succeeded
               ? "TUN settings could not be applied after helper restart, so ClashMax stopped TUN safely: \(message)"
               : "TUN settings could not be applied and TUN cleanup also failed: \(message)"
             return
           }
           // If a newer save arrived while this operation was in flight, apply
           // that latest value before surfacing an obsolete failure.
-          if self.pendingTunSettingsApply == nil {
+          if pendingTunSettingsApply == nil {
             lastError = "Could not apply TUN settings without restart: \(message)"
             return
           }
           continue
         }
-        guard self.tunSettingsApplyToken == token, !Task.isCancelled else { return }
-        if self.pendingTunSettingsApply == nil {
+        guard tunSettingsApplyToken == token, !Task.isCancelled else { return }
+        if pendingTunSettingsApply == nil {
           recordAppliedRuntimeSettingsSnapshot(makeRuntimeSettingsSnapshot(owner: .tunnel))
           lastError = nil
         }
@@ -6381,7 +6427,7 @@ final class AppModel {
   ) async throws {
     try await tunRuntimeMutationGate.run { @Sendable [weak self] in
       guard let self else { return }
-      try await self.performRunningTunSettings(
+      try await performRunningTunSettings(
         settings,
         runtimeOverrides: runtimeOverrides,
         reason: reason
@@ -6460,8 +6506,8 @@ final class AppModel {
     }
     let clientForRuntime: any MihomoAPIControlling
     if controllerIdentityChanged || apiClient == nil {
-      clientForRuntime = MihomoAPIClient(
-        baseURL: try effectiveOverrides.endpoint.baseURL,
+      clientForRuntime = try MihomoAPIClient(
+        baseURL: effectiveOverrides.endpoint.baseURL,
         secret: effectiveOverrides.secret
       )
     } else if let apiClient {
@@ -6500,7 +6546,7 @@ final class AppModel {
     try Task.checkCancellation()
     do {
       let response = try await helperClient.restartTunnel(
-        coreURL: try bundledCoreURL(),
+        coreURL: bundledCoreURL(),
         configURL: runtimeConfig,
         workDirectory: paths.runtime,
         secret: runtimeOverrides.secret
@@ -6541,7 +6587,7 @@ final class AppModel {
   ) async throws -> Bool {
     var didRestartHelper = didRestartHelper
     let postReloadSnapshot = await routingSnapshotConfirmedByDataPlane(
-      await inspectTunRuntimeNow(
+      inspectTunRuntimeNow(
         includeExternal: false,
         runtimeOverrides: runtimeOverrides
       ),
@@ -6564,7 +6610,7 @@ final class AppModel {
       )
       didRestartHelper = true
       let postRestartSnapshot = await routingSnapshotConfirmedByDataPlane(
-        await inspectTunRuntimeNow(
+        inspectTunRuntimeNow(
           includeExternal: false,
           runtimeOverrides: runtimeOverrides
         ),
@@ -6738,7 +6784,7 @@ final class AppModel {
       do {
         try await tunRuntimeMutationGate.run { @Sendable [weak self] in
           guard let self else { return }
-          try await self.performTunDNSRepair()
+          try await performTunDNSRepair()
         }
       } catch is CancellationError {
         return
@@ -6783,7 +6829,7 @@ final class AppModel {
       do {
         try await tunRuntimeMutationGate.run { @Sendable [weak self] in
           guard let self else { return }
-          try await self.performTunRoutingRepair()
+          try await performTunRoutingRepair()
         }
       } catch is CancellationError {
         return
@@ -6852,7 +6898,7 @@ final class AppModel {
       }
 
       let postReloadSnapshot = await routingSnapshotConfirmedByDataPlane(
-        await inspectTunRuntimeNow(
+        inspectTunRuntimeNow(
           includeExternal: false,
           runtimeOverrides: runtimeOverrides
         ),
@@ -6868,7 +6914,7 @@ final class AppModel {
         activateRuntimeArtifacts(materialization)
         didRestartHelper = true
         let postRestartSnapshot = await routingSnapshotConfirmedByDataPlane(
-          await inspectTunRuntimeNow(
+          inspectTunRuntimeNow(
             includeExternal: false,
             runtimeOverrides: runtimeOverrides
           ),
@@ -6915,7 +6961,7 @@ final class AppModel {
         helperPID: helperStatus.pid,
         helperStatusMessage: helperStatus.message,
         systemDNSState: tunSystemDNSState,
-        systemProxyState: await sampleLocalSystemProxyState(servedPorts: servedPorts),
+        systemProxyState: sampleLocalSystemProxyState(servedPorts: servedPorts),
         servedLocalProxyPorts: servedPorts,
         includeExternal: includeExternal
       )
@@ -7122,11 +7168,11 @@ final class AppModel {
     networkExtensionDiagnosticsTask = Task { @MainActor [weak self] in
       while !Task.isCancelled {
         guard let self else { return }
-        guard self.runtimeOwner == .networkExtension || self.networkExtensionController.vpnStatus.isActive else {
+        guard runtimeOwner == .networkExtension || networkExtensionController.vpnStatus.isActive else {
           return
         }
-        self.networkExtensionController.refreshDiagnostics()
-        self.publishNetworkExtensionDiagnostics()
+        networkExtensionController.refreshDiagnostics()
+        publishNetworkExtensionDiagnostics()
         do {
           try await Task.sleep(nanoseconds: 1_000_000_000)
         } catch {
@@ -7159,11 +7205,11 @@ final class AppModel {
     let context = [
       event.flowProtocol?.displayName,
       event.remoteEndpoint,
-      event.sourceAppSigningIdentifier.map { "source=\($0)" }
+      event.sourceAppSigningIdentifier.map { "source=\($0)" },
     ]
-      .compactMap { $0 }
-      .filter { !$0.isEmpty }
-      .joined(separator: " ")
+    .compactMap(\.self)
+    .filter { !$0.isEmpty }
+    .joined(separator: " ")
     if !context.isEmpty {
       return "\(prefix): \(event.message) \(context)"
     }
@@ -7252,11 +7298,11 @@ final class AppModel {
     previewTask = Task { [weak self] in
       try? await Task.sleep(nanoseconds: 50_000_000)
       guard let self, !Task.isCancelled else { return }
-      guard self.canStartPreviewRuntime() else {
-        self.previewTask = nil
+      guard canStartPreviewRuntime() else {
+        previewTask = nil
         return
       }
-      await self.startPreviewRuntime()
+      await startPreviewRuntime()
     }
   }
 
@@ -7265,30 +7311,30 @@ final class AppModel {
     cancelPendingPreviewRuntimeStart()
     previewTask = Task { @MainActor [weak self] in
       guard let self else { return }
-      if self.previewRuntimeActive {
-        let result = await self.leavePreviewRuntimeResult(cancelsPendingStart: false)
+      if previewRuntimeActive {
+        let result = await leavePreviewRuntimeResult(cancelsPendingStart: false)
         guard result.succeeded else {
-          self.previewTask = nil
+          previewTask = nil
           if let message = result.userFacingMessage {
-            self.appendAppLog(level: "debug", message: "Preview runtime restart skipped after \(reason): \(message)")
+            appendAppLog(level: "debug", message: "Preview runtime restart skipped after \(reason): \(message)")
           }
           return
         }
       }
       guard !Task.isCancelled else {
-        self.previewTask = nil
+        previewTask = nil
         return
       }
       try? await Task.sleep(nanoseconds: 50_000_000)
       guard !Task.isCancelled else {
-        self.previewTask = nil
+        previewTask = nil
         return
       }
-      guard self.canStartPreviewRuntime() else {
-        self.previewTask = nil
+      guard canStartPreviewRuntime() else {
+        previewTask = nil
         return
       }
-      await self.startPreviewRuntime()
+      await startPreviewRuntime()
     }
   }
 
@@ -7359,13 +7405,13 @@ final class AppModel {
         overrides: previewOverrides
       )
       let runtimeConfig = materialization.runtimeConfigURL
-      let client = MihomoAPIClient(baseURL: try previewOverrides.endpoint.baseURL, secret: previewOverrides.secret)
+      let client = try MihomoAPIClient(baseURL: previewOverrides.endpoint.baseURL, secret: previewOverrides.secret)
       previewRuntimeOverrides = previewOverrides
       previewRuntimeActive = true
       runtimeOwner = .preview
       try Task.checkCancellation()
       try await coreController.startUserMode(
-        coreURL: try bundledCoreURL(),
+        coreURL: bundledCoreURL(),
         configURL: runtimeConfig,
         workDirectory: paths.runtime,
         api: previewOverrides.endpoint,
@@ -7379,7 +7425,7 @@ final class AppModel {
         let knownDelayStates = proxyDelayStateMap(from: proxyGroups)
         let cachedRuntimeGroups = proxyGroups
         let runtimeGroups = try await client.proxyGroups()
-        let providers = (try? await client.structuredProxyProviders()) ?? []
+        let providers = await (try? client.structuredProxyProviders()) ?? []
         proxyProviders = providersPreservingKnownDelayStates(providers)
         proxyGroups = enrichProxyGroupsWithKnownEndpoints(
           runtimeGroups,
@@ -7416,7 +7462,8 @@ final class AppModel {
       let inFlightPurpose = stopTaskPurpose
       let result = await activeStopTask.value
       if purpose != .settingsApplyRestart,
-         inFlightPurpose == .settingsApplyRestart {
+         inFlightPurpose == .settingsApplyRestart
+      {
         stopTask = nil
         stopTaskID = nil
         stopTaskPurpose = nil
@@ -7426,7 +7473,8 @@ final class AppModel {
             inFlightPurpose != .termination,
             result.networkExtensionStopError != nil,
             !result.didRunLocalCleanup,
-            needsTerminationCleanup else {
+            needsTerminationCleanup
+      else {
         return result
       }
       stopTask = nil
@@ -7441,7 +7489,7 @@ final class AppModel {
     let taskID = UUID()
     let task = Task { @MainActor [weak self] in
       guard let self else { return RuntimeStopResult.success }
-      return await self.stopRuntime(purpose: purpose)
+      return await stopRuntime(purpose: purpose)
     }
     stopTask = task
     stopTaskID = taskID
@@ -7459,7 +7507,8 @@ final class AppModel {
     guard !result.succeeded, let message = result.userFacingMessage else { return }
     if result.systemProxyRestoreError == nil,
        result.helperStopError == nil,
-       result.networkExtensionStopError != nil {
+       result.networkExtensionStopError != nil
+    {
       setNetworkExtensionLastError(message)
     } else {
       lastError = message
@@ -7608,7 +7657,8 @@ final class AppModel {
     if result.networkExtensionStopError == nil,
        result.networkExtensionDNSRestoreError == nil,
        result.tunDNSRestoreError == nil,
-       systemProxyController.hasManagedSystemDNSState {
+       systemProxyController.hasManagedSystemDNSState
+    {
       do {
         let dnsResult = try await systemProxyController.restoreDNS()
         let restoredState: SystemDNSOverrideState = dnsResult.restoredSnapshotCount > 0 ? .restored : .inactive
@@ -7700,13 +7750,13 @@ final class AppModel {
     await profileCoordinator.waitForPreviewRefresh()
   }
 
-    private func runtimeAPIClientForProxyAction() -> (any MihomoAPIControlling)? {
-      guard canControlRuntimeProxies, let apiClient else {
-        publishWarningNotice(proxyRuntimeActionMessage)
-        return nil
-      }
-      return apiClient
+  private func runtimeAPIClientForProxyAction() -> (any MihomoAPIControlling)? {
+    guard canControlRuntimeProxies, let apiClient else {
+      publishWarningNotice(proxyRuntimeActionMessage)
+      return nil
     }
+    return apiClient
+  }
 
   private func applySelectedProxy(groupName: String, nodeName: String?) {
     updateProxyGroupCollections { groups in
@@ -7837,7 +7887,8 @@ final class AppModel {
         let node = groups[groupIndex].nodes[nodeIndex]
         let resolved: ProxyDelayState?
         if let providerName = node.providerName,
-           let match = exactByProvider[Self.nodeMatchKey(group: groupName, node: node.name, provider: providerName)] {
+           let match = exactByProvider[Self.nodeMatchKey(group: groupName, node: node.name, provider: providerName)]
+        {
           resolved = match
         } else {
           resolved = wildcardByName[Self.nodeMatchKey(group: groupName, node: node.name)]
@@ -7947,7 +7998,8 @@ final class AppModel {
       return .cancelled
     }
     if let clientError = error as? MihomoAPIClient.ClientError,
-       case .delayTestHTTPStatus = clientError {
+       case .delayTestHTTPStatus = clientError
+    {
       return .other
     }
     if let delayError = error as? DelayTestError {
@@ -7964,7 +8016,8 @@ final class AppModel {
       return .timeout
     }
     if normalized.contains("controller responded")
-      || normalized.contains("delay probe returned http") {
+      || normalized.contains("delay probe returned http")
+    {
       return .other
     }
     if normalized.contains("mihomo controller")
@@ -7973,7 +8026,8 @@ final class AppModel {
       || normalized.contains("cannot connect to the server")
       || normalized.contains("unable to connect to the server")
       || normalized.contains("无法连接服务器")
-      || normalized.contains("127.0.0.1:9097") {
+      || normalized.contains("127.0.0.1:9097")
+    {
       return .controllerUnavailable
     }
     return .other
@@ -8103,13 +8157,14 @@ final class AppModel {
     if let providerName = node.providerName,
        let provider = proxyProviders.first(where: { $0.name == providerName }),
        let providerNode = provider.proxies.first(where: { $0.name == node.name }),
-       let endpoint = proxyEndpoint(from: providerNode) {
+       let endpoint = proxyEndpoint(from: providerNode)
+    {
       return endpoint.host
     }
     let endpointMaps = [
       proxyEndpointMap(from: proxyProviders),
       proxyEndpointMap(from: profilePreviewGroups),
-      proxyEndpointMap(from: proxyGroups)
+      proxyEndpointMap(from: proxyGroups),
     ]
     return endpointMaps.lazy.compactMap { $0[node.name]?.host }.first
   }
@@ -8123,7 +8178,7 @@ final class AppModel {
     let endpointMaps = [
       proxyEndpointMap(from: providers),
       proxyEndpointMap(from: profilePreviewGroups),
-      proxyEndpointMap(from: cachedRuntimeGroups)
+      proxyEndpointMap(from: cachedRuntimeGroups),
     ]
     return groups.map { group in
       var group = group
@@ -8276,7 +8331,7 @@ final class AppModel {
       }
     case .requireCore:
       optionalCoreErrorMessage = nil
-      preflightMode = .validate(coreURL: try bundledCoreURL(), validator: MihomoRuntimeConfigValidator())
+      preflightMode = try .validate(coreURL: bundledCoreURL(), validator: MihomoRuntimeConfigValidator())
     }
     let effectiveRuntimeOptions: RuntimeConfigOptions
     if let runtimeOptions {
@@ -8415,7 +8470,7 @@ final class AppModel {
     let architecture = ProcessInfo.processInfo.machineHardwareName.contains("x86") ? "amd64" : "arm64"
     let candidates = [
       AppConstants.bundledCoreRoot.appendingPathComponent("mihomo"),
-      AppConstants.bundledCoreRoot.appendingPathComponent("mihomo-darwin-\(architecture)")
+      AppConstants.bundledCoreRoot.appendingPathComponent("mihomo-darwin-\(architecture)"),
     ]
     guard let core = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) else {
       throw AppError.missingBundledCore
@@ -8437,7 +8492,7 @@ final class AppModel {
       },
       Task { [weak self] in
         await self?.runConnectionStream(client: client, token: token)
-      }
+      },
     ]
     reloadRuntimeData()
   }
@@ -8562,7 +8617,7 @@ final class AppModel {
     if Self.informationalStartupDiagnosticPrefixes.contains(where: { normalized.hasPrefix($0) }) {
       return "info"
     }
-    if normalized.hasPrefix("mihomo pid ") && normalized.contains("did not exit after sigterm") {
+    if normalized.hasPrefix("mihomo pid "), normalized.contains("did not exit after sigterm") {
       return "warn"
     }
     if Self.failureStartupDiagnosticPrefixes.contains(where: { normalized.hasPrefix($0) }) {
@@ -8578,14 +8633,14 @@ final class AppModel {
     "checking runtime ports:",
     "launching mihomo with config:",
     "mihomo launch pid:",
-    "mihomo controller ready:"
+    "mihomo controller ready:",
   ]
 
   private static let failureStartupDiagnosticPrefixes = [
     "port ",
     "readiness failed:",
     "mihomo exited before controller readiness:",
-    "core tail:"
+    "core tail:",
   ]
 
   private func startupDiagnosticsSummary() -> String {
@@ -8628,7 +8683,6 @@ final class AppModel {
       }
     )
   }
-
 }
 
 private enum DelayTestError: LocalizedError {
@@ -8730,7 +8784,7 @@ extension UTType {
   }
 }
 
-private extension Array where Element == ProxyGroup {
+private extension [ProxyGroup] {
   func preservingKnownDelayStates(_ knownStates: [ProxyNodeKey: ProxyDelayState], profileID: Profile.ID?) -> [ProxyGroup] {
     map { group in
       var group = group

@@ -1,5 +1,5 @@
-import XCTest
 @testable import ClashMax
+import XCTest
 
 /// The local rule simulator has to understand rule types in both spellings the app sees them in:
 /// `DOMAIN-SUFFIX` as written in a config, and `DomainSuffix` as a running Mihomo core reports it
@@ -147,7 +147,7 @@ final class RuleMatchSimulatorRuleTypeTests: XCTestCase {
     for type in [
       "GEOIP", "GeoIP", "GEOSITE", "GeoSite", "RULE-SET", "RuleSet", "SUB-RULE",
       "SRC-GEOIP", "SrcGeoIP", "SRC-IP-ASN", "SRC-IP-SUFFIX", "SrcIPSuffix",
-      "IP-SUFFIX", "IPSuffix", "NETWORK", "Network"
+      "IP-SUFFIX", "IPSuffix", "NETWORK", "Network",
     ] {
       let trace = simulator.simulate(
         input: RuleMatchSimulationInput(destination: "example.com"),
@@ -164,7 +164,7 @@ final class RuleMatchSimulatorRuleTypeTests: XCTestCase {
     // substring fallback and swallow domain traffic that a later rule should have taken.
     let rules = [
       rule("IPCIDR", "10.0.0.0/8", "Wrong", index: 1),
-      rule("DomainSuffix", "example.com", "Right", index: 2)
+      rule("DomainSuffix", "example.com", "Right", index: 2),
     ]
 
     XCTAssertEqual(

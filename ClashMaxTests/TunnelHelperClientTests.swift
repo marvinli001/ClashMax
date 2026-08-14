@@ -1,7 +1,7 @@
+@testable import ClashMax
 import Foundation
 import ServiceManagement
 import XCTest
-@testable import ClashMax
 
 @MainActor
 final class TunnelHelperClientTests: XCTestCase {
@@ -282,7 +282,7 @@ final class TunnelHelperClientTests: XCTestCase {
         ok: true,
         protocolVersion: ClashMaxHelperProtocolVersion.current,
         helperBuildVersion: "current"
-      ))
+      )),
     ])
     let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: "same")
     let client = TunnelHelperClient(
@@ -308,7 +308,7 @@ final class TunnelHelperClientTests: XCTestCase {
     ))
     let transport = SequencedHelperTransport(statuses: [
       oldResponse,
-      oldResponse
+      oldResponse,
     ])
     let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: "same")
     let client = TunnelHelperClient(
@@ -416,7 +416,7 @@ final class TunnelHelperClientTests: XCTestCase {
         ok: true,
         protocolVersion: ClashMaxHelperProtocolVersion.current,
         helperBuildVersion: "current"
-      ))
+      )),
     ])
     let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: "current")
     let client = TunnelHelperClient(
@@ -444,7 +444,7 @@ final class TunnelHelperClientTests: XCTestCase {
     ))
     let transport = SequencedHelperTransport(statuses: [
       oldResponse,
-      oldResponse
+      oldResponse,
     ])
     let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: "current")
     let client = TunnelHelperClient(
@@ -551,7 +551,7 @@ final class TunnelHelperClientTests: XCTestCase {
       .failure("xpc unavailable"),
       HelperClientResponse(payload: HelperXPCPayload.response(ok: true)),
       .failure("xpc unavailable"),
-      HelperClientResponse(payload: HelperXPCPayload.response(ok: true))
+      HelperClientResponse(payload: HelperXPCPayload.response(ok: true)),
     ])
     let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: "current")
     let client = TunnelHelperClient(
@@ -579,7 +579,7 @@ final class TunnelHelperClientTests: XCTestCase {
       .failure("xpc unavailable"),
       HelperClientResponse(payload: HelperXPCPayload.response(ok: true)),
       .failure("xpc unavailable"),
-      HelperClientResponse(payload: HelperXPCPayload.response(ok: true))
+      HelperClientResponse(payload: HelperXPCPayload.response(ok: true)),
     ])
     let recordStore = InMemoryHelperRegistrationRecordStore(storedFingerprint: "current")
     let client = TunnelHelperClient(
@@ -771,7 +771,7 @@ final class TunnelHelperClientTests: XCTestCase {
       #selector(ClashMaxHelperXPCProtocol.startTunnel(corePath:configPath:workDirectoryPath:secret:withReply:)),
       #selector(ClashMaxHelperXPCProtocol.stopTunnel(withReply:)),
       #selector(ClashMaxHelperXPCProtocol.restartTunnel(corePath:configPath:workDirectoryPath:secret:withReply:)),
-      #selector(ClashMaxHelperXPCProtocol.recentLogs(withReply:))
+      #selector(ClashMaxHelperXPCProtocol.recentLogs(withReply:)),
     ]
 
     for selector in replySelectors {
@@ -787,7 +787,7 @@ final class TunnelHelperClientTests: XCTestCase {
     let interface = ClashMaxHelperXPCInterface.make()
     let selectors = [
       #selector(ClashMaxHelperXPCProtocol.startTunnel(corePath:configPath:workDirectoryPath:secret:withReply:)),
-      #selector(ClashMaxHelperXPCProtocol.restartTunnel(corePath:configPath:workDirectoryPath:secret:withReply:))
+      #selector(ClashMaxHelperXPCProtocol.restartTunnel(corePath:configPath:workDirectoryPath:secret:withReply:)),
     ]
 
     for selector in selectors {
@@ -817,7 +817,7 @@ final class TunnelHelperClientTests: XCTestCase {
   func testContinuationBoxResumesConnectionFailureThatArrivesBeforeAttachWithoutCleanup() async {
     let cases = [
       "pre-attach invalidation",
-      "pre-attach interruption"
+      "pre-attach interruption",
     ]
 
     for expectedMessage in cases {
@@ -948,7 +948,7 @@ private actor ToggleableHelperState {
   let subsequentStatus: HelperClientResponse
 
   init(initialStatus: HelperClientResponse, subsequentStatus: HelperClientResponse) {
-    self.nextStatus = initialStatus
+    nextStatus = initialStatus
     self.subsequentStatus = subsequentStatus
   }
 
@@ -963,7 +963,7 @@ private final class ToggleableHelperTransport: HelperXPCTransport, Sendable {
   private let state: ToggleableHelperState
 
   init(initialStatus: HelperClientResponse, subsequentStatus: HelperClientResponse) {
-    self.state = ToggleableHelperState(initialStatus: initialStatus, subsequentStatus: subsequentStatus)
+    state = ToggleableHelperState(initialStatus: initialStatus, subsequentStatus: subsequentStatus)
   }
 
   func status() async throws -> HelperClientResponse {
@@ -1006,7 +1006,7 @@ private final class SequencedHelperTransport: HelperXPCTransport, Sendable {
   private let state: SequencedHelperState
 
   init(statuses: [HelperClientResponse]) {
-    self.state = SequencedHelperState(statuses: statuses)
+    state = SequencedHelperState(statuses: statuses)
   }
 
   func status() async throws -> HelperClientResponse {

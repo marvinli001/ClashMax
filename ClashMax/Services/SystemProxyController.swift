@@ -205,8 +205,8 @@ final class SystemProxyController: @unchecked Sendable {
     self.commandRunner = commandRunner
     self.snapshotDefaults = snapshotDefaults
     self.snapshotDefaultsKey = snapshotDefaultsKey
-    self.snapshots = Self.loadPersistedSnapshots(defaults: snapshotDefaults, key: snapshotDefaultsKey)
-    self.dnsSnapshots = Self.loadPersistedDNSSnapshots(defaults: snapshotDefaults, key: Self.persistedDNSSnapshotsDefaultsKey)
+    snapshots = Self.loadPersistedSnapshots(defaults: snapshotDefaults, key: snapshotDefaultsKey)
+    dnsSnapshots = Self.loadPersistedDNSSnapshots(defaults: snapshotDefaults, key: Self.persistedDNSSnapshotsDefaultsKey)
   }
 
   func apply(host: String, port: Int, bypassDomains: [String] = SystemProxyController.defaultBypassDomains) async throws {
@@ -604,16 +604,16 @@ final class SystemProxyController: @unchecked Sendable {
   }
 
   private func snapshot(for service: String) async throws -> ServiceProxySnapshot {
-    ServiceProxySnapshot(
-      web: ProxyState(output: try await commandRunner.run("/usr/sbin/networksetup", ["-getwebproxy", service])),
-      secureWeb: ProxyState(output: try await commandRunner.run("/usr/sbin/networksetup", ["-getsecurewebproxy", service])),
-      socks: ProxyState(output: try await commandRunner.run("/usr/sbin/networksetup", ["-getsocksfirewallproxy", service])),
-      bypassDomains: ProxyBypassDomains(output: try await commandRunner.run("/usr/sbin/networksetup", ["-getproxybypassdomains", service])).domains
+    try await ServiceProxySnapshot(
+      web: ProxyState(output: commandRunner.run("/usr/sbin/networksetup", ["-getwebproxy", service])),
+      secureWeb: ProxyState(output: commandRunner.run("/usr/sbin/networksetup", ["-getsecurewebproxy", service])),
+      socks: ProxyState(output: commandRunner.run("/usr/sbin/networksetup", ["-getsocksfirewallproxy", service])),
+      bypassDomains: ProxyBypassDomains(output: commandRunner.run("/usr/sbin/networksetup", ["-getproxybypassdomains", service])).domains
     )
   }
 
   private func dnsSnapshot(for service: String) async throws -> ServiceDNSSnapshot {
-    ServiceDNSSnapshot(output: try await commandRunner.run("/usr/sbin/networksetup", ["-getdnsservers", service]))
+    try await ServiceDNSSnapshot(output: commandRunner.run("/usr/sbin/networksetup", ["-getdnsservers", service]))
   }
 
   private func restore(_ state: ProxyState, service: String, kind: ProxyKind) async throws {
@@ -782,7 +782,7 @@ final class SystemProxyController: @unchecked Sendable {
   }
 }
 
-private struct DefaultRouteInterfaces {
+private enum DefaultRouteInterfaces {
   static func parse(_ output: String) -> Set<String> {
     var interfaces = Set<String>()
     for rawLine in output.split(separator: "\n") {
@@ -839,7 +839,7 @@ private struct OrderedNetworkService {
   }
 }
 
-private struct ActiveNetworkInterfaces {
+private enum ActiveNetworkInterfaces {
   static func parse(_ output: String) -> Set<String> {
     var interfaces = Set<String>()
     for rawLine in output.split(separator: "\n") {
@@ -1098,7 +1098,7 @@ struct ProcessCommandRunner: CommandRunning {
           domain: "ClashMax.CommandRunner",
           code: Int(ETIMEDOUT),
           userInfo: [
-            NSLocalizedDescriptionKey: "Command timed out after \(timeout)s: \(command)\(output.isEmpty ? "" : "\n\(output)")"
+            NSLocalizedDescriptionKey: "Command timed out after \(timeout)s: \(command)\(output.isEmpty ? "" : "\n\(output)")",
           ]
         )
       },
@@ -1134,7 +1134,7 @@ struct ProcessCommandRunner: CommandRunning {
       domain: "ClashMax.CommandRunner",
       code: Int(EPERM),
       userInfo: [
-        NSLocalizedDescriptionKey: "Refusing to run mutating networksetup command inside XCTest: \(command). Inject a test CommandRunning double instead."
+        NSLocalizedDescriptionKey: "Refusing to run mutating networksetup command inside XCTest: \(command). Inject a test CommandRunning double instead.",
       ]
     )
   }
