@@ -81,9 +81,13 @@ jobs:
       # commit will format the remainder later. See docs/DEVELOPMENT.md.
       - name: SwiftFormat gate (files this change touches)
         env:
-          # Push events: the commit the branch was on before this push. Empty on
-          # pull_request, where the script uses the base branch instead.
-          SWIFTFORMAT_LINT_BASE: ${{ github.event.before }}
+          # Push events only: the commit the branch was on before this push.
+          # Deliberately blank everywhere else so the script falls through to the
+          # pull request's base branch. `github.event.before` is empty when a PR
+          # is opened but carries the *previous head* on every later synchronize,
+          # so passing it unconditionally silently narrowed the gate to the last
+          # push's delta instead of everything the PR changes.
+          SWIFTFORMAT_LINT_BASE: ${{ github.event_name == 'push' && github.event.before || '' }}
         run: script/swiftformat_lint.sh
 
       # Never fails. This is the burn-down number for the step-2 commit, printed
