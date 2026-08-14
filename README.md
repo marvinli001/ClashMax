@@ -23,11 +23,12 @@ The interface stays restrained, compact, and easy to scan. The first screen is t
 
 ## How To Use ClashMax
 
-1. Open the [latest GitHub Release](https://github.com/marvinli001/ClashMax/releases/latest) and download the `ClashMax-X.Y.Z.zip` asset for the current release.
-2. Unzip the archive to get `ClashMax.app`.
-3. Move `ClashMax.app` into the system `/Applications` folder. This is required for the normal installed-app workflow and for macOS system integration paths such as helper approval and the experimental Network Extension.
-4. Launch ClashMax from `/Applications`, import a Clash/Mihomo YAML profile or add a subscription, then start the runtime from the Dashboard.
-5. If macOS asks for permissions, approve the requested helper or System Extension prompts. TUN mode and `NE Proxy` need the corresponding macOS approval before they can run.
+1. Open the [latest GitHub Release](https://github.com/marvinli001/ClashMax/releases/latest) and download the `ClashMax-X.Y.Z.dmg` installer for the current release.
+2. Open the DMG and drag `ClashMax.app` onto the `Applications` shortcut in the same window. Installing into `/Applications` is required for the normal installed-app workflow and for macOS system integration paths such as helper approval and the experimental Network Extension.
+3. Eject the DMG, launch ClashMax from `/Applications`, import a Clash/Mihomo YAML profile or add a subscription, then start the runtime from the Dashboard.
+4. If macOS asks for permissions, approve the requested helper or System Extension prompts. TUN mode and `NE Proxy` need the corresponding macOS approval before they can run.
+
+The same release also ships `ClashMax-X.Y.Z.zip`. That asset exists for in-app Sparkle updates; if you prefer it, unzip it and move `ClashMax.app` into `/Applications` yourself.
 
 ## Core Capabilities
 
@@ -69,7 +70,7 @@ The interface stays restrained, compact, and easy to scan. The first screen is t
 
 ## Downloads And Updates
 
-Release builds are distributed through GitHub Releases. After installation, ClashMax can check for app updates in-app. Each app release includes the matching stable Mihomo core, so users do not need to install or maintain a separate core binary.
+Release builds are distributed through GitHub Releases. The DMG is the recommended installer, and the zip asset is kept for in-app Sparkle updates. After installation, ClashMax can check for app updates in-app. Each app release includes the matching stable Mihomo core, so users do not need to install or maintain a separate core binary.
 
 ## Community
 

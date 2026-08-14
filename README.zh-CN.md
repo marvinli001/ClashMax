@@ -23,11 +23,12 @@ ClashMax 是一个使用 SwiftUI 构建的原生 macOS Mihomo 图形客户端。
 
 ## 如何使用 ClashMax
 
-1. 打开 [最新 GitHub Release](https://github.com/marvinli001/ClashMax/releases/latest)，下载当前版本的 `ClashMax-X.Y.Z.zip`。
-2. 解压 zip，得到 `ClashMax.app`。
-3. 将 `ClashMax.app` 移动到系统 `/Applications` 目录。普通安装使用、helper 授权以及实验性的 Network Extension 路径都应从这个已安装位置启动。
-4. 从 `/Applications` 启动 ClashMax，导入 Clash/Mihomo YAML 配置或添加订阅，然后在 Dashboard 启动运行时。
-5. 如果 macOS 弹出权限提示，请按需批准 helper 或 System Extension。TUN 模式和 `NE Proxy` 都需要对应的 macOS 授权后才能运行。
+1. 打开 [最新 GitHub Release](https://github.com/marvinli001/ClashMax/releases/latest)，下载当前版本的 `ClashMax-X.Y.Z.dmg` 安装包。
+2. 打开 DMG，把 `ClashMax.app` 拖到同一窗口里的 `Applications` 快捷方式上。普通安装使用、helper 授权以及实验性的 Network Extension 路径都应从 `/Applications` 这个已安装位置启动。
+3. 推出 DMG，从 `/Applications` 启动 ClashMax，导入 Clash/Mihomo YAML 配置或添加订阅，然后在 Dashboard 启动运行时。
+4. 如果 macOS 弹出权限提示，请按需批准 helper 或 System Extension。TUN 模式和 `NE Proxy` 都需要对应的 macOS 授权后才能运行。
+
+同一个 Release 里还有 `ClashMax-X.Y.Z.zip`，那份资产是给应用内 Sparkle 更新用的；如果你更习惯 zip，解压后自行把 `ClashMax.app` 移动到 `/Applications` 即可。
 
 ## 核心能力
 
@@ -69,7 +70,7 @@ ClashMax 是一个使用 SwiftUI 构建的原生 macOS Mihomo 图形客户端。
 
 ## 下载与更新
 
-发布版通过 GitHub Releases 提供。安装后，ClashMax 可在应用内检查 App 更新；每个 App release 都包含对应的 stable Mihomo 内核，用户不需要单独安装或维护 core binary。
+发布版通过 GitHub Releases 提供，推荐使用 DMG 安装，zip 资产主要供应用内 Sparkle 更新使用。安装后，ClashMax 可在应用内检查 App 更新；每个 App release 都包含对应的 stable Mihomo 内核，用户不需要单独安装或维护 core binary。
 
 ## 社区与反馈
 
