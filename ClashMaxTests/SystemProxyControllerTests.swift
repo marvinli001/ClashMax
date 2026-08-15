@@ -843,9 +843,10 @@ final class SystemProxyControllerTests: XCTestCase {
       }
     }
     await secondStarted.wait()
-    for _ in 0..<10 {
-      await Task.yield()
-    }
+    // `secondStarted` only proves the task began; the gate it then parks in is a
+    // private actor with no observable waiter count, so this is a real-time settle
+    // rather than a poll. A yield budget would elapse before it ever got there.
+    await settle()
 
     secondTask.cancel()
     await releaseFirst.signal()
@@ -1096,6 +1097,20 @@ final class SystemProxyControllerTests: XCTestCase {
     let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
     defaults.removePersistentDomain(forName: suiteName)
     return defaults
+  }
+
+  /// Gives pending work real time to run, for the assertions that prove something
+  /// *did not* happen.
+  ///
+  /// `Task.yield()` alone cannot do that. It hands off turns, and a fixed number of
+  /// turns elapses in microseconds under load, so the negative assertion passes
+  /// vacuously — checked before the work it is denying could have run at all.
+  private func settle(_ duration: TimeInterval = 0.05) async {
+    let deadline = Date().addingTimeInterval(duration)
+    while Date() < deadline {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 2_000_000)
+    }
   }
 }
 

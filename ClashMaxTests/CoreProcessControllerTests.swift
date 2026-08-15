@@ -49,9 +49,7 @@ final class CoreProcessControllerTests: XCTestCase {
       )
     }
 
-    for _ in 0..<20 where !readiness.didStart {
-      await Task.yield()
-    }
+    await waitUntil { readiness.didStart }
     XCTAssertTrue(readiness.didStart)
     XCTAssertEqual(controller.status, .starting)
 

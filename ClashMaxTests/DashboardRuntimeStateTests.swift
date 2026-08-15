@@ -331,9 +331,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       )
     }
 
-    for _ in 0..<20 where !model.isAddingSubscription {
-      await Task.yield()
-    }
+    await waitUntil { model.isAddingSubscription }
 
     XCTAssertTrue(model.isAddingSubscription)
     XCTAssertTrue(store.profiles.isEmpty)
@@ -408,9 +406,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       await model.updateSubscription(profile, session: updateSession)
     }
 
-    for _ in 0..<20 where !model.updatingProfileIDs.contains(profile.id) {
-      await Task.yield()
-    }
+    await waitUntil { model.updatingProfileIDs.contains(profile.id) }
 
     XCTAssertTrue(model.updatingProfileIDs.contains(profile.id))
 
@@ -1237,12 +1233,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.testDelay(for: group.nodes[0])
 
-    for _ in 0..<30 where await client.delayRequestCount() == 0 {
-      await Task.yield()
-    }
-    for _ in 0..<30 where model.proxyGroups.first?.nodes.first?.delay != 73 {
-      await Task.yield()
-    }
+    await waitUntil { await client.delayRequestCount() != 0 }
+    await waitUntil { model.proxyGroups.first?.nodes.first?.delay == 73 }
 
     let delayRequestCount = await client.delayRequestCount()
     XCTAssertEqual(delayRequestCount, 1)
@@ -2956,9 +2948,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(model.updateSystemProxySettings(settings))
     model.setSystemProxyEnabled(true)
 
-    for _ in 0..<40 where !model.systemProxyEnabled || controller.guardState != .active {
-      await Task.yield()
-    }
+    await waitUntil { model.systemProxyEnabled && controller.guardState == .active }
 
     XCTAssertTrue(model.systemProxyEnabled)
     XCTAssertEqual(controller.guardState, .active)
@@ -2967,9 +2957,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.setSystemProxyEnabled(false)
 
-    for _ in 0..<40 where model.systemProxyEnabled || controller.guardState != .idle {
-      await Task.yield()
-    }
+    await waitUntil { !model.systemProxyEnabled && controller.guardState == .idle }
 
     XCTAssertFalse(model.systemProxyEnabled)
     XCTAssertEqual(controller.guardState, .idle)
@@ -4655,12 +4643,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.testDelay(for: group.nodes[0])
 
-    for _ in 0..<20 where await client.delayRequestCount() == 0 {
-      await Task.yield()
-    }
-    for _ in 0..<20 where model.proxyGroups.first?.nodes.first?.delay != 73 {
-      await Task.yield()
-    }
+    await waitUntil { await client.delayRequestCount() != 0 }
+    await waitUntil { model.proxyGroups.first?.nodes.first?.delay == 73 }
 
     let delayRequestCount = await client.delayRequestCount()
     XCTAssertEqual(delayRequestCount, 1)
@@ -4710,12 +4694,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.testDelay(for: group.nodes[0])
 
-    for _ in 0..<30 where await client.delayRequestCount() < 2 {
-      await Task.yield()
-    }
-    for _ in 0..<30 where model.proxyGroups.first?.nodes.first?.delay != 73 {
-      await Task.yield()
-    }
+    await waitUntil { await client.delayRequestCount() >= 2 }
+    await waitUntil { model.proxyGroups.first?.nodes.first?.delay == 73 }
 
     let delayRequestCount = await client.delayRequestCount()
     XCTAssertEqual(delayRequestCount, 2)
@@ -4765,12 +4745,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.testDelay(for: group.nodes[0])
 
-    for _ in 0..<30 where await pingTester.requestCount() == 0 {
-      await Task.yield()
-    }
-    for _ in 0..<30 where model.proxyGroups.first?.nodes.first?.delay != 44 {
-      await Task.yield()
-    }
+    await waitUntil { await pingTester.requestCount() != 0 }
+    await waitUntil { model.proxyGroups.first?.nodes.first?.delay == 44 }
 
     let requestedHosts = await pingTester.hosts()
     let delayRequestCount = await client.delayRequestCount()
@@ -4828,12 +4804,11 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.testDelay(for: runtimeGroup.nodes[0])
 
-    for _ in 0..<30 where await pingTester.requestCount() == 0 {
-      await Task.yield()
-    }
-    for _ in 0..<30 where model.proxyGroups.first?.nodes.first?.delay != 51 {
-      await Task.yield()
-    }
+    await waitUntil { await pingTester.requestCount() != 0 }
+    await waitUntil { model.proxyGroups.first?.nodes.first?.delay == 51 }
+    // The measured delay lands one turn before the reload that republishes the node
+    // with its resolved endpoint, so the host/port assertions below need their own wait.
+    await waitUntil { model.proxyGroups.first?.nodes.first?.serverHost != nil }
 
     let requestedHosts = await pingTester.hosts()
     let delayRequestCount = await client.delayRequestCount()
@@ -4914,19 +4889,13 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.reloadRuntimeData()
 
-    for _ in 0..<30 where model.proxyGroups.first?.nodes.first?.serverHost == nil {
-      await Task.yield()
-    }
+    await waitUntil { model.proxyGroups.first?.nodes.first?.serverHost != nil }
 
     let node = try XCTUnwrap(model.proxyGroups.first?.nodes.first)
     model.testDelay(for: node)
 
-    for _ in 0..<30 where await pingTester.requestCount() == 0 {
-      await Task.yield()
-    }
-    for _ in 0..<30 where model.proxyGroups.first?.nodes.first?.delay != 62 {
-      await Task.yield()
-    }
+    await waitUntil { await pingTester.requestCount() != 0 }
+    await waitUntil { model.proxyGroups.first?.nodes.first?.delay == 62 }
 
     let requestedHosts = await pingTester.hosts()
     let delayRequestCount = await client.delayRequestCount()
@@ -4978,9 +4947,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.testDelay(for: group.nodes[0])
 
-    for _ in 0..<30 where model.appNotice == nil {
-      await Task.yield()
-    }
+    await waitUntil { model.appNotice != nil }
 
     model.runtimeData.flushPendingLogs()
 
@@ -5060,9 +5027,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.reloadRuntimeData()
 
-    for _ in 0..<20 where model.proxyProviders.isEmpty || model.ruleProviders.isEmpty || model.connections.isEmpty {
-      await Task.yield()
-    }
+    await waitUntil { !model.proxyProviders.isEmpty && !model.ruleProviders.isEmpty && !model.connections.isEmpty }
 
     XCTAssertEqual(model.proxyProviders, [provider])
     XCTAssertEqual(model.ruleProviders, [ruleProvider])
@@ -5087,9 +5052,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.reloadRuntimeData()
 
-    for _ in 0..<40 where !model.runtimeDataLoading {
-      await Task.yield()
-    }
+    await waitUntil { model.runtimeDataLoading }
 
     XCTAssertTrue(model.runtimeDataLoading)
 
@@ -5138,9 +5101,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.reloadRuntimeData()
 
-    for _ in 0..<40 where !model.runtimeDataLoading {
-      await Task.yield()
-    }
+    await waitUntil { model.runtimeDataLoading }
 
     XCTAssertTrue(model.runtimeDataLoading)
 
@@ -5168,9 +5129,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.reloadRuntimeData()
 
-    for _ in 0..<40 where !model.runtimeDataLoading {
-      await Task.yield()
-    }
+    await waitUntil { model.runtimeDataLoading }
 
     XCTAssertTrue(model.runtimeDataLoading)
 
@@ -6067,9 +6026,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     XCTAssertEqual(model.previewSelections["Proxy"], "DIRECT")
     XCTAssertEqual(model.proxyGroups.first?.selected, "DIRECT")
-    for _ in 0..<40 where await client.selectedProxyRequestCount() == 0 {
-      await Task.yield()
-    }
+    await waitUntil { await client.selectedProxyRequestCount() != 0 }
 
     let selectedProxyRequests = await client.selectedProxyRequests()
     XCTAssertEqual(selectedProxyRequests, ["Proxy:DIRECT"])
@@ -6095,9 +6052,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.selectProxy(group: group, node: group.nodes[1])
 
-    for _ in 0..<40 where model.lastError == nil {
-      await Task.yield()
-    }
+    await waitUntil { model.lastError != nil }
 
     XCTAssertEqual(model.proxyGroups.first?.selected, "Japan")
     XCTAssertEqual(model.previewSelections["Proxy"], "Japan")
@@ -6124,12 +6079,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.selectProxy(group: group, node: group.nodes[1])
 
-    for _ in 0..<40 where await client.selectedProxyRequestCount() == 0 {
-      await Task.yield()
-    }
-    for _ in 0..<40 where model.proxyGroups.first?.selected != "DIRECT" {
-      await Task.yield()
-    }
+    await waitUntil { await client.selectedProxyRequestCount() != 0 }
+    await waitUntil { model.proxyGroups.first?.selected == "DIRECT" }
 
     let selectedProxyRequests = await client.selectedProxyRequests()
     XCTAssertEqual(selectedProxyRequests, ["Proxy:DIRECT"])
@@ -6152,9 +6103,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [group])
 
     model.testDelay(for: group.nodes[0])
-    for _ in 0..<40 where await client.delayRequestCount() == 0 {
-      await Task.yield()
-    }
+    await waitUntil { await client.delayRequestCount() != 0 }
     model.testDelay(for: group.nodes[0])
 
     try? await Task.sleep(nanoseconds: 180_000_000)
@@ -6179,9 +6128,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [group])
 
     model.testDelay(in: group, for: group.nodes[0], testURL: slowURL)
-    for _ in 0..<40 where await client.delayRequestCount() == 0 {
-      await Task.yield()
-    }
+    await waitUntil { await client.delayRequestCount() != 0 }
     model.testDelay(in: group, for: group.nodes[0], testURL: fastURL)
 
     try? await Task.sleep(nanoseconds: 180_000_000)
@@ -6213,9 +6160,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     model.testDelay(in: groupA, for: groupA.nodes[0])
     model.testDelay(in: groupB, for: groupB.nodes[0])
 
-    for _ in 0..<50 where await client.delayRequestCount() < 2 {
-      await Task.yield()
-    }
+    await waitUntil { await client.delayRequestCount() >= 2 }
     for _ in 0..<50 where model.proxyGroups.compactMap({ $0.nodes.first?.delay }).count < 2 {
       await Task.yield()
     }
@@ -6276,9 +6221,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.testDelay(in: group)
 
-    for _ in 0..<50 where await client.delayRequestCount() < 2 {
-      await Task.yield()
-    }
+    await waitUntil { await client.delayRequestCount() >= 2 }
 
     let groupDelayRequestCount = await client.delayRequestCount()
     XCTAssertEqual(groupDelayRequestCount, 2)
@@ -7290,9 +7233,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let model = try await makeRunningRuntimeModel(client: client)
 
     model.reloadRuntimeData()
-    for _ in 0..<40 where await client.proxyGroupsRequestCount() == 0 {
-      await Task.yield()
-    }
+    await waitUntil { await client.proxyGroupsRequestCount() != 0 }
     model.reloadRuntimeData()
     model.reloadRuntimeData()
 
@@ -7330,9 +7271,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     }
 
     model.reloadRuntimeData()
-    for _ in 0..<40 where await client.proxyGroupsRequestCount() == 0 {
-      await Task.yield()
-    }
+    await waitUntil { await client.proxyGroupsRequestCount() != 0 }
 
     let secondConfigURL = FileManager.default.temporaryDirectory
       .appendingPathComponent("ClashMaxSecondProfile-\(UUID().uuidString).yaml")
@@ -7391,16 +7330,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
     model.updateProxyProvider(provider)
     model.closeConnection(connection)
 
-    for _ in 0..<40 {
+    await waitUntil {
       let healthCheckRequestCount = await client.healthCheckRequestCount()
       let closedConnectionIDs = await client.closedConnectionIDs()
-      if healthCheckRequestCount > 0,
-         model.proxyProviderUpdatesInFlight.contains(provider.id),
-         !closedConnectionIDs.isEmpty
-      {
-        break
-      }
-      await Task.yield()
+      return healthCheckRequestCount > 0
+        && model.proxyProviderUpdatesInFlight.contains(provider.id)
+        && !closedConnectionIDs.isEmpty
     }
 
     let didCleanUp = await model.prepareForTermination()
@@ -7698,9 +7633,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       )
     )
     model.requestProxyRoutingMode(.neProxy)
-    for _ in 0..<40 where model.proxyRoutingMode != .neProxy {
-      await Task.yield()
-    }
+    await waitUntil { model.proxyRoutingMode == .neProxy }
 
     model.start()
 
@@ -8982,9 +8915,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       tunnelReadinessProbe: FailingCoreReadinessProbe(message: "controller refused connection")
     )
     model.requestProxyRoutingMode(.tun)
-    for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
-      await Task.yield()
-    }
+    await waitUntil { model.tunHelperPreparationState.isReady }
     XCTAssertTrue(model.tunHelperPreparationState.isReady)
 
     model.start()
@@ -9027,9 +8958,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       defaults: Self.makeIsolatedDefaults()
     )
     model.requestProxyRoutingMode(.tun)
-    for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
-      await Task.yield()
-    }
+    await waitUntil { model.tunHelperPreparationState.isReady }
 
     model.start()
     for _ in 0..<160 {
@@ -9081,9 +9010,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       defaults: Self.makeIsolatedDefaults()
     )
     model.requestProxyRoutingMode(.tun)
-    for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
-      await Task.yield()
-    }
+    await waitUntil { model.tunHelperPreparationState.isReady }
 
     model.start()
     for _ in 0..<160 {
@@ -9140,9 +9067,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       defaults: Self.makeIsolatedDefaults()
     )
     model.requestProxyRoutingMode(.tun)
-    for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
-      await Task.yield()
-    }
+    await waitUntil { model.tunHelperPreparationState.isReady }
 
     model.start()
 
@@ -9192,9 +9117,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       defaults: Self.makeIsolatedDefaults()
     )
     model.requestProxyRoutingMode(.tun)
-    for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
-      await Task.yield()
-    }
+    await waitUntil { model.tunHelperPreparationState.isReady }
 
     model.start()
 
@@ -9244,9 +9167,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       defaults: Self.makeIsolatedDefaults()
     )
     model.requestProxyRoutingMode(.tun)
-    for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
-      await Task.yield()
-    }
+    await waitUntil { model.tunHelperPreparationState.isReady }
 
     model.start()
 
@@ -9299,9 +9220,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       defaults: Self.makeIsolatedDefaults()
     )
     model.requestProxyRoutingMode(.tun)
-    for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
-      await Task.yield()
-    }
+    await waitUntil { model.tunHelperPreparationState.isReady }
 
     model.start()
 
@@ -9349,9 +9268,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       defaults: Self.makeIsolatedDefaults()
     )
     model.requestProxyRoutingMode(.tun)
-    for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
-      await Task.yield()
-    }
+    await waitUntil { model.tunHelperPreparationState.isReady }
     model.start()
     for _ in 0..<160 where model.tunDiagnostics.updatedAt != first.updatedAt && model.lastError == nil {
       await Task.yield()
@@ -9397,9 +9314,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       defaults: Self.makeIsolatedDefaults()
     )
     model.requestProxyRoutingMode(.tun)
-    for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
-      await Task.yield()
-    }
+    await waitUntil { model.tunHelperPreparationState.isReady }
     model.start()
 
     for _ in 0..<160 where model.tunDiagnostics.updatedAt != snapshot.updatedAt && model.lastError == nil {
@@ -10224,9 +10139,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
       defaults: Self.makeIsolatedDefaults()
     )
     model.requestProxyRoutingMode(.tun)
-    for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
-      await Task.yield()
-    }
+    await waitUntil { model.tunHelperPreparationState.isReady }
     model.start()
     for _ in 0..<160 where model.tunDiagnostics.updatedAt != snapshot.updatedAt && model.lastError == nil {
       await Task.yield()
@@ -10408,9 +10321,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(model.overrides.mode, .rule)
     XCTAssertEqual(counter.count, 0)
 
-    for _ in 0..<20 where model.overrides.mode != .global {
-      await Task.yield()
-    }
+    await waitUntil { model.overrides.mode == .global }
 
     XCTAssertEqual(model.overrides.mode, .global)
     XCTAssertGreaterThan(counter.count, 0)
@@ -10429,9 +10340,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(model.proxyRoutingMode, .systemProxy)
     XCTAssertEqual(counter.count, 0)
 
-    for _ in 0..<20 where model.proxyRoutingMode != .tun {
-      await Task.yield()
-    }
+    await waitUntil { model.proxyRoutingMode == .tun }
 
     XCTAssertEqual(model.proxyRoutingMode, .tun)
     XCTAssertGreaterThan(counter.count, 0)
@@ -10464,9 +10373,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     launcher.process.finish(exitCode: 2)
 
-    for _ in 0..<20 where counter.count == baseline {
-      await Task.yield()
-    }
+    await waitUntil { counter.count != baseline }
 
     XCTAssertEqual(model.statusSummary, "Crashed: mihomo exited with code 2")
     XCTAssertGreaterThan(counter.count, baseline)
@@ -10495,9 +10402,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.requestProxyRoutingMode(.tun)
 
-    for _ in 0..<40 where model.proxyRoutingMode != .tun || model.tunHelperPreparationState == .checking || model.tunHelperPreparationState == .idle {
-      await Task.yield()
-    }
+    await waitUntil { model.proxyRoutingMode == .tun && model.tunHelperPreparationState != .checking && model.tunHelperPreparationState != .idle }
 
     guard case .requiresApproval = model.tunHelperPreparationState else {
       XCTFail("Expected TUN helper approval state, got \(model.tunHelperPreparationState)")
@@ -10535,30 +10440,22 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.warmTunHelperRegistrationOnLaunch()
 
-    for _ in 0..<40 where !model.tunHelperPreparationState.allowsStartAttempt {
-      await Task.yield()
-    }
+    await waitUntil { model.tunHelperPreparationState.allowsStartAttempt }
 
     XCTAssertEqual(model.tunHelperPreparationState, .registered(TunnelHelperClient.registeredMessage))
     XCTAssertEqual(service.registerCount, 0)
     XCTAssertEqual(service.openSettingsCount, 0)
 
     model.requestProxyRoutingMode(.tun)
-    for _ in 0..<20 where model.proxyRoutingMode != .tun {
-      await Task.yield()
-    }
+    await waitUntil { model.proxyRoutingMode == .tun }
 
     XCTAssertEqual(model.proxyRoutingMode, .tun)
     XCTAssertEqual(model.tunHelperPreparationState, .registered(TunnelHelperClient.registeredMessage))
 
     model.requestProxyRoutingMode(.systemProxy)
-    for _ in 0..<20 where model.proxyRoutingMode != .systemProxy {
-      await Task.yield()
-    }
+    await waitUntil { model.proxyRoutingMode == .systemProxy }
     model.requestProxyRoutingMode(.tun)
-    for _ in 0..<20 where model.proxyRoutingMode != .tun {
-      await Task.yield()
-    }
+    await waitUntil { model.proxyRoutingMode == .tun }
 
     XCTAssertEqual(model.tunHelperPreparationState, .registered(TunnelHelperClient.registeredMessage))
   }
@@ -10608,9 +10505,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.warmTunHelperRegistrationOnLaunch()
     model.evaluateInitialTunHelperPromptOnLaunch()
-    for _ in 0..<20 {
-      await Task.yield()
-    }
+    await settle()
 
     // A System Proxy user never needs the helper, so launch must neither nag
     // them nor quietly install a privileged daemon on their behalf.
@@ -10698,9 +10593,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     model.warmTunHelperRegistrationOnLaunch()
     model.requestProxyRoutingMode(.tun)
 
-    for _ in 0..<40 where model.tunHelperPreparationState == .idle || model.tunHelperPreparationState == .checking {
-      await Task.yield()
-    }
+    await waitUntil { model.tunHelperPreparationState != .idle && model.tunHelperPreparationState != .checking }
 
     XCTAssertEqual(model.proxyRoutingMode, .tun)
     XCTAssertEqual(service.registerCount, 1)
@@ -10735,9 +10628,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     model.warmTunHelperRegistrationOnLaunch()
     model.installInitialTunHelper()
 
-    for _ in 0..<40 where model.initialTunHelperPromptActionInFlight || model.initialTunHelperPrompt?.primaryAction != .openSettings {
-      await Task.yield()
-    }
+    await waitUntil { !model.initialTunHelperPromptActionInFlight && model.initialTunHelperPrompt?.primaryAction == .openSettings }
 
     XCTAssertEqual(service.registerCount, 1)
     XCTAssertEqual(service.openSettingsCount, 1)
@@ -10771,9 +10662,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(service.registerCount, 0)
 
     model.requestProxyRoutingMode(.tun)
-    for _ in 0..<40 where model.proxyRoutingMode != .tun || model.tunHelperPreparationState == .idle || model.tunHelperPreparationState == .checking {
-      await Task.yield()
-    }
+    await waitUntil { model.proxyRoutingMode == .tun && model.tunHelperPreparationState != .idle && model.tunHelperPreparationState != .checking }
 
     XCTAssertEqual(service.registerCount, 1)
     XCTAssertEqual(service.openSettingsCount, 1)
@@ -10942,9 +10831,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.warmTunHelperRegistrationOnLaunch()
     model.installInitialTunHelper()
-    for _ in 0..<40 where model.initialTunHelperPromptActionInFlight {
-      await Task.yield()
-    }
+    await waitUntil { !model.initialTunHelperPromptActionInFlight }
 
     guard case .failed = model.initialTunHelperPrompt?.stage else {
       return XCTFail("expected the failed step, got \(String(describing: model.initialTunHelperPrompt?.stage))")
@@ -10953,9 +10840,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertNotNil(model.initialTunHelperPromptFailure)
 
     model.installInitialTunHelper()
-    for _ in 0..<40 where model.initialTunHelperPromptActionInFlight {
-      await Task.yield()
-    }
+    await waitUntil { !model.initialTunHelperPromptActionInFlight }
 
     // The retry succeeded, so the sheet has to move on instead of staying on an
     // error the user already got past.
@@ -11006,9 +10891,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.repairHelperRegistration()
 
-    for _ in 0..<40 where model.tunHelperPreparationState == .idle || model.tunHelperPreparationState == .checking {
-      await Task.yield()
-    }
+    await waitUntil { model.tunHelperPreparationState != .idle && model.tunHelperPreparationState != .checking }
 
     XCTAssertEqual(
       model.tunHelperPreparationState,
@@ -11039,9 +10922,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.refreshHelperStatus()
 
-    for _ in 0..<40 where model.tunHelperPreparationState == .idle || model.tunHelperPreparationState == .checking {
-      await Task.yield()
-    }
+    await waitUntil { model.tunHelperPreparationState != .idle && model.tunHelperPreparationState != .checking }
 
     XCTAssertEqual(
       model.tunHelperPreparationState,
@@ -11071,9 +10952,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.refreshHelperStatus()
 
-    for _ in 0..<40 where model.tunHelperPreparationState == .idle || model.tunHelperPreparationState == .checking {
-      await Task.yield()
-    }
+    await waitUntil { model.tunHelperPreparationState != .idle && model.tunHelperPreparationState != .checking }
 
     XCTAssertEqual(
       model.tunHelperPreparationState,
@@ -11106,9 +10985,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.requestProxyRoutingMode(.tun)
 
-    for _ in 0..<40 where model.tunHelperPreparationState == .idle || model.tunHelperPreparationState == .checking {
-      await Task.yield()
-    }
+    await waitUntil { model.tunHelperPreparationState != .idle && model.tunHelperPreparationState != .checking }
 
     XCTAssertEqual(model.proxyRoutingMode, .tun)
     XCTAssertEqual(
@@ -11145,9 +11022,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.requestProxyRoutingMode(.tun)
 
-    for _ in 0..<40 where !model.tunHelperPreparationState.isReady {
-      await Task.yield()
-    }
+    await waitUntil { model.tunHelperPreparationState.isReady }
 
     XCTAssertEqual(model.proxyRoutingMode, .tun)
     XCTAssertEqual(service.registerCount, 1)
@@ -12040,6 +11915,54 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
   }
 
+  /// Polls a condition in wall-clock time, which a `Task.yield()` spin cannot do.
+  ///
+  /// This replaced every `for _ in 0..<N where … { await Task.yield() }` gate in this file.
+  /// Yielding only reparks the test's own task on the main actor; the work it waits on parks on
+  /// the cooperative pool between hops, so a fixed step budget drains in microseconds whenever
+  /// that pool is busy — the spin counts, it never waits. That is how a 40-yield gate passed here
+  /// and went red on a contended CI runner: the System Proxy restore chain runs a dozen
+  /// `networksetup` round trips before it clears `systemProxyEnabled`, and the spin ran out
+  /// mid-chain (`testSystemProxyRestoreIgnoresUnspecifiedRawProxyHosts`, red run 2026-08-15).
+  ///
+  /// Yields before it sleeps, and only starts sleeping once yielding stops paying off. Several
+  /// callers wait on a *transient* flag — `runtimeDataLoading`, `isAddingSubscription` — that is
+  /// set and cleared inside a single main-actor turn, and a coarse sleep can step straight over
+  /// it. So the first `yieldBudget` checks reproduce the old spin exactly, with a budget larger
+  /// than any it replaced (the largest was 50); real time only starts passing after that.
+  private func waitUntil(
+    _ isSatisfied: () async -> Bool,
+    timeout: TimeInterval = 5,
+    yieldBudget: Int = 60
+  ) async {
+    let deadline = Date().addingTimeInterval(timeout)
+    var yields = 0
+    while true {
+      if await isSatisfied() { return }
+      guard Date() < deadline else { return }
+      if yields < yieldBudget {
+        yields += 1
+        await Task.yield()
+      } else {
+        try? await Task.sleep(nanoseconds: 2_000_000)
+      }
+    }
+  }
+
+  /// Gives pending work real time to run, for the assertions that prove something
+  /// *did not* happen.
+  ///
+  /// `Task.yield()` alone cannot do that. It hands off turns, and a fixed number of
+  /// turns elapses in microseconds under load, so the negative assertion passes
+  /// vacuously — checked before the work it is denying could have run at all.
+  private func settle(_ duration: TimeInterval = 0.05) async {
+    let deadline = Date().addingTimeInterval(duration)
+    while Date() < deadline {
+      await Task.yield()
+      try? await Task.sleep(nanoseconds: 2_000_000)
+    }
+  }
+
   private func assertSystemProxyRestoreIgnoresUnspecifiedRawProxyHost(
     _ rawHost: String,
     residualServer: String,
@@ -12064,16 +11987,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(model.updateSystemProxySettings(settings), file: file, line: line)
     model.setSystemProxyEnabled(true)
 
-    for _ in 0..<40 where !model.systemProxyEnabled {
-      await Task.yield()
-    }
+    await waitUntil { model.systemProxyEnabled }
     XCTAssertTrue(model.systemProxyEnabled, file: file, line: line)
 
     model.setSystemProxyEnabled(false)
 
-    for _ in 0..<40 where model.systemProxyEnabled {
-      await Task.yield()
-    }
+    await waitUntil { !model.systemProxyEnabled }
 
     let webProxyDisableCount = commandRunner.commands.filter {
       $0 == "/usr/sbin/networksetup -setwebproxystate Wi-Fi off"
