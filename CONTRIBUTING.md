@@ -6,6 +6,8 @@ For Chinese users: issues and pull requests in Chinese are welcome. Please inclu
 
 ## Where to Start
 
+First time here? Start with a [**good first issue**](https://github.com/marvinli001/ClashMax/labels/good%20first%20issue). These are scoped small on purpose: each one names the files to change, points at existing code to copy, and states exactly how to verify it. Ask questions directly on the issue — you do not need a complete solution before asking.
+
 - Use [Issues](https://github.com/marvinli001/ClashMax/issues) for reproducible bugs, actionable feedback, and implementation tasks that are specific enough to track.
 - Use [Questions](https://github.com/marvinli001/ClashMax/discussions/new?category=questions) for installation, usage, setup help, and runtime troubleshooting.
 - Use [Ideas](https://github.com/marvinli001/ClashMax/discussions/new?category=ideas) for early feature ideas, product direction, and workflow proposals.
