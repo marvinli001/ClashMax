@@ -45,6 +45,8 @@ struct EffectiveRuntimeConfigSnapshot: Equatable, Sendable {
   var preflightStatus: EffectiveRuntimeConfigPreflightStatus
   /// Whether the app-managed DNS override is really in effect, and on which keys (issue #16).
   var dnsOverride: DNSOverridePlan = .inactive
+  /// The `sniffer` block in the generated YAML, and where it came from (roadmap A1).
+  var sniffer: SnifferPlan = .init(source: .appManaged, settings: .empty, patchedKeyNames: [])
 
   var redactedDiffText: String {
     diffRows.map(\.displayLine).joined(separator: "\n")
@@ -62,6 +64,8 @@ struct EffectiveRuntimeConfigSnapshot: Equatable, Sendable {
     }
     lines.append("")
     lines.append(contentsOf: dnsOverride.plainTextLines)
+    lines.append("")
+    lines.append(contentsOf: sniffer.plainTextLines)
     lines.append("")
     lines.append("Layers")
     for layer in layers {

@@ -443,4 +443,161 @@ final class MihomoAPIClientTests: XCTestCase {
     XCTAssertEqual(request.url?.path, "/configs")
     XCTAssertEqual(try String(data: XCTUnwrap(recorder.lastBody), encoding: .utf8), #"{"tun":{"enable":false}}"#)
   }
+
+  /// Roadmap A1a. The decoder used to backfill a missing domain with the destination IP, so no
+  /// consumer could tell "the domain is example.com" from "this connection never had a domain".
+  /// These fixtures are the metadata shapes the bundled core actually emits — see the table on
+  /// `ConnectionDomainOrigin`, measured against v1.19.29 over a mixed inbound.
+  func testConnectionsDecodeDomainProvenanceInsteadOfBackfillingTheDestinationIP() async throws {
+    let recorder = URLProtocolRecorder(responseBody: """
+    {
+      "connections": [
+        {
+          "id": "reported",
+          "upload": 0,
+          "download": 0,
+          "chains": ["Proxy"],
+          "metadata": {
+            "network": "tcp",
+            "host": "example.com",
+            "sniffHost": "",
+            "destinationIP": "",
+            "remoteDestination": "172.66.147.243",
+            "destinationPort": 443,
+            "dnsMode": "normal"
+          }
+        },
+        {
+          "id": "sniffed-overriding",
+          "upload": 0,
+          "download": 0,
+          "chains": ["Proxy"],
+          "metadata": {
+            "network": "tcp",
+            "host": "example.com",
+            "sniffHost": "example.com",
+            "destinationIP": "",
+            "remoteDestination": "104.20.23.154",
+            "destinationPort": 443
+          }
+        },
+        {
+          "id": "sniffed-not-overriding",
+          "upload": 0,
+          "download": 0,
+          "chains": ["Proxy"],
+          "metadata": {
+            "network": "tcp",
+            "host": "",
+            "sniffHost": "example.com",
+            "destinationIP": "172.66.147.243",
+            "remoteDestination": "172.66.147.243",
+            "destinationPort": 443
+          }
+        },
+        {
+          "id": "domainless",
+          "upload": 0,
+          "download": 0,
+          "chains": ["DIRECT"],
+          "metadata": {
+            "network": "tcp",
+            "host": "",
+            "sniffHost": "",
+            "destinationIP": "104.20.23.154",
+            "remoteDestination": "104.20.23.154",
+            "destinationPort": 443,
+            "specialProxy": "pinned"
+          }
+        },
+        {
+          "id": "domainless-keys-absent",
+          "upload": 0,
+          "download": 0,
+          "chains": ["DIRECT"],
+          "metadata": {
+            "network": "udp",
+            "remoteDestination": "2606:4700::6810:1a9a",
+            "destinationPort": 443
+          }
+        },
+        {
+          "id": "ip-literal-host",
+          "upload": 0,
+          "download": 0,
+          "chains": ["DIRECT"],
+          "metadata": {
+            "network": "tcp",
+            "host": "104.20.23.154",
+            "destinationPort": 443
+          }
+        }
+      ]
+    }
+    """)
+    let session = URLSession(configuration: recorder.configuration)
+    let client = MihomoAPIClient(baseURL: URL(string: "http://127.0.0.1:9097")!, secret: "abc", session: session)
+
+    let connections = try await client.connections()
+    XCTAssertEqual(connections.map(\.id), [
+      "reported",
+      "sniffed-overriding",
+      "sniffed-not-overriding",
+      "domainless",
+      "domainless-keys-absent",
+      "ip-literal-host",
+    ])
+    let byID = Dictionary(uniqueKeysWithValues: connections.map { ($0.id, $0) })
+
+    // The client named the destination: no sniffing involved, and the raw address survives in
+    // `remoteDestination` because the core empties `destinationIP` whenever a domain is in play.
+    let reported = try XCTUnwrap(byID["reported"])
+    XCTAssertEqual(reported.domainOrigin, .reported)
+    XCTAssertEqual(reported.domain, "example.com")
+    XCTAssertNil(reported.sniffHost)
+    XCTAssertEqual(reported.destinationIPAddress, "172.66.147.243")
+    XCTAssertEqual(reported.destinationAddress, "172.66.147.243:443")
+    XCTAssertEqual(reported.dnsMode, "normal")
+
+    // Sniffed with `override-destination: true`: the recovered name is copied into `host` as well,
+    // and `sniffHost` is what distinguishes it from a name the client actually sent.
+    let overriding = try XCTUnwrap(byID["sniffed-overriding"])
+    XCTAssertEqual(overriding.domainOrigin, .sniffed)
+    XCTAssertEqual(overriding.domain, "example.com")
+    XCTAssertEqual(overriding.reportedHost, "example.com")
+    XCTAssertEqual(overriding.destinationAddress, "104.20.23.154:443")
+
+    // Sniffed with `override-destination: false`: `host` stays empty, so before A1a this connection
+    // was indistinguishable from one that never had a domain — even though the core matched its
+    // rules on the sniffed name.
+    let notOverriding = try XCTUnwrap(byID["sniffed-not-overriding"])
+    XCTAssertEqual(notOverriding.domainOrigin, .sniffed)
+    XCTAssertEqual(notOverriding.domain, "example.com")
+    XCTAssertNil(notOverriding.reportedHost)
+    XCTAssertEqual(notOverriding.host, "example.com")
+
+    // No domain at all. The IP is still shown, but as a presentation fallback above a model that
+    // records the absence — the fact roadmap A1c needs in order to explain an unmatched rule.
+    let domainless = try XCTUnwrap(byID["domainless"])
+    XCTAssertEqual(domainless.domainOrigin, .none)
+    XCTAssertNil(domainless.domain)
+    XCTAssertEqual(domainless.host, "104.20.23.154")
+    XCTAssertEqual(domainless.destinationAddress, "104.20.23.154:443")
+    XCTAssertEqual(domainless.specialProxy, "pinned")
+
+    // Both keys missing outright, not merely empty.
+    let keysAbsent = try XCTUnwrap(byID["domainless-keys-absent"])
+    XCTAssertEqual(keysAbsent.domainOrigin, .none)
+    XCTAssertNil(keysAbsent.domain)
+    XCTAssertNil(keysAbsent.reportedHost)
+    XCTAssertEqual(keysAbsent.destinationIPAddress, "2606:4700::6810:1a9a")
+
+    // An IP literal reported as the host is an address, not a domain: `DOMAIN-SUFFIX` cannot match
+    // it, so counting it as a domain would hide the very case this distinction exists to expose.
+    let literal = try XCTUnwrap(byID["ip-literal-host"])
+    XCTAssertEqual(literal.domainOrigin, .none)
+    XCTAssertNil(literal.domain)
+    XCTAssertEqual(literal.destinationIPAddress, "104.20.23.154")
+    XCTAssertEqual(literal.host, "104.20.23.154")
+  }
 }

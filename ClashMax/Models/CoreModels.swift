@@ -815,6 +815,7 @@ struct SubscriptionProviderOptionsGuardrailReport: Codable, Equatable, Sendable 
       "tproxy-port",
       "tun",
       "dns",
+      "sniffer",
       "script",
       "listeners",
     ]
@@ -832,6 +833,8 @@ struct SubscriptionProviderOptionsGuardrailReport: Codable, Equatable, Sendable 
       message = String(localized: "TUN settings are controlled by ClashMax and the privileged helper.")
     case "dns":
       message = String(localized: "DNS is app-managed in v2 templates and runtime routing modes.")
+    case "sniffer":
+      message = String(localized: "Sniffing is app-managed. A provider that turns it off leaves connections dialed straight to an IP with no domain, so DOMAIN and GEOSITE rules can never match them.")
     case "script", "listeners":
       message = String(localized: "Runtime script/listener hooks can change traffic handling outside the guarded template.")
     default:
@@ -4597,17 +4600,53 @@ struct MenuBarPinnedGroupSettings: Codable, Equatable, Sendable {
   }
 }
 
+/// Where a connection's domain came from — or the fact that it never had one.
+///
+/// Measured against the bundled core (v1.19.29) over the mixed inbound on 2026-08-15:
+///
+/// | case | `host` | `sniffHost` | `destinationIP` | `remoteDestination` |
+/// | --- | --- | --- | --- | --- |
+/// | the client named the destination | `example.com` | *(empty)* | *(empty)* | `172.66.147.243` |
+/// | sniffed, `override-destination: true` | `example.com` | `example.com` | *(empty)* | `104.20.23.154` |
+/// | sniffed, `override-destination: false` | *(empty)* | `example.com` | `172.66.147.243` | `172.66.147.243` |
+/// | no domain, sniffer off | *(empty)* | *(empty)* | `104.20.23.154` | `104.20.23.154` |
+///
+/// So `sniffHost` is an unambiguous marker of a recovered name, and `remoteDestination` is the only
+/// field carrying the raw address in every case.
+enum ConnectionDomainOrigin: String, Codable, Equatable, Sendable, CaseIterable {
+  /// The client named the destination: an HTTP `CONNECT`, a SOCKS5 hostname, or a fake-IP lookup
+  /// the core mapped back to its domain.
+  case reported
+  /// No domain reached the core, and the sniffer recovered one out of the traffic itself.
+  case sniffed
+  /// No domain, and none was recovered — every `DOMAIN`, `DOMAIN-SUFFIX`, `DOMAIN-KEYWORD` and
+  /// `GEOSITE` rule is structurally unreachable for this connection (roadmap A1).
+  case none
+}
+
 struct ConnectionSnapshot: Identifiable, Codable, Equatable, Sendable {
   var id: String
   var network: String
-  var host: String
+  /// `metadata.host` — the domain the core was handed. Empty for a connection opened to a bare IP.
+  var reportedHost: String?
+  /// `metadata.sniffHost` — the domain the sniffer recovered from the traffic. The core fills it
+  /// only when sniffing supplied the name, which is what makes `ConnectionDomainOrigin` decidable.
+  var sniffHost: String?
   var sourceIP: String?
   var sourcePort: Int?
   var destinationIP: String?
+  /// `metadata.remoteDestination` — the address the core actually dials. `destinationIP` goes empty
+  /// whenever a domain is in play, so this is the field that survives in every case.
+  var remoteDestinationIP: String?
   var destinationPort: Int?
   var inboundPort: Int?
   var processName: String?
   var processPath: String?
+  /// `metadata.dnsMode` (`normal`, `fake-ip`, `redir-host`) — how the name in front of this
+  /// connection was resolved.
+  var dnsMode: String?
+  /// `metadata.specialProxy` — an inbound-pinned outbound, which bypasses rule matching entirely.
+  var specialProxy: String?
   var upload: Int
   var download: Int
   var chain: [String]
@@ -4621,13 +4660,17 @@ struct ConnectionSnapshot: Identifiable, Codable, Equatable, Sendable {
     id: String,
     network: String,
     host: String,
+    sniffHost: String? = nil,
     sourceIP: String? = nil,
     sourcePort: Int? = nil,
     destinationIP: String? = nil,
+    remoteDestinationIP: String? = nil,
     destinationPort: Int? = nil,
     inboundPort: Int? = nil,
     processName: String? = nil,
     processPath: String? = nil,
+    dnsMode: String? = nil,
+    specialProxy: String? = nil,
     upload: Int,
     download: Int,
     chain: [String],
@@ -4639,14 +4682,18 @@ struct ConnectionSnapshot: Identifiable, Codable, Equatable, Sendable {
   ) {
     self.id = id
     self.network = network
-    self.host = host
+    reportedHost = host.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    self.sniffHost = sniffHost?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     self.sourceIP = sourceIP?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     self.sourcePort = sourcePort
     self.destinationIP = destinationIP?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    self.remoteDestinationIP = remoteDestinationIP?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     self.destinationPort = destinationPort
     self.inboundPort = inboundPort
     self.processName = processName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     self.processPath = processPath?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    self.dnsMode = dnsMode?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    self.specialProxy = specialProxy?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     self.upload = upload
     self.download = download
     self.chain = chain
@@ -4657,17 +4704,59 @@ struct ConnectionSnapshot: Identifiable, Codable, Equatable, Sendable {
     self.endedAt = endedAt
   }
 
+  /// Where the domain came from. A recovered name wins over a reported one because the core fills
+  /// `sniffHost` only when sniffing supplied it — including the `force-domain` case, where the
+  /// sniffed name deliberately replaces one the client did send.
+  var domainOrigin: ConnectionDomainOrigin {
+    if sniffedDomain != nil { return .sniffed }
+    return reportedDomain == nil ? .none : .reported
+  }
+
+  /// The domain the rules could match on, or `nil` when this connection never carried one.
+  var domain: String? { sniffedDomain ?? reportedDomain }
+
+  /// The raw destination address, wherever the core put it. A bare IP reported as the host is an
+  /// address, not a domain, so it is read here rather than by `domain`.
+  var destinationIPAddress: String? {
+    if let destinationIP { return destinationIP }
+    if let remoteDestinationIP { return remoteDestinationIP }
+    return literalHostAddress
+  }
+
+  /// An IP literal in `metadata.host` is not a domain — `DOMAIN-SUFFIX` cannot match it either — so
+  /// counting it as one would hide exactly the case `ConnectionDomainOrigin` exists to expose.
+  private var reportedDomain: String? {
+    guard let reportedHost, QuickRuleHostClassifier.classify(reportedHost) == .domain else { return nil }
+    return reportedHost
+  }
+
+  private var sniffedDomain: String? {
+    guard let sniffHost, QuickRuleHostClassifier.classify(sniffHost) == .domain else { return nil }
+    return sniffHost
+  }
+
+  private var literalHostAddress: String? {
+    guard let reportedHost, QuickRuleHostClassifier.classify(reportedHost) != .domain else { return nil }
+    return reportedHost
+  }
+
   var appDisplayName: String {
     processName ?? processPath.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent } ?? "-"
   }
+
+  /// The Connections table has always shown the destination IP for a connection with no domain.
+  /// That fallback is kept — but as a presentation choice made above the model, instead of a fact
+  /// the decoder destroyed before anything downstream could see it (roadmap A1a).
+  var host: String { domain ?? destinationIPAddress ?? "" }
 
   var sourceAddress: String {
     Self.endpointLabel(host: sourceIP, port: sourcePort)
   }
 
+  /// Prefers the address over the domain: with a domain in play the core empties `destinationIP` and
+  /// keeps the address in `remoteDestination`, so before A1a this column simply repeated the host.
   var destinationAddress: String {
-    let destinationHost = destinationIP ?? host
-    return Self.endpointLabel(host: destinationHost, port: destinationPort)
+    Self.endpointLabel(host: destinationIPAddress ?? domain, port: destinationPort)
   }
 
   var ruleSummary: String {
@@ -5230,19 +5319,25 @@ struct RoutingSimulationRequest: Identifiable, Equatable, Sendable {
   var target: String
   var input: RuleMatchSimulationInput
   var explanation: RuleExplanation
+  /// Whether domain rules could see the connection this request came from (roadmap A1c). Carried
+  /// with the hand-off, like `explanation`: Routing is reasoning about the connection as it was when
+  /// the user clicked through, and the connection itself may already have closed.
+  var domainVerdict: SnifferDiagnosticsSnapshot?
 
   init(
     id: UUID = UUID(),
     connectionID: ConnectionSnapshot.ID,
     target: String,
     input: RuleMatchSimulationInput? = nil,
-    explanation: RuleExplanation
+    explanation: RuleExplanation,
+    domainVerdict: SnifferDiagnosticsSnapshot? = nil
   ) {
     self.id = id
     self.connectionID = connectionID
     self.target = target
     self.input = input ?? .legacyTarget(target)
     self.explanation = explanation
+    self.domainVerdict = domainVerdict
   }
 }
 
@@ -5313,8 +5408,11 @@ struct RuleExplanationBuilder: Sendable {
   private func simulationInputs(for connection: ConnectionSnapshot) -> [RuleMatchSimulationInput] {
     let ruleType = connection.rule?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() ?? ""
     let processTargets = [connection.processPath, connection.processName].compactMap(Self.normalized)
-    let ipTargets = [connection.destinationIP, connection.host].compactMap(Self.normalized)
-    let hostTargets = [connection.host, connection.destinationIP].compactMap(Self.normalized)
+    // A domainless connection has no host target at all. Feeding it the destination IP (as this did
+    // before roadmap A1a) simulated domain rules against an address and reported a "no match" whose
+    // real cause — that the domain never existed — was invisible.
+    let ipTargets = [connection.destinationIPAddress].compactMap(Self.normalized)
+    let hostTargets = [connection.domain].compactMap(Self.normalized)
     let destinations: [String]
     if ruleType.hasPrefix("IP-CIDR") || ruleType == "GEOIP" {
       destinations = Self.unique(ipTargets + hostTargets)

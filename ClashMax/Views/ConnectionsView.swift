@@ -46,6 +46,16 @@ struct ConnectionsView: View {
   @State private var selectedConnectionIDs = Set<ConnectionSnapshot.ID>()
   @State private var appIconCache = ConnectionAppIconCache()
   @State private var quickRuleContext: QuickRuleSheetContext?
+  @State private var snifferFixPhase = SnifferFixPhase.idle
+
+  /// The one-click sniffer repair offered by the domain verdict. Local to the panel because it is
+  /// about the button the user just pressed, not about the runtime as a whole.
+  private enum SnifferFixPhase: Equatable {
+    case idle
+    case applying
+    case applied
+    case failed(String)
+  }
 
   var body: some View {
     AdaptivePage(title: "Connections") {
@@ -96,6 +106,9 @@ struct ConnectionsView: View {
     .onChange(of: visibleConnections.map(\.id)) { _, ids in
       selectedConnectionIDs = selectedConnectionIDs.intersection(Set(ids))
     }
+    .onChange(of: selectedConnection?.id) { _, _ in
+      snifferFixPhase = .idle
+    }
     .quickRuleSheet($quickRuleContext)
   }
 
@@ -134,15 +147,12 @@ struct ConnectionsView: View {
     }
   }
 
-  /// Mihomo reports the destination IP as the host for connections opened without a hostname, and a
-  /// domain rule keyed on an IP would never match, so the address is used as-is and the draft turns
-  /// it into a CIDR rule.
+  /// A connection opened without a hostname has no domain to key a rule on, so the draft is
+  /// prefilled with the destination address and turned into a CIDR rule. Reads the typed state
+  /// instead of re-deriving it: `host` is the display fallback, so testing it for emptiness could
+  /// never have told the two cases apart (roadmap A1a).
   private func connectionRuleHost(_ connection: ConnectionSnapshot) -> String {
-    let host = connection.host.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard host.isEmpty else { return host }
-    let destination = connection.destinationAddress.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard let separator = destination.lastIndex(of: ":") else { return destination }
-    return String(destination[destination.startIndex..<separator])
+    connection.domain ?? connection.destinationIPAddress ?? ""
   }
 
   private func copy(_ text: String) {
@@ -346,6 +356,7 @@ struct ConnectionsView: View {
           detailRow("Chain", connection.chain.isEmpty ? "-" : connection.chain.joined(separator: " / "))
           detailRow("Traffic", TrafficSample.formatBytes(connection.download + connection.upload))
           whyThisRule(connection)
+          domainVisibility(connection)
         } else {
           Text("Select a connection to inspect the process, rule, and chain.")
             .font(.caption)
@@ -374,6 +385,129 @@ struct ConnectionsView: View {
       }
       .buttonStyle(.bordered)
       .controlSize(.small)
+    }
+  }
+
+  /// Whether any domain rule could have matched this connection at all — the half of the routing
+  /// story `whyThisRule` cannot tell.
+  ///
+  /// Roadmap A1: a connection opened straight to an IP carries no name, so every `DOMAIN-SUFFIX`
+  /// rule written for it is structurally unreachable. Nothing else in this panel says so, and the
+  /// user reads the silence as "my rules do not work". The verdict names the reason and, when
+  /// ClashMax can repair it, offers the repair here rather than sending the user to Routing to
+  /// reconstruct it by hand.
+  private func domainVisibility(_ connection: ConnectionSnapshot) -> some View {
+    let verdict = SnifferDiagnosticsBuilder.build(
+      SnifferDiagnosticsInput(
+        connection: connection,
+        sniffer: appModel.activeSnifferSettings,
+        snifferChangedAt: appModel.activeSnifferSettingsChangedAt,
+        rules: runtimeData.rules
+      )
+    )
+    return VStack(alignment: .leading, spacing: 8) {
+      Divider()
+      Label("Domain Visibility", systemImage: "eye.trianglebadge.exclamationmark")
+        .font(.caption.weight(.semibold))
+      Label {
+        Text(verdict.headline)
+          .font(.caption.weight(.medium))
+          .fixedSize(horizontal: false, vertical: true)
+      } icon: {
+        Image(systemName: Self.domainVerdictSymbol(verdict.status))
+          .foregroundStyle(Self.domainVerdictTint(verdict.status))
+      }
+      Text(verdict.reason)
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+        .textSelection(.enabled)
+
+      // `Destination` is the row directly above this block, and `Match On Domain` is what
+      // `whyThisRule` already simulated; repeating either would pad the panel without adding a fact.
+      ForEach(verdict.facts.filter { $0.key != .destination && $0.key != .matchOnDomain }, id: \.key) { fact in
+        VStack(alignment: .leading, spacing: 2) {
+          Text(fact.title)
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+          Text(fact.value)
+            .font(.caption)
+            .lineLimit(2)
+            .textSelection(.enabled)
+        }
+      }
+
+      ForEach(verdict.recoveryActions, id: \.self) { action in
+        Label(action, systemImage: "arrow.turn.down.right")
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+
+      if let fix = verdict.fix {
+        snifferFixControl(fix)
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func snifferFixControl(_ fix: SnifferDiagnosticsFix) -> some View {
+    switch snifferFixPhase {
+    case .idle, .applying:
+      Button {
+        applySnifferFix(fix)
+      } label: {
+        if snifferFixPhase == .applying {
+          ProgressView().controlSize(.small)
+        } else {
+          Label(fix.title, systemImage: "wand.and.stars")
+        }
+      }
+      .buttonStyle(.bordered)
+      .controlSize(.small)
+      .disabled(snifferFixPhase == .applying)
+    case .applied:
+      // What the commit actually did, not merely that it was written: a sniffer change hot-reloads
+      // while the core is up and waits for the next start when it is not, and those are different
+      // answers to "is it on now?".
+      Label(
+        appModel.lastRuntimeApplyOutcome?.title ?? String(localized: "Sniffer settings updated"),
+        systemImage: "checkmark.circle.fill"
+      )
+      .font(.caption2)
+      .foregroundStyle(.green)
+      .fixedSize(horizontal: false, vertical: true)
+    case let .failed(message):
+      Label(message, systemImage: "exclamationmark.triangle.fill")
+        .font(.caption2)
+        .foregroundStyle(.red)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+  }
+
+  private func applySnifferFix(_ fix: SnifferDiagnosticsFix) {
+    snifferFixPhase = .applying
+    Task { @MainActor in
+      let didApply = await appModel.applySnifferFix(fix)
+      snifferFixPhase = didApply
+        ? .applied
+        : .failed(appModel.lastError ?? String(localized: "The sniffer change could not be applied."))
+    }
+  }
+
+  private static func domainVerdictSymbol(_ status: SnifferDiagnosticsSnapshot.Status) -> String {
+    switch status {
+    case .pass: return "checkmark.seal.fill"
+    case .info: return "info.circle.fill"
+    case .warn: return "exclamationmark.triangle.fill"
+    }
+  }
+
+  private static func domainVerdictTint(_ status: SnifferDiagnosticsSnapshot.Status) -> Color {
+    switch status {
+    case .pass: return .green
+    case .info: return .secondary
+    case .warn: return .orange
     }
   }
 

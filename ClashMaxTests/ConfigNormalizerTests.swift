@@ -1529,9 +1529,15 @@ final class ConfigNormalizerTests: XCTestCase {
       "Manual Proxy",
       "Upstream Proxy",
       "DNS override",
+      "Sniffer",
       "Final runtime YAML",
     ])
     XCTAssertEqual(snapshot.preflightStatus, .notRun)
+    // The sniffer gets a labeled layer of its own, the way dns-override already does (roadmap A1b).
+    let snifferLayer = try XCTUnwrap(snapshot.layers.first { $0.id == "sniffer" })
+    XCTAssertTrue(snifferLayer.isActive)
+    XCTAssertEqual(snapshot.sniffer.source, .appManaged)
+    XCTAssertTrue(snifferLayer.redactedContent.contains("sniff.TLS"))
     let exported = snapshot.redactedReportText
     XCTAssertTrue(exported.contains("DOMAIN-SUFFIX,global.example,DIRECT"))
     XCTAssertTrue(exported.contains("DOMAIN-SUFFIX,profile.example,DIRECT"))
@@ -1707,6 +1713,25 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertTrue(keyPaths.contains("listeners"))
     XCTAssertTrue(report.hasDangerousRisks)
     XCTAssertTrue(report.runtimeDiff.contains { $0.isAdvanced && $0.before != $0.after })
+  }
+
+  func testProviderOptionsGuardrailFlagsSnifferOverridesWithTheDomainRuleConsequence() throws {
+    let options = SubscriptionProviderOptions(
+      runtimeMergeYAML: """
+      sniffer:
+        enable: false
+      """
+    )
+
+    let report = SubscriptionProviderOptionsGuardrailReport.analyze(options: options)
+    let sniffer = try XCTUnwrap(report.risks.first { $0.keyPath == "sniffer" })
+
+    // A subscription that turns sniffing off exposes nothing, so this is not "danger" the way a
+    // leaked secret is. It is still a warning because every DOMAIN rule silently stops matching
+    // IP-dialed traffic, and the message has to name that instead of only saying "app-managed".
+    XCTAssertEqual(sniffer.severity, .warning)
+    XCTAssertTrue(sniffer.message.contains("DOMAIN"), sniffer.message)
+    XCTAssertFalse(report.hasDangerousRisks)
   }
 
   func testURIProviderContentAcceptsMihomo11925SchemesAndUnknownURIs() throws {
@@ -2557,6 +2582,203 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertFalse((dns["proxy-server-nameserver"] as? [String] ?? []).isEmpty)
   }
 
+  // MARK: - Sniffer (roadmap A1b)
+
+  func testRuntimeConfigSniffsTLSAndHTTPWhenTheProfileSaysNothing() throws {
+    // A connection opened straight to an IP carries no domain, so every DOMAIN-SUFFIX rule written
+    // for it is structurally unreachable. Defaulting the sniffer on is what makes those rules able
+    // to fire at all (roadmap A1).
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: Self.minimalProfileSource,
+      overrides: .defaultForLaunch(secret: "secret-token")
+    )
+    let sniffer = try XCTUnwrap(try (Yams.load(yaml: output) as? [String: Any])?["sniffer"] as? [String: Any])
+    let sniff = try XCTUnwrap(sniffer["sniff"] as? [String: Any])
+
+    XCTAssertEqual(sniffer["enable"] as? Bool, true)
+    XCTAssertEqual(sniffer["override-destination"] as? Bool, true)
+    XCTAssertEqual(Set(sniff.keys), ["TLS", "HTTP"])
+    XCTAssertEqual((sniff["TLS"] as? [String: Any])?["ports"] as? [String], ["443", "8443"])
+    XCTAssertEqual((sniff["HTTP"] as? [String: Any])?["ports"] as? [String], ["80", "8080-8880"])
+    XCTAssertEqual(sniffer["skip-domain"] as? [String], ["Mijia Cloud", "+.push.apple.com"])
+  }
+
+  func testRuntimeConfigWritesSniffingOffRatherThanDroppingTheBlock() throws {
+    var options = RuntimeConfigOptions.default
+    options.runtimeSnippets = [
+      RuntimeSnippet(name: "No Sniffing", payload: .sniffer(SnifferSettings(enabled: false))),
+    ]
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: Self.minimalProfileSource,
+      overrides: .defaultForLaunch(secret: "secret-token"),
+      options: options
+    )
+    let sniffer = try XCTUnwrap(try (Yams.load(yaml: output) as? [String: Any])?["sniffer"] as? [String: Any])
+
+    // Off has to be written, not implied: an absent block is indistinguishable from a stale one.
+    XCTAssertEqual(sniffer["enable"] as? Bool, false)
+  }
+
+  func testRuntimeConfigHonorsPerProtocolPortsFromASnippet() throws {
+    var options = RuntimeConfigOptions.default
+    options.runtimeSnippets = [
+      RuntimeSnippet(
+        name: "QUIC Sniffing",
+        payload: .sniffer(
+          SnifferSettings(
+            protocols: [
+              SnifferProtocolSettings(networkProtocol: .tls, ports: ["443"], overrideDestination: false),
+              SnifferProtocolSettings(networkProtocol: .quic, ports: ["443", "8443"]),
+            ]
+          )
+        )
+      ),
+    ]
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: Self.minimalProfileSource,
+      overrides: .defaultForLaunch(secret: "secret-token"),
+      options: options
+    )
+    let sniffer = try XCTUnwrap(try (Yams.load(yaml: output) as? [String: Any])?["sniffer"] as? [String: Any])
+    let sniff = try XCTUnwrap(sniffer["sniff"] as? [String: Any])
+
+    XCTAssertEqual(Set(sniff.keys), ["TLS", "QUIC"], "A snippet's sniff map replaces the default one")
+    XCTAssertEqual((sniff["TLS"] as? [String: Any])?["override-destination"] as? Bool, false)
+    XCTAssertEqual((sniff["QUIC"] as? [String: Any])?["ports"] as? [String], ["443", "8443"])
+    XCTAssertEqual(sniffer["enable"] as? Bool, true, "The app-managed baseline still supplies enable")
+  }
+
+  func testRuntimeConfigKeepsASubscriptionsOwnSnifferWhenNoSnippetTouchesIt() throws {
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: """
+      \(Self.minimalProfileSource)
+      sniffer:
+        enable: true
+        sniff:
+          QUIC:
+            ports: [443]
+        skip-domain:
+          - Mijia Cloud
+      """,
+      overrides: .defaultForLaunch(secret: "secret-token")
+    )
+    let sniffer = try XCTUnwrap(try (Yams.load(yaml: output) as? [String: Any])?["sniffer"] as? [String: Any])
+    let sniff = try XCTUnwrap(sniffer["sniff"] as? [String: Any])
+
+    XCTAssertEqual(Set(sniff.keys), ["QUIC"], "The profile's own sniffer is not silently replaced")
+    XCTAssertNil(sniffer["override-destination"], "Nor is the app default folded into it")
+    XCTAssertEqual(sniffer["skip-domain"] as? [String], ["Mijia Cloud"])
+  }
+
+  func testRuntimeConfigPatchesASubscriptionsSnifferInPlace() throws {
+    var options = RuntimeConfigOptions.default
+    options.runtimeSnippets = [
+      RuntimeSnippet(
+        name: "Keep Push Direct",
+        payload: .sniffer(SnifferSettings(overrideDestination: false, skipDomain: ["+.push.apple.com"]))
+      ),
+    ]
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: """
+      \(Self.minimalProfileSource)
+      sniffer:
+        enable: true
+        force-dns-mapping: true
+        sniff:
+          QUIC:
+            ports: [443]
+        skip-domain:
+          - Mijia Cloud
+      """,
+      overrides: .defaultForLaunch(secret: "secret-token"),
+      options: options
+    )
+    let sniffer = try XCTUnwrap(try (Yams.load(yaml: output) as? [String: Any])?["sniffer"] as? [String: Any])
+    let sniff = try XCTUnwrap(sniffer["sniff"] as? [String: Any])
+
+    XCTAssertEqual(sniffer["override-destination"] as? Bool, false)
+    XCTAssertEqual(sniffer["force-dns-mapping"] as? Bool, true, "A key the snippet does not set survives")
+    XCTAssertEqual(Set(sniff.keys), ["QUIC"], "So does the profile's own sniff map")
+    XCTAssertEqual(sniffer["skip-domain"] as? [String], ["Mijia Cloud", "+.push.apple.com"], "Exception lists merge")
+  }
+
+  func testRuntimeConfigRejectsASnifferSnippetTheCoreWouldAcceptAndThenIgnore() {
+    // `mihomo -t` accepts every one of these and sniffs nothing, which looks exactly like a working
+    // sniffer from outside (measured against the bundled v1.19.29 on 2026-08-15).
+    let invalidPatches: [SnifferSettings] = [
+      SnifferSettings(protocols: [SnifferProtocolSettings(networkProtocol: .tls, ports: ["9000-100"])]),
+      SnifferSettings(protocols: [SnifferProtocolSettings(networkProtocol: .tls, ports: ["70000"])]),
+      SnifferSettings(skipSourceAddress: ["not-an-ip"]),
+    ]
+
+    for patch in invalidPatches {
+      var options = RuntimeConfigOptions.default
+      options.runtimeSnippets = [RuntimeSnippet(name: "Bad Sniffer", payload: .sniffer(patch))]
+      XCTAssertThrowsError(
+        try ConfigNormalizer().runtimeConfig(
+          from: Self.minimalProfileSource,
+          overrides: .defaultForLaunch(secret: "secret-token"),
+          options: options
+        ),
+        "Expected \(patch) to be rejected"
+      )
+    }
+  }
+
+  func testRuntimeConfigLeavesAnInertProfileSnifferAloneButRejectsTheSameThingFromASnippet() throws {
+    let inertProfile = """
+    \(Self.minimalProfileSource)
+    sniffer:
+      enable: true
+      sniff: {}
+    """
+
+    // Not ClashMax's block to reject — passing it through as authored is the honest thing to do,
+    // and A1c is what tells the user their sniffer is inert.
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: inertProfile,
+      overrides: .defaultForLaunch(secret: "secret-token")
+    )
+    let sniffer = try XCTUnwrap(try (Yams.load(yaml: output) as? [String: Any])?["sniffer"] as? [String: Any])
+    XCTAssertEqual(sniffer["enable"] as? Bool, true)
+
+    // The same shape asked for by the user is refused, because we can say so before it runs.
+    var options = RuntimeConfigOptions.default
+    options.runtimeSnippets = [
+      RuntimeSnippet(name: "Inert", payload: .sniffer(SnifferSettings(enabled: true))),
+    ]
+    XCTAssertThrowsError(
+      try ConfigNormalizer().runtimeConfig(
+        from: """
+        \(Self.minimalProfileSource)
+        sniffer:
+          enable: false
+        """,
+        overrides: .defaultForLaunch(secret: "secret-token"),
+        options: options
+      )
+    )
+  }
+
+  func testDisabledSnifferSnippetDoesNotReachTheRuntimeConfig() throws {
+    var options = RuntimeConfigOptions.default
+    options.runtimeSnippets = [
+      RuntimeSnippet(name: "Off", enabled: false, payload: .sniffer(SnifferSettings(enabled: false))),
+    ]
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: Self.minimalProfileSource,
+      overrides: .defaultForLaunch(secret: "secret-token"),
+      options: options
+    )
+    let sniffer = try XCTUnwrap(try (Yams.load(yaml: output) as? [String: Any])?["sniffer"] as? [String: Any])
+
+    XCTAssertEqual(sniffer["enable"] as? Bool, true)
+  }
+
   private static let minimalProfileSource = """
   proxies:
     - name: Direct
@@ -3126,6 +3348,86 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(destinationPort.simulationInput.inboundPort, "7890")
     XCTAssertEqual(destinationPort.simulationInput.sourceIP, "192.168.1.44")
     XCTAssertEqual(destinationPort.simulationInput.process, "Safari")
+  }
+
+  /// Roadmap A1a. The simulator used to be fed `ConnectionSnapshot.host`, which the decoder had
+  /// already backfilled with the destination IP. That made a sniffed connection look domainless and
+  /// a domainless one look like it had been considered against every domain rule and rejected.
+  func testRuleExplanationBuilderSimulatesTheRealDomainAndAddressSeparately() throws {
+    let rules = [
+      RuntimeRule(index: 1, type: "DOMAIN-SUFFIX", payload: "example.com", policy: "Proxy"),
+      RuntimeRule(index: 2, type: "IP-CIDR", payload: "104.20.0.0/16", policy: "DIRECT"),
+      RuntimeRule(index: 3, type: "MATCH", payload: "", policy: "Fallback"),
+    ]
+    let builder = RuleExplanationBuilder()
+
+    // Sniffed with `override-destination: false`: `metadata.host` is empty, so this simulated the
+    // domain rule against `104.20.23.154` and reported no match — while the core had matched the
+    // sniffed name all along.
+    let sniffed = builder.explanation(
+      for: ConnectionSnapshot(
+        id: "sniffed",
+        network: "tcp",
+        host: "",
+        sniffHost: "api.example.com",
+        destinationIP: "104.20.23.154",
+        destinationPort: 443,
+        upload: 0,
+        download: 0,
+        chain: ["Proxy"],
+        rule: "DOMAIN-SUFFIX",
+        rulePayload: "example.com"
+      ),
+      rules: rules
+    )
+    XCTAssertEqual(sniffed.simulationInput.destination, "api.example.com")
+    guard case let .matched(sniffedRule) = sniffed.localOutcome else {
+      return XCTFail("Expected the sniffed domain to match the domain rule")
+    }
+    XCTAssertEqual(sniffedRule.type, "DOMAIN-SUFFIX")
+
+    // A named connection: the core leaves `destinationIP` empty, so before A1a an IP rule had no
+    // address to simulate against at all. `remoteDestination` supplies it.
+    let named = builder.explanation(
+      for: ConnectionSnapshot(
+        id: "named",
+        network: "tcp",
+        host: "cdn.example.net",
+        destinationIP: "",
+        remoteDestinationIP: "104.20.23.154",
+        destinationPort: 443,
+        upload: 0,
+        download: 0,
+        chain: ["DIRECT"],
+        rule: "IP-CIDR",
+        rulePayload: "104.20.0.0/16"
+      ),
+      rules: rules
+    )
+    XCTAssertEqual(named.simulationInput.destination, "104.20.23.154")
+    guard case let .matched(namedRule) = named.localOutcome else {
+      return XCTFail("Expected the remote destination to match the IP rule")
+    }
+    XCTAssertEqual(namedRule.type, "IP-CIDR")
+
+    // No domain anywhere: the address is the only target there is, and the domain rule is not
+    // reachable for this connection — which is the fact roadmap A1c reports to the user.
+    let domainless = builder.explanation(
+      for: ConnectionSnapshot(
+        id: "domainless",
+        network: "tcp",
+        host: "",
+        remoteDestinationIP: "203.0.113.9",
+        destinationPort: 443,
+        upload: 0,
+        download: 0,
+        chain: ["Fallback"],
+        rule: "MATCH"
+      ),
+      rules: rules
+    )
+    XCTAssertEqual(domainless.simulationInput.destination, "203.0.113.9")
+    XCTAssertEqual(domainless.target, "203.0.113.9")
   }
 
   func testPreviewGroupsExtractXboardStyleInlineYaml() throws {

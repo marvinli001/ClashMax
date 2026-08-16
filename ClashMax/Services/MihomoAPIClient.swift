@@ -442,17 +442,28 @@ struct MihomoAPIClient: Sendable {
       guard let id = item["id"] as? String else { return nil }
       let metadata = item["metadata"] as? [String: Any] ?? [:]
       let chains = item["chains"] as? [String] ?? []
+      // The host is passed through verbatim: a connection opened straight to an IP carries no
+      // domain, and folding the destination IP in here (as this did before roadmap A1a) left no
+      // consumer able to tell "the domain is example.com" from "there is no domain". The IP
+      // fallback now lives in `ConnectionSnapshot.host`, where it is a display choice.
       return ConnectionSnapshot(
         id: id,
         network: metadata["network"] as? String ?? "",
-        host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
+        host: Self.stringValue(for: ["host"], in: metadata) ?? "",
+        sniffHost: Self.stringValue(for: ["sniffHost", "sniff-host"], in: metadata),
         sourceIP: Self.stringValue(for: ["sourceIP", "source-ip", "srcIP", "source"], in: metadata),
         sourcePort: Self.intValue(for: ["sourcePort", "source-port", "srcPort"], in: metadata),
         destinationIP: Self.stringValue(for: ["destinationIP", "destination-ip", "dstIP"], in: metadata),
+        remoteDestinationIP: Self.stringValue(
+          for: ["remoteDestination", "remote-destination", "remoteDst"],
+          in: metadata
+        ),
         destinationPort: Self.intValue(for: ["destinationPort", "destination-port", "dstPort"], in: metadata),
         inboundPort: Self.intValue(for: ["inboundPort", "inbound-port", "inPort"], in: metadata),
         processName: Self.stringValue(for: ["process", "processName", "process-name"], in: metadata),
         processPath: Self.stringValue(for: ["processPath", "process-path"], in: metadata),
+        dnsMode: Self.stringValue(for: ["dnsMode", "dns-mode"], in: metadata),
+        specialProxy: Self.stringValue(for: ["specialProxy", "special-proxy"], in: metadata),
         upload: item["upload"] as? Int ?? 0,
         download: item["download"] as? Int ?? 0,
         chain: chains,

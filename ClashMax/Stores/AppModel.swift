@@ -864,6 +864,15 @@ final class AppModel {
   private let paths: RuntimePaths
   private let runtimeConfigMaterializer = RuntimeConfigMaterializer()
   @ObservationIgnored private var activeRuntimeConfigMaterialization: RuntimeConfigMaterializationResult?
+  /// The `sniffer` block of the config the core is running. `nil` means "not read yet", which the
+  /// diagnostics report as unknown rather than as sniffing being off (roadmap A1c).
+  private(set) var activeSnifferSettings: SnifferSettings?
+  /// When the sniffer configuration last *changed*, not when it was last read. A connection opened
+  /// before that moment never ran under these settings, and the verdict says so instead of judging
+  /// it by a configuration it never saw — otherwise applying a fix from the Connections panel would
+  /// immediately produce a new, false verdict on the very row it repaired.
+  private(set) var activeSnifferSettingsChangedAt: Date?
+  @ObservationIgnored private var activeSnifferSettingsTask: Task<Void, Never>?
   // The five properties below are deliberately left observable: each is read by a
   // view-visible computed property (`canControlRuntimeProxies`, `canStopRuntime`,
   // `canRepairTunRouting`), so under Observation they are effectively view state.
@@ -1911,7 +1920,15 @@ final class AppModel {
       connectionID: connection.id,
       target: explanation.target,
       input: explanation.simulationInput,
-      explanation: explanation
+      explanation: explanation,
+      domainVerdict: SnifferDiagnosticsBuilder.build(
+        SnifferDiagnosticsInput(
+          connection: connection,
+          sniffer: activeSnifferSettings,
+          snifferChangedAt: activeSnifferSettingsChangedAt,
+          rules: runtimeData.rules
+        )
+      )
     )
     selectedSection = .routing
   }
@@ -8258,10 +8275,45 @@ final class AppModel {
 
   private func activateRuntimeArtifacts(_ materialization: RuntimeConfigMaterializationResult) {
     activeRuntimeConfigMaterialization = materialization
+    refreshActiveSnifferSettings(from: materialization.runtimeConfigURL)
   }
 
   private func clearActiveRuntimeArtifacts() {
     activeRuntimeConfigMaterialization = nil
+    activeSnifferSettingsTask?.cancel()
+    activeSnifferSettingsTask = nil
+    activeSnifferSettings = nil
+    activeSnifferSettingsChangedAt = nil
+  }
+
+  /// Reads the applied config's `sniffer` block in the background so the Connections verdict can be
+  /// about what is running. Nothing waits on it: until it lands, a domainless connection is reported
+  /// as "sniffer settings unknown" instead of being blamed on a configuration nobody has read.
+  private func refreshActiveSnifferSettings(from url: URL) {
+    activeSnifferSettingsTask?.cancel()
+    activeSnifferSettingsTask = Task { [weak self] in
+      let settings = await ActiveSnifferConfigReader.snifferSettings(at: url)
+      guard !Task.isCancelled, let self else { return }
+      // Only a real change is stamped. The first read of a runtime is not a change: the core came
+      // up with these settings, so every connection it has ever had ran under them.
+      if let activeSnifferSettings, activeSnifferSettings != settings {
+        activeSnifferSettingsChangedAt = Date()
+      }
+      activeSnifferSettings = settings
+    }
+  }
+
+  /// Apply a repair offered by `SnifferDiagnostics` through the ordinary snippet path — preflight,
+  /// hot reload, rollback on rejection — so a one-click fix is never a second, weaker way of
+  /// changing the runtime (the same reasoning as quick rules in issue #15).
+  @discardableResult
+  func applySnifferFix(_ fix: SnifferDiagnosticsFix) async -> Bool {
+    await runtimeSnippetLibrary.waitForLoad()
+    let target = SnifferFixLibrary.targetSnippet(
+      in: runtimeSnippetLibrary.snippets,
+      activeProfileID: profileStore.activeProfileID
+    )
+    return await saveRuntimeSnippet(SnifferFixLibrary.adding(fix, to: target))
   }
 
   /// Answers only "would Mihomo still accept the config?" — every caller gates a mutation on that and

@@ -95,6 +95,7 @@ enum RuntimeSnippetBinding: Codable, Equatable, Sendable {
 enum RuntimeSnippetPayloadKind: String, Codable, CaseIterable, Identifiable, Sendable {
   case rules
   case dnsPatch
+  case sniffer
 
   var id: String { rawValue }
 
@@ -104,6 +105,8 @@ enum RuntimeSnippetPayloadKind: String, Codable, CaseIterable, Identifiable, Sen
       return String(localized: "Rules")
     case .dnsPatch:
       return String(localized: "DNS Patch")
+    case .sniffer:
+      return String(localized: "Sniffer")
     }
   }
 }
@@ -111,11 +114,13 @@ enum RuntimeSnippetPayloadKind: String, Codable, CaseIterable, Identifiable, Sen
 enum RuntimeSnippetPayload: Codable, Equatable, Sendable {
   case rules(RuleOverlaySettings)
   case dnsPatch(TunDNSSettings)
+  case sniffer(SnifferSettings)
 
   private enum CodingKeys: String, CodingKey {
     case kind
     case rules
     case dnsPatch
+    case sniffer
   }
 
   init(from decoder: Decoder) throws {
@@ -126,6 +131,8 @@ enum RuntimeSnippetPayload: Codable, Equatable, Sendable {
       self = try .rules(container.decodeIfPresent(RuleOverlaySettings.self, forKey: .rules) ?? .disabled)
     case .dnsPatch:
       self = try .dnsPatch(container.decodeIfPresent(TunDNSSettings.self, forKey: .dnsPatch) ?? .profileDefault)
+    case .sniffer:
+      self = try .sniffer(container.decodeIfPresent(SnifferSettings.self, forKey: .sniffer) ?? .empty)
     }
   }
 
@@ -137,6 +144,8 @@ enum RuntimeSnippetPayload: Codable, Equatable, Sendable {
       try container.encode(settings, forKey: .rules)
     case let .dnsPatch(settings):
       try container.encode(settings, forKey: .dnsPatch)
+    case let .sniffer(settings):
+      try container.encode(settings, forKey: .sniffer)
     }
   }
 
@@ -146,6 +155,8 @@ enum RuntimeSnippetPayload: Codable, Equatable, Sendable {
       return .rules
     case .dnsPatch:
       return .dnsPatch
+    case .sniffer:
+      return .sniffer
     }
   }
 
@@ -155,6 +166,8 @@ enum RuntimeSnippetPayload: Codable, Equatable, Sendable {
       return String(localized: "Rules")
     case .dnsPatch:
       return String(localized: "DNS Patch")
+    case .sniffer:
+      return String(localized: "Sniffer")
     }
   }
 
@@ -168,6 +181,8 @@ enum RuntimeSnippetPayload: Codable, Equatable, Sendable {
         return String(localized: "No DNS changes")
       }
       return String(format: String(localized: "%lld DNS changes"), Int64(count))
+    case let .sniffer(settings):
+      return settings.summary
     }
   }
 
@@ -177,6 +192,8 @@ enum RuntimeSnippetPayload: Codable, Equatable, Sendable {
       return settings.hasRuntimeOverlay
     case let .dnsPatch(settings):
       return settings.hasRuntimeOverlay
+    case let .sniffer(settings):
+      return settings.hasRuntimeOverlay
     }
   }
 
@@ -185,6 +202,8 @@ enum RuntimeSnippetPayload: Codable, Equatable, Sendable {
     case let .rules(settings):
       return settings.validationError
     case let .dnsPatch(settings):
+      return settings.validationError
+    case let .sniffer(settings):
       return settings.validationError
     }
   }
@@ -271,6 +290,17 @@ struct RuntimeSnippet: Identifiable, Codable, Equatable, Sendable {
     )
   }
 
+  /// Prefilled with what ClashMax already generates, so the editor opens on the configuration that
+  /// is actually running instead of an empty form the user has to reconstruct (INV-1). Enabling it
+  /// pins those values: from then on the snippet is the truth, including over a profile's own
+  /// `sniffer` block.
+  static var defaultSnifferSnippet: RuntimeSnippet {
+    RuntimeSnippet(
+      name: String(localized: "New Sniffer Patch"),
+      payload: .sniffer(.appManagedDefault)
+    )
+  }
+
   var normalizedName: String {
     name.trimmingCharacters(in: .whitespacesAndNewlines)
   }
@@ -309,17 +339,20 @@ struct RuntimeSnippet: Identifiable, Codable, Equatable, Sendable {
 
 struct RuntimeSnippetApplication: Equatable, Sendable {
   var dnsPatches: [TunDNSSettings]
+  var snifferPatches: [SnifferSettings]
   var ruleOverlay: RuleOverlaySettings
 
-  static let empty = RuntimeSnippetApplication(dnsPatches: [], ruleOverlay: .disabled)
+  static let empty = RuntimeSnippetApplication(dnsPatches: [], snifferPatches: [], ruleOverlay: .disabled)
 
-  init(dnsPatches: [TunDNSSettings], ruleOverlay: RuleOverlaySettings) {
+  init(dnsPatches: [TunDNSSettings], snifferPatches: [SnifferSettings] = [], ruleOverlay: RuleOverlaySettings) {
     self.dnsPatches = dnsPatches
+    self.snifferPatches = snifferPatches
     self.ruleOverlay = ruleOverlay
   }
 
   init(snippets: [RuntimeSnippet]) {
     var dnsPatches: [TunDNSSettings] = []
+    var snifferPatches: [SnifferSettings] = []
     var ruleOverlays: [RuleOverlaySettings] = []
     for snippet in snippets where snippet.enabled {
       switch snippet.payload {
@@ -327,12 +360,21 @@ struct RuntimeSnippetApplication: Equatable, Sendable {
         ruleOverlays.append(settings)
       case let .dnsPatch(settings) where settings.hasRuntimeOverlay:
         dnsPatches.append(settings)
-      case .rules, .dnsPatch:
+      case let .sniffer(settings) where settings.hasRuntimeOverlay:
+        snifferPatches.append(settings)
+      case .rules, .dnsPatch, .sniffer:
         continue
       }
     }
     self.dnsPatches = dnsPatches
+    self.snifferPatches = snifferPatches
     ruleOverlay = RuleOverlaySettings.combinedRuntimeSnippetOverlays(ruleOverlays)
+  }
+
+  /// The one sniffer value the generated YAML is built from: the snippets fold in order, so moving
+  /// a snippet in Routing changes which value wins the same way it does for rules.
+  var snifferPatch: SnifferSettings {
+    SnifferSettings.combined(snifferPatches)
   }
 }
 

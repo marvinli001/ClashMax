@@ -207,6 +207,128 @@ final class LocalizationTests: XCTestCase {
     )
   }
 
+  /// The sniffer strings are added by hand (the CLI build never refreshes the catalog), so this is
+  /// the gate that catches an English-only sniffer editor shipping to a Chinese user (roadmap A1b).
+  func testSimplifiedChineseStringCatalogProvidesSnifferKeys() throws {
+    let bundle = try XCTUnwrap(Bundle(identifier: AppConstants.bundleIdentifier))
+    let zhPath = try XCTUnwrap(bundle.path(forResource: "zh-Hans", ofType: "lproj"))
+    let zhBundle = try XCTUnwrap(Bundle(path: zhPath))
+
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Sniffer", value: nil, table: nil), "嗅探")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Sniffing", value: nil, table: nil), "域名嗅探")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "New Sniffer Patch", value: nil, table: nil), "新建嗅探补丁")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Rewrite Target", value: nil, table: nil), "改写目标")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "DNS Mapping", value: nil, table: nil), "DNS 映射")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Parse Pure IP", value: nil, table: nil), "解析纯 IP")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Always Sniff", value: nil, table: nil), "总是嗅探")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Never Sniff", value: nil, table: nil), "从不嗅探")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Skip Sources", value: nil, table: nil), "跳过来源地址")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Skip Destinations", value: nil, table: nil), "跳过目标地址")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Sniffing off", value: nil, table: nil), "嗅探已关闭")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "No sniffer changes", value: nil, table: nil), "未修改嗅探")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "App-managed sniffer", value: nil, table: nil), "由应用管理的嗅探")
+    XCTAssertEqual(
+      zhBundle.localizedString(forKey: "Profile sniffer patched by snippets", value: nil, table: nil),
+      "配置文件的嗅探已被片段修改"
+    )
+    XCTAssertEqual(
+      zhBundle.localizedString(
+        forKey: "The profile does not configure sniffing, so ClashMax recovers domains from TLS and HTTP traffic itself.",
+        value: nil,
+        table: nil
+      ),
+      "配置文件未配置嗅探，因此 ClashMax 自行从 TLS 和 HTTP 流量中恢复域名。"
+    )
+    XCTAssertEqual(
+      zhBundle.localizedString(
+        forKey: "Reads the SNI from the TLS handshake. This is where most domains come back.",
+        value: nil,
+        table: nil
+      ),
+      "从 TLS 握手中读取 SNI。大多数域名都由此恢复。"
+    )
+
+    let coreDefaultFormat = zhBundle.localizedString(forKey: "%@ (core default)", value: nil, table: nil)
+    XCTAssertEqual(String(format: coreDefaultFormat, "443"), "443（核心默认）")
+    let emptyPortsFormat = zhBundle.localizedString(
+      forKey: "Empty means the core's own default: %@.",
+      value: nil,
+      table: nil
+    )
+    XCTAssertEqual(String(format: emptyPortsFormat, "443"), "留空表示使用核心自带的默认端口：443。")
+    let overrideOnFormat = zhBundle.localizedString(forKey: "%@ %@ (override on)", value: nil, table: nil)
+    XCTAssertEqual(String(format: overrideOnFormat, "TLS", "443"), "TLS 443（改写目标）")
+  }
+
+  /// The Connections domain verdict (roadmap A1c). Its two reordering formats are the fragile ones:
+  /// Chinese puts the arguments in the other order, so they carry positional specifiers and a plain
+  /// `%@` translation would print the wrong value in the wrong slot.
+  func testSimplifiedChineseStringCatalogProvidesDomainVerdictKeys() throws {
+    let bundle = try XCTUnwrap(Bundle(identifier: AppConstants.bundleIdentifier))
+    let zhPath = try XCTUnwrap(bundle.path(forResource: "zh-Hans", ofType: "lproj"))
+    let zhBundle = try XCTUnwrap(Bundle(path: zhPath))
+
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Domain Visibility", value: nil, table: nil), "域名可见性")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "No domain, sniffing is off", value: nil, table: nil), "无域名，嗅探已关闭")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Turn On Sniffing", value: nil, table: nil), "打开嗅探")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Match Without Domain", value: nil, table: nil), "不用域名时匹配")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Sniffer Fixes", value: nil, table: nil), "嗅探修复")
+
+    let removeFormat = zhBundle.localizedString(
+      forKey: "Remove %@ from %@ if this traffic should be sniffed.",
+      value: nil,
+      table: nil
+    )
+    XCTAssertEqual(
+      String(format: removeFormat, "10.0.0.0/8", "skip-dst-address"),
+      "如果这类流量需要嗅探，请从 skip-dst-address 中移除 10.0.0.0/8。"
+    )
+    let sniffPortFormat = zhBundle.localizedString(forKey: "Sniff %@ Port %@", value: nil, table: nil)
+    XCTAssertEqual(String(format: sniffPortFormat, "TLS", "8443"), "嗅探 TLS 的 8443 端口")
+  }
+
+  /// The subscription guardrail risk list (roadmap A1d). The sniffer message joined a list whose
+  /// other six entries had never been translated, so a zh-Hans user would have read one Chinese
+  /// line among six English ones; all seven are asserted together to keep the list coherent.
+  func testSimplifiedChineseStringCatalogProvidesProviderRiskKeys() throws {
+    let bundle = try XCTUnwrap(Bundle(identifier: AppConstants.bundleIdentifier))
+    let zhPath = try XCTUnwrap(bundle.path(forResource: "zh-Hans", ofType: "lproj"))
+    let zhBundle = try XCTUnwrap(Bundle(path: zhPath))
+
+    XCTAssertEqual(
+      zhBundle.localizedString(
+        forKey: "Sniffing is app-managed. A provider that turns it off leaves connections dialed straight to an IP with no domain, so DOMAIN and GEOSITE rules can never match them.",
+        value: nil,
+        table: nil
+      ),
+      "嗅探由 ClashMax 管理。若订阅将其关闭，直接以 IP 发起的连接就不带域名，DOMAIN 与 GEOSITE 规则永远无法命中。"
+    )
+    XCTAssertEqual(
+      zhBundle.localizedString(forKey: "DNS is app-managed in v2 templates and runtime routing modes.", value: nil, table: nil),
+      "在 v2 模板与运行时路由模式下，DNS 由 App 管理。"
+    )
+    XCTAssertEqual(
+      zhBundle.localizedString(forKey: "TUN settings are controlled by ClashMax and the privileged helper.", value: nil, table: nil),
+      "TUN 设置由 ClashMax 与特权助手控制。"
+    )
+    XCTAssertEqual(
+      zhBundle.localizedString(forKey: "Ports are controlled by ClashMax launch settings.", value: nil, table: nil),
+      "端口由 ClashMax 的启动设置控制。"
+    )
+    XCTAssertEqual(
+      zhBundle.localizedString(forKey: "LAN exposure is controlled by ClashMax runtime settings.", value: nil, table: nil),
+      "局域网暴露范围由 ClashMax 的运行时设置控制。"
+    )
+    XCTAssertEqual(
+      zhBundle.localizedString(forKey: "ClashMax manages controller binding and authentication at runtime.", value: nil, table: nil),
+      "控制器的监听地址与鉴权由 ClashMax 在运行时管理。"
+    )
+    XCTAssertEqual(
+      zhBundle.localizedString(forKey: "YAML must be a mapping to be applied safely.", value: nil, table: nil),
+      "YAML 必须是一个映射（mapping）才能被安全应用。"
+    )
+  }
+
   func testSimplifiedChineseStringCatalogProvidesActiveOperationalKeys() throws {
     let bundle = try XCTUnwrap(Bundle(identifier: AppConstants.bundleIdentifier))
     let zhPath = try XCTUnwrap(bundle.path(forResource: "zh-Hans", ofType: "lproj"))

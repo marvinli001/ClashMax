@@ -1,6 +1,7 @@
 @testable import ClashMax
 import Foundation
 import XCTest
+import Yams
 
 @MainActor
 final class CoreRuntimePreflightTests: XCTestCase {
@@ -431,6 +432,253 @@ final class CoreRuntimePreflightTests: XCTestCase {
     let didExit = await waitForProcessExit(pid, timeout: 1)
     XCTAssertTrue(didExit)
   }
+
+  // MARK: - Sniffer runtime matrix (roadmap A1b)
+
+  /// The generated `sniffer` block has to survive every combination the app can produce, not only
+  /// the one it was written against: routing decides what else is in the file (`tun`, the network
+  /// extension's own DNS listener), a DNS patch rewrites the block right next to it, and a
+  /// provider-backed template builds the whole config from scratch. Only the core can say whether
+  /// the result actually starts, so every combination is handed to `mihomo -t`.
+  ///
+  /// Deliberately geodata-free: the `cn-direct` template's `GEOSITE`/`GEOIP` rules make the core
+  /// download ~13 MB before it can answer (measured 2026-08-15: 2.7s cold, and a hard failure when
+  /// offline), which would turn this into a network test. That template gets its own test below.
+  func testBundledMihomoAcceptsGeneratedSnifferAcrossRoutingDNSAndTemplateCombinations() async throws {
+    guard let coreURL = Self.bundledCoreURL() else {
+      throw XCTSkip("Bundled Mihomo core is unavailable in Resources/Core.")
+    }
+
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxSnifferMatrix-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let providerPath = try Self.writeProviderContent(in: directory)
+    let validator = MihomoRuntimeConfigValidator(timeout: 30)
+    var validatedCases = 0
+
+    for source in Self.snifferMatrixSources(providerPath: providerPath) {
+      for routing in Self.snifferMatrixRoutingModes {
+        for dns in Self.snifferMatrixDNSModes {
+          for sniffer in Self.snifferMatrixSnifferModes {
+            let name = "\(source.name)/\(routing.name)/\(dns.name)/\(sniffer.name)"
+            var overrides = RuntimeOverrides.defaultForLaunch(secret: "matrix-secret")
+            overrides.tunEnabled = routing.tunEnabled
+            dns.applyOverrides(&overrides)
+
+            var options = RuntimeConfigOptions()
+            options.networkExtensionRoutingSettings = routing.networkExtensionRoutingSettings
+            options.subscriptionProviderOptions = source.providerOptions
+            options.runtimeSnippets = dns.snippets + sniffer.snippets
+
+            let runtimeYAML: String
+            do {
+              runtimeYAML = try ConfigNormalizer().runtimeConfig(
+                from: source.source,
+                providerContentPath: source.providerContentPath,
+                overrides: overrides,
+                options: options
+              )
+            } catch {
+              XCTFail("Runtime config generation failed for \(name): \(error)")
+              continue
+            }
+
+            // The point of the matrix: whatever else changed, the sniffer block is still there and
+            // still says what this combination asked for.
+            let root = try XCTUnwrap(Yams.load(yaml: runtimeYAML) as? [String: Any], name)
+            let snifferMapping = try XCTUnwrap(root["sniffer"] as? [String: Any], name)
+            XCTAssertEqual(snifferMapping["enable"] as? Bool, sniffer.expectsSniffing, name)
+
+            let configURL = directory.appendingPathComponent("\(validatedCases)-runtime.yaml")
+            try runtimeYAML.write(to: configURL, atomically: true, encoding: .utf8)
+            do {
+              try await validator.validate(coreURL: coreURL, configURL: configURL, workDirectory: directory)
+              validatedCases += 1
+            } catch {
+              XCTFail("Bundled core rejected \(name): \(error)")
+            }
+            try? FileManager.default.removeItem(at: configURL)
+          }
+        }
+      }
+    }
+
+    XCTAssertEqual(
+      validatedCases,
+      Self.snifferMatrixSources(providerPath: providerPath).count
+        * Self.snifferMatrixRoutingModes.count
+        * Self.snifferMatrixDNSModes.count
+        * Self.snifferMatrixSnifferModes.count
+    )
+  }
+
+  /// The `cn-direct` template is the one generated config whose rules need geodata, so it is the one
+  /// combination the core cannot validate offline. Kept separate — and skipped rather than failed
+  /// when the download is unavailable — so the matrix above stays a pure offline test.
+  func testBundledMihomoAcceptsGeneratedSnifferOnGeodataBackedTemplate() async throws {
+    guard let coreURL = Self.bundledCoreURL() else {
+      throw XCTSkip("Bundled Mihomo core is unavailable in Resources/Core.")
+    }
+
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxSnifferGeodata-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let providerPath = try Self.writeProviderContent(in: directory)
+    let validator = MihomoRuntimeConfigValidator(timeout: 60)
+
+    for sniffer in Self.snifferMatrixSnifferModes {
+      var options = RuntimeConfigOptions()
+      options.subscriptionProviderOptions = SubscriptionProviderOptions(generatedTemplate: .cnDirect)
+      options.runtimeSnippets = sniffer.snippets
+
+      let runtimeYAML = try ConfigNormalizer().runtimeConfig(
+        from: Self.snifferMatrixProviderContent,
+        providerContentPath: providerPath,
+        overrides: .defaultForLaunch(secret: "matrix-secret"),
+        options: options
+      )
+      let configURL = directory.appendingPathComponent("cn-direct-\(sniffer.name).yaml")
+      try runtimeYAML.write(to: configURL, atomically: true, encoding: .utf8)
+
+      do {
+        try await validator.validate(coreURL: coreURL, configURL: configURL, workDirectory: directory)
+      } catch {
+        // "can't download GeoSite.dat" / "can't download geoip.metadb": no network, not a defect in
+        // the generated config.
+        let message = String(describing: error)
+        if message.contains("can't download") || message.contains("can't initial Geo") {
+          throw XCTSkip("Mihomo geodata is unavailable offline, so the cn-direct template cannot be validated here.")
+        }
+        XCTFail("Bundled core rejected cn-direct/\(sniffer.name): \(error)")
+      }
+    }
+  }
+
+  private struct SnifferMatrixSource {
+    var name: String
+    var source: String
+    var providerContentPath: String?
+    var providerOptions: SubscriptionProviderOptions = .default
+  }
+
+  private struct SnifferMatrixRoutingMode {
+    var name: String
+    var tunEnabled: Bool
+    var networkExtensionRoutingSettings: NetworkExtensionRoutingSettings?
+  }
+
+  private struct SnifferMatrixDNSMode {
+    var name: String
+    var snippets: [RuntimeSnippet] = []
+    var applyOverrides: (inout RuntimeOverrides) -> Void = { _ in }
+  }
+
+  private struct SnifferMatrixSnifferMode {
+    var name: String
+    var snippets: [RuntimeSnippet] = []
+    var expectsSniffing: Bool
+  }
+
+  private static let snifferMatrixProviderContent =
+    "ss://YWVzLTEyOC1nY206cGFzc3dvcmQ@127.0.0.1:8388#Matrix%20Node\n"
+
+  private static func writeProviderContent(in directory: URL) throws -> String {
+    let providerURL = directory.appendingPathComponent("provider.txt")
+    try snifferMatrixProviderContent.write(to: providerURL, atomically: true, encoding: .utf8)
+    return providerURL.path
+  }
+
+  private static func snifferMatrixSources(providerPath: String) -> [SnifferMatrixSource] {
+    [
+      SnifferMatrixSource(name: "plain-profile", source: syntheticPreflightClashConfig),
+      // A profile that already ships its own sniffer block: ClashMax patches it rather than
+      // replacing it, and the patched result still has to start.
+      SnifferMatrixSource(
+        name: "profile-declared-sniffer",
+        source: syntheticPreflightClashConfig + """
+
+        sniffer:
+          enable: true
+          force-dns-mapping: true
+          parse-pure-ip: true
+          sniff:
+            TLS:
+              ports: [443]
+          skip-domain:
+            - Mijia Cloud
+        """
+      ),
+      SnifferMatrixSource(
+        name: "provider-minimal",
+        source: snifferMatrixProviderContent,
+        providerContentPath: providerPath,
+        providerOptions: SubscriptionProviderOptions(generatedTemplate: .minimal)
+      ),
+      SnifferMatrixSource(
+        name: "provider-global",
+        source: snifferMatrixProviderContent,
+        providerContentPath: providerPath,
+        providerOptions: SubscriptionProviderOptions(generatedTemplate: .global)
+      ),
+      SnifferMatrixSource(
+        name: "provider-rule",
+        source: snifferMatrixProviderContent,
+        providerContentPath: providerPath,
+        providerOptions: SubscriptionProviderOptions(generatedTemplate: .rule)
+      ),
+    ]
+  }
+
+  private static let snifferMatrixRoutingModes: [SnifferMatrixRoutingMode] = [
+    SnifferMatrixRoutingMode(name: "system-proxy", tunEnabled: false, networkExtensionRoutingSettings: nil),
+    SnifferMatrixRoutingMode(name: "tun", tunEnabled: true, networkExtensionRoutingSettings: nil),
+    SnifferMatrixRoutingMode(name: "network-extension", tunEnabled: false, networkExtensionRoutingSettings: .default),
+  ]
+
+  private static let snifferMatrixDNSModes: [SnifferMatrixDNSMode] = [
+    SnifferMatrixDNSMode(name: "dns-default"),
+    SnifferMatrixDNSMode(name: "dns-disabled", applyOverrides: { $0.dnsEnabled = false }),
+    SnifferMatrixDNSMode(name: "dns-patched", snippets: [RuntimeSnippet.defaultDNSPatchSnippet]),
+  ]
+
+  private static let snifferMatrixSnifferModes: [SnifferMatrixSnifferMode] = [
+    SnifferMatrixSnifferMode(name: "sniffer-app-managed", expectsSniffing: true),
+    SnifferMatrixSnifferMode(
+      name: "sniffer-patched",
+      snippets: [
+        RuntimeSnippet(
+          name: "Matrix Sniffer",
+          payload: .sniffer(
+            SnifferSettings(
+              enabled: true,
+              overrideDestination: true,
+              forceDNSMapping: true,
+              parsePureIP: true,
+              protocols: [
+                SnifferProtocolSettings(networkProtocol: .tls, ports: ["443", "8443"]),
+                SnifferProtocolSettings(networkProtocol: .http, ports: ["80", "8080-8880"], overrideDestination: false),
+                SnifferProtocolSettings(networkProtocol: .quic, ports: ["443"]),
+              ],
+              forceDomain: ["+.example.com"],
+              skipDomain: ["Mijia Cloud", "+.push.apple.com"],
+              skipSourceAddress: ["192.168.0.0/16"],
+              skipDestinationAddress: ["10.0.0.0/8"]
+            )
+          )
+        ),
+      ],
+      expectsSniffing: true
+    ),
+    SnifferMatrixSnifferMode(
+      name: "sniffer-off",
+      snippets: [RuntimeSnippet(name: "Sniffer Off", payload: .sniffer(.off))],
+      expectsSniffing: false
+    ),
+  ]
 
   private static func bundledCoreURL() -> URL? {
     let repositoryRoot = URL(fileURLWithPath: #filePath)

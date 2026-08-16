@@ -84,6 +84,13 @@ struct EffectiveRuntimeConfigBuilder {
           runtimeSnippets: runtimeSnippets
         )
       )
+      // Same reasoning as the DNS layer: the sniffer that matters is the one in the generated YAML,
+      // not the one the app meant to write (roadmap A1).
+      let snifferPlan = SnifferPlan.observed(
+        finalSettings: presentation.finalSniffer,
+        profileDeclaresSniffer: presentation.profileDeclaresSniffer,
+        patch: RuntimeSnippetApplication(snippets: runtimeSnippets).snifferPatch
+      )
       let layers = makeLayers(
         profile: profile,
         overrides: overrides,
@@ -94,6 +101,7 @@ struct EffectiveRuntimeConfigBuilder {
         manualProxyEndpoint: options.manualProxyEndpoint,
         upstreamProxyEndpoint: options.upstreamProxyEndpoint,
         dnsOverride: dnsOverride,
+        sniffer: snifferPlan,
         redactedOriginal: presentation.redactedOriginal,
         redactedFinal: presentation.redactedFinal
       )
@@ -111,7 +119,8 @@ struct EffectiveRuntimeConfigBuilder {
         redactedOriginalYAML: presentation.redactedOriginal,
         redactedFinalYAML: presentation.redactedFinal,
         preflightStatus: preflightStatus,
-        dnsOverride: dnsOverride
+        dnsOverride: dnsOverride,
+        sniffer: snifferPlan
       )
     }
   }
@@ -163,6 +172,8 @@ struct EffectiveRuntimeConfigBuilder {
     var redactedFinal: String
     var baselineDNSFacts: DNSRuntimeFacts
     var finalDNSFacts: DNSRuntimeFacts
+    var profileDeclaresSniffer: Bool
+    var finalSniffer: SnifferSettings?
     var diffRows: [EffectiveRuntimeConfigDiffRow]
   }
 
@@ -197,6 +208,8 @@ struct EffectiveRuntimeConfigBuilder {
         redactedFinal: redactedFinal,
         baselineDNSFacts: dnsFacts(inYAML: originalSource),
         finalDNSFacts: dnsFacts(inYAML: finalRuntimeYAML),
+        profileDeclaresSniffer: snifferSettings(inYAML: originalSource)?.hasRuntimeOverlay == true,
+        finalSniffer: snifferSettings(inYAML: finalRuntimeYAML),
         diffRows: EffectiveRuntimeConfigLineDiff.diff(oldText: redactedOriginal, newText: redactedFinal)
       )
     }
@@ -212,6 +225,15 @@ struct EffectiveRuntimeConfigBuilder {
   private nonisolated static func dnsFacts(inYAML yaml: String) -> DNSRuntimeFacts {
     guard let root = (try? Yams.load(yaml: yaml)) as? [String: Any] else { return .absent }
     return DNSRuntimeFacts.facts(from: root["dns"])
+  }
+
+  /// The `sniffer` block as it exists in one config. `nil` means the file has none at all, which is
+  /// what separates "the profile decided" from "ClashMax generated it" in the layer view.
+  private nonisolated static func snifferSettings(inYAML yaml: String) -> SnifferSettings? {
+    guard let root = (try? Yams.load(yaml: yaml)) as? [String: Any],
+          let mapping = root["sniffer"] as? [String: Any]
+    else { return nil }
+    return SnifferSettings(runtimeMapping: mapping)
   }
 
   private func dnsOverrideSources(
@@ -276,6 +298,7 @@ struct EffectiveRuntimeConfigBuilder {
     manualProxyEndpoint: ResolvedOutboundProxyEndpoint?,
     upstreamProxyEndpoint: ResolvedOutboundProxyEndpoint?,
     dnsOverride: DNSOverridePlan,
+    sniffer: SnifferPlan,
     redactedOriginal: String,
     redactedFinal: String
   ) -> [EffectiveRuntimeConfigLayer] {
@@ -346,6 +369,13 @@ struct EffectiveRuntimeConfigBuilder {
         summary: dnsOverride.summary,
         redactedContent: renderDNSOverride(dnsOverride),
         isActive: dnsOverride.hasOverride
+      ),
+      EffectiveRuntimeConfigLayer(
+        id: "sniffer",
+        title: "Sniffer",
+        summary: sniffer.summary,
+        redactedContent: renderSniffer(sniffer),
+        isActive: sniffer.isSniffing
       ),
       EffectiveRuntimeConfigLayer(
         id: "final-runtime-yaml",
@@ -460,6 +490,8 @@ struct EffectiveRuntimeConfigBuilder {
       return renderRuleOverlay(settings)
     case let .dnsPatch(settings):
       return renderDNSPatch(settings)
+    case let .sniffer(settings):
+      return renderSnifferPatch(settings)
     }
   }
 
@@ -492,6 +524,39 @@ struct EffectiveRuntimeConfigBuilder {
     }
     lines.append(contentsOf: plan.issues.map(\.message))
     return lines.joined(separator: "\n")
+  }
+
+  /// Domain lists only — the sniffer block never carries credentials, but it does carry the exact
+  /// hosts a user excluded, so it is rendered through the same key-name discipline as DNS.
+  private func renderSniffer(_ plan: SnifferPlan) -> String {
+    var lines = [plan.source.displayName, plan.source.explanation]
+    lines.append("Effect: \(plan.summary)")
+    if !plan.patchedKeyNames.isEmpty {
+      lines.append("Snippet Keys: \(plan.patchedKeyNames.joined(separator: ", "))")
+    }
+    lines.append(contentsOf: renderSnifferSettings(plan.settings))
+    return lines.joined(separator: "\n")
+  }
+
+  private func renderSnifferPatch(_ settings: SnifferSettings) -> String {
+    let lines = renderSnifferSettings(settings)
+    return lines.isEmpty ? String(localized: "No sniffer changes") : lines.joined(separator: "\n")
+  }
+
+  private func renderSnifferSettings(_ settings: SnifferSettings) -> [String] {
+    var lines: [String] = []
+    appendOptional(settings.enabled, title: "enable", to: &lines)
+    appendOptional(settings.overrideDestination, title: "override-destination", to: &lines)
+    appendOptional(settings.forceDNSMapping, title: "force-dns-mapping", to: &lines)
+    appendOptional(settings.parsePureIP, title: "parse-pure-ip", to: &lines)
+    for entry in settings.protocols {
+      lines.append("sniff.\(entry.networkProtocol.rawValue): \(entry.summary)")
+    }
+    appendList(settings.forceDomain, title: "force-domain", to: &lines)
+    appendList(settings.skipDomain, title: "skip-domain", to: &lines)
+    appendList(settings.skipSourceAddress, title: "skip-src-address", to: &lines)
+    appendList(settings.skipDestinationAddress, title: "skip-dst-address", to: &lines)
+    return lines
   }
 
   private func renderDNSPatch(_ settings: TunDNSSettings) -> String {

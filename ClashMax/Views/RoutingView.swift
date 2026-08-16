@@ -96,6 +96,7 @@ struct RoutingView: View {
   @State private var simulationProcess = ""
   @State private var simulationTrace: RuleMatchSimulationTrace = .noMatch
   @State private var explanationContext: RuleExplanation?
+  @State private var domainVerdictContext: SnifferDiagnosticsSnapshot?
   @State private var effectiveConfigTab: EffectiveConfigInspectorTab = .layers
   @State private var simulationDebouncer = RuleMatchSimulationDebouncer()
   /// Toggling a snippet preflights the effective config and can reload the running core, so a switch
@@ -136,6 +137,7 @@ struct RoutingView: View {
       HStack(spacing: 6) {
         newRuleSnippetButton
         newDNSPatchSnippetButton
+        newSnifferSnippetButton
         saveDraftButton
         deleteSelectedSnippetButton
       }
@@ -144,6 +146,7 @@ struct RoutingView: View {
       HStack(spacing: 4) {
         newRuleSnippetButton
         newDNSPatchSnippetButton
+        newSnifferSnippetButton
         saveDraftButton
         deleteSelectedSnippetButton
       }
@@ -168,6 +171,15 @@ struct RoutingView: View {
       Label("New DNS Patch", systemImage: "network")
     }
     .help(String(localized: "New DNS Patch"))
+  }
+
+  private var newSnifferSnippetButton: some View {
+    Button {
+      newSnifferSnippet()
+    } label: {
+      Label("New Sniffer Patch", systemImage: "waveform.badge.magnifyingglass")
+    }
+    .help(String(localized: "New Sniffer Patch"))
   }
 
   private var saveDraftButton: some View {
@@ -434,6 +446,8 @@ struct RoutingView: View {
         RuleOverlaySettingsEditor(settings: rulesPayloadBinding, showsHeader: false, showsEnableToggle: false)
       case .dnsPatch:
         RuntimeDNSPatchEditor(settings: dnsPayloadBinding)
+      case .sniffer:
+        RuntimeSnifferPatchEditor(settings: snifferPayloadBinding)
       }
 
       if let validationError = draftSnippet.validationError {
@@ -580,6 +594,8 @@ struct RoutingView: View {
         runtimeRuleDiffSections(settings)
       case let .dnsPatch(settings):
         dnsDiffSection(settings)
+      case let .sniffer(settings):
+        snifferDiffSection(settings)
       }
     }
   }
@@ -817,6 +833,10 @@ struct RoutingView: View {
     diffSection(title: "DNS Patch", values: dnsPatchPreviewLines(settings))
   }
 
+  private func snifferDiffSection(_ settings: SnifferSettings) -> some View {
+    diffSection(title: "Sniffer Patch", values: snifferPatchPreviewLines(settings))
+  }
+
   private var matchSimulator: some View {
     RoutingInspectorPanel(title: "Match Simulator", systemImage: "scope") {
       TextField("Destination host or IP", text: $simulationDestination)
@@ -868,6 +888,16 @@ struct RoutingView: View {
         RoutingDetailRow(title: "Chosen Target", value: explanationContext.target.isEmpty ? "-" : explanationContext.target)
         RoutingDetailRow(title: "Chosen Policy", value: explanationContext.chosenPolicySummary)
         RoutingDetailRow(title: "Local Result", value: explanationContext.localSummary, lineLimit: 5)
+        // The simulator above answers "which rule wins for this destination". For a connection that
+        // never carried a domain, the destination in that field is an address, and no domain rule
+        // could ever have matched it — a fact the simulator alone leaves the user to infer.
+        if let verdict = domainVerdictContext {
+          RoutingDetailRow(title: "Domain Visibility", value: verdict.headline, isProminent: true)
+          RoutingDetailRow(title: "Reason", value: verdict.reason, lineLimit: 5)
+          ForEach(verdict.recoveryActions, id: \.self) { action in
+            RoutingDetailRow(title: "Suggested Fix", value: action, lineLimit: 3)
+          }
+        }
       }
     }
   }
@@ -952,6 +982,8 @@ struct RoutingView: View {
           draftSnippet.payload = .rules(RuntimeSnippet.defaultRuleSnippet.rulesPayload)
         case .dnsPatch:
           draftSnippet.payload = .dnsPatch(RuntimeSnippet.defaultDNSPatchSnippet.dnsPayload)
+        case .sniffer:
+          draftSnippet.payload = .sniffer(RuntimeSnippet.defaultSnifferSnippet.snifferPayload)
         }
       }
     )
@@ -972,6 +1004,13 @@ struct RoutingView: View {
     Binding(
       get: { draftSnippet.dnsPayload },
       set: { draftSnippet.payload = .dnsPatch($0) }
+    )
+  }
+
+  private var snifferPayloadBinding: Binding<SnifferSettings> {
+    Binding(
+      get: { draftSnippet.snifferPayload },
+      set: { draftSnippet.payload = .sniffer($0) }
     )
   }
 
@@ -1023,6 +1062,14 @@ struct RoutingView: View {
   private func newDNSPatchSnippet() {
     selectedSnippetID = nil
     draftSnippet = RuntimeSnippet.defaultDNSPatchSnippet
+    loadedSnippetSnapshot = nil
+    isEditingDetachedDraft = true
+    runSimulationImmediately()
+  }
+
+  private func newSnifferSnippet() {
+    selectedSnippetID = nil
+    draftSnippet = RuntimeSnippet.defaultSnifferSnippet
     loadedSnippetSnapshot = nil
     isEditingDetachedDraft = true
     runSimulationImmediately()
@@ -1128,6 +1175,7 @@ struct RoutingView: View {
   private func consumeRoutingSimulationRequest() {
     guard let request = appModel.routingSimulationRequest else { return }
     explanationContext = request.explanation
+    domainVerdictContext = request.domainVerdict
     simulationDestination = request.input.destination
     simulationSourceIP = request.input.sourceIP
     simulationDestinationPort = request.input.destinationPort
@@ -1199,6 +1247,22 @@ struct RoutingView: View {
     return lines
   }
 
+  private func snifferPatchPreviewLines(_ settings: SnifferSettings) -> [String] {
+    var lines: [String] = []
+    appendOptionalBool(settings.enabled, title: "enable", to: &lines)
+    appendOptionalBool(settings.overrideDestination, title: "override-destination", to: &lines)
+    appendOptionalBool(settings.forceDNSMapping, title: "force-dns-mapping", to: &lines)
+    appendOptionalBool(settings.parsePureIP, title: "parse-pure-ip", to: &lines)
+    for entry in settings.protocols {
+      lines.append("sniff.\(entry.networkProtocol.rawValue): \(entry.summary)")
+    }
+    appendList(settings.forceDomain, title: "force-domain", to: &lines)
+    appendList(settings.skipDomain, title: "skip-domain", to: &lines)
+    appendList(settings.skipSourceAddress, title: "skip-src-address", to: &lines)
+    appendList(settings.skipDestinationAddress, title: "skip-dst-address", to: &lines)
+    return lines
+  }
+
   private func appendOptionalBool(_ value: Bool?, title: String, to lines: inout [String]) {
     guard let value else { return }
     lines.append("\(title) = \(value)")
@@ -1245,6 +1309,13 @@ private extension RuntimeSnippet {
       return settings
     }
     return RuntimeSnippet.defaultDNSPatchSnippet.dnsPayload
+  }
+
+  var snifferPayload: SnifferSettings {
+    if case let .sniffer(settings) = payload {
+      return settings
+    }
+    return .appManagedDefault
   }
 }
 
@@ -1429,36 +1500,11 @@ private struct RuntimeDNSPatchEditor: View {
   }
 
   private func optionalBoolPicker(_ title: String, value: Binding<Bool?>) -> some View {
-    Picker(title, selection: Binding(
-      get: { RuntimeOptionalBoolChoice(value: value.wrappedValue) },
-      set: { value.wrappedValue = $0.value }
-    )) {
-      ForEach(RuntimeOptionalBoolChoice.allCases) { choice in
-        Text(choice.displayName).tag(choice)
-      }
-    }
-    .pickerStyle(.menu)
-    .frame(maxWidth: 138)
+    RoutingOptionalBoolPicker(title: title, value: value)
   }
 
   private func textArea(_ placeholder: String, text: Binding<String>, minHeight: CGFloat) -> some View {
-    TextEditor(text: text)
-      .font(.system(.caption, design: .monospaced))
-      .frame(minHeight: minHeight)
-      .overlay(alignment: .topLeading) {
-        if text.wrappedValue.isEmpty {
-          Text(LocalizedStringKey(placeholder))
-            .font(.caption)
-            .foregroundStyle(.tertiary)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 7)
-            .allowsHitTesting(false)
-        }
-      }
-      .overlay {
-        SurfaceRadius.shape(SurfaceRadius.chip)
-          .strokeBorder(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 1)
-      }
+    RoutingSnippetTextArea(placeholder: placeholder, text: text, minHeight: minHeight)
   }
 
   private func optionalBoolBinding(_ keyPath: WritableKeyPath<TunDNSSettings, Bool?>) -> Binding<Bool?> {
@@ -1526,6 +1572,208 @@ private struct RuntimeDNSPatchEditor: View {
       result[key] = value
     }
     return result
+  }
+}
+
+private struct RoutingOptionalBoolPicker: View {
+  let title: String
+  @Binding var value: Bool?
+  var maxWidth: CGFloat = 138
+
+  var body: some View {
+    Picker(title, selection: Binding(
+      get: { RuntimeOptionalBoolChoice(value: value) },
+      set: { value = $0.value }
+    )) {
+      ForEach(RuntimeOptionalBoolChoice.allCases) { choice in
+        Text(choice.displayName).tag(choice)
+      }
+    }
+    .pickerStyle(.menu)
+    .frame(maxWidth: maxWidth)
+  }
+}
+
+private struct RoutingSnippetTextArea: View {
+  let placeholder: String
+  @Binding var text: String
+  var minHeight: CGFloat
+
+  var body: some View {
+    TextEditor(text: $text)
+      .font(.system(.caption, design: .monospaced))
+      .frame(minHeight: minHeight)
+      .overlay(alignment: .topLeading) {
+        if text.isEmpty {
+          Text(LocalizedStringKey(placeholder))
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 7)
+            .allowsHitTesting(false)
+        }
+      }
+      .overlay {
+        SurfaceRadius.shape(SurfaceRadius.chip)
+          .strokeBorder(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 1)
+      }
+  }
+}
+
+/// Sniffing is what turns a domainless connection back into a `DOMAIN-SUFFIX`-matchable one, so the
+/// editor names the consequence of each switch rather than the YAML key (roadmap A1).
+private struct RuntimeSnifferPatchEditor: View {
+  @Binding var settings: SnifferSettings
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      RoutingEditRow("Sniffing") {
+        RoutingOptionalBoolPicker(title: String(localized: "Sniffing"), value: $settings.enabled)
+      }
+
+      RoutingEditRow("Rewrite Target") {
+        VStack(alignment: .leading, spacing: 4) {
+          RoutingOptionalBoolPicker(
+            title: String(localized: "Rewrite Target"),
+            value: $settings.overrideDestination
+          )
+          Text("Replaces the connection's IP destination with the sniffed domain, so rules, logs and the Connections list all show the real host.")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      }
+
+      RoutingEditRow("Advanced") {
+        ViewThatFits(in: .horizontal) {
+          HStack(spacing: 8) {
+            RoutingOptionalBoolPicker(title: String(localized: "DNS Mapping"), value: $settings.forceDNSMapping)
+            RoutingOptionalBoolPicker(title: String(localized: "Parse Pure IP"), value: $settings.parsePureIP)
+          }
+          VStack(alignment: .leading, spacing: 8) {
+            RoutingOptionalBoolPicker(title: String(localized: "DNS Mapping"), value: $settings.forceDNSMapping)
+            RoutingOptionalBoolPicker(title: String(localized: "Parse Pure IP"), value: $settings.parsePureIP)
+          }
+        }
+      }
+
+      ForEach(SnifferProtocol.allCases) { networkProtocol in
+        protocolEditor(networkProtocol)
+      }
+
+      snifferListEditor("Always Sniff", keyPath: \.forceDomain, placeholder: "One domain per line")
+      snifferListEditor("Never Sniff", keyPath: \.skipDomain, placeholder: "One domain per line")
+      snifferListEditor("Skip Sources", keyPath: \.skipSourceAddress, placeholder: "One IP or CIDR per line")
+      snifferListEditor("Skip Destinations", keyPath: \.skipDestinationAddress, placeholder: "One IP or CIDR per line")
+
+      if let validationError = settings.validationError {
+        Label(validationError, systemImage: "exclamationmark.triangle.fill")
+          .font(.caption)
+          .foregroundStyle(.orange)
+          .lineLimit(3)
+      }
+
+      // The core accepts an empty `sniff` map without complaint and then sniffs nothing, so this
+      // stays advisory here — a patch is allowed to be sparse — and only the merged config decides.
+      if settings.validationError == nil, let effectiveError = settings.effectiveValidationError {
+        Label(effectiveError, systemImage: "exclamationmark.triangle")
+          .font(.caption)
+          .foregroundStyle(.orange)
+          .lineLimit(3)
+      }
+    }
+  }
+
+  private func protocolEditor(_ networkProtocol: SnifferProtocol) -> some View {
+    RoutingEditRow(LocalizedStringResource(stringLiteral: networkProtocol.displayName)) {
+      VStack(alignment: .leading, spacing: 4) {
+        HStack(spacing: 8) {
+          Toggle("Sniff", isOn: protocolEnabledBinding(networkProtocol))
+            .toggleStyle(.switch)
+            .labelsHidden()
+          TextField("Ports", text: portsBinding(networkProtocol))
+            .textFieldStyle(.roundedBorder)
+            .disabled(settings.settings(for: networkProtocol) == nil)
+        }
+        Text(networkProtocol.explanation)
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+        // Leaving the field empty is legal, but it is not "all ports" — the core falls back to one
+        // port per protocol, so the row says which one rather than letting it look unlimited.
+        if let entry = settings.settings(for: networkProtocol), entry.ports.isEmpty {
+          Text(
+            String(
+              format: String(localized: "Empty means the core's own default: %@."),
+              entry.effectivePorts.joined(separator: ", ")
+            )
+          )
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+        }
+      }
+    }
+  }
+
+  private func snifferListEditor(
+    _ title: LocalizedStringResource,
+    keyPath: WritableKeyPath<SnifferSettings, [String]>,
+    placeholder: String
+  ) -> some View {
+    RoutingEditRow(title) {
+      RoutingSnippetTextArea(placeholder: placeholder, text: listBinding(keyPath), minHeight: 54)
+    }
+  }
+
+  /// Listing a protocol at all is what enables it; unchecking removes the entry rather than writing
+  /// an empty one, because the core treats an empty `sniff` map as "sniff nothing" without erroring.
+  private func protocolEnabledBinding(_ networkProtocol: SnifferProtocol) -> Binding<Bool> {
+    Binding(
+      get: { settings.settings(for: networkProtocol) != nil },
+      set: { isEnabled in
+        var protocols = settings.protocols.filter { $0.networkProtocol != networkProtocol }
+        if isEnabled {
+          protocols.append(
+            SnifferProtocolSettings(
+              networkProtocol: networkProtocol,
+              ports: networkProtocol.defaultPorts
+            )
+          )
+          protocols.sort { lhs, rhs in
+            let order = SnifferProtocol.allCases
+            return (order.firstIndex(of: lhs.networkProtocol) ?? 0) < (order.firstIndex(of: rhs.networkProtocol) ?? 0)
+          }
+        }
+        settings.protocols = protocols
+      }
+    )
+  }
+
+  private func portsBinding(_ networkProtocol: SnifferProtocol) -> Binding<String> {
+    Binding(
+      get: { settings.settings(for: networkProtocol)?.ports.joined(separator: ", ") ?? "" },
+      set: { text in
+        guard let index = settings.protocols.firstIndex(where: { $0.networkProtocol == networkProtocol }) else {
+          return
+        }
+        settings.protocols[index].ports = text
+          .components(separatedBy: CharacterSet(charactersIn: ",\n"))
+          .map { $0.trimmingCharacters(in: .whitespaces) }
+          .filter { !$0.isEmpty }
+      }
+    )
+  }
+
+  private func listBinding(_ keyPath: WritableKeyPath<SnifferSettings, [String]>) -> Binding<String> {
+    Binding(
+      get: { settings[keyPath: keyPath].joined(separator: "\n") },
+      set: { text in
+        settings[keyPath: keyPath] = text
+          .components(separatedBy: .newlines)
+          .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+          .filter { !$0.isEmpty }
+      }
+    )
   }
 }
 

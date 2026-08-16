@@ -64,6 +64,8 @@ enum RuntimeChangeKind: Equatable, Sendable {
   case rules
   /// DNS patches and the managed DNS override.
   case dns
+  /// The `sniffer` block — which protocols and ports are sniffed for a domain.
+  case sniffer
   /// The order of the runtime overlay snippets, which decides which rule wins.
   case snippetOrder
   /// A profile's own provider options, which carry its per-profile rule overlay.
@@ -105,8 +107,10 @@ extension RuntimeChangeApplyMode {
   static func resolve(_ change: RuntimeChangeKind, in context: RuntimeApplyContext) -> RuntimeChangeApplyMode {
     guard context.servesUserTraffic else { return .appliesOnNextStart }
     switch change {
-    case .rules, .dns, .snippetOrder, .profileOptions:
+    case .rules, .dns, .sniffer, .snippetOrder, .profileOptions:
       // All are materialized into the generated runtime YAML, which every owner reloads in place.
+      // Verified for the sniffer on 2026-08-15: `PUT /configs?force=true` with a sniffer-off config
+      // flipped `/configs.sniffing` from true to false on a running core, with no restart.
       return .hotReload
     case .inboundPort, .controllerEndpoint:
       return context.runtimeOwner == .networkExtension
@@ -203,6 +207,8 @@ extension RuntimeChangeKind {
       self = .rules
     case .dnsPatch:
       self = .dns
+    case .sniffer:
+      self = .sniffer
     }
   }
 
@@ -212,6 +218,8 @@ extension RuntimeChangeKind {
       return String(localized: "rule")
     case .dns:
       return String(localized: "DNS")
+    case .sniffer:
+      return String(localized: "sniffer")
     case .snippetOrder:
       return String(localized: "overlay order")
     case .profileOptions:

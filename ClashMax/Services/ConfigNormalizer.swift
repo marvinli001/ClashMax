@@ -200,6 +200,30 @@ struct ConfigNormalizer {
       root["dns"] = dns
     }
 
+    // Roadmap A1b. A connection opened straight to an IP carries no domain, so every DOMAIN,
+    // DOMAIN-SUFFIX, DOMAIN-KEYWORD and GEOSITE rule written for it is structurally unreachable —
+    // the user's rules simply never fire. The sniffer recovers the name out of the traffic, and
+    // because `GET /configs` reports only a single `sniffing` boolean, this generated block is the
+    // one honest record of what is actually being sniffed.
+    let snifferPatch = snippetApplication.snifferPatch
+    if let validationError = snifferPatch.validationError {
+      throw NormalizerError.invalidProfile(validationError)
+    }
+    let profileSnifferMapping = root["sniffer"] as? [String: Any]
+    let snifferPlan = SnifferPlanBuilder.plan(profileMapping: profileSnifferMapping, patch: snifferPatch)
+    // A profile's own sniffer is passed through as authored, even when it is inert: it is not
+    // ClashMax's to reject. Anything the user asked for is checked, because an inert sniffer looks
+    // exactly like a working one from outside.
+    if snifferPatch.hasRuntimeOverlay || !snifferPlan.source.isProfileSupplied,
+       let validationError = snifferPlan.settings.effectiveValidationError
+    {
+      throw NormalizerError.invalidProfile(validationError)
+    }
+    root["sniffer"] = SnifferPlanBuilder.runtimeMapping(
+      profileMapping: profileSnifferMapping,
+      patch: snifferPatch
+    )
+
     let ruleOverlay = overrides.ruleOverlay.combined(
       withProfileOverlay: options.subscriptionProviderOptions.ruleOverlay
     )

@@ -5,7 +5,7 @@ final class RuntimeChangeApplyModeTests: XCTestCase {
   func testRuleAndDNSEditsHotReloadForEveryRunningOwner() {
     for owner in [RuntimeOwner.user, .tunnel, .networkExtension] {
       let context = RuntimeApplyContext(runtimeOwner: owner)
-      for change in [RuntimeChangeKind.rules, .dns, .snippetOrder, .profileOptions] {
+      for change in [RuntimeChangeKind.rules, .dns, .sniffer, .snippetOrder, .profileOptions] {
         XCTAssertEqual(
           RuntimeChangeApplyMode.resolve(change, in: context),
           .hotReload,
@@ -19,6 +19,7 @@ final class RuntimeChangeApplyModeTests: XCTestCase {
     for change in [
       RuntimeChangeKind.rules,
       .dns,
+      .sniffer,
       .snippetOrder,
       .profileOptions,
       .inboundPort,
@@ -94,6 +95,20 @@ final class RuntimeChangeApplyModeTests: XCTestCase {
   func testSnippetPayloadKindMapsToTheEditedChangeKind() {
     XCTAssertEqual(RuntimeChangeKind(RuntimeSnippetPayloadKind.rules), .rules)
     XCTAssertEqual(RuntimeChangeKind(RuntimeSnippetPayloadKind.dnsPatch), .dns)
+    XCTAssertEqual(RuntimeChangeKind(RuntimeSnippetPayloadKind.sniffer), .sniffer)
+  }
+
+  /// Verified against the bundled core on 2026-08-15: `PUT /configs?force=true` with a changed
+  /// `sniffer` block takes effect on the next connection without restarting the process.
+  func testSnifferEditsHotReloadRatherThanRestartingTheCore() {
+    XCTAssertEqual(
+      RuntimeChangeApplyMode.resolve(.sniffer, in: RuntimeApplyContext(runtimeOwner: .user)),
+      .hotReload
+    )
+    XCTAssertEqual(
+      RuntimeChangeApplyMode.resolve(.sniffer, in: .stopped),
+      .appliesOnNextStart
+    )
   }
 
   func testPendingChangeCountCountsEveryUnappliedEdit() {
