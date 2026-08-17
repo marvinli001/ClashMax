@@ -363,26 +363,44 @@ struct MenuBarRuntimePresentation {
 /// Builds the compact upload/download labels shown on the menu bar status item.
 ///
 /// Reuses `TrafficSample.format(_:)` so the units stay consistent with the rest of
-/// the app, and keeps the "only while running with live data" decision in one
-/// testable place. Returns `nil` when the menu bar should show its icon alone.
+/// the app, and keeps the "only while running with live data, and only if the user
+/// asked for it" decision in one testable place. Returns `nil` when the menu bar
+/// should show its icon alone.
 enum MenuBarTrafficStatusLabel {
   struct Lines: Equatable {
     let upload: String
     let download: String
   }
 
-  static func lines(showsTraffic: Bool, hasTrafficData: Bool, sample: TrafficSample) -> Lines? {
-    guard showsTraffic, hasTrafficData else { return nil }
+  /// - Parameter speedVisible: the Settings preference from issue #29. It gates the
+  ///   status item only; the panel's traffic section and the polling behind it are
+  ///   deliberately untouched.
+  static func lines(
+    speedVisible: Bool = true,
+    showsTraffic: Bool,
+    hasTrafficData: Bool,
+    sample: TrafficSample
+  ) -> Lines? {
+    guard speedVisible, showsTraffic, hasTrafficData else { return nil }
     return Lines(
       upload: "↑\(compact(sample.upload))",
       download: "↓\(compact(sample.download))"
     )
   }
 
-  static func text(showsTraffic: Bool, hasTrafficData: Bool, sample: TrafficSample) -> String? {
-    guard let statusLines = lines(showsTraffic: showsTraffic, hasTrafficData: hasTrafficData, sample: sample) else {
-      return nil
-    }
+  static func text(
+    speedVisible: Bool = true,
+    showsTraffic: Bool,
+    hasTrafficData: Bool,
+    sample: TrafficSample
+  ) -> String? {
+    let statusLines = lines(
+      speedVisible: speedVisible,
+      showsTraffic: showsTraffic,
+      hasTrafficData: hasTrafficData,
+      sample: sample
+    )
+    guard let statusLines else { return nil }
     return "\(statusLines.upload)\n\(statusLines.download)"
   }
 

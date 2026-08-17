@@ -903,6 +903,7 @@ final class BackupRestoreServiceTests: XCTestCase {
       closesOldConnectionsAfterSwitch: true,
       customDelayTestURLsByGroupName: ["Elite": "https://latency.example.com/generate_204"]
     )
+    sourceSettings.menuBarTrafficSpeedVisible = false
     sourceSettings.externalControllerSettings = ExternalControllerSettings(secret: "source-controller-secret")
     let backupURL = source.root.appendingPathComponent("settings.clashmax-backup")
 
@@ -943,6 +944,7 @@ final class BackupRestoreServiceTests: XCTestCase {
     XCTAssertEqual(restoreSettings.overrides.mixedPort, 17_777)
     XCTAssertEqual(restoreSettings.appTheme, .dark)
     XCTAssertEqual(restoreSettings.proxyPageSettings, sourceSettings.proxyPageSettings)
+    XCTAssertFalse(restoreSettings.menuBarTrafficSpeedVisible)
     XCTAssertNil(restoreSettings.appliedRuntimeSettingsSnapshot)
     XCTAssertNotEqual(restoreSettings.externalControllerSettings.secret, "source-controller-secret")
     XCTAssertFalse(try String(contentsOf: backupURL, encoding: .utf8).contains("source-controller-secret"))

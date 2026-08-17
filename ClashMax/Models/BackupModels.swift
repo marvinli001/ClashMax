@@ -276,6 +276,7 @@ struct BackupSettingsSnapshot: Codable, Equatable, Sendable {
   var delayTestSettings: DelayTestSettings
   var subscriptionFetchSettings: SubscriptionFetchSettings
   var menuBarPinnedGroupSettings: MenuBarPinnedGroupSettings
+  var menuBarTrafficSpeedVisible: Bool
   var proxyPageSettings: ProxyPageSettings
   var globalShortcutSettings: GlobalShortcutSettings
   var externalDashboardProfiles: [ExternalDashboardProfile]
@@ -304,6 +305,7 @@ struct BackupSettingsSnapshot: Codable, Equatable, Sendable {
     case delayTestSettings
     case subscriptionFetchSettings
     case menuBarPinnedGroupSettings
+    case menuBarTrafficSpeedVisible
     case proxyPageSettings
     case globalShortcutSettings
     case externalDashboardProfiles
@@ -323,6 +325,7 @@ struct BackupSettingsSnapshot: Codable, Equatable, Sendable {
     delayTestSettings: DelayTestSettings,
     subscriptionFetchSettings: SubscriptionFetchSettings,
     menuBarPinnedGroupSettings: MenuBarPinnedGroupSettings,
+    menuBarTrafficSpeedVisible: Bool = true,
     proxyPageSettings: ProxyPageSettings = .default,
     globalShortcutSettings: GlobalShortcutSettings,
     externalDashboardProfiles: [ExternalDashboardProfile],
@@ -340,6 +343,7 @@ struct BackupSettingsSnapshot: Codable, Equatable, Sendable {
     self.delayTestSettings = delayTestSettings
     self.subscriptionFetchSettings = subscriptionFetchSettings
     self.menuBarPinnedGroupSettings = menuBarPinnedGroupSettings
+    self.menuBarTrafficSpeedVisible = menuBarTrafficSpeedVisible
     self.proxyPageSettings = proxyPageSettings
     self.globalShortcutSettings = globalShortcutSettings
     self.externalDashboardProfiles = externalDashboardProfiles
@@ -370,6 +374,7 @@ struct BackupSettingsSnapshot: Codable, Equatable, Sendable {
         MenuBarPinnedGroupSettings.self,
         forKey: .menuBarPinnedGroupSettings
       ),
+      menuBarTrafficSpeedVisible: container.decodeIfPresent(Bool.self, forKey: .menuBarTrafficSpeedVisible) ?? true,
       proxyPageSettings: container.decodeIfPresent(ProxyPageSettings.self, forKey: .proxyPageSettings) ?? .default,
       globalShortcutSettings: container.decode(GlobalShortcutSettings.self, forKey: .globalShortcutSettings),
       externalDashboardProfiles: container.decode(

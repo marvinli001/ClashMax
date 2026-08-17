@@ -1,5 +1,6 @@
 import AppKit
 @testable import ClashMax
+import ServiceManagement
 import XCTest
 
 final class MenuBarRuntimePresentationTests: XCTestCase {
@@ -165,6 +166,42 @@ final class MenuBarTrafficStatusLabelTests: XCTestCase {
     XCTAssertLessThan(label.count, 32)
     XCTAssertFalse(label.contains("Download"))
     XCTAssertFalse(label.contains("Upload"))
+  }
+
+  func testHiddenWhenUserTurnedMenuBarSpeedOff() {
+    // Issue #29: the preference hides the status item rows even while the core is
+    // running with live samples, which is the only case where they would show.
+    let label = MenuBarTrafficStatusLabel.text(
+      speedVisible: false,
+      showsTraffic: true,
+      hasTrafficData: true,
+      sample: TrafficSample(upload: 348, download: 2048)
+    )
+
+    XCTAssertNil(label)
+  }
+
+  func testShownWhenUserKeepsMenuBarSpeedOn() {
+    let label = MenuBarTrafficStatusLabel.text(
+      speedVisible: true,
+      showsTraffic: true,
+      hasTrafficData: true,
+      sample: TrafficSample(upload: 348, download: 2048)
+    )
+
+    XCTAssertEqual(label, "↑348B/s\n↓2KB/s")
+  }
+
+  func testPreferenceAloneDoesNotShowSpeedsWhileStopped() {
+    // The preference is permission to draw the rows, never a reason to.
+    let label = MenuBarTrafficStatusLabel.text(
+      speedVisible: true,
+      showsTraffic: false,
+      hasTrafficData: true,
+      sample: TrafficSample(upload: 348, download: 2048)
+    )
+
+    XCTAssertNil(label)
   }
 
   func testHiddenWhenNotRunning() {
@@ -439,4 +476,90 @@ final class MenuBarNodeSelectionTests: XCTestCase {
   ) -> ProxyNode {
     ProxyNode(name: name, type: "vless", delay: nil, isSelectable: selectable, delayState: delayState)
   }
+}
+
+/// Issue #29: the status item speed rows are opt-out, so the store has to treat a
+/// never-written key as "on" while still honoring an explicit off.
+@MainActor
+final class MenuBarTrafficSpeedSettingTests: XCTestCase {
+  func testDefaultsToVisibleWhenTheUserNeverChose() {
+    let settings = makeSettings(defaults: makeDefaults())
+
+    XCTAssertTrue(settings.menuBarTrafficSpeedVisible)
+  }
+
+  func testTurningItOffSurvivesRelaunch() {
+    let defaults = makeDefaults()
+    let settings = makeSettings(defaults: defaults)
+
+    settings.menuBarTrafficSpeedVisible = false
+
+    // `bool(forKey:)` reads false for both "off" and "never written", so the
+    // reload has to come from a fresh store rather than the raw default.
+    XCTAssertFalse(makeSettings(defaults: defaults).menuBarTrafficSpeedVisible)
+  }
+
+  func testTurningItBackOnSurvivesRelaunch() {
+    let defaults = makeDefaults()
+    let settings = makeSettings(defaults: defaults)
+    settings.menuBarTrafficSpeedVisible = false
+
+    settings.menuBarTrafficSpeedVisible = true
+
+    XCTAssertTrue(makeSettings(defaults: defaults).menuBarTrafficSpeedVisible)
+  }
+
+  func testBackupSnapshotCarriesTheChoice() {
+    let settings = makeSettings(defaults: makeDefaults())
+    settings.menuBarTrafficSpeedVisible = false
+
+    let restored = makeSettings(defaults: makeDefaults())
+    restored.applyBackupSnapshot(settings.backupSnapshot())
+
+    XCTAssertFalse(restored.menuBarTrafficSpeedVisible)
+  }
+
+  func testBackupsWrittenBeforeTheSettingExistedRestoreAsVisible() throws {
+    let legacy = makeSettings(defaults: makeDefaults())
+    legacy.menuBarTrafficSpeedVisible = false
+    var payload = try XCTUnwrap(
+      try JSONSerialization.jsonObject(with: JSONEncoder().encode(legacy.backupSnapshot()))
+        as? [String: Any]
+    )
+    // Without this the removal could be a no-op and the assertion below would
+    // pass whether or not the decoder actually defaults the missing key.
+    XCTAssertNotNil(payload.removeValue(forKey: "menuBarTrafficSpeedVisible"))
+
+    let decoded = try JSONDecoder().decode(
+      BackupSettingsSnapshot.self,
+      from: JSONSerialization.data(withJSONObject: payload)
+    )
+
+    XCTAssertTrue(decoded.menuBarTrafficSpeedVisible)
+  }
+
+  private func makeDefaults() -> UserDefaults {
+    let suiteName = "io.github.clashmax.tests.menuBarTrafficSpeed.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    addTeardownBlock { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
+    return defaults
+  }
+
+  private func makeSettings(defaults: UserDefaults) -> PersistedSettingsStore {
+    PersistedSettingsStore(loginItemService: MenuBarTrafficSpeedLoginItemService(), defaults: defaults)
+  }
+}
+
+private final class MenuBarTrafficSpeedLoginItemService: LoginItemManaging {
+  var status: SMAppService.Status = .notRegistered
+
+  func register() throws {
+    status = .enabled
+  }
+
+  func unregister() async throws {
+    status = .notRegistered
+  }
+
+  func openSystemSettingsLoginItems() {}
 }

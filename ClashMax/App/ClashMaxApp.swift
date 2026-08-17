@@ -204,6 +204,7 @@ private struct MenuBarStatusLabel: View {
   var body: some View {
     let runtime = MenuBarRuntimePresentation(appModel: appModel)
     let trafficLines = MenuBarTrafficStatusLabel.lines(
+      speedVisible: appModel.menuBarTrafficSpeedVisible,
       showsTraffic: runtime.showsTraffic,
       hasTrafficData: !runtimeData.trafficHistory.isEmpty,
       sample: runtimeData.trafficSample
@@ -216,6 +217,11 @@ private struct MenuBarStatusLabel: View {
           logo: NSImage(named: "ClashMaxMenuBarLogo")
         ))
       } else {
+        // The icon-only branch tints by runtime state, so a user who turned the
+        // speeds off (issue #29) still reads start/stop off the menu bar — green
+        // while running, secondary while stopped — instead of losing the state
+        // along with the numbers. The composited branch above cannot do that: it
+        // is a template image, which macOS masks to a single color.
         Image("ClashMaxMenuBarLogo")
           .renderingMode(.template)
           .resizable()

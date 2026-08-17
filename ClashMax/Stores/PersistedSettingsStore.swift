@@ -69,6 +69,15 @@ final class PersistedSettingsStore {
     }
   }
 
+  /// Whether the status item shows the live upload/download rows next to the logo.
+  /// Defaults to on so existing installs keep the 1.0.22 behavior; turning it off
+  /// only changes what the status item draws, never traffic polling itself.
+  var menuBarTrafficSpeedVisible = true {
+    didSet {
+      defaults.set(menuBarTrafficSpeedVisible, forKey: Self.menuBarTrafficSpeedVisibleDefaultsKey)
+    }
+  }
+
   var proxyPageSettings = ProxyPageSettings.default {
     didSet {
       saveCodable(proxyPageSettings, forKey: Self.proxyPageSettingsDefaultsKey)
@@ -142,6 +151,7 @@ final class PersistedSettingsStore {
   private static let delayTestSettingsDefaultsKey = "io.github.clashmax.delayTestSettings"
   private static let subscriptionFetchSettingsDefaultsKey = "io.github.clashmax.subscriptionFetchSettings"
   private static let menuBarPinnedGroupSettingsDefaultsKey = "io.github.clashmax.menuBarPinnedGroupSettings"
+  private static let menuBarTrafficSpeedVisibleDefaultsKey = "io.github.clashmax.menuBarTrafficSpeedVisible"
   private static let proxyPageSettingsDefaultsKey = "io.github.clashmax.proxyPageSettings"
   private static let globalShortcutSettingsDefaultsKey = "io.github.clashmax.globalShortcutSettings"
   private static let externalDashboardProfilesDefaultsKey = "io.github.clashmax.externalDashboardProfiles"
@@ -212,6 +222,10 @@ final class PersistedSettingsStore {
       forKey: Self.menuBarPinnedGroupSettingsDefaultsKey,
       defaults: defaults
     ) ?? .default
+    // `defaults.bool(forKey:)` cannot express "on unless the user turned it off",
+    // so read the raw object: a missing key means the user never chose, and the
+    // status item keeps showing speeds.
+    menuBarTrafficSpeedVisible = defaults.object(forKey: Self.menuBarTrafficSpeedVisibleDefaultsKey) as? Bool ?? true
     proxyPageSettings = Self.loadCodable(
       ProxyPageSettings.self,
       forKey: Self.proxyPageSettingsDefaultsKey,
@@ -334,6 +348,7 @@ final class PersistedSettingsStore {
       delayTestSettings: delayTestSettings,
       subscriptionFetchSettings: subscriptionFetchSettings,
       menuBarPinnedGroupSettings: menuBarPinnedGroupSettings,
+      menuBarTrafficSpeedVisible: menuBarTrafficSpeedVisible,
       proxyPageSettings: proxyPageSettings,
       globalShortcutSettings: globalShortcutSettings,
       externalDashboardProfiles: externalDashboardProfiles,
@@ -353,6 +368,7 @@ final class PersistedSettingsStore {
     delayTestSettings = snapshot.delayTestSettings
     subscriptionFetchSettings = snapshot.subscriptionFetchSettings
     menuBarPinnedGroupSettings = snapshot.menuBarPinnedGroupSettings
+    menuBarTrafficSpeedVisible = snapshot.menuBarTrafficSpeedVisible
     proxyPageSettings = snapshot.proxyPageSettings
     globalShortcutSettings = snapshot.globalShortcutSettings
     externalDashboardProfiles = snapshot.externalDashboardProfiles

@@ -97,6 +97,10 @@ restricted desktop capture environments, so do this manually before release:
 - Verify long profile names truncate to one line without resizing the panel.
 - Verify the System Proxy toggle is disabled unless Proxy Routing is System
   Proxy, and that the disabled state explains the routing requirement.
+- Verify Settings > General > Menu Bar Traffic Speed (issue #29) hides the
+  status item's speed rows while the core is still running, leaves the panel's
+  traffic section intact, and survives a relaunch. The icon-only status item
+  keeps its runtime tint, so it stays green while running.
 
 ## Reference Image Pass
 

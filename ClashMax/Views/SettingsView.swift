@@ -61,6 +61,15 @@ struct SettingsView: View {
               set: { appModel.setDeveloperMode($0) }
             )
           )
+          SettingsToggleRow(
+            "Menu Bar Traffic Speed",
+            description: "Show live upload and download speeds next to the menu bar icon.",
+            isOn: Binding(
+              get: { appModel.menuBarTrafficSpeedVisible },
+              set: { appModel.setMenuBarTrafficSpeedVisible($0) }
+            )
+          )
+          .help("Turning this off leaves only the ClashMax icon in the menu bar. Traffic monitoring and the menu bar panel's traffic chart are unaffected.")
           SettingsControlRow("Appearance", description: "Choose the app color scheme.") {
             Picker("Appearance", selection: $settings.appTheme) {
               ForEach(AppTheme.allCases) { theme in

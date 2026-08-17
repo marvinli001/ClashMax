@@ -625,6 +625,11 @@ final class AppModel {
     set { settings.menuBarPinnedGroupSettings = newValue }
   }
 
+  var menuBarTrafficSpeedVisible: Bool {
+    get { settings.menuBarTrafficSpeedVisible }
+    set { settings.menuBarTrafficSpeedVisible = newValue }
+  }
+
   var globalShortcutSettings: GlobalShortcutSettings {
     get { settings.globalShortcutSettings }
     set { settings.globalShortcutSettings = newValue }
@@ -5189,6 +5194,10 @@ final class AppModel {
 
   func setSilentStart(_ enabled: Bool) {
     settings.setSilentStart(enabled)
+  }
+
+  func setMenuBarTrafficSpeedVisible(_ visible: Bool) {
+    settings.menuBarTrafficSpeedVisible = visible
   }
 
   func openLoginItemsSettings() {
