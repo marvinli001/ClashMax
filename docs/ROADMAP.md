@@ -3,7 +3,7 @@
 **English** | [简体中文](ROADMAP.zh-CN.md)
 
 **Status:** draft 2026-08-14 · maintainer [@marvinli001](https://github.com/marvinli001) ·
-app 1.0.22, bundled Mihomo [v1.19.29](../Resources/Core/mihomo-manifest.json)
+app 1.0.23, bundled Mihomo [v1.19.30](../Resources/Core/mihomo-manifest.json)
 
 This document records **where ClashMax is going and why**, in a form that can be checked
 against the tree. It is not a wish list. Every gap named below was verified by reading the

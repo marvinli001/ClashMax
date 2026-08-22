@@ -10,7 +10,7 @@
     <a href="https://github.com/marvinli001/ClashMax/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/marvinli001/ClashMax/actions/workflows/ci.yml/badge.svg?branch=master"></a>
     <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%2015%2B-111111?logo=apple&logoColor=white">
     <img alt="Swift" src="https://img.shields.io/badge/Swift-6.0-F05138?logo=swift&logoColor=white">
-    <img alt="Mihomo" src="https://img.shields.io/badge/core-Mihomo%20v1.19.29-2f6fed">
+    <img alt="Mihomo" src="https://img.shields.io/badge/core-Mihomo%20v1.19.30-2f6fed">
     <img alt="License" src="https://img.shields.io/badge/license-GPL--3.0-2563eb">
   </p>
 </div>

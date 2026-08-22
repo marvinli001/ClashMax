@@ -5,7 +5,7 @@
 > 本文是 [`ROADMAP.md`](ROADMAP.md) 的中文版本，内容与英文版逐节对应。两者出现不一致时，以英文版为准。
 
 **状态：** 草案 2026-08-14 · 维护者 [@marvinli001](https://github.com/marvinli001) ·
-应用 1.0.22，内置 Mihomo [v1.19.29](../Resources/Core/mihomo-manifest.json)
+应用 1.0.23，内置 Mihomo [v1.19.30](../Resources/Core/mihomo-manifest.json)
 
 本文记录 **ClashMax 要往哪里走、以及为什么**，并且写成可以对着代码树逐条核对的形式。它不是许愿单。
 下面点名的每一处缺口，都是在 2026-08-14 通过实际阅读仓库验证过的；每一个提出的 issue 都带有可以用一条命令
