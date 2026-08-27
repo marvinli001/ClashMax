@@ -4,12 +4,16 @@
 
 > 本文是 [`ROADMAP.md`](ROADMAP.md) 的中文版本，内容与英文版逐节对应。两者出现不一致时，以英文版为准。
 
-**状态：** 草案 2026-08-14 · 维护者 [@marvinli001](https://github.com/marvinli001) ·
+**状态：** 草案 2026-08-14，2026-08-27 修订 · 维护者 [@marvinli001](https://github.com/marvinli001) ·
 应用 1.0.23，内置 Mihomo [v1.19.30](../Resources/Core/mihomo-manifest.json)
 
 本文记录 **ClashMax 要往哪里走、以及为什么**，并且写成可以对着代码树逐条核对的形式。它不是许愿单。
 下面点名的每一处缺口，都是在 2026-08-14 通过实际阅读仓库验证过的；每一个提出的 issue 都带有可以用一条命令
 或一张截图演示的验收标准。
+
+2026-08-27 的这次修订关掉了 **A3、A6、B5**——这三处覆盖缺口要么用户已经在踩，要么什么都不做也会持续劣化。
+这些小节里引用的每一条端点契约，都是拿内置内核实测出来的，而不是照抄上游文档；凡是实测结果和"想当然"的结论
+相左的地方，都写在了它约束的那条验收标准旁边。
 
 Bug 修复、已提交的 issue、Mihomo 版本升级属于日常维护，**刻意**不写进本文。本文讨论的是 ClashMax 存在的
 *意义*。
@@ -123,10 +127,11 @@ ClashMax 已经在用的 Mihomo 控制 API 端点，来自
 | --- | --- | --- |
 | **`sniffer`** | **全仓 0 命中。** 更糟的是：连接解码器会用目标 IP 回填缺失的域名（[`MihomoAPIClient.swift:448`](../ClashMax/Services/MihomoAPIClient.swift#L448)），导致下游没有任何一处能区分"无域名连接"和"有域名连接" | 直连 IP 打开的连接（硬编码 IP 的 app、部分 CDN、QUIC）不携带域名，因此 `DOMAIN-SUFFIX` 规则无法命中它们。用户的感受是*"我写的规则不生效"*——而我们的诊断说不出原因，因为这个事实在诊断之前就已经被销毁了。参见 [A1](#a1sniffer把内核从未看到的域名找回来) |
 | **`/dns/query`** | 未实现 | 无法回答"这个域名到底被哪个 nameserver 解析成了什么"。在我们本来能端到端讲完的路由故事中间留了一个洞。 |
-| **`/cache/fakeip/flush`** | 未实现 | fake-ip 映射脏了只能靠重启内核清除。 |
-| **`/group/{name}/delay`** | 未实现 | 批量测速是逐节点打的，而内核有整组接口。 |
-| **`geox-url`、`geo-auto-update`、`geodata-mode`** | 仅出现在 ClashX 迁移 key 白名单中（[`ClashXMigrationParser.swift:748`](../ClashMax/Services/ClashXMigrationParser.swift#L748)）——认得，但不支持 | GeoIP/GeoSite 数据库无法更新，geo 类规则会悄悄过期。 |
-| **`/configs/geo`、`/memory`** | 未实现 | 没有应用内 geo 数据库刷新；没有内核内存遥测。 |
+| **`/cache/fakeip/flush`** | **2026-08-27 已补齐**——`flushFakeIPCache()`，通过 `FakeIPDiagnosticsBuilder` 以 L1 修复动作的形式呈现。参见 [A3](#a3把清空-fake-ip-缓存做成-l1-修复动作) | *（原：fake-ip 映射脏了只能靠重启内核清除）* |
+| **`/group/{name}/delay`** | **2026-08-27 已补齐**——成员数超过 8 的组会合并成一次整组请求，不再逐节点扇出。参见 [A6](#a6通过-groupnamedelay-做批量测速) | *（原：批量测速是逐节点打的，而内核有整组接口）* |
+| **`geox-url`、`geo-auto-update`、`geodata-mode`** | **2026-08-27 已补齐**——`GeoDatabaseSettings` 由应用管理，并由 `ConfigNormalizer` 写进运行时 YAML。但**仍未**从 ClashX 导入：迁移解析器依旧只是把这三个 key 放行，并不读取它们。参见 [B5](#b5geo-数据库维护) | *（原：GeoIP/GeoSite 数据库无法更新，geo 类规则会悄悄过期——2026-08-27 在维护者本机实测：`GeoSite.dat` 最后写入于 6 月 20 日，`geoip.metadb` 于 5 月 4 日）* |
+| **`/configs/geo`** | **2026-08-27 已补齐**——`updateGeoDatabases(timeout:)`，对应「立即更新」动作 | *（原：没有应用内 geo 数据库刷新）* |
+| **`/memory`** | 未实现 | 没有内核内存遥测。 |
 | **`tcp-concurrent`、`global-client-fingerprint`、`find-process-mode`、`keep-alive-interval`、`ntp`、`experimental`、`global-ua`、`interface-name`** | 全仓 0 命中 | 高级用户会撞到硬天花板。**按 INV-2，解法是通用覆盖路径，而不是八个新开关。** |
 | **`listeners`** | 只被当作订阅风险 key 剥离 | 入站监听（给局域网其他设备用）不可用。这需要一个明确的决定，而不是一个默认值。 |
 
@@ -308,11 +313,26 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
 
 #### A3——把清空 fake-ip 缓存做成 L1 修复动作
 
+**状态：2026-08-27 已交付。** 尚未人工跑过——见下方缺口。
+
 - **问题：** 目前 fake-ip 映射脏了只能重启内核。
+- **这个端点实际的行为**，拿内置内核 v1.19.30 实测：`POST /cache/fakeip/flush` 一律返回 `204` 空响应体，
+  **无论内核是不是处于 fake-ip 模式**；`GET` 返回 `405`。也就是说，响应本身无法说明这次操作有没有意义——
+  这个判断必须在发请求*之前*做出。实现里正是这么做的，而且判断依据不是 `GET /configs`，因为后者**根本
+  没有 `dns` 这个 key**；[`ActiveDNSConfigReader`](../ClashMax/Services/ActiveDNSConfigReader.swift)
+  改为从真正交给内核的那份运行时 YAML 里回读 `dns:` 块，与 A1a 中读 `sniffer` 的做法一致。
 - **验收标准：**
-  - [ ] `MihomoAPIClient` 增加 `flushFakeIPCache()`。
-  - [ ] 作为相关诊断上的修复动作出现，而不是一个光秃秃的按钮。
-  - [ ] 当 `enhanced-mode` 不是 `fake-ip` 时禁用，并说明原因。
+  - [x] `MihomoAPIClient` 增加 `flushFakeIPCache()`。
+  - [x] 作为相关诊断上的修复动作出现，而不是一个光秃秃的按钮。
+        [`FakeIPDiagnosticsBuilder`](../ClashMax/Models/FakeIPDiagnostics.swift) 只有在表最后一次
+        「已知干净」之后确实发生了*使其失效的事件*时才会报 `warn`——配置文件被更新，或网络发生了变化。
+        否则就是 `pass`，面板会如实这么说，而不是诱导用户做一次无意义的清空。
+  - [x] 当 `enhanced-mode` 不是 `fake-ip` 时禁用，并说明原因。凡是内核根本不持有 fake-ip 表的情形
+        （内核未运行、配置尚未回读、DNS 未启用、不在 fake-ip 模式），`canFlush` 均为 false，控件会
+        **保持可见但禁用，并把 `reason` 显示出来**，而不是隐藏——一个不存在的控件没法解释自己为什么不在。
+- **基线：** 「已知干净」的时刻取「内核以空表启动」和「我们自己清空过」两者中较晚的一个。这个前提在这里成立，
+  是因为 ClashMax 从不写 `profile.store-fake-ip`，而它默认为 `false`，所以内核启动时这张表确实是空的。
+- **缺口：** 从未针对真实的门户认证网络或真实的订阅更新人工验证过。
 
 #### A4——连接路径回放
 
@@ -337,10 +357,21 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
 
 #### A6——通过 `/group/{name}/delay` 做批量测速
 
+**状态：2026-08-27 已交付，唯独实测数据还欠着。**
+
+- **这个端点实际的行为**，拿内置内核 v1.19.30 实测：`GET /group/{name}/delay?url=&timeout=` 成功时返回
+  一个扁平的 `[String: Int]`；组名不存在返回 `404`；而最关键的一点是——**探测失败的节点会被从响应里静默
+  省略，而不是被报成错误**。「缺席」就是失败信号，所以把结果映射回逐节点状态这件事必须显式处理，不能写成
+  一次查不到就耸耸肩的字典取值。
 - **验收标准：**
-  - [ ] 整组测速走组端点；单节点测速仍走逐节点接口。
-  - [ ] issue #18 确立的批次状态语义（running / completed / partial / failed / cancelled）被原样保留。
-  - [ ] 在 1000+ 节点的组上实测，并把结果记入 `MANUAL_TEST_PLAN.md`。
+  - [x] 整组测速走组端点；单节点测速仍走逐节点接口。
+        `AppModel.proxyDelayBatchUnits(items:settings:)` 只在组名非空、成员数不少于 8（一波并发 6 个再加
+        两个余量）、且所有成员共用同一个测速 URL 时，才把一个组提升为一次整组请求；`.nativePing` 永不提升，
+        因为那种模式压根不经过内核。
+  - [x] issue #18 确立的批次状态语义（running / completed / partial / failed / cancelled）被原样保留——
+        被内核省略的成员会被记为 `.failure(.timeout, …)`，即计入「测过且失败」，而不是「没有数据」。
+  - [ ] **在 1000+ 节点的组上实测，并把结果记入 `MANUAL_TEST_PLAN.md`。** 仍未完成。单元提升逻辑有测试覆盖，
+        但这条标准存在的意义就是产出那个数字，而那个数字目前还不存在。
 
 ---
 
@@ -390,12 +421,36 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
 
 #### B5——Geo 数据库维护
 
+**状态：2026-08-27 已交付。** 从未用眼睛看过——见下方缺口。
+
 - **问题：** `geox-url` / `geo-auto-update` / `geodata-mode` 被认得但不被支持，因此 geo 规则会漂移。
+  这是 3.2 列表上唯一一项**什么都不做也会持续变坏**的缺口，而且它早就在发生：2026-08-27 在维护者本机，
+  `~/Library/Application Support/ClashMax/Runtime/` 里的 `GeoSite.dat` 最后写入于 **6 月 20 日**，
+  `geoip.metadb` 于 **5 月 4 日**——分别漂了约两个月和四个月，而应用里没有任何一处界面说过这件事。
+- **实现过程中踩到的两个坑**，均已拿内置内核 v1.19.30 实测确认：
+  - 配置**文件**里 `geox-url` 的子 key 必须写成 `geoip` / `geosite` / `mmdb` / `asn`。
+    `GET /configs` 回显时会写成 `geo-ip` / `geo-site`，而把*那种*拼法写进文件会被**静默忽略**——
+    内核继续用它内置的 URL，且不会报任何问题。
+  - `geodata-mode` 决定磁盘上到底存在哪个 GeoIP 文件：关闭时是 `mmdb` 源的 `geoip.metadb`，
+    开启时是 `geoip` 源的 `GeoIP.dat`。判断是否过期，必须针对当前模式实际使用的那个文件。
 - **验收标准：**
-  - [ ] 这三个 key 由应用管理并生成进运行时 YAML。
-  - [ ] 通过 `/configs/geo` 手动刷新，且最近一次更新时间可见。
-  - [ ] 下载失败或不完整时，绝不会留下一个损坏的数据库。
-  - [ ] 默认 URL 有文档说明，并可在 L3 覆盖。
+  - [x] 这三个 key 由应用管理并生成进运行时 YAML——`GeoDatabaseSettings` 定义在
+        [`CoreModels.swift`](../ClashMax/Models/CoreModels.swift)，由
+        [`ConfigNormalizer`](../ClashMax/Services/ConfigNormalizer.swift) 写出。
+  - [x] 通过 `/configs/geo` 手动刷新，且最近一次更新时间可见。面板报告的是**运行中的规则真正引用到的那些
+        数据库里最旧的那一份**的年龄，而不是一个记下来的「上次点击时间」，因此重启应用后它依然诚实。
+  - [x] 下载失败或不完整时，绝不会留下一个损坏的数据库。这一条是内核保证的，不是我们保证的，而且是实测过、
+        不是假设的：刷新失败时返回 **`500` 并带一个 `{"message": …}` 响应体**，现有文件保持逐字节不变。
+        那条 message 会被原样呈现——`ClientError.coreMessage` 存在的意义正是不要把内核自己的解释压成
+        一句「HTTP 500」。
+  - [x] 默认 URL 有文档说明，并可在 L3 覆盖（四个 MetaCubeX 地址，逐个可替换，保存前会校验协议和非空）。
+- **防「静默空转」的那道关：** `/configs/geo` 在「下载了四个文件」和「什么都没做」两种情况下都返回 `204`，
+  所以绝不能把状态码本身当成成功来汇报。实现会在调用前后各 stat 一次工作目录，并根据磁盘上实际发生的变化
+  来描述结果：已重写、本来就是最新的（内核会发 `If-None-Match`，远端没变就是 304，不落盘），
+  或者*刷新完什么都没动、但被引用的数据库仍然缺失*——后者才是真正的空转，并且会被如实报成空转。
+- **未完成：** ClashX 迁移目前仍然只是把这三个 key 放行。从 ClashX 迁移过来的用户，纸面上保留了 geo 设置，
+  实际拿到的却是 ClashMax 的默认值。
+- **缺口：** 从未用眼睛看过。整个功能都是在对「磁盘上是什么」下断言，而还没有人在运行中的应用里看它下过这个断言。
 
 ---
 
@@ -480,10 +535,10 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
 | **首先** | **A1a** | 一个不带 UI 的解码器修复，也是硬前置：在连接解码器停止把"没有域名"坍缩成"目标 IP"之前，A1c 的诊断根本算不出来。可以单独发布，一天的量。 |
 | **然后** | **A1b + A1c + A1d** | 本文中优先级最高的一项，也是能验证整套论点的最小闭环：一个真实的内核缺口、一个真实的诊断缺口、一个修复按钮、不需要新的 UI 范式。如果三层模型是错的，这里能以最低代价暴露出来。 |
 | **然后** | A2 | 路由故事的另一半。放在 A1 之后做，这样 DNS 面板里显示的域名和规则实际匹配所用的域名，是已知同一个值。 |
-| **然后** | A3、A5、C1 | 低风险、高杠杆。A5 与 C1 都直接降低维护者负担；C1 吸收 A1d。 |
+| **然后** | ~~A3~~、A5、C1 | 低风险、高杠杆。A5 与 C1 都直接降低维护者负担；C1 吸收 A1d。**A3 已于 2026-08-27 随 B5 一并交付。** |
 | **然后** | B1、A4 | B1 是最重磅的面向用户功能；A4 是让护城河变得显而易见的那个界面。B1 放在 A1 之后，免得进程规则成为第二个在无域名连接上失效的东西。 |
 | **然后** | B2、C2 | 两者都是有状态的，需要先让前面的工作变得可信。 |
-| **之后** | B3、B4、B5、A6、C3 | 有价值，但不承重。 |
+| **之后** | B3、B4、~~B5~~、~~A6~~、C3 | 有价值，但不承重。**B5 与 A6 已被提前，于 2026-08-27 交付。** B5 是因为它是本列表上唯一一项什么都不做也会持续劣化的东西——而且在维护者自己的机器上已经劣化了四个月，这是「不承重」这个判断没能预见到的。A6 是因为 #10 / #11 / #18 这一串卡顿问题，源头都在它去掉的那套逐节点扇出上。 |
 | **贯穿始终** | D1、D2、D3 | 永远不作为独立里程碑。 |
 
 ---

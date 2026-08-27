@@ -3000,6 +3000,200 @@ enum RuntimeSettingsApplyState: Equatable {
   case appliedWithFollowUpFailure(String)
 }
 
+/// The geo database keys ClashMax generates into the runtime YAML (roadmap B5).
+///
+/// Mihomo downloads `GeoSite.dat` and the GeoIP database into its working directory the first time
+/// a `GEOSITE`/`GEOIP`/ASN rule needs them, and then never touches them again unless
+/// `geo-auto-update` is on. ClashMax previously wrote none of these keys, so `GEOIP,CN` and
+/// `GEOSITE` rules matched against whatever snapshot happened to land on first launch and drifted
+/// silently from then on. The keys were recognized by the ClashX migration parser and dropped.
+///
+/// Defaults are the core's own (read back from `GET /configs` on the bundled core, v1.19.30), so
+/// generating them changes nothing until the user changes a value.
+struct GeoDatabaseSettings: Codable, Equatable, Sendable {
+  static let defaultUpdateIntervalHours = 24
+  static let minimumUpdateIntervalHours = 1
+  static let maximumUpdateIntervalHours = 24 * 30
+
+  /// Mihomo's own defaults, from the MetaCubeX `meta-rules-dat` release assets.
+  static let defaultGeoIPURL = "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat"
+  static let defaultGeoSiteURL = "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"
+  static let defaultMMDBURL = "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.metadb"
+  static let defaultASNURL = "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/GeoLite2-ASN.mmdb"
+
+  /// The file the core itself stats to decide how old the databases are, so ClashMax reports the
+  /// same age the core acts on rather than a second opinion. Proven by the core's own startup line
+  /// `[GEO] Get GEO database update time error: stat …/GeoSite.dat`.
+  static let ageReferenceFileName = "GeoSite.dat"
+
+  /// Written as `geo-auto-update`. The core then re-downloads on its own schedule; the manual
+  /// `POST /configs/geo` refresh works either way.
+  var autoUpdateEnabled: Bool
+  /// Written as `geo-update-interval`, in hours.
+  var updateIntervalHours: Int
+  /// Written as `geodata-mode`. `false` (the core's default) uses the MMDB GeoIP database
+  /// (`geoip.metadb`, fetched from `mmdb`); `true` uses the dat-format one (`GeoIP.dat`, fetched
+  /// from `geoip`). The two are different files with different URLs, which is why the setting
+  /// changes which URL matters.
+  var geodataMode: Bool
+  var geoIPURL: String
+  var geoSiteURL: String
+  var mmdbURL: String
+  var asnURL: String
+
+  private enum CodingKeys: String, CodingKey {
+    case autoUpdateEnabled
+    case updateIntervalHours
+    case geodataMode
+    case geoIPURL
+    case geoSiteURL
+    case mmdbURL
+    case asnURL
+  }
+
+  init(
+    autoUpdateEnabled: Bool = false,
+    updateIntervalHours: Int = GeoDatabaseSettings.defaultUpdateIntervalHours,
+    geodataMode: Bool = false,
+    geoIPURL: String = GeoDatabaseSettings.defaultGeoIPURL,
+    geoSiteURL: String = GeoDatabaseSettings.defaultGeoSiteURL,
+    mmdbURL: String = GeoDatabaseSettings.defaultMMDBURL,
+    asnURL: String = GeoDatabaseSettings.defaultASNURL
+  ) {
+    self.autoUpdateEnabled = autoUpdateEnabled
+    self.updateIntervalHours = updateIntervalHours
+    self.geodataMode = geodataMode
+    self.geoIPURL = geoIPURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    self.geoSiteURL = geoSiteURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    self.mmdbURL = mmdbURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    self.asnURL = asnURL.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  static let `default` = GeoDatabaseSettings()
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    let defaults = Self.default
+    self.init(
+      autoUpdateEnabled: container.decodeDefault(
+        Bool.self,
+        forKey: .autoUpdateEnabled,
+        default: defaults.autoUpdateEnabled
+      ),
+      updateIntervalHours: container.decodeDefault(
+        Int.self,
+        forKey: .updateIntervalHours,
+        default: defaults.updateIntervalHours
+      ),
+      geodataMode: container.decodeDefault(Bool.self, forKey: .geodataMode, default: defaults.geodataMode),
+      geoIPURL: container.decodeDefault(String.self, forKey: .geoIPURL, default: defaults.geoIPURL),
+      geoSiteURL: container.decodeDefault(String.self, forKey: .geoSiteURL, default: defaults.geoSiteURL),
+      mmdbURL: container.decodeDefault(String.self, forKey: .mmdbURL, default: defaults.mmdbURL),
+      asnURL: container.decodeDefault(String.self, forKey: .asnURL, default: defaults.asnURL)
+    )
+  }
+
+  var normalizedUpdateIntervalHours: Int {
+    min(max(updateIntervalHours, Self.minimumUpdateIntervalHours), Self.maximumUpdateIntervalHours)
+  }
+
+  /// The URL the core actually fetches the GeoIP database from, given `geodata-mode`. Which of the
+  /// two is live is not obvious from the settings alone, so every surface that reports "where does
+  /// GeoIP come from" reads this rather than picking a field.
+  var effectiveGeoIPURL: String {
+    geodataMode ? geoIPURL : mmdbURL
+  }
+
+  /// The GeoIP database file name the core writes into its working directory for the current mode.
+  var effectiveGeoIPFileName: String {
+    geodataMode ? "GeoIP.dat" : "geoip.metadb"
+  }
+
+  var isDefault: Bool {
+    self == Self.default
+  }
+
+  var usesDefaultURLs: Bool {
+    geoIPURL == Self.defaultGeoIPURL
+      && geoSiteURL == Self.defaultGeoSiteURL
+      && mmdbURL == Self.defaultMMDBURL
+      && asnURL == Self.defaultASNURL
+  }
+
+  /// One line for the settings row: what will happen, and whether the sources are still the core's.
+  var summary: String {
+    var parts = [
+      autoUpdateEnabled
+        ? String(
+          format: String(localized: "Auto-update every %lld h"),
+          Int64(normalizedUpdateIntervalHours)
+        )
+        : String(localized: "Manual updates only"),
+      geodataMode
+        ? String(localized: "GeoIP: dat")
+        : String(localized: "GeoIP: mmdb"),
+    ]
+    if !usesDefaultURLs {
+      parts.append(String(localized: "custom sources"))
+    }
+    return parts.joined(separator: " · ")
+  }
+
+  /// `nil` when the settings would generate a config Mihomo accepts. Each URL is checked
+  /// individually because a single bad one silently breaks only the database it feeds.
+  var validationError: String? {
+    if updateIntervalHours < Self.minimumUpdateIntervalHours
+      || updateIntervalHours > Self.maximumUpdateIntervalHours
+    {
+      return String(
+        format: String(localized: "Geo update interval must be between %lld and %lld hours."),
+        Int64(Self.minimumUpdateIntervalHours),
+        Int64(Self.maximumUpdateIntervalHours)
+      )
+    }
+    let named: [(String, String)] = [
+      (String(localized: "GeoIP (dat)"), geoIPURL),
+      (String(localized: "GeoSite"), geoSiteURL),
+      (String(localized: "GeoIP (mmdb)"), mmdbURL),
+      (String(localized: "ASN"), asnURL),
+    ]
+    for (label, url) in named {
+      guard let error = Self.urlValidationError(for: url, label: label) else { continue }
+      return error
+    }
+    return nil
+  }
+
+  private static func urlValidationError(for value: String, label: String) -> String? {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+      return String(format: String(localized: "The %@ database URL cannot be empty."), label)
+    }
+    guard let url = URL(string: trimmed),
+          let scheme = url.scheme?.lowercased(),
+          scheme == "http" || scheme == "https",
+          let host = url.host,
+          !host.isEmpty
+    else {
+      return String(format: String(localized: "The %@ database URL must be an http or https URL."), label)
+    }
+    return nil
+  }
+
+  /// The `geox-url` mapping as Mihomo reads it from a config **file**. The keys differ from the ones
+  /// `GET /configs` reports back (`geo-ip`, `geo-site`), which is a trap worth naming: writing the
+  /// hyphenated forms produces a config the core silently ignores. Verified against v1.19.30 by
+  /// writing these keys and reading the values back out of `/configs`.
+  var geoxURLMapping: [String: String] {
+    [
+      "geoip": geoIPURL,
+      "geosite": geoSiteURL,
+      "mmdb": mmdbURL,
+      "asn": asnURL,
+    ]
+  }
+}
+
 struct RuntimeOverrides: Codable, Equatable, Sendable {
   var mixedPort: Int
   var externalControllerHost: String {
@@ -3020,6 +3214,7 @@ struct RuntimeOverrides: Codable, Equatable, Sendable {
   var ruleOverlay: RuleOverlaySettings
   var tunEnabled: Bool
   var tunSettings: TunSettings
+  var geoDatabase: GeoDatabaseSettings
 
   private enum CodingKeys: String, CodingKey {
     case mixedPort
@@ -3036,6 +3231,7 @@ struct RuntimeOverrides: Codable, Equatable, Sendable {
     case ruleOverlay
     case tunEnabled
     case tunSettings
+    case geoDatabase
   }
 
   init(
@@ -3052,7 +3248,8 @@ struct RuntimeOverrides: Codable, Equatable, Sendable {
     tunEnabled: Bool,
     unifiedDelay: Bool = false,
     externalControllerCORS: ExternalControllerCORSSettings = .default,
-    tunSettings: TunSettings = .default
+    tunSettings: TunSettings = .default,
+    geoDatabase: GeoDatabaseSettings = .default
   ) {
     self.mixedPort = mixedPort
     self.externalControllerHost = Self.normalizedExternalControllerHost(externalControllerHost)
@@ -3068,6 +3265,7 @@ struct RuntimeOverrides: Codable, Equatable, Sendable {
     self.ruleOverlay = ruleOverlay
     self.tunEnabled = tunEnabled
     self.tunSettings = tunSettings
+    self.geoDatabase = geoDatabase
   }
 
   static func defaultForLaunch(secret: String = UUID().uuidString.replacingOccurrences(of: "-", with: "")) -> RuntimeOverrides {
@@ -3085,7 +3283,8 @@ struct RuntimeOverrides: Codable, Equatable, Sendable {
       tunEnabled: false,
       unifiedDelay: false,
       externalControllerCORS: .default,
-      tunSettings: .default
+      tunSettings: .default,
+      geoDatabase: .default
     )
   }
 
@@ -3124,6 +3323,11 @@ struct RuntimeOverrides: Codable, Equatable, Sendable {
     )
     tunEnabled = container.decodeDefault(Bool.self, forKey: .tunEnabled, default: defaults.tunEnabled)
     tunSettings = container.decodeDefault(TunSettings.self, forKey: .tunSettings, default: defaults.tunSettings)
+    geoDatabase = container.decodeDefault(
+      GeoDatabaseSettings.self,
+      forKey: .geoDatabase,
+      default: defaults.geoDatabase
+    )
   }
 
   var endpoint: CoreAPIEndpoint {

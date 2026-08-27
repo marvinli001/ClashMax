@@ -472,6 +472,8 @@ struct RoutingView: View {
       snippetStatus
       effectiveConfigPreview
       dnsOverrideStatus
+      fakeIPStatus
+      geoDatabaseStatus
       runtimeDiffPreview
       connectionExplanation
       matchSimulator
@@ -521,6 +523,108 @@ struct RoutingView: View {
         .font(.caption)
         .foregroundStyle(.tertiary)
         .fixedSize(horizontal: false, vertical: true)
+    }
+  }
+
+  /// Roadmap A3. In fake-ip mode the address → domain table is what lets a domain rule fire on a
+  /// connection that only ever carried an IP, and it survives events that invalidate it — joining
+  /// another network, or a subscription update replacing the node list. The only remedy ClashMax
+  /// offered before this was restarting the core.
+  private var fakeIPStatus: some View {
+    let diagnosis = appModel.fakeIPDiagnostics
+    return RoutingInspectorPanel(title: "Fake IP", systemImage: "arrow.triangle.2.circlepath") {
+      RoutingDiagnosisHeadline(headline: diagnosis.headline, status: diagnosis.status)
+      Text(diagnosis.reason)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+
+      ForEach(Array(diagnosis.facts.enumerated()), id: \.offset) { _, fact in
+        RoutingDiagnosisFactRow(title: fact.title, value: fact.value)
+      }
+
+      HStack(spacing: 8) {
+        Button {
+          appModel.flushFakeIPCache()
+        } label: {
+          if appModel.fakeIPFlushInFlight {
+            ProgressView()
+              .controlSize(.small)
+          } else {
+            Text("Flush Fake IP Cache")
+          }
+        }
+        .controlSize(.small)
+        .disabled(!appModel.canFlushFakeIPCache)
+        // The action stays visible when it would do nothing, with the diagnosis as the tooltip: a
+        // control that is not there cannot explain why it is not there.
+        .help(diagnosis.reason)
+
+        if let lastFlushAt = appModel.lastFakeIPFlushAt {
+          Text(lastFlushAt, format: .relative(presentation: .named))
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+        }
+      }
+    }
+  }
+
+  /// Roadmap B5. Mihomo downloads the geo databases once, on the first rule that needs them, and
+  /// then never touches them again unless `geo-auto-update` is on — so `GEOIP,CN` and `GEOSITE`
+  /// rules quietly match against whatever snapshot happened to land on first launch.
+  private var geoDatabaseStatus: some View {
+    let diagnosis = appModel.geoDatabaseDiagnostics
+    return RoutingInspectorPanel(title: "Geo Databases", systemImage: "globe.badge.chevron.backward") {
+      RoutingDiagnosisHeadline(headline: diagnosis.headline, status: diagnosis.status)
+      Text(diagnosis.reason)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+
+      ForEach(Array(diagnosis.facts.enumerated()), id: \.offset) { _, fact in
+        RoutingDiagnosisFactRow(title: fact.title, value: fact.value)
+      }
+
+      HStack(spacing: 8) {
+        Button {
+          appModel.updateGeoDatabases()
+        } label: {
+          if appModel.geoDatabaseUpdateInFlight {
+            ProgressView()
+              .controlSize(.small)
+          } else {
+            Text("Update Now")
+          }
+        }
+        .controlSize(.small)
+        .disabled(!appModel.canUpdateGeoDatabases)
+        .help(diagnosis.reason)
+
+        if appModel.geoDatabaseUpdateInFlight {
+          Text("Downloading through the core; this can take a while.")
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+        }
+      }
+
+      // Reported from what changed on disk, not from the endpoint's status code: `POST /configs/geo`
+      // answers 204 for "downloaded four files" and for "did nothing at all".
+      if let message = appModel.geoDatabaseUpdateStatusMessage {
+        Text(message)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+
+      ForEach(diagnosis.recoveryActions, id: \.self) { action in
+        Label(action, systemImage: "arrow.right.circle")
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .task(id: appModel.geoDatabaseSettings) {
+      appModel.refreshGeoDatabaseInventory()
     }
   }
 
@@ -1889,6 +1993,95 @@ private struct RoutingInspectorPanel<Content: View>: View {
     .frame(maxWidth: .infinity, alignment: .topLeading)
     .background(.insetSurface, in: shape)
     .overlay(shape.strokeBorder(.separator.opacity(0.82), lineWidth: 1))
+  }
+}
+
+private struct RoutingDiagnosisHeadline: View {
+  let headline: String
+  let status: DiagnosisStatus
+
+  /// The three diagnostics builders (`SnifferDiagnosticsSnapshot`, `FakeIPDiagnosticsSnapshot`,
+  /// `GeoDatabaseDiagnosticsSnapshot`) each carry their own `Status` enum so no model depends on
+  /// another; this is the one place the three collapse onto a shared icon and tint.
+  enum DiagnosisStatus {
+    case pass
+    case info
+    case warn
+
+    init(_ status: FakeIPDiagnosticsSnapshot.Status) {
+      switch status {
+      case .pass: self = .pass
+      case .info: self = .info
+      case .warn: self = .warn
+      }
+    }
+
+    init(_ status: GeoDatabaseDiagnosticsSnapshot.Status) {
+      switch status {
+      case .pass: self = .pass
+      case .info: self = .info
+      case .warn: self = .warn
+      }
+    }
+
+    var systemImage: String {
+      switch self {
+      case .pass: return "checkmark.seal.fill"
+      case .info: return "info.circle.fill"
+      case .warn: return "exclamationmark.triangle.fill"
+      }
+    }
+
+    var tint: Color {
+      switch self {
+      case .pass: return .green
+      case .info: return .secondary
+      case .warn: return .orange
+      }
+    }
+  }
+
+  init(headline: String, status: FakeIPDiagnosticsSnapshot.Status) {
+    self.headline = headline
+    self.status = DiagnosisStatus(status)
+  }
+
+  init(headline: String, status: GeoDatabaseDiagnosticsSnapshot.Status) {
+    self.headline = headline
+    self.status = DiagnosisStatus(status)
+  }
+
+  var body: some View {
+    Label {
+      Text(headline)
+        .font(.callout.weight(.medium))
+        .fixedSize(horizontal: false, vertical: true)
+    } icon: {
+      Image(systemName: status.systemImage)
+        .foregroundStyle(status.tint)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+}
+
+/// `RoutingDetailRow` takes a `LocalizedStringResource`; diagnostics facts carry titles composed at
+/// runtime, so they need a row that takes a plain `String`.
+private struct RoutingDiagnosisFactRow: View {
+  let title: String
+  let value: String
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 3) {
+      Text(title)
+        .font(.caption2)
+        .foregroundStyle(.tertiary)
+      Text(value)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+        .textSelection(.enabled)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 }
 

@@ -1,0 +1,55 @@
+.band {
+  padding-block: var(--band);
+  border-top: 1px solid var(--hair-strong);
+}
+
+.plate {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: clamp(1.5rem, 4vw, 3.5rem);
+  align-items: center;
+  padding: clamp(1.75rem, 4vw, 3rem);
+}
+
+/* Same voice as every other band heading: the chart's narrow lettering. */
+.heading {
+  margin: 0;
+  font-family: var(--face-label);
+  font-size: clamp(1.875rem, 3.9vw, 3rem);
+  line-height: 1.02;
+  letter-spacing: -0.018em;
+  font-weight: 700;
+  text-wrap: balance;
+}
+
+:global(html[lang^='zh']) .heading {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.24;
+}
+
+.text { min-width: 0; }
+
+.body {
+  margin: 0.875rem 0 0;
+  max-width: 46ch;
+  color: var(--ink-2);
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.875rem;
+}
+
+.alt {
+  font-size: 0.875rem;
+  color: var(--ink-2);
+}
+
+@media (max-width: 899px) {
+  .plate { grid-template-columns: 1fr; align-items: start; }
+}

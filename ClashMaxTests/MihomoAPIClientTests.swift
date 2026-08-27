@@ -600,4 +600,220 @@ final class MihomoAPIClientTests: XCTestCase {
     XCTAssertEqual(literal.destinationIPAddress, "104.20.23.154")
     XCTAssertEqual(literal.host, "104.20.23.154")
   }
+
+  // MARK: Whole-group delay (roadmap A6)
+
+  /// The endpoint's failure model is the opposite of the per-node one: a node that failed its probe
+  /// is silently omitted from the 200 body, so absence is the only signal of failure. The client
+  /// must hand back exactly what the core reported and leave that reading to the caller, which
+  /// already knows the full member list.
+  func testGroupDelayReturnsOnlyTheMembersTheCoreReported() async throws {
+    let recorder = URLProtocolRecorder(responseBody: #"{"Tokyo 01":128,"Osaka 02":315}"#)
+    let session = URLSession(configuration: recorder.configuration)
+    let client = MihomoAPIClient(
+      baseURL: URL(string: "http://127.0.0.1:9097")!,
+      secret: "abc",
+      session: session
+    )
+
+    let delays = try await client.testGroupDelay(
+      group: "Proxy",
+      testURL: URL(string: "https://www.gstatic.com/generate_204")!,
+      timeout: 5_000
+    )
+
+    XCTAssertEqual(delays, ["Tokyo 01": 128, "Osaka 02": 315])
+    let request = try XCTUnwrap(recorder.lastRequest)
+    let components = try XCTUnwrap(URLComponents(url: XCTUnwrap(request.url), resolvingAgainstBaseURL: false))
+    XCTAssertEqual(components.path, "/group/Proxy/delay")
+    XCTAssertEqual(components.queryItems?.first { $0.name == "timeout" }?.value, "5000")
+    XCTAssertEqual(
+      components.queryItems?.first { $0.name == "url" }?.value,
+      "https://www.gstatic.com/generate_204"
+    )
+  }
+
+  func testGroupDelayPercentEncodesGroupNamesWithSlashesAndSpaces() async throws {
+    let recorder = URLProtocolRecorder(responseBody: "{}")
+    let session = URLSession(configuration: recorder.configuration)
+    let client = MihomoAPIClient(
+      baseURL: URL(string: "http://127.0.0.1:9097")!,
+      secret: "abc",
+      session: session
+    )
+
+    _ = try await client.testGroupDelay(
+      group: "US / Streaming",
+      testURL: URL(string: "https://www.gstatic.com/generate_204")!,
+      timeout: 5_000
+    )
+
+    let url = try XCTUnwrap(recorder.lastRequest?.url)
+    XCTAssertTrue(url.absoluteString.contains("/group/US%20%2F%20Streaming/delay"), url.absoluteString)
+  }
+
+  /// An unknown group is a caller bug, not "every node failed" — it has to be distinguishable so
+  /// the batch can degrade to the per-node path instead of reporting the whole group as dead.
+  func testGroupDelayReportsAnUnknownGroupAsItsOwnError() async throws {
+    let recorder = URLProtocolRecorder(responseBody: #"{"message":"Group not found"}"#, statusCode: 404)
+    let session = URLSession(configuration: recorder.configuration)
+    let client = MihomoAPIClient(
+      baseURL: URL(string: "http://127.0.0.1:9097")!,
+      secret: "abc",
+      session: session
+    )
+
+    do {
+      _ = try await client.testGroupDelay(
+        group: "Ghost",
+        testURL: URL(string: "https://www.gstatic.com/generate_204")!,
+        timeout: 5_000
+      )
+      XCTFail("Expected an unknown group to throw")
+    } catch let MihomoAPIClient.ClientError.unknownProxyGroup(name) {
+      XCTAssertEqual(name, "Ghost")
+    }
+  }
+
+  /// The core holds the response open for the whole probe window, so a transport timeout sized for
+  /// ordinary control requests would fail every large group client-side before the core answers.
+  func testGroupDelayOutlastsTheProbeWindowRatherThanTheSharedTimeout() async throws {
+    let recorder = URLProtocolRecorder(responseBody: "{}")
+    let session = URLSession(configuration: recorder.configuration)
+    let client = MihomoAPIClient(
+      baseURL: URL(string: "http://127.0.0.1:9097")!,
+      secret: "abc",
+      session: session,
+      requestTimeout: 5
+    )
+
+    _ = try await client.testGroupDelay(
+      group: "Proxy",
+      testURL: URL(string: "https://www.gstatic.com/generate_204")!,
+      timeout: 30_000
+    )
+
+    let request = try XCTUnwrap(recorder.lastRequest)
+    XCTAssertEqual(request.timeoutInterval, 45, accuracy: 0.01)
+    XCTAssertEqual(MihomoAPIClient.groupDelayRequestTimeout(forProbeTimeout: 1_000), 30, accuracy: 0.01)
+    XCTAssertEqual(MihomoAPIClient.groupDelayRequestTimeout(forProbeTimeout: 60_000), 75, accuracy: 0.01)
+  }
+
+  func testGroupDelayIgnoresNonNumericEntriesInsteadOfFailingTheWholeCall() async throws {
+    let recorder = URLProtocolRecorder(responseBody: #"{"Tokyo 01":128,"Broken":"timeout"}"#)
+    let session = URLSession(configuration: recorder.configuration)
+    let client = MihomoAPIClient(
+      baseURL: URL(string: "http://127.0.0.1:9097")!,
+      secret: "abc",
+      session: session
+    )
+
+    let delays = try await client.testGroupDelay(
+      group: "Proxy",
+      testURL: URL(string: "https://www.gstatic.com/generate_204")!,
+      timeout: 5_000
+    )
+
+    XCTAssertEqual(delays, ["Tokyo 01": 128])
+  }
+
+  // MARK: Fake-ip flush (roadmap A3)
+
+  /// 204 with an empty body, and `GET` is 405 — so the method matters and nothing may be decoded
+  /// from the response.
+  func testFlushFakeIPCachePostsAndDecodesNothing() async throws {
+    let recorder = URLProtocolRecorder(responseBody: "", statusCode: 204)
+    let session = URLSession(configuration: recorder.configuration)
+    let client = MihomoAPIClient(
+      baseURL: URL(string: "http://127.0.0.1:9097")!,
+      secret: "abc",
+      session: session
+    )
+
+    try await client.flushFakeIPCache()
+
+    let request = try XCTUnwrap(recorder.lastRequest)
+    XCTAssertEqual(request.httpMethod, "POST")
+    XCTAssertEqual(request.url?.path, "/cache/fakeip/flush")
+    XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer abc")
+  }
+
+  func testFlushFakeIPCacheSurfacesAFailureStatus() async throws {
+    let recorder = URLProtocolRecorder(responseBody: "", statusCode: 500)
+    let session = URLSession(configuration: recorder.configuration)
+    let client = MihomoAPIClient(
+      baseURL: URL(string: "http://127.0.0.1:9097")!,
+      secret: "abc",
+      session: session
+    )
+
+    do {
+      try await client.flushFakeIPCache()
+      XCTFail("Expected a 500 to throw")
+    } catch let MihomoAPIClient.ClientError.httpStatus(status) {
+      XCTAssertEqual(status, 500)
+    }
+  }
+
+  // MARK: Geo database update (roadmap B5)
+
+  func testUpdateGeoDatabasesPostsWithALongTimeout() async throws {
+    let recorder = URLProtocolRecorder(responseBody: "", statusCode: 204)
+    let session = URLSession(configuration: recorder.configuration)
+    let client = MihomoAPIClient(
+      baseURL: URL(string: "http://127.0.0.1:9097")!,
+      secret: "abc",
+      session: session,
+      requestTimeout: 5
+    )
+
+    try await client.updateGeoDatabases()
+
+    let request = try XCTUnwrap(recorder.lastRequest)
+    XCTAssertEqual(request.httpMethod, "POST")
+    XCTAssertEqual(request.url?.path, "/configs/geo")
+    // The call is synchronous in the core: it answers only once every database it needs has been
+    // downloaded through the proxy chain, so the shared control-request timeout is far too short.
+    XCTAssertEqual(request.timeoutInterval, MihomoAPIClient.defaultGeoUpdateTimeout, accuracy: 0.01)
+  }
+
+  /// Which database could not be downloaded, and why, is the entire diagnostic value of a failed
+  /// geo update — collapsing it into "500" would leave the user with nothing to act on.
+  func testUpdateGeoDatabasesKeepsTheCoresOwnFailureMessage() async throws {
+    let recorder = URLProtocolRecorder(
+      responseBody: #"{"message":"can't download GeoSite database file: 500 Internal Server Error"}"#,
+      statusCode: 500
+    )
+    let session = URLSession(configuration: recorder.configuration)
+    let client = MihomoAPIClient(
+      baseURL: URL(string: "http://127.0.0.1:9097")!,
+      secret: "abc",
+      session: session
+    )
+
+    do {
+      try await client.updateGeoDatabases()
+      XCTFail("Expected a failed geo update to throw")
+    } catch let MihomoAPIClient.ClientError.coreMessage(status, message) {
+      XCTAssertEqual(status, 500)
+      XCTAssertEqual(message, "can't download GeoSite database file: 500 Internal Server Error")
+    }
+  }
+
+  func testUpdateGeoDatabasesFallsBackToTheStatusWhenThereIsNoMessage() async throws {
+    let recorder = URLProtocolRecorder(responseBody: "<html>gateway</html>", statusCode: 502)
+    let session = URLSession(configuration: recorder.configuration)
+    let client = MihomoAPIClient(
+      baseURL: URL(string: "http://127.0.0.1:9097")!,
+      secret: "abc",
+      session: session
+    )
+
+    do {
+      try await client.updateGeoDatabases()
+      XCTFail("Expected a 502 to throw")
+    } catch let MihomoAPIClient.ClientError.httpStatus(status) {
+      XCTAssertEqual(status, 502)
+    }
+  }
 }

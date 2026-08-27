@@ -112,6 +112,19 @@ struct ConfigNormalizer {
     root["log-level"] = overrides.logLevel
     root["unified-delay"] = overrides.unifiedDelay
 
+    // Roadmap B5. Without these keys the core downloads the geo databases once, on the first start
+    // that needs them, and never refreshes: `GEOIP,CN` and `GEOSITE` rules then match a snapshot
+    // that keeps ageing with no user-visible signal. They are app-managed rather than passed
+    // through from the profile so the setting has one owner, the same as `mode` and `log-level`.
+    let geoDatabase = overrides.geoDatabase
+    if let validationError = geoDatabase.validationError {
+      throw NormalizerError.invalidProfile(validationError)
+    }
+    root["geo-auto-update"] = geoDatabase.autoUpdateEnabled
+    root["geo-update-interval"] = geoDatabase.normalizedUpdateIntervalHours
+    root["geodata-mode"] = geoDatabase.geodataMode
+    root["geox-url"] = geoDatabase.geoxURLMapping
+
     if overrides.externalControllerCORS.enabled {
       root["external-controller-cors"] = [
         "allow-origins": overrides.externalControllerCORS.effectiveAllowedOrigins,

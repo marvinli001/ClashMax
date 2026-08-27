@@ -9,6 +9,7 @@ struct SettingsView: View {
   @Environment(AppUpdateController.self) private var appUpdateController
   private let bundledCoreInfo: BundledCoreInfo
   @State private var isRuleOverlayPresented = false
+  @State private var isGeoDatabasePresented = false
   @State private var isApplyingRuleOverlay = false
   @State private var ruleOverlayApplyError: String?
   @State private var isNetworkPoliciesPresented = false
@@ -376,6 +377,35 @@ struct SettingsView: View {
               }
               .frame(width: 560)
               .padding(18)
+            }
+          }
+
+          // Geo data is what GEOSITE/GEOIP rules match against, so it belongs with the rules rather
+          // than with the network plumbing (roadmap B5).
+          SettingsControlRow("Geo Databases", description: settings.geoDatabaseSettings.summary) {
+            Button {
+              isGeoDatabasePresented = true
+            } label: {
+              Label("Configure", systemImage: "globe")
+            }
+            .popover(isPresented: $isGeoDatabasePresented, arrowEdge: .bottom) {
+              GeoDatabaseSettingsPopover(
+                baseline: settings.geoDatabaseSettings,
+                diagnosis: appModel.geoDatabaseDiagnostics,
+                isUpdating: appModel.geoDatabaseUpdateInFlight,
+                canUpdateNow: appModel.canUpdateGeoDatabases,
+                updateStatusMessage: appModel.geoDatabaseUpdateStatusMessage,
+                onUpdateNow: { appModel.updateGeoDatabases() },
+                onSave: { draft in
+                  guard appModel.updateGeoDatabaseSettings(draft) else { return }
+                  isGeoDatabasePresented = false
+                }
+              )
+              .frame(width: 560)
+              .padding(18)
+              .task {
+                appModel.refreshGeoDatabaseInventory()
+              }
             }
           }
         }
@@ -1354,6 +1384,212 @@ private struct ExternalDashboardProfilesPopover: View {
 ///
 /// `onApply` is deliberately synchronous: the callers wrap their own `Task`. Storing an `async`
 /// closure on a `View` crashes swift-frontend in IRGen.
+/// The L3 editor for roadmap B5: `geo-auto-update`, `geo-update-interval`, `geodata-mode` and the
+/// four `geox-url` sources, plus the on-disk state and a manual refresh.
+///
+/// The four URLs are separate fields rather than one blob because a single bad one silently breaks
+/// only the database it feeds — `GeoSite.dat` can be current while `geoip.metadb` never downloads —
+/// and the validation reports which one is wrong.
+struct GeoDatabaseSettingsPopover: View {
+  let baseline: GeoDatabaseSettings
+  let diagnosis: GeoDatabaseDiagnosticsSnapshot
+  let isUpdating: Bool
+  let canUpdateNow: Bool
+  let updateStatusMessage: String?
+  let onUpdateNow: () -> Void
+  let onSave: (GeoDatabaseSettings) -> Void
+
+  @State private var draft: GeoDatabaseSettings
+
+  init(
+    baseline: GeoDatabaseSettings,
+    diagnosis: GeoDatabaseDiagnosticsSnapshot,
+    isUpdating: Bool = false,
+    canUpdateNow: Bool = false,
+    updateStatusMessage: String? = nil,
+    onUpdateNow: @escaping () -> Void,
+    onSave: @escaping (GeoDatabaseSettings) -> Void
+  ) {
+    self.baseline = baseline
+    self.diagnosis = diagnosis
+    self.isUpdating = isUpdating
+    self.canUpdateNow = canUpdateNow
+    self.updateStatusMessage = updateStatusMessage
+    self.onUpdateNow = onUpdateNow
+    self.onSave = onSave
+    _draft = State(initialValue: baseline)
+  }
+
+  private var validationError: String? {
+    draft.validationError
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      status
+      Divider()
+      schedule
+      Divider()
+      sources
+      Divider()
+      footer
+    }
+    .onChange(of: baseline) { oldValue, newValue in
+      // Same rule as the rule-overlay editor: adopt an outside change only while the draft is
+      // untouched, so a background edit never swallows what the user has typed.
+      guard draft == oldValue else { return }
+      draft = newValue
+    }
+  }
+
+  private var status: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text(diagnosis.headline)
+        .font(.callout.weight(.medium))
+      Text(diagnosis.reason)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+
+      ForEach(Array(diagnosis.facts.enumerated()), id: \.offset) { _, fact in
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+          Text(fact.title)
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+            .frame(width: 120, alignment: .leading)
+          Text(fact.value)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      }
+
+      HStack(spacing: 8) {
+        Button {
+          onUpdateNow()
+        } label: {
+          if isUpdating {
+            ProgressView()
+              .controlSize(.small)
+          } else {
+            Text("Update Now")
+          }
+        }
+        .controlSize(.small)
+        .disabled(!canUpdateNow)
+        .help(diagnosis.reason)
+
+        if let updateStatusMessage {
+          Text(updateStatusMessage)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      }
+      .padding(.top, 2)
+    }
+  }
+
+  private var schedule: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Toggle(isOn: $draft.autoUpdateEnabled) {
+        VStack(alignment: .leading, spacing: 2) {
+          Text("Update Automatically")
+          Text("The core re-downloads the databases on its own schedule while it is running.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      }
+
+      HStack(spacing: 10) {
+        Text("Interval")
+          .frame(width: 120, alignment: .leading)
+        NumberStepperField(
+          accessibilityLabel: "Geo update interval in hours",
+          value: $draft.updateIntervalHours,
+          range: GeoDatabaseSettings.minimumUpdateIntervalHours...GeoDatabaseSettings.maximumUpdateIntervalHours
+        )
+        Text("hours")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+      .disabled(!draft.autoUpdateEnabled)
+
+      Toggle(isOn: $draft.geodataMode) {
+        VStack(alignment: .leading, spacing: 2) {
+          Text("Use dat-format GeoIP data")
+          // These are two different files with two different URLs, which is why the toggle changes
+          // which source below is the live one.
+          Text("Off uses geoip.metadb from the mmdb source; on uses GeoIP.dat from the GeoIP (dat) source.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      }
+    }
+  }
+
+  private var sources: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text("Sources")
+        .font(.caption.weight(.medium))
+        .foregroundStyle(.secondary)
+      urlField(title: "GeoSite", text: $draft.geoSiteURL, isLive: true)
+      urlField(title: "GeoIP (mmdb)", text: $draft.mmdbURL, isLive: !draft.geodataMode)
+      urlField(title: "GeoIP (dat)", text: $draft.geoIPURL, isLive: draft.geodataMode)
+      urlField(title: "ASN", text: $draft.asnURL, isLive: true)
+    }
+  }
+
+  private func urlField(
+    title: LocalizedStringResource,
+    text: Binding<String>,
+    isLive: Bool
+  ) -> some View {
+    HStack(alignment: .firstTextBaseline, spacing: 10) {
+      Text(title)
+        .font(.caption)
+        .foregroundStyle(isLive ? .secondary : .tertiary)
+        .frame(width: 120, alignment: .leading)
+      TextField("", text: text)
+        .textFieldStyle(.roundedBorder)
+        .font(.caption)
+        .accessibilityLabel(Text(title))
+    }
+  }
+
+  private var footer: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      if let validationError {
+        Label(validationError, systemImage: "exclamationmark.triangle.fill")
+          .font(.caption)
+          .foregroundStyle(.orange)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+
+      Text("Saved changes are written into the runtime config; a running core reloads them.")
+        .font(.caption)
+        .foregroundStyle(.tertiary)
+        .fixedSize(horizontal: false, vertical: true)
+
+      HStack(spacing: 10) {
+        Button("Restore Defaults") {
+          draft = .default
+        }
+        .disabled(draft.isDefault)
+
+        Spacer()
+
+        Button("Save") {
+          onSave(draft)
+        }
+        .keyboardShortcut(.defaultAction)
+        .disabled(validationError != nil || draft == baseline)
+      }
+    }
+  }
+}
+
 struct RuleOverlayDraftPopover: View {
   let baseline: RuleOverlaySettings
   let pendingSummary: String

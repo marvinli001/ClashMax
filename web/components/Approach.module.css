@@ -1,0 +1,66 @@
+/* Numbered because the order is the information: step two is impossible
+   before step one. */
+.steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  border-top: 1px solid var(--hair-strong);
+  margin: 0;
+  padding: 0;
+  /* The 01-04 marks are drawn by ::before; the native list markers would
+     otherwise print a second, differently-formatted number beside them. */
+  list-style: none;
+  counter-reset: step;
+}
+
+.step {
+  position: relative;
+  padding: 1.5rem 1.5rem 1.75rem 0;
+  border-inline-start: 1px solid var(--hair);
+  padding-inline-start: 1.5rem;
+  counter-increment: step;
+}
+
+.step:first-child { border-inline-start: 0; padding-inline-start: 0; }
+
+.step::before {
+  content: counter(step, decimal-leading-zero);
+  display: block;
+  font-family: var(--face-mono);
+  font-size: 0.75rem;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 0.75rem;
+}
+
+.title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  text-wrap: balance;
+}
+
+.detail {
+  margin: 0.4375rem 0 0;
+  font-size: 0.875rem;
+  line-height: 1.55;
+  color: var(--ink-2);
+  text-wrap: pretty;
+}
+
+@media (max-width: 1023px) {
+  .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .step:nth-child(3) { border-inline-start: 0; padding-inline-start: 0; }
+  .step:nth-child(-n + 2) { border-bottom: 1px solid var(--hair); }
+}
+
+@media (max-width: 599px) {
+  .steps { grid-template-columns: 1fr; }
+  .step {
+    border-inline-start: 0;
+    padding-inline: 0;
+    border-bottom: 1px solid var(--hair);
+  }
+  .step:last-child { border-bottom: 0; }
+}

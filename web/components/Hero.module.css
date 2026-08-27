@@ -1,0 +1,66 @@
+.hero {
+  padding-block: clamp(2.5rem, 6vw, 5rem) clamp(2.5rem, 5vw, 4rem);
+}
+
+.grid {
+  display: grid;
+  /* Wide enough that the three-control action row stays on one line and that
+     the headline's first clause survives whole at the display cap; the chart
+     takes the rest. */
+  grid-template-columns: minmax(0, 31rem) minmax(0, 1fr);
+  gap: clamp(2rem, 5vw, 4.5rem);
+  align-items: start;
+}
+
+.title {
+  /* The cap is set by the longest first clause, not by taste: `macOS control`
+     measures 464px at 4.625rem, inside the 31rem column with room to spare.
+     Anything larger breaks it after `macOS` and strands `control` on its own
+     line, which reads as three clauses instead of two. */
+  font-size: clamp(3rem, 6.1vw, 4.625rem);
+  line-height: 0.94;
+  letter-spacing: -0.045em;
+  font-weight: 600;
+  margin: 0;
+  text-wrap: balance;
+}
+
+/* The second line is the verdict, so it is set in the narrow face at the same
+   size: the chart lettering saying the thing the chart does. */
+.tail {
+  display: block;
+  font-family: var(--face-label);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+/* Chinese keeps English's scale but not its fit: CJK glyphs fill their em, so
+   the same tracking closes the counters up and the same leading collides the
+   ascenders. Both clauses - 原生 macOS / 控制 Mihomo - still survive whole. */
+:global(html[lang^='zh']) .title {
+  letter-spacing: -0.01em;
+  line-height: 1.02;
+}
+
+:global(html[lang^='zh']) .tail {
+  font-family: var(--face-text);
+  letter-spacing: -0.01em;
+}
+
+.sub {
+  margin: 1.5rem 0 0;
+  max-width: 34ch;
+  font-size: clamp(1.0625rem, 1.35vw, 1.1875rem);
+  line-height: 1.55;
+  color: var(--ink-2);
+  text-wrap: pretty;
+}
+
+.actions {
+  margin-top: clamp(1.75rem, 3vw, 2.5rem);
+}
+
+@media (max-width: 1023px) {
+  .grid { grid-template-columns: 1fr; }
+  .sub { max-width: 52ch; }
+}

@@ -1,0 +1,42 @@
+/* A chart legend, not a card grid: rows ruled off a single baseline, symbol
+   in the margin, name and gloss on one line. */
+.list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: clamp(1.5rem, 4vw, 4rem);
+  border-top: 1px solid var(--hair-strong);
+  margin: 0;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 1.75rem minmax(0, 1fr);
+  column-gap: 1rem;
+  align-items: baseline;
+  padding: 1rem 0;
+  border-bottom: 1px solid var(--hair-faint);
+}
+
+.mark {
+  color: var(--ink-3);
+  transform: translateY(0.22em);
+}
+
+.name {
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  margin: 0;
+}
+
+.detail {
+  margin: 0.25rem 0 0;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--ink-2);
+  text-wrap: pretty;
+}
+
+@media (max-width: 899px) {
+  .list { grid-template-columns: 1fr; }
+}

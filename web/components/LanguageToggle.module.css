@@ -1,0 +1,42 @@
+/* Two states shown at once: the mark is where you are, the name is where the
+   link goes. A one-word switch that hides the current language makes you
+   click to find out what you had. */
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3125rem 0.75rem 0.3125rem 0.375rem;
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--r-control);
+  color: var(--ink-2);
+  text-decoration: none;
+  line-height: 1;
+  transition: border-color 160ms var(--ease-out), color 160ms var(--ease-out);
+}
+
+.toggle:hover {
+  border-color: var(--ink-2);
+  color: var(--ink);
+}
+
+.mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5rem;
+  height: 1.5rem;
+  padding: 0 0.3125rem;
+  border-radius: var(--r-control);
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--face-label);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.other {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  white-space: nowrap;
+}

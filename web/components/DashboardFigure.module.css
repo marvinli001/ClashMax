@@ -1,0 +1,352 @@
+.plate {
+  padding: clamp(0.75rem, 1.6vw, 1.25rem);
+  margin: 0;
+}
+
+/* The window ground the app's cards sit on. .appmat carries the hairline and
+   the macOS token set; only the ground and the padding belong here. */
+.mat {
+  background: var(--app-sunk);
+  padding: clamp(0.625rem, 1.4vw, 1rem);
+}
+
+.stack { display: grid; gap: 0.75rem; }
+
+.card {
+  background: var(--app-bg);
+  border: 1px solid var(--app-line);
+  border-radius: var(--app-r);
+  padding: 0.875rem 1rem;
+}
+
+/* --- Header card -------------------------------------------------------- */
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.875rem;
+}
+
+.core {
+  flex: none;
+  width: 3.25rem;
+  height: 3.25rem;
+  display: grid;
+  place-items: center;
+  border-radius: var(--app-r);
+  background: color-mix(in srgb, var(--app-green) 13%, transparent);
+  color: var(--app-green);
+}
+
+.headMain { display: grid; gap: 0.625rem; min-width: 0; }
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 0.4375rem;
+  margin: 0;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--app-green);
+}
+
+.pills { display: flex; flex-wrap: wrap; gap: 0.375rem; }
+
+.pill {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.375rem;
+  border: 1px solid var(--app-line);
+  border-radius: var(--app-r-tile);
+  padding: 0.1875rem 0.5rem;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.pillLabel { color: var(--app-3); }
+.pillValue { color: var(--app-text); font-weight: 500; }
+.pillLive .pillValue { color: var(--app-green); }
+
+.run {
+  margin-inline-start: auto;
+  display: grid;
+  justify-items: end;
+  gap: 0.5rem;
+}
+
+/* The prominent run control. Flat fill, system accent, no elevation. */
+.stop {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  min-width: 6rem;
+  padding: 0.375rem 0.875rem;
+  border-radius: var(--app-r-tile);
+  background: var(--app-accent);
+  color: #fff;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+@media (prefers-color-scheme: dark) {
+  .stop { color: #0b1220; }
+}
+
+.inset {
+  margin-top: 0.875rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.75rem;
+  padding: 0.625rem 0.75rem;
+  border-radius: var(--app-r);
+  background: var(--app-sunk);
+}
+
+.infoItem { display: grid; gap: 0.0625rem; }
+.infoLabel { font-size: 0.6875rem; color: var(--app-3); }
+.infoValue { font-size: 0.8125rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* --- Metric tiles ------------------------------------------------------- */
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.tile { display: grid; gap: 0.1875rem; align-content: start; }
+
+.tileMark {
+  width: 1.75rem;
+  height: 1.75rem;
+  display: grid;
+  place-items: center;
+  border-radius: var(--app-r-tile);
+  margin-bottom: 0.5rem;
+}
+
+.toneCyan { color: var(--app-cyan); background: color-mix(in srgb, var(--app-cyan) 13%, transparent); }
+.toneIndigo { color: var(--app-indigo); background: color-mix(in srgb, var(--app-indigo) 13%, transparent); }
+.toneOrange { color: var(--app-orange); background: color-mix(in srgb, var(--app-orange) 13%, transparent); }
+.toneGreen { color: var(--app-green); background: color-mix(in srgb, var(--app-green) 13%, transparent); }
+
+.tileLabel { font-size: 0.75rem; color: var(--app-2); }
+
+.tileValue {
+  font-size: 1.0625rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.tileFoot { font-size: 0.6875rem; color: var(--app-3); }
+
+/* --- The two runtime cards ---------------------------------------------- */
+
+.pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.cardHead {
+  display: flex;
+  align-items: center;
+  gap: 0.4375rem;
+  margin: 0 0 0.875rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.cardHeadMark { color: var(--app-accent); display: inline-flex; }
+
+.cardBadge {
+  margin-inline-start: auto;
+  border: 1px solid var(--app-line);
+  border-radius: 5px;
+  padding: 0.0625rem 0.4375rem;
+  font-size: 0.6875rem;
+  font-weight: 400;
+  color: var(--app-2);
+}
+
+.node { display: flex; align-items: center; gap: 0.75rem; }
+
+.nodeMark {
+  flex: none;
+  width: 2.375rem;
+  height: 2.375rem;
+  display: grid;
+  place-items: center;
+  border-radius: var(--app-r-tile);
+  color: var(--app-green);
+  background: color-mix(in srgb, var(--app-green) 13%, transparent);
+}
+
+.nodeText { display: grid; gap: 0.1875rem; min-width: 0; }
+
+.nodeName {
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nodeMeta {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.75rem;
+  color: var(--app-2);
+  min-width: 0;
+}
+
+.nodeType {
+  border-radius: 999px;
+  padding: 0.0625rem 0.4375rem;
+  background: var(--app-sunk);
+  white-space: nowrap;
+}
+
+.nodeDelay {
+  margin-inline-start: auto;
+  flex: none;
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--app-fast);
+}
+
+.pickers { display: flex; gap: 0.5rem; margin-top: 0.875rem; }
+
+.picker { display: grid; gap: 0.25rem; min-width: 0; flex: none; width: 8.5rem; }
+.pickerWide { flex: 1; width: auto; }
+.pickerLabel { font-size: 0.6875rem; color: var(--app-3); }
+
+.pickerValue {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  border: 1px solid var(--app-line);
+  border-radius: var(--app-r-tile);
+  background: var(--app-alt);
+  padding: 0.3125rem 0.5rem;
+  font-size: 0.8125rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pickerValue svg { margin-inline-start: auto; flex: none; color: var(--app-3); }
+
+.stats { display: flex; flex-wrap: wrap; gap: 0.625rem 1.5rem; }
+.stat { display: grid; gap: 0.0625rem; }
+.statLabel { font-size: 0.6875rem; color: var(--app-3); }
+.statValue { font-size: 0.875rem; font-weight: 600; }
+
+.lines {
+  margin-top: 0.875rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--app-line-soft);
+  display: grid;
+  gap: 0.375rem;
+}
+
+.line {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  margin: 0;
+  font-size: 0.8125rem;
+}
+
+.lineLabel { color: var(--app-2); flex: none; }
+
+.lineValue {
+  margin-inline-start: auto;
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- Chart annotation, outside the mat ---------------------------------- */
+
+.callouts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: clamp(0.75rem, 1.6vw, 1.25rem);
+  border-top: 1px solid var(--hair);
+}
+
+.callout {
+  padding: 0.875rem 0 0.125rem;
+  padding-inline-end: 1.25rem;
+  display: grid;
+  gap: 0.375rem;
+  align-content: start;
+  position: relative;
+}
+
+/* A leader tick off the rule, the way a chart annotates what it points at. */
+.callout::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  inset-inline-start: 0;
+  width: 1.5rem;
+  height: 1px;
+  background: var(--ink);
+}
+
+.calloutDetail {
+  font-size: 0.875rem;
+  color: var(--ink-2);
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+
+.caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.75rem;
+  margin: 0.875rem 0 0;
+  font-size: 0.875rem;
+  color: var(--ink-3);
+}
+
+/* --- Reflow. The replica narrows the way the app's own window does. ------ */
+
+@media (max-width: 1023px) {
+  .pair { grid-template-columns: 1fr; }
+  .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 719px) {
+  .callouts { grid-template-columns: 1fr; }
+  .callout { border-bottom: 1px solid var(--hair-faint); padding-bottom: 0.875rem; }
+  .callout:last-child { border-bottom: 0; }
+}
+
+@media (max-width: 599px) {
+  .head { flex-wrap: wrap; }
+  .core { display: none; }
+  .run {
+    margin-inline-start: 0;
+    width: 100%;
+    grid-auto-flow: column;
+    justify-items: start;
+    justify-content: start;
+    align-items: center;
+  }
+  .inset { gap: 0.5rem 1.25rem; }
+  .pickers { flex-wrap: wrap; }
+  .picker { width: 100%; }
+}

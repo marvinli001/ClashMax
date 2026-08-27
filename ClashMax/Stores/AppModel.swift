@@ -296,6 +296,8 @@ struct RuntimeDiagnosticsReport: Equatable, Sendable {
   var publicIPInfo: PublicIPInfo?
   var probeHost: String = ""
   var proxyEffect: ProxyEffectDiagnosticsSnapshot?
+  var fakeIP: FakeIPDiagnosticsSnapshot?
+  var geoDatabases: GeoDatabaseDiagnosticsSnapshot?
 
   var plainText: String {
     let lines = rawLines().map(redacted)
@@ -331,6 +333,12 @@ struct RuntimeDiagnosticsReport: Equatable, Sendable {
       "NE Diagnostics: TCP \(networkExtensionDiagnostics.activeTCPBridgeCount), UDP \(networkExtensionDiagnostics.activeUDPBridgeCount), DNS \(networkExtensionDiagnostics.dnsCaptureCount)",
     ]
     lines.append(contentsOf: proxyEffectReportLines())
+    if let fakeIP {
+      lines.append(contentsOf: fakeIP.plainTextLines)
+    }
+    if let geoDatabases {
+      lines.append(contentsOf: geoDatabases.plainTextLines)
+    }
     if let readinessIssue {
       lines.append("Readiness: \(readinessIssue)")
     }
@@ -603,6 +611,11 @@ final class AppModel {
   var delayTestSettings: DelayTestSettings {
     get { settings.delayTestSettings }
     set { settings.delayTestSettings = newValue }
+  }
+
+  var geoDatabaseSettings: GeoDatabaseSettings {
+    get { settings.geoDatabaseSettings }
+    set { settings.geoDatabaseSettings = newValue }
   }
 
   var proxyPageSettings: ProxyPageSettings {
@@ -878,6 +891,30 @@ final class AppModel {
   /// immediately produce a new, false verdict on the very row it repaired.
   private(set) var activeSnifferSettingsChangedAt: Date?
   @ObservationIgnored private var activeSnifferSettingsTask: Task<Void, Never>?
+  /// The `dns` block of the config the core is running. `nil` means "not read yet"; the fake-ip
+  /// diagnosis reports that as unknown rather than as "not in fake-ip mode" (roadmap A3). It has to
+  /// come from the file because `GET /configs` carries no `dns` key at all.
+  private(set) var activeDNSFacts: DNSRuntimeFacts?
+  @ObservationIgnored private var activeDNSFactsTask: Task<Void, Never>?
+  /// When the core was last handed a config. The fake-ip table is empty at that moment (Mihomo's
+  /// `profile.store-fake-ip` defaults to off and ClashMax never turns it on), so it is the baseline
+  /// every later invalidating event is compared against.
+  private(set) var lastRuntimeConfigAppliedAt: Date?
+  private(set) var lastFakeIPFlushAt: Date?
+  private(set) var lastNetworkEnvironmentChangeAt: Date?
+  private(set) var fakeIPFlushInFlight = false
+  @ObservationIgnored private var fakeIPFlushTask: Task<Void, Never>?
+  /// What the geo databases in the core's working directory look like right now. `nil` means the
+  /// directory has not been stat'ed yet (roadmap B5).
+  private(set) var geoDatabaseInventory: GeoDatabaseInventory?
+  @ObservationIgnored private var geoDatabaseInventoryTask: Task<Void, Never>?
+  private(set) var geoDatabaseUpdateInFlight = false
+  private(set) var lastGeoDatabaseUpdateAt: Date?
+  private(set) var lastGeoDatabaseUpdateFailure: String?
+  /// What the last refresh actually did, described from the working directory rather than from the
+  /// endpoint's status code.
+  private(set) var geoDatabaseUpdateStatusMessage: String?
+  @ObservationIgnored private var geoDatabaseUpdateTask: Task<Void, Never>?
   // The five properties below are deliberately left observable: each is read by a
   // view-visible computed property (`canControlRuntimeProxies`, `canStopRuntime`,
   // `canRepairTunRouting`), so under Observation they are effectively view state.
@@ -988,6 +1025,13 @@ final class AppModel {
   private static let previewRuntimeMixedPort = 17_890
   private static let previewRuntimeControllerPort = 19_097
   private static let proxyDelayBatchConcurrencyLimit = 6
+  // Issue #10/#11 upstream: a whole-group probe replaces one HTTP request per node with a single
+  // `/group/{name}/delay` call. It is only worth it above this many members. The core holds a
+  // group probe open for the entire timeout window, so it yields no partial results, whereas the
+  // per-node path finishes a group of `proxyDelayBatchConcurrencyLimit` members in a single
+  // concurrency wave — roughly the same wall time, but with results appearing as they land.
+  // The threshold is therefore set just past one full wave.
+  private static let proxyGroupDelayMinimumMembers = proxyDelayBatchConcurrencyLimit + 2
   private static let runtimeStreamReconnectDelayNanoseconds: UInt64 = 1_000_000_000
   // Issue #11: batch delay results are coalesced before touching observable state. A flush
   // happens once `proxyDelayBatchFlushCount` results have accumulated or once
@@ -1808,7 +1852,9 @@ final class AppModel {
       helperLogs: helperLogs,
       publicIPInfo: publicIPInfoState.info,
       probeHost: proxyEffectProbeHost,
-      proxyEffect: proxyEffect
+      proxyEffect: proxyEffect,
+      fakeIP: fakeIPDiagnostics,
+      geoDatabases: geoDatabaseDiagnostics
     )
   }
 
@@ -3880,6 +3926,25 @@ final class AppModel {
     }
   }
 
+  /// Persists the geo database settings and applies them through the ordinary running-settings path
+  /// (roadmap B5). Validation runs first because a bad `geox-url` produces a config the core rejects
+  /// on reload, and a rejected reload is a worse outcome than a refused Save.
+  @discardableResult
+  func updateGeoDatabaseSettings(_ newSettings: GeoDatabaseSettings) -> Bool {
+    if let validationError = newSettings.validationError {
+      lastError = validationError
+      return false
+    }
+    guard newSettings != geoDatabaseSettings else { return true }
+    seedAppliedRuntimeSettingsSnapshotIfNeeded()
+    geoDatabaseSettings = newSettings
+    // `geodata-mode` changes which GeoIP file name is live, so the inventory has to be re-read
+    // against the new names rather than kept from the old ones.
+    refreshGeoDatabaseInventory()
+    scheduleRunningRuntimeSettingsApply(reason: "Geo database settings updated")
+    return true
+  }
+
   @discardableResult
   func updateExternalControllerSettings(_ newSettings: ExternalControllerSettings) -> Bool {
     if let validationError = newSettings.validationError {
@@ -4375,6 +4440,10 @@ final class AppModel {
           level: "info",
           message: "Network environment changed via \(event.reason): path=\(event.pathStatus), ssid=\(currentNetwork.ssid ?? currentNetwork.unavailableReason?.rawValue ?? "none")"
         )
+        // Stamped here rather than inside `handleNetworkEnvironmentMayHaveChanged`, which returns
+        // early when auto-apply is off: the fake-ip table goes stale on a network change whether or
+        // not a policy is waiting to be applied (roadmap A3).
+        lastNetworkEnvironmentChangeAt = Date()
         handleNetworkEnvironmentMayHaveChanged(reason: event.reason)
       }
     }
@@ -5770,23 +5839,37 @@ final class AppModel {
       }
     }
 
-    await withTaskGroup(of: ProxyDelayBatchItemResult.self) { taskGroup in
+    // Issue #10/#11 upstream: the batch is scheduled as *units*, not nodes. A unit is either one
+    // node (the original per-node probe) or a whole group answered by a single
+    // `/group/{name}/delay` call, which is what keeps a 1600-node catalog from issuing 1600
+    // requests. A group unit that the core cannot answer degrades into its node units instead of
+    // failing, so an older core or a renamed group behaves exactly as it did before.
+    var units = Self.proxyDelayBatchUnits(items: items, settings: settings)
+    let concurrencyLimit = Self.proxyDelayBatchConcurrencyLimit
+    await withTaskGroup(of: ProxyDelayBatchUnitResult.self) { taskGroup in
       var nextIndex = 0
-      let initialCount = min(Self.proxyDelayBatchConcurrencyLimit, items.count)
-      for _ in 0..<initialCount {
-        let item = items[nextIndex]
-        nextIndex += 1
-        taskGroup.addTask {
-          await Self.measureBatchDelay(
-            item: item,
-            apiClient: apiClient,
-            settings: settings,
-            pingTester: pingTester
-          )
+      var inFlight = 0
+
+      func scheduleAvailableUnits() {
+        while inFlight < concurrencyLimit, nextIndex < units.count {
+          let unit = units[nextIndex]
+          nextIndex += 1
+          inFlight += 1
+          taskGroup.addTask {
+            await Self.measureBatchUnit(
+              unit,
+              apiClient: apiClient,
+              settings: settings,
+              pingTester: pingTester
+            )
+          }
         }
       }
 
-      while let result = await taskGroup.next() {
+      scheduleAvailableUnits()
+
+      while let unitResult = await taskGroup.next() {
+        inFlight -= 1
         guard proxyDelayBatchToken == token else {
           taskGroup.cancelAll()
           break
@@ -5796,46 +5879,47 @@ final class AppModel {
           break
         }
 
-        switch result.outcome {
-        case let .success(delay):
-          completedKeys.insert(result.item.nodeKey)
-          pendingStates[result.item.nodeKey] = .measured(delay)
-          pendingProgress.append { progress in progress.recordSuccess() }
-          processedSinceFlush += 1
-        case let .failure(kind, message):
-          guard kind != .cancelled else {
-            // Restoration is handled in one batch by `restoreCancelledBatchItems` once the loop
-            // unwinds, so cancelled in-flight results need no per-item publish here.
-            continue
+        let results: [ProxyDelayBatchItemResult]
+        switch unitResult {
+        case let .measured(itemResults):
+          results = itemResults
+        case let .unsupportedGroup(fallbackItems):
+          // The group endpoint refused this group (unknown name, or a core without it). Re-queue
+          // its members as ordinary per-node units so the batch never loses coverage.
+          units.append(contentsOf: fallbackItems.map { ProxyDelayBatchUnit.node($0) })
+          results = []
+        }
+
+        for result in results {
+          switch result.outcome {
+          case let .success(delay):
+            completedKeys.insert(result.item.nodeKey)
+            pendingStates[result.item.nodeKey] = .measured(delay)
+            pendingProgress.append { progress in progress.recordSuccess() }
+            processedSinceFlush += 1
+          case let .failure(kind, message):
+            guard kind != .cancelled else {
+              // Restoration is handled in one batch by `restoreCancelledBatchItems` once the loop
+              // unwinds, so cancelled in-flight results need no per-item publish here.
+              continue
+            }
+            completedKeys.insert(result.item.nodeKey)
+            pendingStates[result.item.nodeKey] = delayState(kind: kind, message: message)
+            let failure = ProxyDelayBatchFailure(
+              nodeKey: result.item.nodeKey,
+              groupName: result.item.groupName,
+              nodeName: result.item.node.name,
+              providerName: result.item.node.providerName,
+              kind: kind,
+              message: message
+            )
+            pendingProgress.append { progress in progress.recordFailure(failure) }
+            processedSinceFlush += 1
           }
-          completedKeys.insert(result.item.nodeKey)
-          pendingStates[result.item.nodeKey] = delayState(kind: kind, message: message)
-          let failure = ProxyDelayBatchFailure(
-            nodeKey: result.item.nodeKey,
-            groupName: result.item.groupName,
-            nodeName: result.item.node.name,
-            providerName: result.item.node.providerName,
-            kind: kind,
-            message: message
-          )
-          pendingProgress.append { progress in progress.recordFailure(failure) }
-          processedSinceFlush += 1
         }
 
         flushIfThresholdReached()
-
-        if nextIndex < items.count {
-          let item = items[nextIndex]
-          nextIndex += 1
-          taskGroup.addTask {
-            await Self.measureBatchDelay(
-              item: item,
-              apiClient: apiClient,
-              settings: settings,
-              pingTester: pingTester
-            )
-          }
-        }
+        scheduleAvailableUnits()
       }
     }
 
@@ -6184,6 +6268,136 @@ final class AppModel {
       }
       return try await pingTester.ping(host: host, timeoutMilliseconds: settings.normalizedTimeoutMilliseconds)
     }
+  }
+
+  /// Splits a flat batch into scheduling units, promoting every group large enough to be worth a
+  /// single `/group/{name}/delay` call.
+  ///
+  /// A group is only promoted when all of these hold:
+  /// - the probe actually goes through the core (`.nativePing` measures from this process, so
+  ///   there is no core endpoint to call);
+  /// - the group has a real name — `testDelay(for:)` synthesises an unnamed group for a node that
+  ///   belongs to no visible group, and the core has no such group to probe;
+  /// - every member shares one test URL, since the endpoint takes a single `url`;
+  /// - the group has more than one concurrency wave of members, so the loss of incremental
+  ///   results buys a real reduction in requests.
+  static func proxyDelayBatchUnits(
+    items: [ProxyDelayBatchItem],
+    settings: DelayTestSettings
+  ) -> [ProxyDelayBatchUnit] {
+    guard settings.mode == .mihomoURL else {
+      return items.map { .node($0) }
+    }
+
+    // Grouping preserves first-seen order so the batch still runs top-to-bottom over the page.
+    var order: [String] = []
+    var grouped: [String: [ProxyDelayBatchItem]] = [:]
+    for item in items {
+      if grouped[item.groupName] == nil {
+        order.append(item.groupName)
+      }
+      grouped[item.groupName, default: []].append(item)
+    }
+
+    return order.flatMap { groupName -> [ProxyDelayBatchUnit] in
+      let members = grouped[groupName] ?? []
+      guard !groupName.isEmpty,
+            members.count >= proxyGroupDelayMinimumMembers,
+            let testURL = members.first?.testURL,
+            members.allSatisfy({ $0.testURL == testURL })
+      else {
+        return members.map { .node($0) }
+      }
+      return [.group(name: groupName, testURL: testURL, items: members)]
+    }
+  }
+
+  private static func measureBatchUnit(
+    _ unit: ProxyDelayBatchUnit,
+    apiClient: any MihomoAPIControlling,
+    settings: DelayTestSettings,
+    pingTester: any PingTesting
+  ) async -> ProxyDelayBatchUnitResult {
+    switch unit {
+    case let .node(item):
+      let result = await measureBatchDelay(
+        item: item,
+        apiClient: apiClient,
+        settings: settings,
+        pingTester: pingTester
+      )
+      return .measured([result])
+    case let .group(name, testURL, items):
+      return await measureBatchGroupDelay(
+        groupName: name,
+        testURL: testURL,
+        items: items,
+        apiClient: apiClient,
+        settings: settings
+      )
+    }
+  }
+
+  /// One `/group/{name}/delay` call, mapped back onto the batch items it covers.
+  ///
+  /// The endpoint's failure model is the opposite of the per-node one and drives everything here
+  /// (contract measured against the bundled core, v1.19.30):
+  /// - it answers 200 with only the members that succeeded, so **a member missing from the
+  ///   response is a failed probe**, reported as a timeout — the same classification the per-node
+  ///   path derives from its 504 `Timeout` body, which keeps the issue #18 batch semantics
+  ///   (completed / partial / failed) identical across both paths;
+  /// - members the core does not know about simply never appear, and members it knows that we did
+  ///   not ask about are ignored, so the item list stays authoritative;
+  /// - an unknown group is a 404 for the whole call rather than a node failure, so it degrades to
+  ///   the per-node path instead of reporting that every member failed.
+  ///
+  /// Only one attempt is made even when `unifiedDelay` is on: that setting is mirrored into the
+  /// runtime config as `unified-delay` (`PersistedSettingsStore`), so the core already performs the
+  /// second handshake itself and returns the unified figure. Repeating the call here would double
+  /// the blocking window of the very probe this path exists to make cheaper.
+  private static func measureBatchGroupDelay(
+    groupName: String,
+    testURL: URL,
+    items: [ProxyDelayBatchItem],
+    apiClient: any MihomoAPIControlling,
+    settings: DelayTestSettings
+  ) async -> ProxyDelayBatchUnitResult {
+    let delays: [String: Int]
+    do {
+      delays = try await apiClient.testGroupDelay(
+        group: groupName,
+        testURL: testURL,
+        timeout: settings.normalizedTimeoutMilliseconds
+      )
+    } catch is CancellationError {
+      return .measured(items.map {
+        ProxyDelayBatchItemResult(item: $0, outcome: .failure(.cancelled, "Cancelled"))
+      })
+    } catch {
+      guard !Task.isCancelled else {
+        return .measured(items.map {
+          ProxyDelayBatchItemResult(item: $0, outcome: .failure(.cancelled, "Cancelled"))
+        })
+      }
+      return .unsupportedGroup(items)
+    }
+
+    guard !Task.isCancelled else {
+      return .measured(items.map {
+        ProxyDelayBatchItemResult(item: $0, outcome: .failure(.cancelled, "Cancelled"))
+      })
+    }
+
+    let timeoutMessage = NSLocalizedString(
+      "The proxy group delay test did not report a result for this node.",
+      comment: "Batch delay failure reason for a node omitted from the whole-group delay response."
+    )
+    return .measured(items.map { item in
+      guard let delay = delays[item.node.name] else {
+        return ProxyDelayBatchItemResult(item: item, outcome: .failure(.timeout, timeoutMessage))
+      }
+      return ProxyDelayBatchItemResult(item: item, outcome: .success(delay))
+    })
   }
 
   private static func measureBatchDelay(
@@ -8284,7 +8498,10 @@ final class AppModel {
 
   private func activateRuntimeArtifacts(_ materialization: RuntimeConfigMaterializationResult) {
     activeRuntimeConfigMaterialization = materialization
+    lastRuntimeConfigAppliedAt = Date()
     refreshActiveSnifferSettings(from: materialization.runtimeConfigURL)
+    refreshActiveDNSFacts(from: materialization.runtimeConfigURL)
+    refreshGeoDatabaseInventory()
   }
 
   private func clearActiveRuntimeArtifacts() {
@@ -8293,6 +8510,11 @@ final class AppModel {
     activeSnifferSettingsTask = nil
     activeSnifferSettings = nil
     activeSnifferSettingsChangedAt = nil
+    activeDNSFactsTask?.cancel()
+    activeDNSFactsTask = nil
+    activeDNSFacts = nil
+    lastRuntimeConfigAppliedAt = nil
+    lastFakeIPFlushAt = nil
   }
 
   /// Reads the applied config's `sniffer` block in the background so the Connections verdict can be
@@ -8309,6 +8531,165 @@ final class AppModel {
         activeSnifferSettingsChangedAt = Date()
       }
       activeSnifferSettings = settings
+    }
+  }
+
+  /// Reads the applied config's `dns` block in the background, for the same reason as the sniffer
+  /// block: `GET /configs` carries no `dns` key at all, so the generated file is the only source
+  /// that can say whether the core is in fake-ip mode (roadmap A3). Nothing waits on it; until it
+  /// lands the fake-ip verdict reports "unknown" rather than guessing.
+  private func refreshActiveDNSFacts(from url: URL) {
+    activeDNSFactsTask?.cancel()
+    activeDNSFactsTask = Task { @MainActor [weak self] in
+      let facts = await ActiveDNSConfigReader.facts(at: url)
+      guard !Task.isCancelled, let self else { return }
+      activeDNSFacts = facts
+    }
+  }
+
+  var fakeIPDiagnostics: FakeIPDiagnosticsSnapshot {
+    FakeIPDiagnosticsBuilder.snapshot(for: FakeIPDiagnosticsInput(
+      isCoreRunning: isCoreRunning,
+      dnsFacts: activeDNSFacts,
+      runtimeAppliedAt: lastRuntimeConfigAppliedAt,
+      lastFlushAt: lastFakeIPFlushAt,
+      networkChangedAt: lastNetworkEnvironmentChangeAt,
+      profileUpdatedAt: profileStore.activeProfile?.updatedAt
+    ))
+  }
+
+  var canFlushFakeIPCache: Bool {
+    apiClient != nil && !fakeIPFlushInFlight && fakeIPDiagnostics.canFlush
+  }
+
+  /// Drops the core's whole fake-ip table (roadmap A3). Cheap and safe — the next DNS query
+  /// re-allocates — and the only alternative previously on offer was restarting the core.
+  func flushFakeIPCache() {
+    guard fakeIPFlushTask == nil, apiClient != nil else { return }
+    fakeIPFlushInFlight = true
+    fakeIPFlushTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer {
+        fakeIPFlushInFlight = false
+        fakeIPFlushTask = nil
+      }
+      guard let apiClient else { return }
+      do {
+        try await apiClient.flushFakeIPCache()
+        guard !Task.isCancelled else { return }
+        lastFakeIPFlushAt = Date()
+        appendAppLog(level: "info", message: "Flushed the core's fake-ip cache.")
+      } catch is CancellationError {
+        return
+      } catch {
+        let message = UserFacingError.message(for: error)
+        appendAppLog(level: "warn", message: "Fake-ip cache flush failed: \(message)")
+        lastError = "Could not flush the fake-ip cache: \(message)"
+      }
+    }
+  }
+
+  /// Stats the geo databases in the core's working directory (roadmap B5). Safe to call with the
+  /// core down — the files outlive it, and their age is exactly what the diagnosis is about.
+  func refreshGeoDatabaseInventory() {
+    let directory = paths.runtime
+    let geoSettings = geoDatabaseSettings
+    geoDatabaseInventoryTask?.cancel()
+    geoDatabaseInventoryTask = Task { @MainActor [weak self] in
+      let inventory = await GeoDatabaseInventoryReader.inventory(at: directory, settings: geoSettings)
+      guard !Task.isCancelled, let self else { return }
+      geoDatabaseInventory = inventory
+    }
+  }
+
+  /// Which geo databases the running config actually references. Unknown while the core is down or
+  /// its rule list has not arrived, because an empty rule list must not be read as "no geo rules" —
+  /// that is the reading that would let the UI call a silent no-op a successful refresh.
+  var geoRuleRequirements: GeoRuleRequirements {
+    guard isCoreRunning, !rules.isEmpty else { return .unknown }
+    return GeoRuleRequirements.requirements(for: rules)
+  }
+
+  var geoDatabaseDiagnostics: GeoDatabaseDiagnosticsSnapshot {
+    GeoDatabaseDiagnosticsBuilder.snapshot(for: GeoDatabaseDiagnosticsInput(
+      isCoreRunning: isCoreRunning,
+      settings: geoDatabaseSettings,
+      inventory: geoDatabaseInventory,
+      requirements: geoRuleRequirements,
+      lastUpdateAt: lastGeoDatabaseUpdateAt,
+      lastUpdateFailure: lastGeoDatabaseUpdateFailure
+    ))
+  }
+
+  var canUpdateGeoDatabases: Bool {
+    apiClient != nil && !geoDatabaseUpdateInFlight && geoDatabaseDiagnostics.canUpdate
+  }
+
+  /// Asks the core to re-download the geo databases (roadmap B5).
+  ///
+  /// `POST /configs/geo` answers 204 for "downloaded four files" and for "did nothing at all", so
+  /// the status code alone cannot be reported as success. The working directory is stat'ed either
+  /// side of the call and the outcome is described from what actually changed on disk: files
+  /// rewritten, nothing to do because the remote is unchanged (the core sends `If-None-Match` and
+  /// skips the write on a 304), or a refresh that touched nothing while a referenced database is
+  /// still missing — which is the silent no-op, and is reported as one.
+  func updateGeoDatabases() {
+    guard geoDatabaseUpdateTask == nil, apiClient != nil else { return }
+    let directory = paths.runtime
+    let geoSettings = geoDatabaseSettings
+    let requirements = geoRuleRequirements
+    geoDatabaseUpdateInFlight = true
+    geoDatabaseUpdateStatusMessage = nil
+    geoDatabaseUpdateTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer {
+        geoDatabaseUpdateInFlight = false
+        geoDatabaseUpdateTask = nil
+      }
+      guard let apiClient else { return }
+      let before = await GeoDatabaseInventoryReader.inventory(at: directory, settings: geoSettings)
+      do {
+        try await apiClient.updateGeoDatabases()
+      } catch is CancellationError {
+        return
+      } catch {
+        let message = UserFacingError.message(for: error)
+        guard !Task.isCancelled else { return }
+        lastGeoDatabaseUpdateFailure = message
+        geoDatabaseUpdateStatusMessage = nil
+        appendAppLog(level: "warn", message: "Geo database update failed: \(message)")
+        lastError = "Could not update the geo databases: \(message)"
+        return
+      }
+      let after = await GeoDatabaseInventoryReader.inventory(at: directory, settings: geoSettings)
+      guard !Task.isCancelled else { return }
+      geoDatabaseInventory = after
+      lastGeoDatabaseUpdateAt = Date()
+      lastGeoDatabaseUpdateFailure = nil
+      let kinds = requirements.isKnown && requirements.referencesAny
+        ? requirements.referencedKinds
+        : GeoDatabaseKind.allCases
+      let changed = kinds.compactMap { after.state(for: $0) }
+        .filter { $0 != before.state(for: $0.kind) }
+      let stillMissing = kinds.compactMap { after.state(for: $0) }.filter { !$0.exists }
+      if !changed.isEmpty {
+        let names = changed.map(\.fileName).joined(separator: ", ")
+        geoDatabaseUpdateStatusMessage = String(
+          format: String(localized: "Updated %@."),
+          names
+        )
+        appendAppLog(level: "info", message: "Geo database update rewrote \(names).")
+      } else if !stillMissing.isEmpty {
+        let names = stillMissing.map(\.fileName).joined(separator: ", ")
+        geoDatabaseUpdateStatusMessage = String(
+          format: String(localized: "The core reported no error but did not download %@. No rule in the running config asks for that database."),
+          names
+        )
+        appendAppLog(level: "warn", message: "Geo database update downloaded nothing; \(names) still absent.")
+      } else {
+        geoDatabaseUpdateStatusMessage = String(localized: "The geo databases were already current.")
+        appendAppLog(level: "info", message: "Geo database update found nothing newer to download.")
+      }
     }
   }
 
@@ -8876,7 +9257,7 @@ private struct ProxyDelayCacheEntry {
   var recordedAt: Date
 }
 
-private struct ProxyDelayBatchItem: Sendable {
+struct ProxyDelayBatchItem: Sendable {
   var groupName: String
   var node: ProxyNode
   var nodeKey: ProxyNodeKey
@@ -8884,6 +9265,18 @@ private struct ProxyDelayBatchItem: Sendable {
   var testURL: URL
   var previousState: ProxyDelayState
   var nativePingHost: String?
+}
+
+/// One scheduling slot in a batch delay run: either a single node probe or a whole-group probe.
+enum ProxyDelayBatchUnit: Sendable {
+  case node(ProxyDelayBatchItem)
+  case group(name: String, testURL: URL, items: [ProxyDelayBatchItem])
+}
+
+private enum ProxyDelayBatchUnitResult: Sendable {
+  case measured([ProxyDelayBatchItemResult])
+  /// The core could not answer a whole-group probe for these items; run them one by one instead.
+  case unsupportedGroup([ProxyDelayBatchItem])
 }
 
 private struct ProxyDelayBatchItemResult: Sendable {

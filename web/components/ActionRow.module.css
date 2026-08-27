@@ -1,0 +1,9 @@
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+@media (max-width: 419px) {
+  .row { display: grid; grid-template-columns: 1fr; }
+}

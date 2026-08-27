@@ -1,0 +1,47 @@
+/* The restricted-area marking off a sectional: hatch inside the boundary,
+   drawn once, at the one place on the page that talks about limits. */
+.hatch {
+  height: 10px;
+  border-top: 1px solid var(--restricted);
+  background-image: repeating-linear-gradient(
+    -45deg,
+    var(--restricted) 0 1px,
+    transparent 1px 7px
+  );
+  opacity: 0.55;
+  margin-bottom: clamp(1.75rem, 3.5vw, 2.75rem);
+}
+
+.list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  column-gap: clamp(1.5rem, 4vw, 3.5rem);
+  border-top: 1px solid var(--hair-strong);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  padding: 1.125rem 0 1.25rem;
+  border-bottom: 1px solid var(--hair-faint);
+}
+
+.title {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+.detail {
+  margin: 0.4375rem 0 0;
+  font-size: 0.875rem;
+  line-height: 1.55;
+  color: var(--ink-2);
+  text-wrap: pretty;
+}
+
+@media (max-width: 1023px) { .list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 639px) { .list { grid-template-columns: 1fr; } }

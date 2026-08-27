@@ -2,13 +2,20 @@
 
 **English** | [简体中文](ROADMAP.zh-CN.md)
 
-**Status:** draft 2026-08-14 · maintainer [@marvinli001](https://github.com/marvinli001) ·
-app 1.0.23, bundled Mihomo [v1.19.30](../Resources/Core/mihomo-manifest.json)
+**Status:** draft 2026-08-14, revised 2026-08-27 · maintainer
+[@marvinli001](https://github.com/marvinli001) · app 1.0.23, bundled Mihomo
+[v1.19.30](../Resources/Core/mihomo-manifest.json)
 
 This document records **where ClashMax is going and why**, in a form that can be checked
 against the tree. It is not a wish list. Every gap named below was verified by reading the
 repository on 2026-08-14, and every proposed issue carries acceptance criteria that can be
 demonstrated with a command or a screenshot.
+
+The 2026-08-27 revision closes **A3, A6 and B5** — the three coverage gaps that were either
+already hurting users or getting worse on their own. Each endpoint contract quoted in those
+sections was probed against the bundled core rather than read off the upstream docs; where a
+probe contradicted the obvious assumption, the contradiction is written down next to the
+criterion it constrains.
 
 Bug fixes, filed issues, and Mihomo version bumps are ongoing maintenance and are
 deliberately **not** in this document. This is about what ClashMax is *for*.
@@ -133,10 +140,11 @@ Gaps, in priority order:
 | --- | --- | --- |
 | **`sniffer`** | **Zero occurrences repo-wide.** Worse: the connections decoder backfills a missing domain with the destination IP ([`MihomoAPIClient.swift:448`](../ClashMax/Services/MihomoAPIClient.swift#L448)), so nothing downstream can tell a domainless connection from a named one | Connections opened straight to an IP (hardcoded-IP apps, some CDNs, QUIC) carry no domain, so `DOMAIN-SUFFIX` rules cannot match them. Users experience this as *"my rules don't work"* — and our diagnostics cannot say why, because the fact is destroyed before diagnosis. See [A1](#a1--sniffer-recover-the-domain-the-kernel-never-saw) |
 | **`/dns/query`** | Not implemented | Cannot answer "which nameserver answered this domain, and with what address". Leaves a hole in the middle of the routing story we otherwise tell end to end. |
-| **`/cache/fakeip/flush`** | Not implemented | A stale fake-ip mapping can only be cleared by restarting the core. |
-| **`/group/{name}/delay`** | Not implemented | Batch delay testing is issued per node; the kernel has a whole-group endpoint. |
-| **`geox-url`, `geo-auto-update`, `geodata-mode`** | Present only in the ClashX migration key allow-list ([`ClashXMigrationParser.swift:748`](../ClashMax/Services/ClashXMigrationParser.swift#L748)) — recognized, not supported | GeoIP/GeoSite databases cannot be updated, so geo-based rules silently drift out of date. |
-| **`/configs/geo`, `/memory`** | Not implemented | No in-app geo database refresh; no core memory telemetry. |
+| **`/cache/fakeip/flush`** | **Closed 2026-08-27** — `flushFakeIPCache()`, surfaced through `FakeIPDiagnosticsBuilder` as an L1 fix action. See [A3](#a3--flush-fake-ip-cache-as-an-l1-fix-action) | *(was: a stale fake-ip mapping can only be cleared by restarting the core)* |
+| **`/group/{name}/delay`** | **Closed 2026-08-27** — whole-group units replace per-node fan-out above 8 members. See [A6](#a6--batch-delay-testing-via-groupnamedelay) | *(was: batch delay testing is issued per node; the kernel has a whole-group endpoint)* |
+| **`geox-url`, `geo-auto-update`, `geodata-mode`** | **Closed 2026-08-27** — `GeoDatabaseSettings` is app-managed and generated into the runtime YAML by `ConfigNormalizer`. Still *not* imported from ClashX: the migration parser continues to allow-list them without reading them. See [B5](#b5--geo-database-maintenance) | *(was: GeoIP/GeoSite databases cannot be updated, so geo-based rules silently drift out of date — measured on the maintainer's own machine on 2026-08-27: `GeoSite.dat` last written Jun 20, `geoip.metadb` May 4)* |
+| **`/configs/geo`** | **Closed 2026-08-27** — `updateGeoDatabases(timeout:)` behind an Update Now action | *(was: no in-app geo database refresh)* |
+| **`/memory`** | Not implemented | No core memory telemetry. |
 | **`tcp-concurrent`, `global-client-fingerprint`, `find-process-mode`, `keep-alive-interval`, `ntp`, `experimental`, `global-ua`, `interface-name`** | Zero occurrences | Advanced users hit a hard ceiling. **Per INV-2 the fix is the generic override path, not eight new toggles.** |
 | **`listeners`** | Recognized only as a subscription risk key to strip | Inbound listeners (serving other devices on the LAN) are unavailable. Needs a deliberate decision, not a default. |
 
@@ -352,11 +360,33 @@ believing the user when they say their rules do not work.
 
 #### A3 — Flush fake-ip cache as an L1 fix action
 
+**Status: shipped 2026-08-27.** Not yet exercised by hand — see the gap below.
+
 - **Problem:** a stale fake-ip mapping currently requires a core restart.
+- **What the endpoint actually does**, probed against the bundled core v1.19.30: `POST
+  /cache/fakeip/flush` answers `204` with an empty body **whether or not the core is in
+  fake-ip mode**, and `GET` answers `405`. The reply therefore cannot be used to decide
+  whether the action meant anything — that decision has to be made *before* the call. It is,
+  and not from `GET /configs`, which carries **no `dns` key at all**;
+  [`ActiveDNSConfigReader`](../ClashMax/Services/ActiveDNSConfigReader.swift) reads the
+  `dns:` block back off the runtime YAML the core was actually handed, the same way A1a's
+  reader does for `sniffer`.
 - **Acceptance criteria:**
-  - [ ] `MihomoAPIClient` gains `flushFakeIPCache()`.
-  - [ ] Surfaced as a fix action on the relevant diagnosis, not as a bare button.
-  - [ ] Disabled with an explanation when `enhanced-mode` is not `fake-ip`.
+  - [x] `MihomoAPIClient` gains `flushFakeIPCache()`.
+  - [x] Surfaced as a fix action on the relevant diagnosis, not as a bare button.
+        [`FakeIPDiagnosticsBuilder`](../ClashMax/Models/FakeIPDiagnostics.swift) only reaches
+        `warn` when something *invalidating* happened after the table was last known empty —
+        the profile reloaded, or the network changed. Absent that it is `pass`, and the panel
+        says so rather than inviting a pointless flush.
+  - [x] Disabled with an explanation when `enhanced-mode` is not `fake-ip`. `canFlush` is
+        false for every cause where the core holds no table (core down, config not read back,
+        DNS off, not fake-ip mode) and the control is rendered **disabled with `reason`
+        showing**, not hidden — a hidden control cannot explain why it is not there.
+- **Baseline:** the known-good moment is the later of "the core started with an empty table"
+  and "we emptied it ourselves". That is sound here only because `profile.store-fake-ip` is
+  never written by ClashMax and defaults to `false`, so the table genuinely is empty at core
+  start.
+- **Gap:** never run by hand against a real captive portal or a real subscription update.
 
 #### A4 — Connection route replay
 
@@ -384,11 +414,26 @@ believing the user when they say their rules do not work.
 
 #### A6 — Batch delay testing via `/group/{name}/delay`
 
+**Status: shipped 2026-08-27, except the measurement.**
+
+- **What the endpoint actually does**, probed against the bundled core v1.19.30: `GET
+  /group/{name}/delay?url=&timeout=` returns a flat `[String: Int]` on 200, an unknown group
+  is `404`, and — the load-bearing detail — **a node that failed its probe is silently
+  omitted from the response rather than reported**. Absence is the failure signal, which is
+  why the mapping back into per-node state has to be explicit rather than a dictionary
+  lookup with a shrug.
 - **Acceptance criteria:**
-  - [ ] Whole-group testing uses the group endpoint; per-node stays for single tests.
-  - [ ] The batch status semantics established for issue #18 (running / completed / partial /
-        failed / cancelled) are preserved exactly.
-  - [ ] Measured on a group of 1000+ nodes and the result recorded in `MANUAL_TEST_PLAN.md`.
+  - [x] Whole-group testing uses the group endpoint; per-node stays for single tests.
+        `AppModel.proxyDelayBatchUnits(items:settings:)` promotes a group to one request only
+        when it has a name, at least 8 members (one concurrency wave of 6 plus a margin), and
+        every member shares one test URL; `.nativePing` never promotes, because that mode does
+        not go through the core at all.
+  - [x] The batch status semantics established for issue #18 (running / completed / partial /
+        failed / cancelled) are preserved exactly — a member the core omitted is recorded as
+        `.failure(.timeout, …)`, so it counts as tested-and-failed, not as missing.
+  - [ ] **Measured on a group of 1000+ nodes and the result recorded in
+        `MANUAL_TEST_PLAN.md`.** Still open. The unit-promotion logic is covered by tests, but
+        the number this item exists to produce does not exist yet.
 
 ---
 
@@ -449,13 +494,46 @@ cannot copy cheaply.
 
 #### B5 — Geo database maintenance
 
+**Status: shipped 2026-08-27.** Never seen by eye — see the gap below.
+
 - **Problem:** `geox-url` / `geo-auto-update` / `geodata-mode` are recognized but
-  unsupported, so geo rules drift.
+  unsupported, so geo rules drift. This is the only gap on the 3.2 list that **keeps getting
+  worse while nothing happens**, and it was already happening: on the maintainer's own
+  machine on 2026-08-27, `~/Library/Application Support/ClashMax/Runtime/` held a
+  `GeoSite.dat` last written **Jun 20** and a `geoip.metadb` last written **May 4** — roughly
+  two and four months of drift, with no surface anywhere in the app that said so.
+- **Traps found while implementing this**, both verified against the bundled core v1.19.30:
+  - A config **file** must spell the `geox-url` sub-keys `geoip` / `geosite` / `mmdb` / `asn`.
+    `GET /configs` echoes them back as `geo-ip` / `geo-site`, and writing *those* spellings
+    into the file is **silently ignored** — the core keeps its built-in URLs and nothing
+    reports a problem.
+  - `geodata-mode` decides which GeoIP file is even on disk: off means `geoip.metadb` from the
+    `mmdb` source, on means `GeoIP.dat` from the `geoip` source. Staleness has to be measured
+    against the file the current mode actually uses.
 - **Acceptance criteria:**
-  - [ ] The three keys are app-managed and generated into the runtime YAML.
-  - [ ] Manual refresh via `/configs/geo`, with the last-update time visible.
-  - [ ] A failed or partial download never leaves a broken database in place.
-  - [ ] Default URLs are documented and overridable at L3.
+  - [x] The three keys are app-managed and generated into the runtime YAML —
+        `GeoDatabaseSettings` in [`CoreModels.swift`](../ClashMax/Models/CoreModels.swift),
+        written by [`ConfigNormalizer`](../ClashMax/Services/ConfigNormalizer.swift).
+  - [x] Manual refresh via `/configs/geo`, with the last-update time visible. The panel
+        reports the age of the **oldest database the running rules actually reference**, not a
+        remembered "last clicked" timestamp, so it stays honest across app restarts.
+  - [x] A failed or partial download never leaves a broken database in place. This one is the
+        core's doing, not ours, and it was checked rather than assumed: a failed refresh
+        answers **`500` with a `{"message": …}` body** and leaves the existing files
+        byte-identical. The message is surfaced verbatim — `ClientError.coreMessage` exists
+        precisely so the core's own explanation is not flattened into "HTTP 500".
+  - [x] Default URLs are documented and overridable at L3 (four MetaCubeX URLs, each
+        replaceable, validated for scheme and emptiness before they can be saved).
+- **The silent-no-op guard:** `/configs/geo` answers `204` for "downloaded four files" *and*
+  for "did nothing at all", so the status code alone must never be reported as success. The
+  working directory is stat'ed either side of the call and the outcome is described from what
+  changed on disk: rewritten, already current (the core sends `If-None-Match`, so an unchanged
+  remote produces a 304 and no write), or *refreshed nothing while a referenced database is
+  still missing* — which is the real no-op, and is reported as one.
+- **Not done:** ClashX migration still only allow-lists these three keys. A user migrating
+  from ClashX keeps their geo settings on paper and gets ClashMax's defaults in practice.
+- **Gap:** never seen by eye. The whole feature is a claim about what is on disk, and nobody
+  has watched it make that claim in a running app.
 
 ---
 
@@ -552,10 +630,10 @@ Deliberately conservative — one track at a time, with D interleaved.
 | **First** | **A1a** | A decoder fix with no UI, and a hard prerequisite: until the connections decoder stops collapsing "no domain" into "the destination IP", the diagnosis in A1c is not computable. Ships on its own, in a day. |
 | **Then** | **A1b + A1c + A1d** | The highest-priority item in this document, and the smallest closed loop that validates the whole thesis: a real kernel gap, a real diagnostic gap, one fix button, no new UI paradigm. If the three-layer model is wrong, this is where it shows cheaply. |
 | **Then** | A2 | The other half of the routing story. Do it after A1 so the domain shown in the DNS panel and the domain the rules actually matched on are known to be the same value. |
-| **Then** | A3, A5, C1 | Low-risk, high-leverage. A5 and C1 both reduce maintainer load directly; C1 absorbs A1d. |
+| **Then** | ~~A3~~, A5, C1 | Low-risk, high-leverage. A5 and C1 both reduce maintainer load directly; C1 absorbs A1d. **A3 shipped 2026-08-27** alongside B5. |
 | **Then** | B1, A4 | B1 is the headline user-facing feature; A4 is the screen that makes the moat obvious. Do B1 after A1 so process rules are not the second thing to fail on domainless connections. |
 | **Then** | B2, C2 | Both are stateful and need the earlier work to be trustworthy first. |
-| **Later** | B3, B4, B5, A6, C3 | Valuable, not load-bearing. |
+| **Later** | B3, B4, ~~B5~~, ~~A6~~, C3 | Valuable, not load-bearing. **B5 and A6 were pulled forward and shipped 2026-08-27.** B5 because it was the one item on this list that degrades while nothing happens — and it had already been degrading for four months on the maintainer's own machine, which "not load-bearing" failed to predict. A6 because the #10 / #11 / #18 jank series all originate in the per-node fan-out it removes. |
 | **Throughout** | D1, D2, D3 | Never a milestone of its own. |
 
 ---

@@ -1,0 +1,101 @@
+.strip {
+  border-top: 1px solid var(--hair-strong);
+  border-bottom: 1px solid var(--hair-strong);
+}
+
+.inner {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.cell {
+  padding: 1.25rem 0 1.375rem;
+  padding-inline-start: 1.25rem;
+  border-inline-start: 1px solid var(--hair);
+  display: grid;
+  align-content: start;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.cell:first-child {
+  border-inline-start: 0;
+  padding-inline-start: 0;
+}
+
+.value {
+  font-size: clamp(1.375rem, 2.4vw, 1.875rem);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+/* Instrument damping: a live value does not blink into place, it settles. */
+.settle {
+  animation: settle 520ms var(--ease-out) both;
+}
+
+@keyframes settle {
+  from { opacity: 0.35; transform: translateY(-0.14em); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settle { animation: none; }
+}
+
+.meta {
+  font-size: 0.8125rem;
+  color: var(--ink-3);
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+
+.meta a { color: inherit; }
+
+.state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4375rem;
+  font-family: var(--face-label);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+/* The one status dot on the page, and it reports a real fetch outcome. */
+.state::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border: 1px solid currentColor;
+  background: transparent;
+}
+
+.state[data-state='live'] {
+  color: var(--airway);
+}
+
+.state[data-state='live']::before {
+  background: currentColor;
+}
+
+@media (max-width: 899px) {
+  .inner { grid-template-columns: repeat(2, 1fr); }
+  .cell:nth-child(3) { border-inline-start: 0; padding-inline-start: 0; }
+  .cell:nth-child(-n + 2) { border-bottom: 1px solid var(--hair); }
+}
+
+@media (max-width: 479px) {
+  .inner { grid-template-columns: 1fr; }
+  .cell {
+    border-inline-start: 0;
+    padding-inline-start: 0;
+    border-bottom: 1px solid var(--hair);
+  }
+  .cell:last-child { border-bottom: 0; }
+}

@@ -32,3 +32,11 @@ docs/APP_UPDATES.md
 docs/UI_LIQUID_GLASS_SWIFT6_AUDIT.md
 # Consolidated workstation-only verification checklist.
 MANUAL_TEST_PLAN.md
+PRODUCT.md
+
+# Next.js source for the docs/web site. The built export in docs/web IS committed.
+web/node_modules/
+web/.next/
+web/out/
+# Impeccable working notes and QA captures, workstation-only like the checklists above.
+.impeccable/

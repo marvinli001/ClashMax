@@ -1,0 +1,295 @@
+.wrap {
+  display: grid;
+  gap: 0;
+}
+
+.plate {
+  position: relative;
+  padding: 0;
+  overflow: hidden;
+}
+
+.svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* One geometry, drawn twice: the chart turns portrait on a phone so the
+   lettering keeps its real size instead of scaling down into noise. */
+.landscape { display: block; }
+.portrait { display: none; }
+
+@media (max-width: 719px) {
+  .landscape { display: none; }
+  .portrait { display: block; }
+}
+
+/* --- Chart line work --------------------------------------------------- */
+
+.corridor {
+  stroke: var(--hair-strong);
+  stroke-width: 1;
+  fill: none;
+}
+
+.boundary {
+  stroke: var(--hair-strong);
+  stroke-width: 1;
+  stroke-dasharray: 5 4;
+  fill: none;
+}
+
+.boundaryMatched {
+  stroke: var(--ink);
+  stroke-dasharray: none;
+  stroke-width: 1.4;
+}
+
+.bandFill { fill: var(--airway-wash); }
+.bandFillReject { fill: var(--restricted-wash); }
+
+.bandEdge {
+  stroke: var(--airway);
+  stroke-width: 1;
+  fill: none;
+  opacity: 0.5;
+}
+
+.bandEdgeReject {
+  stroke: var(--restricted);
+  stroke-width: 1;
+  fill: none;
+  opacity: 0.55;
+}
+
+.originMark {
+  stroke: var(--ink);
+  stroke-width: 1.25;
+  fill: var(--paper-plate);
+}
+
+.tick {
+  stroke: var(--ink-3);
+  stroke-width: 1;
+}
+
+.label {
+  font-family: var(--face-label);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  fill: var(--ink-3);
+}
+
+.labelPortrait { font-size: 10.5px; }
+
+.ruleLabel {
+  font-family: var(--face-mono);
+  font-size: 9px;
+  letter-spacing: 0;
+  fill: var(--ink-3);
+  text-transform: none;
+}
+
+.ruleLabelMatched { fill: var(--ink); font-weight: 500; }
+
+.order {
+  font-family: var(--face-label);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  fill: var(--ink-3);
+  opacity: 0.75;
+}
+
+.originLabel {
+  font-family: var(--face-mono);
+  font-size: 10px;
+  fill: var(--ink-2);
+}
+
+.bandLabel {
+  font-family: var(--face-label);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.bandLabelProxy { fill: var(--airway); }
+.bandLabelReject { fill: var(--restricted); }
+.bandLabelDirect { fill: var(--ink-2); }
+
+/* --- The route. The one authored motion moment on the page. ------------ */
+
+/*
+ * The dash length is the route's own length in user units, measured in the
+ * component and handed down as --route-len. pathLength normalisation is not
+ * used here: Chrome renders a pathLength-normalised dasharray against the
+ * geometric length, so a `1` dash covered only a stub of the real polyline.
+ * If the property ever goes missing the dasharray simply drops out and the
+ * route renders solid, which is the correct resting state anyway.
+ */
+.route {
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: butt;
+  stroke-linejoin: miter;
+  stroke-dasharray: var(--route-len);
+  stroke-dashoffset: 0;
+  animation: draw 820ms var(--ease-out) both;
+}
+
+@keyframes draw {
+  from { stroke-dashoffset: var(--route-len); }
+  to { stroke-dashoffset: 0; }
+}
+
+.routeProxy { stroke: var(--airway); }
+.routeReject { stroke: var(--restricted); }
+.routeDirect { stroke: var(--ink); }
+
+.head {
+  animation: headIn 820ms var(--ease-out) both;
+}
+
+@keyframes headIn {
+  0%, 72% { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+.headProxy { fill: var(--airway); }
+.headReject { fill: var(--restricted); }
+.headDirect { fill: var(--ink); }
+
+.crossing {
+  stroke-width: 1.4;
+  animation: headIn 820ms var(--ease-out) both;
+}
+.crossingProxy { stroke: var(--airway); }
+.crossingReject { stroke: var(--restricted); }
+.crossingDirect { stroke: var(--ink); }
+
+@media (prefers-reduced-motion: reduce) {
+  .route,
+  .head,
+  .crossing {
+    animation: none;
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+}
+
+/* --- Destination picker ------------------------------------------------ */
+
+.picker {
+  border-top: 1px solid var(--hair-strong);
+  padding: 1rem 1.125rem 1.125rem;
+}
+
+.pickerLegend {
+  display: block;
+  margin-bottom: 0.75rem;
+}
+
+.options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4375rem;
+}
+
+.option {
+  position: relative;
+  display: inline-flex;
+}
+
+.option input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  margin: 0;
+  cursor: pointer;
+}
+
+.optionLabel {
+  display: inline-flex;
+  align-items: center;
+  height: 2rem;
+  padding-inline: 0.8125rem;
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--r-control);
+  font-family: var(--face-mono);
+  font-size: 0.75rem;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition:
+    border-color 0.18s var(--ease-out),
+    color 0.18s var(--ease-out),
+    background-color 0.18s var(--ease-out);
+}
+
+.option:hover .optionLabel {
+  border-color: var(--ink-2);
+  color: var(--ink);
+}
+
+.option input:checked + .optionLabel {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.option input:focus-visible + .optionLabel {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* --- Verdict readout --------------------------------------------------- */
+
+/* The readout is knocked out of the graticule outright: a solid patch of
+   stock under the one piece of type the whole chart exists to deliver. */
+.verdict {
+  border-top: 1px solid var(--hair-strong);
+  background: var(--paper-plate);
+  padding: 0.9375rem 1.125rem 1.0625rem;
+  display: grid;
+  gap: 0.4375rem;
+}
+
+.verdictHead {
+  display: flex;
+  align-items: baseline;
+  gap: 0.625rem;
+  flex-wrap: wrap;
+}
+
+.verdictRule {
+  font-family: var(--face-mono);
+  font-size: 0.8125rem;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.verdictClearance {
+  font-family: var(--face-label);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.verdictNote {
+  font-size: 0.875rem;
+  line-height: 1.55;
+  color: var(--ink-2);
+  margin: 0;
+}
+
+.caption {
+  margin: 0.875rem 0 0;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--ink-3);
+  max-width: 54ch;
+}

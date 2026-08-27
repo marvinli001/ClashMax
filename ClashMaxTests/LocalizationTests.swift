@@ -217,6 +217,12 @@ final class LocalizationTests: XCTestCase {
     XCTAssertEqual(zhBundle.localizedString(forKey: "Sniffer", value: nil, table: nil), "嗅探")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Sniffing", value: nil, table: nil), "域名嗅探")
     XCTAssertEqual(zhBundle.localizedString(forKey: "New Sniffer Patch", value: nil, table: nil), "新建嗅探补丁")
+    // Both of these only reached the catalog when Xcode re-extracted strings while archiving
+    // 1.0.23: the lowercase key names the change in the apply-outcome sentence ("Mihomo
+    // reloaded, so the %@ change is live now."), and "Sniffer Patch" titles the Routing diff
+    // section. Both shipped in English in 1.0.23.
+    XCTAssertEqual(zhBundle.localizedString(forKey: "sniffer", value: nil, table: nil), "嗅探")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Sniffer Patch", value: nil, table: nil), "嗅探补丁")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Rewrite Target", value: nil, table: nil), "改写目标")
     XCTAssertEqual(zhBundle.localizedString(forKey: "DNS Mapping", value: nil, table: nil), "DNS 映射")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Parse Pure IP", value: nil, table: nil), "解析纯 IP")
@@ -701,6 +707,76 @@ final class LocalizationTests: XCTestCase {
     XCTAssertEqual(
       String(format: probeFormat, "目标地址 example.com"),
       "已按当前规则列表模拟：目标地址 example.com。"
+    )
+  }
+
+  /// Geo database maintenance (roadmap B5), the fake-ip flush action (A3) and the whole-group
+  /// delay probe (A6) all shipped their user-facing copy at once. The geo panel is the one that
+  /// matters most here: its whole job is to say out loud that a database has silently gone stale,
+  /// which it cannot do on a Chinese system in English.
+  func testSimplifiedChineseStringCatalogProvidesGeoAndFakeIPKeys() throws {
+    let bundle = try XCTUnwrap(Bundle(identifier: AppConstants.bundleIdentifier))
+    let zhPath = try XCTUnwrap(bundle.path(forResource: "zh-Hans", ofType: "lproj"))
+    let zhBundle = try XCTUnwrap(Bundle(path: zhPath))
+    let expectedTranslations = [
+      "Geo Databases": "Geo 数据库",
+      "Geo databases are current": "Geo 数据库是最新的",
+      "Geo databases are out of date": "Geo 数据库已过期",
+      "Geo databases not downloaded yet": "Geo 数据库尚未下载",
+      "Geo database update failed": "Geo 数据库更新失败",
+      "Geo database age unknown": "Geo 数据库时间未知",
+      "No geo data in use": "未使用 Geo 数据",
+      "Update Now": "立即更新",
+      "Update Automatically": "自动更新",
+      "Manual updates only": "仅手动更新",
+      "Last Refresh": "最近刷新",
+      "GeoIP Format": "GeoIP 格式",
+      "Use dat-format GeoIP data": "使用 dat 格式的 GeoIP 数据",
+      "Sources": "下载源",
+      "custom sources": "自定义下载源",
+      "hours": "小时",
+      "Fake IP is active": "Fake IP 已启用",
+      "Fake-ip mappings may be stale": "fake-ip 映射可能已过期",
+      "Flush Fake IP Cache": "清空 Fake IP 缓存",
+      "Not in fake-ip mode": "未处于 fake-ip 模式",
+      "No fake-ip table": "没有 fake-ip 表",
+      "DNS is off": "DNS 未启用",
+      "Enhanced Mode": "增强模式",
+      "Last Flush": "最近清空",
+      "Network Changed": "网络已变化",
+      "Profile Updated": "配置文件已更新",
+      "The proxy group delay test did not report a result for this node.": "代理组延迟测试没有返回该节点的结果。",
+    ]
+
+    for (key, expected) in expectedTranslations {
+      XCTAssertEqual(
+        zhBundle.localizedString(forKey: key, value: nil, table: nil),
+        expected,
+        "Expected a Simplified Chinese translation for \(key)"
+      )
+    }
+
+    let staleFormat = zhBundle.localizedString(
+      forKey: "The oldest geo database was last written %@ and automatic updates are off, so GEOIP and GEOSITE rules are matching against that snapshot.",
+      value: nil,
+      table: nil
+    )
+    XCTAssertEqual(
+      String(format: staleFormat, "2 个月前"),
+      "最旧的 Geo 数据库写入于 2 个月前，且自动更新已关闭，因此 GEOIP 和 GEOSITE 规则一直在按那份快照匹配。"
+    )
+
+    let missingFormat = zhBundle.localizedString(forKey: "%@ — not downloaded", value: nil, table: nil)
+    XCTAssertEqual(String(format: missingFormat, "GeoSite.dat"), "GeoSite.dat — 尚未下载")
+
+    let modeFormat = zhBundle.localizedString(
+      forKey: "DNS enhanced-mode is %@, so the core returns real addresses and keeps no fake-ip table.",
+      value: nil,
+      table: nil
+    )
+    XCTAssertEqual(
+      String(format: modeFormat, "redir-host"),
+      "DNS enhanced-mode 为 redir-host，内核会返回真实地址，不维护 fake-ip 表。"
     )
   }
 }

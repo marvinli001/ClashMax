@@ -1,0 +1,41 @@
+.head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+  gap: clamp(1rem, 4vw, 3.5rem);
+  align-items: end;
+  padding-bottom: clamp(1.75rem, 3.5vw, 2.75rem);
+}
+
+/* Set in the narrow face: the same lettering that names every waypoint and
+   captions every figure, here at heading size. A band titled in the chart's
+   own hand reads as a panel of the sheet rather than a section of a landing
+   page. Only the hero's first line stays in the text face, so its pivot into
+   narrow on the second line still lands as the page's one typographic turn. */
+.heading {
+  margin: 0;
+  font-family: var(--face-label);
+  font-size: clamp(1.875rem, 3.7vw, 3rem);
+  line-height: 1.02;
+  letter-spacing: -0.018em;
+  font-weight: 700;
+  text-wrap: balance;
+}
+
+:global(html[lang^='zh']) .heading {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.24;
+}
+
+.body {
+  margin: 0;
+  text-wrap: pretty;
+}
+
+@media (max-width: 899px) {
+  .head {
+    grid-template-columns: 1fr;
+    align-items: start;
+    gap: 1rem;
+  }
+}

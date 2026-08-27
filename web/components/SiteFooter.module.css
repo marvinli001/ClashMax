@@ -1,0 +1,77 @@
+/* The margin block of a chart sheet: publisher, edition, and the marks that
+   explain the sheet, set small and ruled off. */
+.footer {
+  border-top: 1px solid var(--hair-strong);
+  padding-block: clamp(2.5rem, 5vw, 3.75rem);
+  font-size: 0.875rem;
+  color: var(--ink-2);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: clamp(1.5rem, 4vw, 3rem);
+  align-items: start;
+}
+
+.identity {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.875rem;
+}
+
+.rose { color: var(--ink-3); flex: none; margin-top: 0.125rem; }
+
+.name {
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: -0.015em;
+}
+
+.note { margin: 0.3125rem 0 0; max-width: 42ch; line-height: 1.55; }
+
+.links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5rem;
+  justify-content: flex-end;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.links a { color: var(--ink-2); }
+.links a:hover { color: var(--ink); }
+
+.rule {
+  margin-top: clamp(1.75rem, 3.5vw, 2.5rem);
+  padding-top: 1rem;
+  border-top: 1px solid var(--hair);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5rem;
+  align-items: baseline;
+  color: var(--ink-3);
+  font-size: 0.8125rem;
+}
+
+.spacer { margin-inline-start: auto; }
+
+@media (max-width: 719px) {
+  .grid { grid-template-columns: 1fr; }
+  .links { justify-content: flex-start; }
+  .spacer { margin-inline-start: 0; }
+
+  /* One left edge down the whole margin block. The rose and the wordmark keep
+     the top line to themselves; the note drops to the container edge so it
+     rules up with the link list below it instead of stepping in, then back
+     out, then in again. */
+  .identity {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: 0.875rem;
+    align-items: start;
+  }
+  .identityText { display: contents; }
+  .note { grid-column: 1 / -1; margin-top: 0.5rem; max-width: none; }
+}

@@ -6488,17 +6488,23 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(model.appNotice?.tone, .warning)
   }
 
+  /// **The group size here is load-bearing.** Seven members keeps this group below
+  /// `proxyDelayBatchUnits`' promotion floor, so the batch fans out one request per node — which is
+  /// the only path on which "cancel keeps what already finished" is a meaningful claim. A whole-group
+  /// request is atomic: the core answers for every member at once or not at all, so there is nothing
+  /// partial to preserve. That case is covered separately by
+  /// `testCancellingAnInFlightGroupRequestRecordsEveryMemberAsCancelled`. Do not raise this count to
+  /// 8 — it silently moves the test onto the other path and stops testing what it names.
   func testBatchDelayTestingCanBeCancelledWithoutLosingCompletedResults() async throws {
-    let nodes = (0..<8).map { index in
+    let nodes = (0..<7).map { index in
       ProxyNode(name: "Node \(index)", type: "vless", delay: nil, isSelectable: true)
     }
     let group = ProxyGroup(name: "Proxy", type: "select", selected: "Node 0", nodes: nodes)
     let client = RecordingMihomoController(
       proxyGroupsResponse: [group],
-      testDelayResults: [73, 88, 99, 101, 102, 103, 104, 105],
+      testDelayResults: [73, 88, 99, 101, 102, 103, 104],
       testDelayDelaysNanoseconds: [
         10_000_000,
-        600_000_000,
         600_000_000,
         600_000_000,
         600_000_000,
@@ -6516,8 +6522,8 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     let progress = try XCTUnwrap(model.proxyDelayBatchProgress)
     XCTAssertEqual(progress.succeeded, 1)
-    XCTAssertEqual(progress.cancelled, 7)
-    XCTAssertEqual(progress.completed, 8)
+    XCTAssertEqual(progress.cancelled, 6)
+    XCTAssertEqual(progress.completed, 7)
     let measuredResults = model.proxyGroups
       .flatMap(\.nodes)
       .compactMap { node -> Int? in
@@ -6525,7 +6531,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
         return delay
       }
     XCTAssertEqual(measuredResults.count, 1)
-    XCTAssertTrue(Set([73, 88, 99, 101, 102, 103, 104, 105]).isSuperset(of: measuredResults))
+    XCTAssertTrue(Set([73, 88, 99, 101, 102, 103, 104]).isSuperset(of: measuredResults))
     XCTAssertFalse(
       model.proxyGroups.flatMap(\.nodes).contains { node in
         node.resolvedDelayState == .testing
@@ -6719,17 +6725,18 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(text.contains("cancelled"), text)
   }
 
+  /// Seven members for the same reason as the test above: this asserts *per-node* cancellation
+  /// bookkeeping, which only the per-node path produces.
   func testBatchDelayTestingCancellationRecordsUntestedNodesInFailuresAndDiagnostics() async throws {
-    let nodes = (0..<8).map { index in
+    let nodes = (0..<7).map { index in
       ProxyNode(name: "Node \(index)", type: "vless", delay: nil, isSelectable: true)
     }
     let group = ProxyGroup(name: "Proxy", type: "select", selected: "Node 0", nodes: nodes)
     let client = RecordingMihomoController(
       proxyGroupsResponse: [group],
-      testDelayResults: [73, 88, 99, 101, 102, 103, 104, 105],
+      testDelayResults: [73, 88, 99, 101, 102, 103, 104],
       testDelayDelaysNanoseconds: [
         10_000_000,
-        600_000_000,
         600_000_000,
         600_000_000,
         600_000_000,
@@ -6748,13 +6755,103 @@ final class DashboardRuntimeStateTests: XCTestCase {
     let progress = try XCTUnwrap(model.proxyDelayBatchProgress)
     XCTAssertEqual(progress.status, .cancelled)
     XCTAssertEqual(progress.testedCount, 1)
-    XCTAssertEqual(progress.untestedCount, 7)
-    XCTAssertEqual(progress.cancelled, 7)
+    XCTAssertEqual(progress.untestedCount, 6)
+    XCTAssertEqual(progress.cancelled, 6)
     let cancelledFailures = progress.failures.filter { $0.kind == .cancelled }
-    XCTAssertEqual(cancelledFailures.count, 7)
+    XCTAssertEqual(cancelledFailures.count, 6)
     XCTAssertTrue(cancelledFailures.allSatisfy { $0.nodeName.hasPrefix("Node ") })
     let firstCancelled = try XCTUnwrap(cancelledFailures.first)
     XCTAssertTrue(progress.diagnosticText.contains(firstCancelled.nodeName))
+  }
+
+  // MARK: - Roadmap A6: whole-group delay via `/group/{name}/delay`
+
+  /// A group past the promotion floor must cost **one** request, not one per node. This is the
+  /// entire point of A6: the maintainer's own profile runs ~1600 nodes, and the per-node fan-out
+  /// behind it is where issues #10, #11 and #18 all originate.
+  func testBatchDelayTestingUsesOneGroupRequestForALargeGroup() async throws {
+    let nodes = (0..<9).map { index in
+      ProxyNode(name: "Node \(index)", type: "vless", delay: nil, isSelectable: true)
+    }
+    let group = ProxyGroup(name: "Proxy", type: "select", selected: "Node 0", nodes: nodes)
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [group],
+      testDelayResults: Array(repeating: 73, count: 9)
+    )
+    let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [group])
+
+    model.testDelayForAllProxyGroups()
+    try await waitForBatchProgress(model) { !$0.isRunning && $0.completed == 9 }
+
+    let groupRequests = await client.recordedGroupDelayRequests()
+    XCTAssertEqual(groupRequests.count, 1)
+    XCTAssertEqual(groupRequests.first?.group, "Proxy")
+
+    let progress = try XCTUnwrap(model.proxyDelayBatchProgress)
+    XCTAssertEqual(progress.succeeded, 9)
+    XCTAssertEqual(progress.status, .completed)
+    XCTAssertFalse(model.proxyGroups.flatMap(\.nodes).contains { $0.resolvedDelayState == .testing })
+  }
+
+  /// The core **omits** a node that failed its probe from the group response instead of reporting
+  /// an error, so absence is the failure signal. A build that reads a missing key as "no data"
+  /// would quietly leave those nodes stuck in `.testing` and report fewer nodes than it tested —
+  /// which is exactly the "cancelled but N/N tested" contradiction issue #18 was filed about.
+  func testBatchDelayTestingRecordsGroupMembersTheCoreOmittedAsFailures() async throws {
+    let nodes = (0..<9).map { index in
+      ProxyNode(name: "Node \(index)", type: "vless", delay: nil, isSelectable: true)
+    }
+    let group = ProxyGroup(name: "Proxy", type: "select", selected: "Node 0", nodes: nodes)
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [group],
+      testDelayResults: Array(repeating: 73, count: 9)
+    )
+    await client.setGroupDelayOmittedNodes(["Node 3", "Node 7"])
+    let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [group])
+
+    model.testDelayForAllProxyGroups()
+    try await waitForBatchProgress(model) { !$0.isRunning && $0.completed == 9 }
+
+    let progress = try XCTUnwrap(model.proxyDelayBatchProgress)
+    XCTAssertEqual(progress.succeeded, 7)
+    XCTAssertEqual(progress.testedCount, 9)
+    XCTAssertEqual(progress.status, .partiallyCompleted)
+    let failedNames = Set(progress.failures.map(\.nodeName))
+    XCTAssertEqual(failedNames, ["Node 3", "Node 7"])
+    XCTAssertTrue(progress.failures.allSatisfy { $0.kind == .timeout })
+    // Every node ends the run with a state; none is left mid-test because the core said nothing
+    // about it.
+    XCTAssertFalse(model.proxyGroups.flatMap(\.nodes).contains { $0.resolvedDelayState == .testing })
+  }
+
+  /// A whole-group request is atomic — the core answers for every member at once or not at all —
+  /// so cancelling one in flight has no partial results to keep. What it must still do is report
+  /// that honestly: every member of the cancelled unit is recorded as cancelled and none is left
+  /// counted as tested.
+  func testCancellingAnInFlightGroupRequestRecordsEveryMemberAsCancelled() async throws {
+    let nodes = (0..<9).map { index in
+      ProxyNode(name: "Node \(index)", type: "vless", delay: nil, isSelectable: true)
+    }
+    let group = ProxyGroup(name: "Proxy", type: "select", selected: "Node 0", nodes: nodes)
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [group],
+      testDelayResults: Array(repeating: 73, count: 9),
+      testDelayDelaysNanoseconds: Array(repeating: 600_000_000, count: 9)
+    )
+    let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [group])
+
+    model.testDelayForAllProxyGroups()
+    try await waitForBatchProgress(model) { $0.isRunning }
+    model.cancelProxyDelayBatch()
+    try await waitForBatchProgress(model) { !$0.isRunning && $0.wasCancelled }
+
+    let progress = try XCTUnwrap(model.proxyDelayBatchProgress)
+    XCTAssertEqual(progress.status, .cancelled)
+    XCTAssertEqual(progress.succeeded, 0)
+    XCTAssertEqual(progress.cancelled, 9)
+    XCTAssertEqual(progress.testedCount, 0)
+    XCTAssertEqual(progress.untestedCount, 9)
+    XCTAssertFalse(model.proxyGroups.flatMap(\.nodes).contains { $0.resolvedDelayState == .testing })
   }
 
   func testBatchDelayTestingCancelAfterCompletionDoesNotReportCancelled() async throws {
@@ -12165,6 +12262,18 @@ private final class ScriptedRuntimeStreamController: MihomoAPIControlling, @unch
     try await base.testDelay(proxy: proxy, testURL: testURL, timeout: timeout)
   }
 
+  func testGroupDelay(group: String, testURL: URL, timeout: Int) async throws -> [String: Int] {
+    try await base.testGroupDelay(group: group, testURL: testURL, timeout: timeout)
+  }
+
+  func flushFakeIPCache() async throws {
+    try await base.flushFakeIPCache()
+  }
+
+  func updateGeoDatabases(timeout: TimeInterval) async throws {
+    try await base.updateGeoDatabases(timeout: timeout)
+  }
+
   func healthCheckProvider(named provider: String) async throws {
     try await base.healthCheckProvider(named: provider)
   }
@@ -12402,6 +12511,14 @@ private actor RecordingMihomoController: MihomoAPIControlling {
   private var proxyGroupsRequests = 0
   private var delayRequests: [String] = []
   private var delayRequestURLValues: [URL] = []
+  private var groupDelayRequests: [(group: String, testURL: URL)] = []
+  private var groupDelayFailureMessage: String?
+  private var groupDelayOmittedNodes: Set<String> = []
+  private var groupMembers: [String: [String]] = [:]
+  private var fakeIPFlushRequests = 0
+  private var fakeIPFlushFailureMessage: String?
+  private var geoUpdateRequests: [TimeInterval] = []
+  private var geoUpdateFailureMessage: String?
   private var healthCheckRequests: [String] = []
   private var proxyProviderUpdateRequests: [String] = []
   private var ruleProviderUpdateRequests: [String] = []
@@ -12627,6 +12744,89 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     }
     let resultIndex = min(index, max(testDelayResults.count - 1, 0))
     return testDelayResults[resultIndex]
+  }
+
+  /// Mirrors the real `/group/{name}/delay` contract: one call answers for the whole group, and a
+  /// node that failed its probe is *omitted* from the response rather than reported as an error.
+  ///
+  /// By default the members are resolved from the scripted `proxyGroupsResponses` and measured
+  /// through the same scripted per-node behaviour as `testDelay`, so a test that scripts delays or
+  /// failures gets the same numbers whichever path the batch takes.
+  func testGroupDelay(group: String, testURL: URL, timeout: Int) async throws -> [String: Int] {
+    groupDelayRequests.append((group: group, testURL: testURL))
+    if let groupDelayFailureMessage {
+      throw AppError.helperResponse(groupDelayFailureMessage)
+    }
+    let members = try groupMemberNames(for: group)
+    var delays: [String: Int] = [:]
+    for member in members where !groupDelayOmittedNodes.contains(member) {
+      do {
+        delays[member] = try await testDelay(proxy: member, testURL: testURL, timeout: timeout)
+      } catch is CancellationError {
+        throw CancellationError()
+      } catch {
+        // A failed probe simply does not appear in the response.
+        continue
+      }
+    }
+    return delays
+  }
+
+  private func groupMemberNames(for group: String) throws -> [String] {
+    if let scripted = groupMembers[group] {
+      return scripted
+    }
+    let index = min(max(proxyGroupsRequests - 1, 0), max(proxyGroupsResponses.count - 1, 0))
+    guard let match = proxyGroupsResponses[index].first(where: { $0.name == group }) else {
+      throw MihomoAPIClient.ClientError.unknownProxyGroup(group)
+    }
+    return match.nodes.filter { $0.isSelectable && $0.supportsDelayTesting }.map(\.name)
+  }
+
+  func setGroupDelayFailureMessage(_ message: String?) {
+    groupDelayFailureMessage = message
+  }
+
+  func setGroupDelayOmittedNodes(_ names: Set<String>) {
+    groupDelayOmittedNodes = names
+  }
+
+  func setGroupMembers(_ members: [String: [String]]) {
+    groupMembers = members
+  }
+
+  func recordedGroupDelayRequests() -> [(group: String, testURL: URL)] {
+    groupDelayRequests
+  }
+
+  func flushFakeIPCache() async throws {
+    fakeIPFlushRequests += 1
+    if let fakeIPFlushFailureMessage {
+      throw AppError.helperResponse(fakeIPFlushFailureMessage)
+    }
+  }
+
+  func setFakeIPFlushFailureMessage(_ message: String?) {
+    fakeIPFlushFailureMessage = message
+  }
+
+  func recordedFakeIPFlushRequests() -> Int {
+    fakeIPFlushRequests
+  }
+
+  func updateGeoDatabases(timeout: TimeInterval) async throws {
+    geoUpdateRequests.append(timeout)
+    if let geoUpdateFailureMessage {
+      throw AppError.helperResponse(geoUpdateFailureMessage)
+    }
+  }
+
+  func setGeoUpdateFailureMessage(_ message: String?) {
+    geoUpdateFailureMessage = message
+  }
+
+  func recordedGeoUpdateRequests() -> [TimeInterval] {
+    geoUpdateRequests
   }
 
   func healthCheckProvider(named provider: String) async throws {

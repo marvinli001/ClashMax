@@ -161,6 +161,12 @@ validates `Resources/Localizable.xcstrings`, dry-runs catalog compilation, runs
 the new-key translation check below, and runs `LocalizationTests`, including the
 active-key stale check.
 
+Run it again *after* the Xcode archive and before notarizing or publishing.
+Archiving re-extracts the catalog, so it adds untranslated keys to a build that
+was already green: 1.0.22 gained 49 that way, and 1.0.23 gained `"sniffer"` and
+`"Sniffer Patch"` — late enough that the translations could only ride the next
+release.
+
 New keys must ship a Simplified Chinese translation:
 
 ```bash

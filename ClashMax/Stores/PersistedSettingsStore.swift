@@ -56,6 +56,15 @@ final class PersistedSettingsStore {
     }
   }
 
+  /// Mirrored into `overrides` like the settings above, so the next generated runtime config carries
+  /// `geo-auto-update`, `geo-update-interval`, `geodata-mode` and `geox-url` (roadmap B5).
+  var geoDatabaseSettings = GeoDatabaseSettings.default {
+    didSet {
+      overrides.geoDatabase = geoDatabaseSettings
+      saveCodable(geoDatabaseSettings, forKey: Self.geoDatabaseSettingsDefaultsKey)
+    }
+  }
+
   var subscriptionFetchSettings = SubscriptionFetchSettings.default {
     didSet {
       saveCodable(subscriptionFetchSettings, forKey: Self.subscriptionFetchSettingsDefaultsKey)
@@ -149,6 +158,7 @@ final class PersistedSettingsStore {
   private static let networkExtensionRoutingSettingsDefaultsKey = "io.github.clashmax.networkExtensionRoutingSettings"
   private static let ruleOverlaySettingsDefaultsKey = "io.github.clashmax.ruleOverlaySettings"
   private static let delayTestSettingsDefaultsKey = "io.github.clashmax.delayTestSettings"
+  private static let geoDatabaseSettingsDefaultsKey = "io.github.clashmax.geoDatabaseSettings"
   private static let subscriptionFetchSettingsDefaultsKey = "io.github.clashmax.subscriptionFetchSettings"
   private static let menuBarPinnedGroupSettingsDefaultsKey = "io.github.clashmax.menuBarPinnedGroupSettings"
   private static let menuBarTrafficSpeedVisibleDefaultsKey = "io.github.clashmax.menuBarTrafficSpeedVisible"
@@ -212,6 +222,11 @@ final class PersistedSettingsStore {
       forKey: Self.delayTestSettingsDefaultsKey,
       defaults: defaults
     ) ?? .default
+    geoDatabaseSettings = Self.loadCodable(
+      GeoDatabaseSettings.self,
+      forKey: Self.geoDatabaseSettingsDefaultsKey,
+      defaults: defaults
+    ) ?? .default
     subscriptionFetchSettings = Self.loadCodable(
       SubscriptionFetchSettings.self,
       forKey: Self.subscriptionFetchSettingsDefaultsKey,
@@ -272,6 +287,7 @@ final class PersistedSettingsStore {
     overrides.ruleOverlay = ruleOverlaySettings
     overrides.ipv6Enabled = ipv6Enabled
     overrides.unifiedDelay = delayTestSettings.unifiedDelay
+    overrides.geoDatabase = geoDatabaseSettings
     syncExternalControllerSettings()
     refreshLaunchSettings()
   }

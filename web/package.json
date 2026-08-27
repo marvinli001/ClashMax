@@ -1,0 +1,24 @@
+{
+  "name": "clashmax-site",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Static marketing site for ClashMax. Built locally, exported into ../docs/web.",
+  "scripts": {
+    "dev": "next dev --port 4321",
+    "build": "next build",
+    "export": "node scripts/export-to-docs.mjs",
+    "release": "next build && node scripts/export-to-docs.mjs",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "next": "^16.3.2",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "typescript": "^7.0.2"
+  }
+}

@@ -10,6 +10,9 @@ protocol MihomoAPIControlling: Sendable {
   func connections() async throws -> [ConnectionSnapshot]
   func selectProxy(group: String, proxy: String) async throws
   func testDelay(proxy: String, testURL: URL, timeout: Int) async throws -> Int
+  func testGroupDelay(group: String, testURL: URL, timeout: Int) async throws -> [String: Int]
+  func flushFakeIPCache() async throws
+  func updateGeoDatabases(timeout: TimeInterval) async throws
   func healthCheckProvider(named provider: String) async throws
   func updateProxyProvider(named provider: String) async throws
   func updateRuleProvider(named provider: String) async throws
@@ -27,6 +30,10 @@ extension MihomoAPIControlling {
   func reloadConfig(path: String) async throws {
     try await reloadConfig(path: path, force: true)
   }
+
+  func updateGeoDatabases() async throws {
+    try await updateGeoDatabases(timeout: MihomoAPIClient.defaultGeoUpdateTimeout)
+  }
 }
 
 struct MihomoAPIClient: Sendable {
@@ -35,6 +42,11 @@ struct MihomoAPIClient: Sendable {
     case invalidResponse
     case httpStatus(Int)
     case delayTestHTTPStatus(Int)
+    /// An HTTP failure whose body carried Mihomo's own `{"message": "..."}` explanation. Kept
+    /// separate from `httpStatus` because that reason is the only actionable thing the user gets
+    /// from a failed geo update — the status code alone says nothing.
+    case coreMessage(status: Int, message: String)
+    case unknownProxyGroup(String)
 
     var errorDescription: String? {
       switch self {
@@ -46,6 +58,10 @@ struct MihomoAPIClient: Sendable {
         return "Mihomo controller returned HTTP \(status)."
       case let .delayTestHTTPStatus(status):
         return "Mihomo delay probe returned HTTP \(status). The controller responded, but the selected node or test URL could not complete the probe."
+      case let .coreMessage(status, message):
+        return "Mihomo controller returned HTTP \(status): \(message)"
+      case let .unknownProxyGroup(group):
+        return "Mihomo does not know a proxy group named \(group)."
       }
     }
   }
@@ -273,6 +289,85 @@ struct MihomoAPIClient: Sendable {
     return object?["delay"] as? Int ?? -1
   }
 
+  /// Whole-group delay test via `GET /group/{name}/delay`.
+  ///
+  /// Contract measured against the bundled core (v1.19.30) on 2026-08-27, and it is *not* the
+  /// per-node model:
+  /// - 200 with a flat `{"node name": milliseconds}` object.
+  /// - **A node that failed its probe is silently omitted from that object.** Absence is the only
+  ///   signal of failure, so the caller must already know the full member list to tell "failed"
+  ///   from "not in this group" (this is what preserves the issue #18 batch semantics).
+  /// - The request blocks for the full `timeout` when any member is dead, so there is no
+  ///   incremental progress to report — unlike `/proxies/{name}/delay`, which answers 504 per node.
+  /// - An unknown group is 404, which is a caller bug rather than a node failure and is surfaced as
+  ///   its own error instead of "every node failed".
+  func testGroupDelay(group: String, testURL: URL, timeout: Int) async throws -> [String: Int] {
+    let data: Data
+    do {
+      data = try await self.data(for: request(
+        path: apiPath("group", group, "delay"),
+        queryItems: [
+          URLQueryItem(name: "url", value: testURL.absoluteString),
+          URLQueryItem(name: "timeout", value: String(timeout)),
+        ],
+        // The core holds the response open for the whole probe window, so the transport timeout has
+        // to outlast it or every large group would fail as a client-side timeout.
+        timeoutOverride: Self.groupDelayRequestTimeout(forProbeTimeout: timeout)
+      ))
+    } catch let ClientError.httpStatus(status) where status == 404 {
+      throw ClientError.unknownProxyGroup(group)
+    }
+    let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+    return object.reduce(into: [String: Int]()) { result, item in
+      guard let delay = Self.int(from: item.value) else { return }
+      result[item.key] = delay
+    }
+  }
+
+  /// The transport timeout to allow for a group probe that itself blocks for `probeTimeout` ms.
+  static func groupDelayRequestTimeout(forProbeTimeout probeTimeout: Int) -> TimeInterval {
+    // The core returns as soon as the slowest member resolves or the probe window closes, so the
+    // probe window plus a fixed allowance for connection setup and the JSON write is enough.
+    max(TimeInterval(probeTimeout) / 1000 + 15, 30)
+  }
+
+  /// Drops every fake-ip mapping the core currently holds, via `POST /cache/fakeip/flush`.
+  ///
+  /// Measured against the bundled core (v1.19.30): **204 with an empty body**, and `GET` is 405 —
+  /// so nothing may be decoded from the response. The core answers 204 whether or not it is
+  /// actually in fake-ip mode, which is why callers gate this on the effective `enhanced-mode`
+  /// rather than on the status code.
+  func flushFakeIPCache() async throws {
+    var request = try request(path: "/cache/fakeip/flush")
+    request.httpMethod = "POST"
+    _ = try await data(for: request)
+  }
+
+  /// Re-downloads the GeoIP/GeoSite/ASN databases via `POST /configs/geo`.
+  ///
+  /// Contract measured against the bundled core (v1.19.30) on 2026-08-27:
+  /// - **Synchronous.** The response is written only after every database the running config needs
+  ///   has been fetched, so this is not a fire-and-forget trigger and needs a long timeout.
+  /// - **204 on success** — and also on a complete no-op: the core only fetches the databases its
+  ///   *running rules* actually reference, so a config with no `GEOSITE`/`GEOIP`/ASN rule issues no
+  ///   request at all and still answers 204.
+  /// - **500 with `{"message": "..."}`** on failure, e.g. `can't download GeoSite database file:
+  ///   500 Internal Server Error`. That message is the only actionable detail the user gets, so it
+  ///   is preserved through `ClientError.coreMessage` rather than collapsed into a status code.
+  /// - A failed download leaves the existing databases byte-identical on disk (verified by size and
+  ///   mtime), so a failure here never needs a rollback of our own.
+  /// - Downloads are dialed **through the core's own tunnel and matched against the user's rules**,
+  ///   so a `MATCH` to a dead proxy breaks geo updates.
+  func updateGeoDatabases(timeout: TimeInterval = MihomoAPIClient.defaultGeoUpdateTimeout) async throws {
+    var request = try request(path: "/configs/geo", timeoutOverride: timeout)
+    request.httpMethod = "POST"
+    _ = try await dataPreservingCoreMessage(for: request)
+  }
+
+  /// Databases are tens of megabytes and are fetched through the proxy chain, so the ceiling is
+  /// generous: the alternative to waiting is reporting a failure for a download that succeeds.
+  static let defaultGeoUpdateTimeout: TimeInterval = 300
+
   func healthCheckProvider(named provider: String) async throws {
     _ = try await data(for: request(path: apiPath("providers", "proxies", provider, "healthcheck")))
   }
@@ -321,7 +416,11 @@ struct MihomoAPIClient: Sendable {
     }
   }
 
-  private func request(path: String, queryItems: [URLQueryItem] = []) throws -> URLRequest {
+  private func request(
+    path: String,
+    queryItems: [URLQueryItem] = [],
+    timeoutOverride: TimeInterval? = nil
+  ) throws -> URLRequest {
     var components = try urlComponents()
     components.percentEncodedPath = path
     if !queryItems.isEmpty {
@@ -332,8 +431,10 @@ struct MihomoAPIClient: Sendable {
     }
     var request = URLRequest(url: url)
     request.httpMethod = "GET"
-    if let requestTimeout {
-      request.timeoutInterval = requestTimeout
+    // A call that blocks inside the core for its whole probe/download window needs more than the
+    // shared client timeout, which is sized for ordinary control requests.
+    if let timeout = timeoutOverride ?? requestTimeout {
+      request.timeoutInterval = timeout
     }
     request.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")
     return request
@@ -358,6 +459,31 @@ struct MihomoAPIClient: Sendable {
       throw ClientError.httpStatus(http.statusCode)
     }
     return data
+  }
+
+  /// Like `data(for:)`, but keeps Mihomo's own `{"message": "..."}` failure reason instead of
+  /// reducing it to a status code. Used where that reason is the whole diagnostic value of the
+  /// call (a geo update reports *which* database could not be downloaded, and why).
+  private func dataPreservingCoreMessage(for request: URLRequest) async throws -> Data {
+    let (data, response) = try await session.data(for: request)
+    guard let http = response as? HTTPURLResponse else {
+      throw ClientError.invalidResponse
+    }
+    guard (200..<300).contains(http.statusCode) else {
+      guard let message = Self.coreMessage(from: data) else {
+        throw ClientError.httpStatus(http.statusCode)
+      }
+      throw ClientError.coreMessage(status: http.statusCode, message: message)
+    }
+    return data
+  }
+
+  private static func coreMessage(from data: Data) -> String? {
+    guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let message = object["message"] as? String
+    else { return nil }
+    let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
   }
 
   private func webSocketStream<T>(
