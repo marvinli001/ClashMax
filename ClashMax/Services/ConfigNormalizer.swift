@@ -267,6 +267,16 @@ struct ConfigNormalizer {
       root["proxy-groups"] = groups
     }
 
+    // ROADMAP INV-2. The last word belongs to the user: every app-managed key above has already
+    // been written, so a raw patch can reach `mode`, `tun.*`, `dns.enable`, the geo keys, and any
+    // key ClashMax has no UI for at all. The legacy per-profile merge near the top of this method
+    // cannot — it runs before these writes, which is exactly why it was never a real escape hatch.
+    // Placed before the outbound-proxy work so a patch cannot smuggle in a reserved proxy name and
+    // so the final DNS check still sees what Mihomo will read.
+    for rawYAMLPatch in snippetApplication.rawYAMLPatches {
+      root = try rawYAMLPatchedRoot(base: root, patch: rawYAMLPatch)
+    }
+
     if options.manualProxyEndpoint != nil || options.upstreamProxyEndpoint != nil {
       try validateReservedOutboundProxyNames(
         in: root,
@@ -658,28 +668,53 @@ struct ConfigNormalizer {
     guard let overlay = loaded as? [String: Any] else {
       throw NormalizerError.invalidProfile("Runtime merge YAML must be a YAML mapping.")
     }
-    return mergedRuntimeMapping(base: base, overlay: overlay)
+    return mergedRuntimeMapping(base: base, overlay: overlay, listStrategy: .append)
   }
 
-  private func mergedRuntimeMapping(base: [String: Any], overlay: [String: Any]) -> [String: Any] {
+  /// A raw YAML snippet, applied after everything the app manages. Both the parse and the reserved
+  /// keys are re-checked here rather than trusted from the editor: this is the only path the
+  /// generated config actually goes through, and a snippet can also arrive from a restored backup.
+  private func rawYAMLPatchedRoot(base: [String: Any], patch: RawYAMLPatchSettings) throws -> [String: Any] {
+    let overlay: [String: Any]
+    do {
+      overlay = try patch.parsedMapping()
+    } catch {
+      throw NormalizerError.invalidProfile(
+        (error as? RawYAMLPatchError)?.message ?? String(describing: error)
+      )
+    }
+    guard !overlay.isEmpty else { return base }
+    return mergedRuntimeMapping(base: base, overlay: overlay, listStrategy: patch.listStrategy)
+  }
+
+  private func mergedRuntimeMapping(
+    base: [String: Any],
+    overlay: [String: Any],
+    listStrategy: RawYAMLPatchListStrategy
+  ) -> [String: Any] {
     var merged = base
     for (key, overlayValue) in overlay {
       guard let baseValue = merged[key] else {
         merged[key] = overlayValue
         continue
       }
-      merged[key] = mergedRuntimeValue(base: baseValue, overlay: overlayValue)
+      merged[key] = mergedRuntimeValue(base: baseValue, overlay: overlayValue, listStrategy: listStrategy)
     }
     return merged
   }
 
-  private func mergedRuntimeValue(base: Any, overlay: Any) -> Any {
+  private func mergedRuntimeValue(
+    base: Any,
+    overlay: Any,
+    listStrategy: RawYAMLPatchListStrategy
+  ) -> Any {
     if let baseMap = base as? [String: Any],
        let overlayMap = overlay as? [String: Any]
     {
-      return mergedRuntimeMapping(base: baseMap, overlay: overlayMap)
+      return mergedRuntimeMapping(base: baseMap, overlay: overlayMap, listStrategy: listStrategy)
     }
-    if let baseList = base as? [Any],
+    if listStrategy == .append,
+       let baseList = base as? [Any],
        let overlayList = overlay as? [Any]
     {
       return baseList + overlayList

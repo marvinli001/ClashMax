@@ -4651,7 +4651,13 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(model.proxyGroups.first?.nodes.first?.delay, 73)
   }
 
-  func testUnifiedMihomoDelayRunsTwiceAndUsesSecondResult() async throws {
+  /// Unified Delay in `.mihomoURL` is the core's job, not ClashMax's. `unified-delay` is written
+  /// into the runtime YAML and the core applies it inside the single probe it already runs, so
+  /// issuing a second `/proxies/{name}/delay` here measured nothing extra and made every failing
+  /// node wait out two timeouts. It also meant the switch changed the measurement below the group
+  /// promotion floor and did nothing above it, because a promoted group is one call by
+  /// construction — the same setting with two meanings depending on how many nodes were on screen.
+  func testUnifiedMihomoDelayLeavesTheSecondSampleToTheCore() async throws {
     let paths = try Self.makeRuntimePaths()
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
     try "proxies:\n  - { name: Japan, type: vless, server: jp.example, port: 443 }\n"
@@ -4694,12 +4700,70 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     model.testDelay(for: group.nodes[0])
 
-    await waitUntil { await client.delayRequestCount() >= 2 }
-    await waitUntil { model.proxyGroups.first?.nodes.first?.delay == 73 }
+    await waitUntil { model.proxyGroups.first?.nodes.first?.delay == 111 }
+    await settle()
 
     let delayRequestCount = await client.delayRequestCount()
-    XCTAssertEqual(delayRequestCount, 2)
-    XCTAssertEqual(model.proxyGroups.first?.nodes.first?.delay, 73)
+    XCTAssertEqual(delayRequestCount, 1, "The core repeats the handshake; ClashMax must not")
+    XCTAssertEqual(
+      model.proxyGroups.first?.nodes.first?.delay,
+      111,
+      "The reported delay is the core's answer to the one request that was made"
+    )
+  }
+
+  /// The other half of the same contract: `.nativePing` never reaches the core, so nothing else is
+  /// in a position to discount first-connection setup and ClashMax has to send the second probe
+  /// itself. `73` is the second of the two seeded results.
+  func testUnifiedNativePingProbesTwiceAndReportsTheSecondResult() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try "proxies:\n  - { name: Japan, type: vless, server: jp.example, port: 443 }\n"
+      .write(to: configURL, atomically: true, encoding: .utf8)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let controller = CoreProcessController(
+      launcher: FakeProcessLauncher(),
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let group = ProxyGroup(
+      name: "Elite",
+      type: "select",
+      selected: "Japan",
+      nodes: [ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true, serverHost: "jp.example", serverPort: 443)]
+    )
+    let client = RecordingMihomoController(proxyGroupsResponse: [group], testDelayResult: 99)
+    let pingTester = RecordingPingTester(results: [111, 73])
+    let model = try AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      apiClient: client,
+      pingTester: pingTester,
+      defaults: Self.makeIsolatedDefaults()
+    )
+    await model.waitForProfilePreviewRefresh()
+    model.delayTestSettings = DelayTestSettings(mode: .nativePing, unifiedDelay: true)
+    model.proxyGroups = [group]
+
+    try await controller.startUserMode(
+      coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+      configURL: configURL,
+      workDirectory: paths.runtime,
+      api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+    )
+
+    model.testDelay(for: group.nodes[0])
+
+    await waitUntil { model.proxyGroups.first?.nodes.first?.delay == 73 }
+
+    let pingRequestCount = await pingTester.requestCount()
+    let delayRequestCount = await client.delayRequestCount()
+    XCTAssertEqual(pingRequestCount, 2)
+    XCTAssertEqual(delayRequestCount, 0, "Native ping never reaches the core")
   }
 
   func testNativePingDelayUsesNodeServerHost() async throws {
@@ -6854,6 +6918,67 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertFalse(model.proxyGroups.flatMap(\.nodes).contains { $0.resolvedDelayState == .testing })
   }
 
+  /// The degradation path exists for exactly one situation: a core that does not have this group —
+  /// either because it was renamed out from under the batch, or because the build is old enough
+  /// that `/group/{name}/delay` is not routed at all. Both answer 404, which the API client maps
+  /// onto `unknownProxyGroup`, and only that signal may re-expand into per-node requests.
+  func testAGroupTheCoreDoesNotKnowDegradesToPerNodeRequests() async throws {
+    let nodes = (0..<9).map { index in
+      ProxyNode(name: "Node \(index)", type: "vless", delay: nil, isSelectable: true)
+    }
+    let group = ProxyGroup(name: "Proxy", type: "select", selected: "Node 0", nodes: nodes)
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [group],
+      testDelayResults: Array(repeating: 73, count: 9)
+    )
+    await client.setGroupDelayFailure(MihomoAPIClient.ClientError.unknownProxyGroup("Proxy"))
+    let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [group])
+
+    model.testDelayForAllProxyGroups()
+    try await waitForBatchProgress(model) { !$0.isRunning && $0.completed == 9 }
+
+    let groupRequests = await client.recordedGroupDelayRequests()
+    XCTAssertEqual(groupRequests.count, 1)
+    let probed = await client.delayRequestProxies()
+    XCTAssertEqual(probed.sorted(), nodes.map(\.name).sorted())
+
+    let progress = try XCTUnwrap(model.proxyDelayBatchProgress)
+    XCTAssertEqual(progress.succeeded, 9)
+    XCTAssertEqual(progress.status, .completed)
+  }
+
+  /// Any other failure — a 500, a dropped connection, a client-side timeout — must stay a failure
+  /// of the one unit. Re-expanding there answers a single failed request with one request per
+  /// member at the exact moment the core is least able to serve them, which on a 1200-node group
+  /// is the request storm A6 exists to remove.
+  func testAGenericGroupFailureDoesNotReExpandIntoPerNodeRequests() async throws {
+    let nodes = (0..<9).map { index in
+      ProxyNode(name: "Node \(index)", type: "vless", delay: nil, isSelectable: true)
+    }
+    let group = ProxyGroup(name: "Proxy", type: "select", selected: "Node 0", nodes: nodes)
+    let client = RecordingMihomoController(
+      proxyGroupsResponse: [group],
+      testDelayResults: Array(repeating: 73, count: 9)
+    )
+    await client.setGroupDelayFailureMessage("core is busy")
+    let model = try await makeRunningRuntimeModel(client: client, initialProxyGroups: [group])
+
+    model.testDelayForAllProxyGroups()
+    try await waitForBatchProgress(model) { !$0.isRunning && $0.completed == 9 }
+
+    let groupRequests = await client.recordedGroupDelayRequests()
+    XCTAssertEqual(groupRequests.count, 1)
+    let probed = await client.delayRequestProxies()
+    XCTAssertTrue(probed.isEmpty, "A failed group request must not fan out into per-node probes")
+
+    let progress = try XCTUnwrap(model.proxyDelayBatchProgress)
+    XCTAssertEqual(progress.succeeded, 0)
+    XCTAssertEqual(progress.failures.count, 9)
+    XCTAssertEqual(progress.status, .failed)
+    XCTAssertTrue(progress.failures.allSatisfy { $0.message.contains("core is busy") })
+    XCTAssertFalse(model.proxyGroups.flatMap(\.nodes).contains { $0.resolvedDelayState == .testing })
+  }
+
   func testBatchDelayTestingCancelAfterCompletionDoesNotReportCancelled() async throws {
     let group = ProxyGroup(
       name: "Proxy",
@@ -6880,6 +7005,98 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(progress.cancelled, 0)
     XCTAssertEqual(progress.testedCount, 2)
     XCTAssertFalse(progress.wasCancelled)
+  }
+
+  // MARK: - Unified Delay is a runtime key, not a client-side preference
+
+  /// `unified-delay` is generated into the runtime YAML and the **core** acts on it. Writing the
+  /// toggle straight to defaults left the running core measuring on the old value while Settings
+  /// showed the new one, so it goes through the ordinary running-settings path.
+  func testTogglingUnifiedDelayReloadsTheRunningCoreWithTheNewValue() async throws {
+    let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 73)
+    let model = try await makeRunningRuntimeModel(client: client)
+
+    var delaySettings = model.delayTestSettings
+    XCTAssertFalse(delaySettings.unifiedDelay)
+    delaySettings.unifiedDelay = true
+    model.updateDelayTestSettings(delaySettings)
+
+    await waitUntil {
+      let paths = await client.reloadRequestPaths()
+      return !paths.isEmpty && model.runtimeSettingsApplyState == .idle
+    }
+
+    let reloadPaths = await client.reloadRequestPaths()
+    let reloadPath = try XCTUnwrap(reloadPaths.last)
+    let output = try String(contentsOfFile: reloadPath, encoding: .utf8)
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    XCTAssertEqual(yaml["unified-delay"] as? Bool, true)
+    XCTAssertEqual(model.settings.appliedRuntimeSettingsSnapshot?.overrides.unifiedDelay, true)
+  }
+
+  /// The other two delay-test fields are read by ClashMax at probe time, so reloading the core for
+  /// them would drop every connection for nothing.
+  func testChangingOnlyTheDelayTestModeDoesNotReloadTheCore() async throws {
+    let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 73)
+    let model = try await makeRunningRuntimeModel(client: client)
+
+    var delaySettings = model.delayTestSettings
+    delaySettings.mode = .nativePing
+    model.updateDelayTestSettings(delaySettings)
+    await settle()
+
+    let reloadPaths = await client.reloadRequestPaths()
+    XCTAssertTrue(reloadPaths.isEmpty)
+    XCTAssertEqual(model.delayTestSettings.mode, .nativePing)
+  }
+
+  // MARK: - Roadmap B5: geo diagnostics describe the running core
+
+  /// After a save whose reload the core refused, `updateGeoDatabaseSettings` deliberately keeps the
+  /// new values on disk and Settings says "saved but could not be applied". Diagnostics must still
+  /// describe the file the core is actually using: `geodata-mode` decides whether the live GeoIP
+  /// database is `GeoIP.dat` or `geoip.metadb`, so reading the saved value there stats a file the
+  /// core is not using and reports a refresh of the wrong thing.
+  func testGeoDiagnosticsDescribeTheAppliedSettingsRatherThanTheSavedOnes() async throws {
+    let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 73)
+    let model = try await makeRunningRuntimeModel(client: client)
+
+    var appliedOverrides = model.overrides
+    appliedOverrides.geoDatabase.geodataMode = false
+    model.settings.recordAppliedRuntimeSettingsSnapshot(
+      AppliedRuntimeSettingsSnapshot(
+        overrides: appliedOverrides,
+        proxyRoutingMode: .systemProxy,
+        systemProxySettings: .default,
+        networkExtensionRoutingSettings: .default,
+        runtimeOwner: .user,
+        appliedAt: Date()
+      )
+    )
+    // Written straight to the store, which is the state a refused reload leaves behind: saved, but
+    // never applied.
+    var saved = model.geoDatabaseSettings
+    saved.geodataMode = true
+    model.settings.geoDatabaseSettings = saved
+
+    XCTAssertTrue(model.geoDatabaseSettings.geodataMode)
+    XCTAssertFalse(model.runtimeGeoDatabaseSettings.geodataMode)
+
+    let modeFact = try XCTUnwrap(model.geoDatabaseDiagnostics.facts.first { $0.key == .geodataMode })
+    let appliedFact = try XCTUnwrap(
+      GeoDatabaseDiagnosticsBuilder.snapshot(for: GeoDatabaseDiagnosticsInput(
+        isCoreRunning: true,
+        settings: appliedOverrides.geoDatabase
+      )).facts.first { $0.key == .geodataMode }
+    )
+    let savedFact = try XCTUnwrap(
+      GeoDatabaseDiagnosticsBuilder.snapshot(for: GeoDatabaseDiagnosticsInput(
+        isCoreRunning: true,
+        settings: saved
+      )).facts.first { $0.key == .geodataMode }
+    )
+    XCTAssertNotEqual(appliedFact.value, savedFact.value)
+    XCTAssertEqual(modeFact.value, appliedFact.value)
   }
 
   private static func makeBatchFailure(
@@ -12513,6 +12730,7 @@ private actor RecordingMihomoController: MihomoAPIControlling {
   private var delayRequestURLValues: [URL] = []
   private var groupDelayRequests: [(group: String, testURL: URL)] = []
   private var groupDelayFailureMessage: String?
+  private var groupDelayFailure: Error?
   private var groupDelayOmittedNodes: Set<String> = []
   private var groupMembers: [String: [String]] = [:]
   private var fakeIPFlushRequests = 0
@@ -12754,6 +12972,9 @@ private actor RecordingMihomoController: MihomoAPIControlling {
   /// failures gets the same numbers whichever path the batch takes.
   func testGroupDelay(group: String, testURL: URL, timeout: Int) async throws -> [String: Int] {
     groupDelayRequests.append((group: group, testURL: testURL))
+    if let groupDelayFailure {
+      throw groupDelayFailure
+    }
     if let groupDelayFailureMessage {
       throw AppError.helperResponse(groupDelayFailureMessage)
     }
@@ -12785,6 +13006,12 @@ private actor RecordingMihomoController: MihomoAPIControlling {
 
   func setGroupDelayFailureMessage(_ message: String?) {
     groupDelayFailureMessage = message
+  }
+
+  /// Fails the whole-group request with a specific error, which is what separates "this core has
+  /// no such group" (degrade to per-node) from every other failure (report and stop).
+  func setGroupDelayFailure(_ error: Error?) {
+    groupDelayFailure = error
   }
 
   func setGroupDelayOmittedNodes(_ names: Set<String>) {

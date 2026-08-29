@@ -362,6 +362,7 @@ final class PersistedSettingsStore {
       networkExtensionRoutingSettings: networkExtensionRoutingSettings,
       ruleOverlaySettings: ruleOverlaySettings,
       delayTestSettings: delayTestSettings,
+      geoDatabaseSettings: geoDatabaseSettings,
       subscriptionFetchSettings: subscriptionFetchSettings,
       menuBarPinnedGroupSettings: menuBarPinnedGroupSettings,
       menuBarTrafficSpeedVisible: menuBarTrafficSpeedVisible,
@@ -382,6 +383,7 @@ final class PersistedSettingsStore {
     networkExtensionRoutingSettings = snapshot.networkExtensionRoutingSettings
     ruleOverlaySettings = snapshot.ruleOverlaySettings
     delayTestSettings = snapshot.delayTestSettings
+    geoDatabaseSettings = snapshot.geoDatabaseSettings
     subscriptionFetchSettings = snapshot.subscriptionFetchSettings
     menuBarPinnedGroupSettings = snapshot.menuBarPinnedGroupSettings
     menuBarTrafficSpeedVisible = snapshot.menuBarTrafficSpeedVisible
@@ -398,6 +400,7 @@ final class PersistedSettingsStore {
     restoredOverrides.tunSettings = tunSettings
     restoredOverrides.ruleOverlay = ruleOverlaySettings
     restoredOverrides.unifiedDelay = delayTestSettings.unifiedDelay
+    restoredOverrides.geoDatabase = geoDatabaseSettings
     restoredOverrides.externalControllerHost = externalControllerSettings.normalizedHost
     restoredOverrides.externalControllerPort = externalControllerSettings.normalizedPort
     restoredOverrides.secret = externalControllerSettings.normalizedSecret

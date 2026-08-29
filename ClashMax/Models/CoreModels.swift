@@ -1813,6 +1813,24 @@ struct DelayTestSettings: Codable, Equatable, Sendable {
   var normalizedTimeoutMilliseconds: Int {
     min(max(timeoutMilliseconds, 1_000), 30_000)
   }
+
+  /// How many times ClashMax itself repeats a delay probe before reporting a figure.
+  ///
+  /// `unifiedDelay` asks for a measurement with the handshake excluded, but *who* provides the
+  /// second sample depends on the mode:
+  /// - `.mihomoURL` probes run inside the core, and `unified-delay` is generated into the runtime
+  ///   config (`ConfigNormalizer`) so the core issues the second request and times that one.
+  ///   ClashMax repeating the call would stack a second core-side pair on top of the first, and
+  ///   it is what used to make a batch measure differently either side of the whole-group
+  ///   promotion floor: the per-node path sampled twice, the single-call group path once.
+  /// - `.nativePing` never reaches the core, so `unified-delay` in the config does nothing and the
+  ///   second sample has to come from here.
+  ///
+  /// A single attempt also means a failing `.mihomoURL` node costs one timeout window instead of
+  /// two, which is the same jank issues #10/#11 were about.
+  var clientSideProbeAttempts: Int {
+    unifiedDelay && mode == .nativePing ? 2 : 1
+  }
 }
 
 enum ProxyNodeSort: String, Codable, CaseIterable, Equatable, Identifiable, Sendable {
@@ -3162,6 +3180,13 @@ struct GeoDatabaseSettings: Codable, Equatable, Sendable {
       return error
     }
     return nil
+  }
+
+  /// Whether a value would survive `validationError` as one of the four database URLs. Exposed so
+  /// the ClashX migration parser can drop a single bad `geox-url` entry and keep the rest, rather
+  /// than handing `updateGeoDatabaseSettings` a struct it refuses whole (roadmap B5).
+  static func isValidDatabaseURL(_ value: String) -> Bool {
+    urlValidationError(for: value, label: "") == nil
   }
 
   private static func urlValidationError(for value: String, label: String) -> String? {
@@ -6137,6 +6162,9 @@ struct ClientMigrationReport: Codable, Equatable, Sendable {
   var allowLan: Bool?
   var mode: String?
   var logLevel: String?
+  /// Geo database settings read from the source client's config, already validated (roadmap B5).
+  /// `nil` means the config named none of the geo keys — not that they were dropped.
+  var geoDatabase: GeoDatabaseSettings?
   var systemProxyEnabled: Bool?
   var conflicts: [String]
   var unsupportedSettings: [String]
@@ -6160,6 +6188,7 @@ struct ClientMigrationReport: Codable, Equatable, Sendable {
     case allowLan
     case mode
     case logLevel
+    case geoDatabase
     case systemProxyEnabled
     case conflicts
     case unsupportedSettings
@@ -6184,6 +6213,7 @@ struct ClientMigrationReport: Codable, Equatable, Sendable {
     allowLan: Bool? = nil,
     mode: String? = nil,
     logLevel: String? = nil,
+    geoDatabase: GeoDatabaseSettings? = nil,
     systemProxyEnabled: Bool? = nil,
     conflicts: [String] = [],
     unsupportedSettings: [String] = [],
@@ -6206,6 +6236,7 @@ struct ClientMigrationReport: Codable, Equatable, Sendable {
     self.allowLan = allowLan
     self.mode = mode
     self.logLevel = logLevel
+    self.geoDatabase = geoDatabase
     self.systemProxyEnabled = systemProxyEnabled
     self.conflicts = conflicts
     self.unsupportedSettings = unsupportedSettings
@@ -6236,6 +6267,7 @@ struct ClientMigrationReport: Codable, Equatable, Sendable {
       allowLan: container.decodeIfPresent(Bool.self, forKey: .allowLan),
       mode: container.decodeIfPresent(String.self, forKey: .mode),
       logLevel: container.decodeIfPresent(String.self, forKey: .logLevel),
+      geoDatabase: container.decodeIfPresent(GeoDatabaseSettings.self, forKey: .geoDatabase),
       systemProxyEnabled: container.decodeIfPresent(Bool.self, forKey: .systemProxyEnabled),
       conflicts: container.decodeDefault([String].self, forKey: .conflicts, default: []),
       unsupportedSettings: container.decodeDefault([String].self, forKey: .unsupportedSettings, default: []),

@@ -348,7 +348,11 @@ struct EffectiveRuntimeConfigBuilder {
         id: "snippets",
         title: "Snippets",
         summary: String(format: String(localized: "%lld active snippets"), Int64(runtimeSnippets.count)),
-        redactedContent: renderSnippets(runtimeSnippets),
+        redactedContent: renderSnippets(
+          runtimeSnippets,
+          controllerSecret: overrides.secret,
+          providerContentPaths: providerContentPaths
+        ),
         isActive: !runtimeSnippets.isEmpty
       ),
       outboundProxyLayer(
@@ -377,6 +381,11 @@ struct EffectiveRuntimeConfigBuilder {
         redactedContent: renderSniffer(sniffer),
         isActive: sniffer.isSniffing
       ),
+      rawYAMLLayer(
+        snippets: runtimeSnippets,
+        controllerSecret: overrides.secret,
+        providerContentPaths: providerContentPaths
+      ),
       EffectiveRuntimeConfigLayer(
         id: "final-runtime-yaml",
         title: "Final runtime YAML",
@@ -384,6 +393,49 @@ struct EffectiveRuntimeConfigBuilder {
         redactedContent: redactedFinal
       ),
     ]
+  }
+
+  /// Listed last among the overlays because that is where the merge really happens: raw patches are
+  /// applied after every app-managed key, so this layer is what has the final word on the YAML below.
+  private func rawYAMLLayer(
+    snippets: [RuntimeSnippet],
+    controllerSecret: String,
+    providerContentPaths: [String]
+  ) -> EffectiveRuntimeConfigLayer {
+    let patches = RuntimeSnippetApplication(snippets: snippets).rawYAMLPatches
+    var seenKeyPaths: Set<String> = []
+    let overridden = patches.flatMap(\.overriddenManagedKeyPaths).filter { seenKeyPaths.insert($0).inserted }
+    let summary = if patches.isEmpty {
+      String(localized: "No raw YAML snippet applies to this profile.")
+    } else if overridden.isEmpty {
+      String(
+        format: String(localized: "%lld raw YAML snippets are merged after every app-managed key."),
+        Int64(patches.count)
+      )
+    } else {
+      String(
+        format: String(localized: "%lld raw YAML snippets are merged last and take over these app-managed keys: %@."),
+        Int64(patches.count),
+        overridden.joined(separator: ", ")
+      )
+    }
+    let body = patches.isEmpty
+      ? ""
+      : patches.map {
+        renderRawYAMLPatch(
+          $0,
+          controllerSecret: controllerSecret,
+          providerContentPaths: providerContentPaths
+        )
+      }
+      .joined(separator: "\n\n")
+    return EffectiveRuntimeConfigLayer(
+      id: "raw-yaml",
+      title: "Raw YAML overrides",
+      summary: summary,
+      redactedContent: body,
+      isActive: !patches.isEmpty
+    )
   }
 
   private func outboundProxyLayer(
@@ -467,7 +519,11 @@ struct EffectiveRuntimeConfigBuilder {
     return sections.joined(separator: "\n")
   }
 
-  private func renderSnippets(_ snippets: [RuntimeSnippet]) -> String {
+  private func renderSnippets(
+    _ snippets: [RuntimeSnippet],
+    controllerSecret: String,
+    providerContentPaths: [String]
+  ) -> String {
     guard !snippets.isEmpty else {
       return String(localized: "No active snippets apply to this profile.")
     }
@@ -476,7 +532,11 @@ struct EffectiveRuntimeConfigBuilder {
         "Snippet: \(snippet.normalizedName.isEmpty ? String(localized: "Untitled Snippet") : snippet.normalizedName)",
         "Binding: \(snippet.binding.displayName)",
         "Payload: \(snippet.payload.summary)",
-        renderSnippetPayload(snippet.payload),
+        renderSnippetPayload(
+          snippet.payload,
+          controllerSecret: controllerSecret,
+          providerContentPaths: providerContentPaths
+        ),
       ]
       .filter { !$0.isEmpty }
       .joined(separator: "\n")
@@ -484,7 +544,11 @@ struct EffectiveRuntimeConfigBuilder {
     .joined(separator: "\n\n")
   }
 
-  private func renderSnippetPayload(_ payload: RuntimeSnippetPayload) -> String {
+  private func renderSnippetPayload(
+    _ payload: RuntimeSnippetPayload,
+    controllerSecret: String,
+    providerContentPaths: [String]
+  ) -> String {
     switch payload {
     case let .rules(settings):
       return renderRuleOverlay(settings)
@@ -492,7 +556,40 @@ struct EffectiveRuntimeConfigBuilder {
       return renderDNSPatch(settings)
     case let .sniffer(settings):
       return renderSnifferPatch(settings)
+    case let .rawYAML(settings):
+      return renderRawYAMLPatch(
+        settings,
+        controllerSecret: controllerSecret,
+        providerContentPaths: providerContentPaths
+      )
     }
+  }
+
+  /// The one payload whose body is arbitrary user YAML, so it goes through the same redactor as the
+  /// generated config — a raw patch can legitimately carry a `proxies:` block with a password in it.
+  private func renderRawYAMLPatch(
+    _ settings: RawYAMLPatchSettings,
+    controllerSecret: String,
+    providerContentPaths: [String]
+  ) -> String {
+    guard settings.hasRuntimeOverlay else {
+      return String(localized: "No YAML")
+    }
+    var lines = ["Lists: \(settings.listStrategy.displayName)"]
+    if let validationError = settings.validationError {
+      lines.append("Error: \(validationError)")
+      return lines.joined(separator: "\n")
+    }
+    let overridden = settings.overriddenManagedKeyPaths
+    if !overridden.isEmpty {
+      lines.append("Overrides app-managed: \(overridden.joined(separator: ", "))")
+    }
+    lines.append(RuntimeConfigDisplayRedactor.redacted(
+      settings.normalizedYAML,
+      controllerSecret: controllerSecret,
+      providerContentPaths: providerContentPaths
+    ))
+    return lines.joined(separator: "\n")
   }
 
   private func renderRuleOverlay(_ overlay: RuleOverlaySettings) -> String {

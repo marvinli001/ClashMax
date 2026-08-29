@@ -530,6 +530,12 @@ struct ProfilesView: View {
       appModel.setLogLevel(logLevel)
     }
 
+    // Validated by the parser, so this is expected to succeed; `updateGeoDatabaseSettings` still
+    // reports its own refusal through `lastError` rather than failing silently if it ever does not.
+    if let geoDatabase = report.geoDatabase {
+      appModel.updateGeoDatabaseSettings(geoDatabase)
+    }
+
     if !report.bypassDomains.isEmpty {
       var settings = appModel.systemProxySettings
       settings.customBypassDomains = SystemProxySettings.normalizedBypassDomains(
@@ -732,6 +738,17 @@ private struct ClientMigrationReportSheet: View {
       report.allowLan.map { "allow-lan: \($0)" },
       report.mode.map { "mode: \($0)" },
       report.logLevel.map { "log-level: \($0)" },
+      report.geoDatabase.map { geo in
+        var parts = [
+          "geo-auto-update: \(geo.autoUpdateEnabled)",
+          "geo-update-interval: \(geo.normalizedUpdateIntervalHours)",
+          "geodata-mode: \(geo.geodataMode)",
+        ]
+        if !geo.usesDefaultURLs {
+          parts.append("geox-url: custom")
+        }
+        return parts.joined(separator: ", ")
+      },
       report.systemProxyEnabled.map { "system proxy intent: \($0)" },
       report.ports.isEmpty ? nil : report.ports.map { "\($0.key): \($0.value)" }.sorted().joined(separator: ", "),
       report.bypassDomains.isEmpty ? nil : "bypass: \(report.bypassDomains.joined(separator: ", "))",
@@ -2206,12 +2223,12 @@ private struct SubscriptionProviderOptionsEditor: View {
 
           ProfileEditTextEditorRow("Provider Override YAML", text: $options.overrideYAML, minHeight: 72)
           ProfileEditTextEditorRow("Legacy Runtime Merge YAML", text: $options.runtimeMergeYAML, minHeight: 88)
-            .help("Legacy raw YAML merge. Prefer typed snippets on the Routing page for normal rule and DNS changes.")
+            .help("Merged into this one profile before ClashMax writes its own keys, so mode, tun, dns.enable and the geo keys still win over it. For an override that actually has the last word, use a Raw YAML snippet on the Routing page.")
 
           customHeadersEditor
         }
       } else {
-        ProfileEditFootnote(verbatim: String(localized: "Developer Mode is required for legacy raw provider filters, YAML merge fields, and custom request headers. Use Routing snippets for normal rule and DNS changes."))
+        ProfileEditFootnote(verbatim: String(localized: "Developer Mode is required for legacy raw provider filters, YAML merge fields, and custom request headers. Nothing here is needed to override a Mihomo key: a Raw YAML snippet on the Routing page reaches every key, with the same preflight and rollback as any other snippet."))
       }
     }
     .onAppear(perform: validateAdvancedYAML)

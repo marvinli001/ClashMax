@@ -2,7 +2,7 @@
 
 **English** | [简体中文](ROADMAP.zh-CN.md)
 
-**Status:** draft 2026-08-14, revised 2026-08-27 · maintainer
+**Status:** draft 2026-08-14, revised 2026-08-27, corrected 2026-08-29 · maintainer
 [@marvinli001](https://github.com/marvinli001) · app 1.0.23, bundled Mihomo
 [v1.19.30](../Resources/Core/mihomo-manifest.json)
 
@@ -16,6 +16,16 @@ already hurting users or getting worse on their own. Each endpoint contract quot
 sections was probed against the bundled core rather than read off the upstream docs; where a
 probe contradicted the obvious assumption, the contradiction is written down next to the
 criterion it constrains.
+
+A review on 2026-08-29 found five defects in that first cut — a fallback that could turn one
+failed group request back into a per-node storm, a setting that meant two different things
+either side of the promotion floor, geo settings missing from backup and restore, geo
+diagnostics reading the saved value instead of the one the core actually applied, and a
+ClashX import whose winning value depended on directory-enumeration order. All five are
+fixed, and each is written up under the criterion it belongs to rather than in a changelog,
+because the criterion is what was wrong. **The A3/A6/B5 "shipped" claims below are about the
+transport and the logic; the manual observations each section names as a gap are still
+open.**
 
 Bug fixes, filed issues, and Mihomo version bumps are ongoing maintenance and are
 deliberately **not** in this document. This is about what ClashMax is *for*.
@@ -92,6 +102,19 @@ The ceiling for advanced users does not come from more UI switches. It comes fro
 - every apply shows a diff first;
 - a failed apply reverts automatically and says why.
 
+The second bullet became true on 2026-08-29. It is carried by the **Raw YAML** snippet payload
+([`RawYAMLPatch.swift`](../ClashMax/Models/RawYAMLPatch.swift)) — an ordinary snippet kind on the
+Routing page, alongside rules, DNS and sniffer, using the same save, preflight, diff and rollback
+path as any other snippet. It is applied **after** every app-managed key
+([`ConfigNormalizer.swift`](../ClashMax/Services/ConfigNormalizer.swift)), which is what the legacy
+per-profile "Runtime Merge YAML" field never did: that one merges *before* those writes, so `mode`,
+`tun.*`, `dns.enable` and the geo keys always won over it, and it was reachable only from a
+Developer Mode disclosure on subscription profiles. Only `mixed-port`, `external-controller` (and
+its variants) and `secret` are refused, and refusing them **serves** INV-2 rather than capping it:
+they are the channel the app applies, verifies and rolls back through, each already has an owning
+control in Settings, and a patch that moved one would leave the app unable to roll back that very
+patch.
+
 With INV-2 satisfied, **ClashMax's ceiling equals Mihomo's ceiling** and the UI does not
 grow. When Mihomo ships a new key tomorrow, advanced users have it the same day and we ship
 nothing.
@@ -108,7 +131,8 @@ Before adding a setting, a toggle, or a page, answer all five:
 - [ ] **If L1: what is the single fix button, and which snippet does it write?**
 - [ ] **If L2: does it reuse the existing rule/snippet model, or invent a new one?** (INV-1)
 - [ ] **If L3: is it reachable through the generic override path already?** If yes, do not
-      build bespoke UI for it.
+      build bespoke UI for it. Since 2026-08-29 the honest answer for a plain Mihomo key is
+      yes — a Raw YAML snippet reaches it.
 - [ ] **Can the user see the resulting YAML diff, and revert it?** (INV-2)
 
 A key that only advanced users need, and that the generic snippet override already reaches,
@@ -141,11 +165,11 @@ Gaps, in priority order:
 | **`sniffer`** | **Zero occurrences repo-wide.** Worse: the connections decoder backfills a missing domain with the destination IP ([`MihomoAPIClient.swift:448`](../ClashMax/Services/MihomoAPIClient.swift#L448)), so nothing downstream can tell a domainless connection from a named one | Connections opened straight to an IP (hardcoded-IP apps, some CDNs, QUIC) carry no domain, so `DOMAIN-SUFFIX` rules cannot match them. Users experience this as *"my rules don't work"* — and our diagnostics cannot say why, because the fact is destroyed before diagnosis. See [A1](#a1--sniffer-recover-the-domain-the-kernel-never-saw) |
 | **`/dns/query`** | Not implemented | Cannot answer "which nameserver answered this domain, and with what address". Leaves a hole in the middle of the routing story we otherwise tell end to end. |
 | **`/cache/fakeip/flush`** | **Closed 2026-08-27** — `flushFakeIPCache()`, surfaced through `FakeIPDiagnosticsBuilder` as an L1 fix action. See [A3](#a3--flush-fake-ip-cache-as-an-l1-fix-action) | *(was: a stale fake-ip mapping can only be cleared by restarting the core)* |
-| **`/group/{name}/delay`** | **Closed 2026-08-27** — whole-group units replace per-node fan-out above 8 members. See [A6](#a6--batch-delay-testing-via-groupnamedelay) | *(was: batch delay testing is issued per node; the kernel has a whole-group endpoint)* |
-| **`geox-url`, `geo-auto-update`, `geodata-mode`** | **Closed 2026-08-27** — `GeoDatabaseSettings` is app-managed and generated into the runtime YAML by `ConfigNormalizer`. Still *not* imported from ClashX: the migration parser continues to allow-list them without reading them. See [B5](#b5--geo-database-maintenance) | *(was: GeoIP/GeoSite databases cannot be updated, so geo-based rules silently drift out of date — measured on the maintainer's own machine on 2026-08-27: `GeoSite.dat` last written Jun 20, `geoip.metadb` May 4)* |
+| **`/group/{name}/delay`** | **Closed 2026-08-27** — whole-group units replace per-node fan-out above 8 members. Measured 2026-08-29 on 1200 nodes by [`script/bench_group_delay.py`](../script/bench_group_delay.py): **5.00 s vs 350.88 s, 70x**. A group in flight costs the whole concurrency budget and only a 404 degrades to per-node, so the fallback cannot become a larger storm than the one it replaced. See [A6](#a6--batch-delay-testing-via-groupnamedelay) | *(was: batch delay testing is issued per node; the kernel has a whole-group endpoint)* |
+| **`geox-url`, `geo-auto-update`, `geodata-mode`** | **Closed 2026-08-27** — `GeoDatabaseSettings` is app-managed and generated into the runtime YAML by `ConfigNormalizer`. **ClashX import closed 2026-08-29** — the migration parser reads the keys instead of allow-listing them, from the main config only. Backup/restore carry the settings and the diagnostics read the applied ones. See [B5](#b5--geo-database-maintenance) | *(was: GeoIP/GeoSite databases cannot be updated, so geo-based rules silently drift out of date — measured on the maintainer's own machine on 2026-08-27: `GeoSite.dat` last written Jun 20, `geoip.metadb` May 4)* |
 | **`/configs/geo`** | **Closed 2026-08-27** — `updateGeoDatabases(timeout:)` behind an Update Now action | *(was: no in-app geo database refresh)* |
 | **`/memory`** | Not implemented | No core memory telemetry. |
-| **`tcp-concurrent`, `global-client-fingerprint`, `find-process-mode`, `keep-alive-interval`, `ntp`, `experimental`, `global-ua`, `interface-name`** | Zero occurrences | Advanced users hit a hard ceiling. **Per INV-2 the fix is the generic override path, not eight new toggles.** |
+| **`tcp-concurrent`, `global-client-fingerprint`, `find-process-mode`, `keep-alive-interval`, `ntp`, `experimental`, `global-ua`, `interface-name`** | **Closed 2026-08-29** — still zero occurrences by name, and deliberately so: the **Raw YAML** snippet payload ([`RawYAMLPatch.swift`](../ClashMax/Models/RawYAMLPatch.swift)) reaches all of them, and every key Mihomo ships tomorrow, without the app growing a switch. See [INV-2](#23-two-invariants) | *(was: advanced users hit a hard ceiling; per INV-2 the fix is the generic override path, not eight new toggles)* |
 | **`listeners`** | Recognized only as a subscription risk key to strip | Inbound listeners (serving other devices on the LAN) are unavailable. Needs a deliberate decision, not a default. |
 
 ### 3.3 Native macOS leverage already half-built
@@ -386,6 +410,18 @@ believing the user when they say their rules do not work.
   and "we emptied it ourselves". That is sound here only because `profile.store-fake-ip` is
   never written by ClashMax and defaults to `false`, so the table genuinely is empty at core
   start.
+- **Two false positives, fixed 2026-08-29:**
+  - The profile signal was `Profile.updatedAt`, a manifest timestamp that also moves for a
+    rename, an update-policy edit or an upstream-endpoint change — none of which can
+    invalidate a single mapping. Renaming a profile reported a stale fake-ip table. The input
+    is now `profileContentFetchedAt`, fed from `SubscriptionMetadata.lastFetchedAt`, which is
+    written only when a fetch actually brought bytes back. A local profile has no fetch
+    timestamp and contributes nothing, which is the honest answer: ClashMax does not observe
+    in-place edits to a local config either way.
+  - When both the profile and the network were invalidating, the builder always named the
+    profile, because that branch was written first. It now compares the two timestamps and
+    reports whichever happened **later** — the state the table is actually in, rather than a
+    cause the user has already moved past.
 - **Gap:** never run by hand against a real captive portal or a real subscription update.
 
 #### A4 — Connection route replay
@@ -414,7 +450,7 @@ believing the user when they say their rules do not work.
 
 #### A6 — Batch delay testing via `/group/{name}/delay`
 
-**Status: shipped 2026-08-27, except the measurement.**
+**Status: shipped 2026-08-27. Transport measured 2026-08-29; the UI observations are still open.**
 
 - **What the endpoint actually does**, probed against the bundled core v1.19.30: `GET
   /group/{name}/delay?url=&timeout=` returns a flat `[String: Int]` on 200, an unknown group
@@ -428,12 +464,53 @@ believing the user when they say their rules do not work.
         when it has a name, at least 8 members (one concurrency wave of 6 plus a margin), and
         every member shares one test URL; `.nativePing` never promotes, because that mode does
         not go through the core at all.
+  - [x] **A group in flight costs the whole concurrency budget, and only a 404 degrades.**
+        Both were wrong in the first cut, and both made A6 capable of producing a *larger*
+        burst than the fan-out it replaced:
+        - A group unit was charged one slot, like a node. But one group request makes the
+          core probe every member at once — the measurement below resolves 1200 members
+          inside a single timeout window, so there is no internal wave limit to hide behind.
+          Six such units against a six-slot budget is several thousand simultaneous probes.
+          `ProxyDelayBatchUnit.concurrencyCost(budget:)` now charges a group the entire
+          budget, so at most one group's worth of probes is ever in flight, and the scheduler
+          returns exactly what it charged rather than assuming every unit cost one.
+        - *Any* error on the group request used to be read as "this core does not support the
+          endpoint" and re-expanded into one request per member. A 500, a dropped connection
+          or a client-side timeout would therefore answer one failed request with hundreds,
+          at the moment the core is least able to serve them. Only
+          `ClientError.unknownProxyGroup` — which the API client raises for the 404 that both
+          "the group was renamed" and "this core is too old to route the endpoint" produce —
+          degrades now. Everything else fails the unit and says why.
+  - [x] **Unified Delay means one thing on both sides of the promotion floor.** It used to
+        mean two: the per-node path sampled twice from this process and reported the second
+        result, while a promoted group called the endpoint once, so the same switch changed
+        the measurement at 7 nodes and did nothing at 8. Mihomo's own `unified-delay` is a
+        config key, so ClashMax now writes it into the runtime YAML *and* applies it to a
+        running core, and `DelayTestSettings.clientSideProbeAttempts` repeats the probe only
+        in `.nativePing`, where the core is not involved at all. The Settings copy was
+        rewritten to describe that split instead of promising a second sample everywhere; the
+        old wording is the reason the divergence went unnoticed. As a side effect a failing
+        node in `.mihomoURL` no longer waits out two timeouts.
   - [x] The batch status semantics established for issue #18 (running / completed / partial /
         failed / cancelled) are preserved exactly — a member the core omitted is recorded as
         `.failure(.timeout, …)`, so it counts as tested-and-failed, not as missing.
-  - [ ] **Measured on a group of 1000+ nodes and the result recorded in
-        `MANUAL_TEST_PLAN.md`.** Still open. The unit-promotion logic is covered by tests, but
-        the number this item exists to produce does not exist yet.
+  - [x] **Measured on a group of 1000+ nodes, reproducibly.** Done 2026-08-29, against the
+        bundled core v1.19.30 directly, by
+        [`script/bench_group_delay.py`](../script/bench_group_delay.py) — committed, so the
+        numbers below can be re-derived from a clone rather than taken on trust. The rig
+        writes its own configs, starts two cores on loopback (nothing leaves the machine),
+        measures, and tears them down. A 1200-member group (400 reachable, 400 instantly
+        refused, 400 black-holed, 5000 ms timeout) takes **5.00 s** through
+        `/group/{name}/delay` and **350.88 s** through the per-node fan-out at concurrency 6 —
+        **70x, 346 seconds saved**. The group call
+        collapses to exactly one timeout window, so the core imposes no smaller internal wave;
+        that assumption is now measured rather than hoped for. It also reproduces the omission
+        behaviour at scale: **800 of 1200 members came back missing rather than failed**,
+        which is precisely why absence is mapped to `.failure(.timeout, …)` explicitly.
+  - **Still unmeasured:** the same run *through the app's UI* — scroll smoothness during the
+    batch, cancel semantics, every node ending with a state on screen, and the Copy
+    Diagnostics counts. The transport is where the time goes and it is now a known quantity;
+    the four UI observations still need a person at the keyboard.
 
 ---
 
@@ -524,14 +601,50 @@ cannot copy cheaply.
         precisely so the core's own explanation is not flattened into "HTTP 500".
   - [x] Default URLs are documented and overridable at L3 (four MetaCubeX URLs, each
         replaceable, validated for scheme and emptiness before they can be saved).
+  - [x] **Backup and restore carry them.** They persist under their own defaults key, and the
+        first cut stopped there: `BackupSettingsSnapshot` had no geo field, so restoring a
+        settings backup silently reset custom mirrors, the auto-update flag and the interval
+        to ClashMax's defaults — the failure mode is a *quiet* one, which is the kind this
+        project is supposed to be least tolerant of. The snapshot now carries
+        `geoDatabaseSettings` and restore mirrors it back onto `overrides.geoDatabase`, the
+        way the store already does on every other write. An older backup with no geo key
+        decodes to the defaults instead of failing.
+  - [x] **The diagnostics describe the settings the core applied, not the ones on disk.**
+        When a runtime reload fails, ClashMax deliberately keeps the saved settings and says
+        "saved, but could not be applied" — but the inventory read, the staleness verdict and
+        the manual refresh all still read `geoDatabaseSettings`. Since `geodata-mode` decides
+        whether the live GeoIP file is `GeoIP.dat` or `geoip.metadb`, that combination checked
+        a file the core was not using and reported the age of the wrong one. All three now go
+        through `runtimeGeoDatabaseSettings`, which is the applied snapshot while the core is
+        running and the saved value otherwise.
 - **The silent-no-op guard:** `/configs/geo` answers `204` for "downloaded four files" *and*
   for "did nothing at all", so the status code alone must never be reported as success. The
   working directory is stat'ed either side of the call and the outcome is described from what
   changed on disk: rewritten, already current (the core sends `If-None-Match`, so an unchanged
   remote produces a 304 and no write), or *refreshed nothing while a referenced database is
   still missing* — which is the real no-op, and is reported as one.
-- **Not done:** ClashX migration still only allow-lists these three keys. A user migrating
-  from ClashX keeps their geo settings on paper and gets ClashMax's defaults in practice.
+- **ClashX import — closed 2026-08-29.** The parser used to allow-list `geo-auto-update`,
+  `geodata-mode` and `geox-url` and read none of them, so a migrating user kept their geo
+  settings on paper and got ClashMax's defaults in practice. It now reads all four keys into
+  `ClientMigrationReport.geoDatabase`, which the apply step hands to
+  `updateGeoDatabaseSettings`. `geo-update-interval` was not even on the allow-list, so it was
+  additionally reported as an unknown key; it is read now too.
+  - Each field is validated **as it is read**, because `updateGeoDatabaseSettings` refuses an
+    invalid struct *whole*: one bad `geox-url` entry would otherwise turn the entire import
+    into a silent no-op sitting behind a report that said "imported". A rejected field keeps
+    ClashMax's default and says why in the report warnings.
+  - A config that names only some of the keys keeps ClashMax's defaults for the rest, rather
+    than restating them as if the user had chosen them.
+  - **Only the main config contributes** — `config.yaml`, or whichever of ClashX's known
+    primary file names is present. The scan also sweeps `profiles/` and `providers/`, and
+    `FileManager.enumerator` promises no order, so reading geo keys from every file and
+    keeping the last one let an arbitrary inactive fragment decide which mirror ClashMax
+    downloads from, non-deterministically, and then applied it without asking. A fragment that
+    names the keys is now reported in the warnings — named, not silently obeyed and not
+    silently dropped.
+  - The `geo-ip` / `geo-site` spellings — what `GET /configs` echoes back, and what the core
+    ignores without a word when a *file* uses them — are named as the mistake they are instead
+    of being passed along.
 - **Gap:** never seen by eye. The whole feature is a claim about what is on disk, and nobody
   has watched it make that claim in a running app.
 

@@ -101,7 +101,7 @@ final class FakeIPDiagnosticsTests: XCTestCase {
         dnsFacts: dnsFacts(),
         runtimeAppliedAt: minutesAgo(5),
         networkChangedAt: minutesAgo(30),
-        profileUpdatedAt: minutesAgo(90)
+        profileContentFetchedAt: minutesAgo(90)
       ),
       now: now
     )
@@ -134,13 +134,47 @@ final class FakeIPDiagnosticsTests: XCTestCase {
         dnsFacts: dnsFacts(),
         runtimeAppliedAt: minutesAgo(60),
         networkChangedAt: minutesAgo(10),
-        profileUpdatedAt: minutesAgo(2)
+        profileContentFetchedAt: minutesAgo(2)
       ),
       now: now
     )
 
     XCTAssertEqual(snapshot.cause, .profileReloaded)
     XCTAssertEqual(snapshot.facts.filter { $0.key == .lastInvalidation }.count, 1)
+  }
+
+  /// The reported cause is whichever event happened last, not whichever branch is written first.
+  /// Naming the profile while the user has since joined another network points the recovery advice
+  /// at a state they have already moved past.
+  func testNetworkChangeWinsOverAnOlderProfileUpdate() {
+    let snapshot = FakeIPDiagnosticsBuilder.snapshot(
+      for: FakeIPDiagnosticsInput(
+        dnsFacts: dnsFacts(),
+        runtimeAppliedAt: minutesAgo(60),
+        networkChangedAt: minutesAgo(2),
+        profileContentFetchedAt: minutesAgo(10)
+      ),
+      now: now
+    )
+
+    XCTAssertEqual(snapshot.cause, .networkChanged)
+    XCTAssertEqual(snapshot.facts.filter { $0.key == .lastInvalidation }.count, 1)
+  }
+
+  /// A local profile never fetches, so it contributes no timestamp at all — the honest answer,
+  /// where the old `Profile.updatedAt` input turned every rename into a stale-table warning.
+  func testAProfileWithNoFetchTimestampDoesNotInvalidateTheTable() {
+    let snapshot = FakeIPDiagnosticsBuilder.snapshot(
+      for: FakeIPDiagnosticsInput(
+        dnsFacts: dnsFacts(),
+        runtimeAppliedAt: minutesAgo(60),
+        profileContentFetchedAt: nil
+      ),
+      now: now
+    )
+
+    XCTAssertEqual(snapshot.cause, .fresh)
+    XCTAssertEqual(snapshot.status, .pass)
   }
 
   /// Flushing is what makes the table known-good again, so the warning has to clear afterwards or
@@ -151,7 +185,7 @@ final class FakeIPDiagnosticsTests: XCTestCase {
       runtimeAppliedAt: minutesAgo(60),
       lastFlushAt: minutesAgo(1),
       networkChangedAt: minutesAgo(5),
-      profileUpdatedAt: minutesAgo(4)
+      profileContentFetchedAt: minutesAgo(4)
     )
 
     let snapshot = FakeIPDiagnosticsBuilder.snapshot(for: input, now: now)

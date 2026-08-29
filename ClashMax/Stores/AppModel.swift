@@ -1572,6 +1572,18 @@ final class AppModel {
     currentRuntimeOverrides.mixedPort
   }
 
+  /// The geo settings the **running** core actually has, as opposed to the ones the user has saved.
+  ///
+  /// The two diverge whenever a save was accepted but its reload was not — the state Settings
+  /// reports as "saved but could not be applied", where `updateGeoDatabaseSettings` deliberately
+  /// keeps the new values on disk. `geodata-mode` decides whether the live GeoIP database is
+  /// `GeoIP.dat` or `geoip.metadb`, and a custom `geox-url` decides where a refresh pulls from, so
+  /// reading the saved value there would stat a file the core is not using and describe a refresh
+  /// of it as success or failure of the wrong thing.
+  var runtimeGeoDatabaseSettings: GeoDatabaseSettings {
+    currentRuntimeOverrides.geoDatabase
+  }
+
   private var canApplyRuntimeSettingsToCurrentRuntime: Bool {
     guard !previewRuntimeActive else { return false }
     return isRunning
@@ -1628,9 +1640,16 @@ final class AppModel {
   }
 
   private func recordAppliedRuntimeSettingsSnapshot(_ snapshot: AppliedRuntimeSettingsSnapshot) {
+    let previousGeoDatabase = settings.appliedRuntimeSettingsSnapshot?.overrides.geoDatabase
     var snapshot = snapshot
     snapshot.appliedAt = Date()
     settings.recordAppliedRuntimeSettingsSnapshot(snapshot)
+    // The snapshot is what `runtimeGeoDatabaseSettings` reads, so a change to `geodata-mode` or a
+    // mirror only becomes live here. Re-stat against the new names rather than leaving the panel
+    // describing the databases of the previous config.
+    if previousGeoDatabase != snapshot.overrides.geoDatabase {
+      refreshGeoDatabaseInventory()
+    }
   }
 
   var dashboardRuntimeState: DashboardRuntimeState {
@@ -3945,6 +3964,24 @@ final class AppModel {
     return true
   }
 
+  /// Persists the delay-test settings, re-applying the runtime config when `unifiedDelay` changed.
+  ///
+  /// `unifiedDelay` is not a client-side toggle in `.mihomoURL` mode: it is generated into the
+  /// runtime YAML as `unified-delay` and the **core** acts on it. Writing it to defaults without
+  /// re-applying left the running core measuring on the old value while Settings showed the new
+  /// one, so it goes through the ordinary running-settings path like every other generated key.
+  /// The other two fields are read by ClashMax at probe time and need no reload.
+  func updateDelayTestSettings(_ newSettings: DelayTestSettings) {
+    guard newSettings != delayTestSettings else { return }
+    let unifiedDelayChanged = newSettings.unifiedDelay != delayTestSettings.unifiedDelay
+    if unifiedDelayChanged {
+      seedAppliedRuntimeSettingsSnapshotIfNeeded()
+    }
+    delayTestSettings = newSettings
+    guard unifiedDelayChanged else { return }
+    scheduleRunningRuntimeSettingsApply(reason: "Unified delay updated")
+  }
+
   @discardableResult
   func updateExternalControllerSettings(_ newSettings: ExternalControllerSettings) -> Bool {
     if let validationError = newSettings.validationError {
@@ -5846,30 +5883,39 @@ final class AppModel {
     // failing, so an older core or a renamed group behaves exactly as it did before.
     var units = Self.proxyDelayBatchUnits(items: items, settings: settings)
     let concurrencyLimit = Self.proxyDelayBatchConcurrencyLimit
-    await withTaskGroup(of: ProxyDelayBatchUnitResult.self) { taskGroup in
+    await withTaskGroup(of: ProxyDelayBatchUnitOutcome.self) { taskGroup in
       var nextIndex = 0
       var inFlight = 0
 
       func scheduleAvailableUnits() {
-        while inFlight < concurrencyLimit, nextIndex < units.count {
+        // Units are not interchangeable: a group unit costs the whole budget because the core fans
+        // out over its members itself (see `ProxyDelayBatchUnit.concurrencyCost`). The
+        // `inFlight == 0` arm is what guarantees forward progress — a unit priced at or above the
+        // whole budget always runs once the batch has drained, so the loop can never end with
+        // units left unscheduled.
+        while nextIndex < units.count {
           let unit = units[nextIndex]
+          let cost = unit.concurrencyCost(budget: concurrencyLimit)
+          guard inFlight == 0 || inFlight + cost <= concurrencyLimit else { break }
           nextIndex += 1
-          inFlight += 1
+          inFlight += cost
           taskGroup.addTask {
-            await Self.measureBatchUnit(
+            let result = await Self.measureBatchUnit(
               unit,
               apiClient: apiClient,
               settings: settings,
               pingTester: pingTester
             )
+            return ProxyDelayBatchUnitOutcome(concurrencyCost: cost, result: result)
           }
         }
       }
 
       scheduleAvailableUnits()
 
-      while let unitResult = await taskGroup.next() {
-        inFlight -= 1
+      while let unitOutcome = await taskGroup.next() {
+        inFlight -= unitOutcome.concurrencyCost
+        let unitResult = unitOutcome.result
         guard proxyDelayBatchToken == token else {
           taskGroup.cancelAll()
           break
@@ -6226,7 +6272,7 @@ final class AppModel {
     settings: DelayTestSettings,
     testURL: URL
   ) async throws -> Int {
-    let attempts = settings.unifiedDelay ? 2 : 1
+    let attempts = settings.clientSideProbeAttempts
     var lastDelay: Int?
     var lastError: Error?
 
@@ -6236,7 +6282,7 @@ final class AppModel {
         lastError = nil
       } catch {
         lastError = error
-        if !settings.unifiedDelay {
+        if attempts == 1 {
           throw error
         }
       }
@@ -6351,10 +6397,10 @@ final class AppModel {
   /// - an unknown group is a 404 for the whole call rather than a node failure, so it degrades to
   ///   the per-node path instead of reporting that every member failed.
   ///
-  /// Only one attempt is made even when `unifiedDelay` is on: that setting is mirrored into the
-  /// runtime config as `unified-delay` (`PersistedSettingsStore`), so the core already performs the
-  /// second handshake itself and returns the unified figure. Repeating the call here would double
-  /// the blocking window of the very probe this path exists to make cheaper.
+  /// Attempt count comes from `DelayTestSettings.clientSideProbeAttempts`, which is 1 here: this
+  /// path only runs in `.mihomoURL` mode, where the core honours `unified-delay` itself. The
+  /// per-node path uses the same rule, so a batch no longer measures differently either side of
+  /// the promotion floor.
   private static func measureBatchGroupDelay(
     groupName: String,
     testURL: URL,
@@ -6379,7 +6425,25 @@ final class AppModel {
           ProxyDelayBatchItemResult(item: $0, outcome: .failure(.cancelled, "Cancelled"))
         })
       }
-      return .unsupportedGroup(items)
+      // Only "this core has no such group" degrades to the per-node path. That single signal
+      // covers both cases the fallback exists for: a group that was renamed out from under the
+      // batch, and a core too old to route `/group/{name}/delay` at all — the API client maps the
+      // 404 both produce onto `unknownProxyGroup`.
+      //
+      // Every other error stays a failure of this unit. Re-expanding on a 500, a dropped
+      // connection or a client-side timeout would answer one failed request with one request per
+      // member at the exact moment the core is least able to serve them, which is a larger version
+      // of the request storm this path exists to prevent.
+      if let clientError = error as? MihomoAPIClient.ClientError,
+         case .unknownProxyGroup = clientError
+      {
+        return .unsupportedGroup(items)
+      }
+      let message = UserFacingError.message(for: error)
+      let kind = delayFailureKind(for: error, message: message)
+      return .measured(items.map {
+        ProxyDelayBatchItemResult(item: $0, outcome: .failure(kind, message))
+      })
     }
 
     guard !Task.isCancelled else {
@@ -6434,7 +6498,7 @@ final class AppModel {
     settings: DelayTestSettings,
     pingTester: any PingTesting
   ) async throws -> Int {
-    let attempts = settings.unifiedDelay ? 2 : 1
+    let attempts = settings.clientSideProbeAttempts
     var lastDelay: Int?
     var lastError: Error?
 
@@ -6460,7 +6524,7 @@ final class AppModel {
         lastError = nil
       } catch {
         lastError = error
-        if !settings.unifiedDelay {
+        if attempts == 1 {
           throw error
         }
       }
@@ -8554,7 +8618,7 @@ final class AppModel {
       runtimeAppliedAt: lastRuntimeConfigAppliedAt,
       lastFlushAt: lastFakeIPFlushAt,
       networkChangedAt: lastNetworkEnvironmentChangeAt,
-      profileUpdatedAt: profileStore.activeProfile?.updatedAt
+      profileContentFetchedAt: profileStore.activeProfile?.subscriptionMetadata?.lastFetchedAt
     ))
   }
 
@@ -8593,7 +8657,7 @@ final class AppModel {
   /// core down — the files outlive it, and their age is exactly what the diagnosis is about.
   func refreshGeoDatabaseInventory() {
     let directory = paths.runtime
-    let geoSettings = geoDatabaseSettings
+    let geoSettings = runtimeGeoDatabaseSettings
     geoDatabaseInventoryTask?.cancel()
     geoDatabaseInventoryTask = Task { @MainActor [weak self] in
       let inventory = await GeoDatabaseInventoryReader.inventory(at: directory, settings: geoSettings)
@@ -8613,7 +8677,7 @@ final class AppModel {
   var geoDatabaseDiagnostics: GeoDatabaseDiagnosticsSnapshot {
     GeoDatabaseDiagnosticsBuilder.snapshot(for: GeoDatabaseDiagnosticsInput(
       isCoreRunning: isCoreRunning,
-      settings: geoDatabaseSettings,
+      settings: runtimeGeoDatabaseSettings,
       inventory: geoDatabaseInventory,
       requirements: geoRuleRequirements,
       lastUpdateAt: lastGeoDatabaseUpdateAt,
@@ -8636,7 +8700,7 @@ final class AppModel {
   func updateGeoDatabases() {
     guard geoDatabaseUpdateTask == nil, apiClient != nil else { return }
     let directory = paths.runtime
-    let geoSettings = geoDatabaseSettings
+    let geoSettings = runtimeGeoDatabaseSettings
     let requirements = geoRuleRequirements
     geoDatabaseUpdateInFlight = true
     geoDatabaseUpdateStatusMessage = nil
@@ -9271,12 +9335,40 @@ struct ProxyDelayBatchItem: Sendable {
 enum ProxyDelayBatchUnit: Sendable {
   case node(ProxyDelayBatchItem)
   case group(name: String, testURL: URL, items: [ProxyDelayBatchItem])
+
+  /// How much of the batch's concurrency budget this unit occupies while it is in flight.
+  ///
+  /// A node unit is one request measuring one node, so it costs one slot. A group unit is one
+  /// request that makes the **core** probe every member at once — mihomo's group `URLTest` starts
+  /// one goroutine per member with no internal wave limit, which the A6 measurement confirmed by
+  /// resolving all 1200 members of a synthetic group inside a single 5 s timeout window.
+  ///
+  /// Charging a group unit one slot like a node would therefore let the scheduler put six *whole
+  /// groups* in flight against a six-slot budget: a catalog with several large groups would turn
+  /// into thousands of simultaneous probes, which is a bigger burst than the per-node fan-out this
+  /// path replaced. Charging it the whole budget keeps at most one group's worth of probes running
+  /// and still costs one request per group.
+  func concurrencyCost(budget: Int) -> Int {
+    switch self {
+    case .node:
+      return 1
+    case .group:
+      return max(1, budget)
+    }
+  }
 }
 
 private enum ProxyDelayBatchUnitResult: Sendable {
   case measured([ProxyDelayBatchItemResult])
   /// The core could not answer a whole-group probe for these items; run them one by one instead.
   case unsupportedGroup([ProxyDelayBatchItem])
+}
+
+/// A finished unit together with the concurrency budget it was holding, so the scheduler returns
+/// exactly what it charged instead of assuming every unit costs one slot.
+private struct ProxyDelayBatchUnitOutcome: Sendable {
+  var concurrencyCost: Int
+  var result: ProxyDelayBatchUnitResult
 }
 
 private struct ProxyDelayBatchItemResult: Sendable {

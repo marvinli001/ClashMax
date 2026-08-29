@@ -138,6 +138,7 @@ struct RoutingView: View {
         newRuleSnippetButton
         newDNSPatchSnippetButton
         newSnifferSnippetButton
+        newRawYAMLSnippetButton
         saveDraftButton
         deleteSelectedSnippetButton
       }
@@ -147,6 +148,7 @@ struct RoutingView: View {
         newRuleSnippetButton
         newDNSPatchSnippetButton
         newSnifferSnippetButton
+        newRawYAMLSnippetButton
         saveDraftButton
         deleteSelectedSnippetButton
       }
@@ -180,6 +182,15 @@ struct RoutingView: View {
       Label("New Sniffer Patch", systemImage: "waveform.badge.magnifyingglass")
     }
     .help(String(localized: "New Sniffer Patch"))
+  }
+
+  private var newRawYAMLSnippetButton: some View {
+    Button {
+      newRawYAMLSnippet()
+    } label: {
+      Label("New Raw YAML Patch", systemImage: "curlybraces")
+    }
+    .help(String(localized: "New Raw YAML Patch"))
   }
 
   private var saveDraftButton: some View {
@@ -448,6 +459,8 @@ struct RoutingView: View {
         RuntimeDNSPatchEditor(settings: dnsPayloadBinding)
       case .sniffer:
         RuntimeSnifferPatchEditor(settings: snifferPayloadBinding)
+      case .rawYAML:
+        RuntimeRawYAMLPatchEditor(settings: rawYAMLPayloadBinding)
       }
 
       if let validationError = draftSnippet.validationError {
@@ -700,6 +713,8 @@ struct RoutingView: View {
         dnsDiffSection(settings)
       case let .sniffer(settings):
         snifferDiffSection(settings)
+      case let .rawYAML(settings):
+        rawYAMLDiffSection(settings)
       }
     }
   }
@@ -941,6 +956,25 @@ struct RoutingView: View {
     diffSection(title: "Sniffer Patch", values: snifferPatchPreviewLines(settings))
   }
 
+  private func rawYAMLDiffSection(_ settings: RawYAMLPatchSettings) -> some View {
+    diffSection(title: "Raw YAML Patch", values: rawYAMLPatchPreviewLines(settings))
+  }
+
+  /// Names the top-level keys the patch wins, not the YAML body: the body is already in the editor
+  /// right next to this panel, and it is the one payload that can be arbitrarily long.
+  private func rawYAMLPatchPreviewLines(_ settings: RawYAMLPatchSettings) -> [String] {
+    guard settings.hasRuntimeOverlay else { return [] }
+    if let validationError = settings.validationError {
+      return [validationError]
+    }
+    var lines = settings.topLevelKeys.map { "\($0): \(String(localized: "set by this snippet"))" }
+    for keyPath in settings.overriddenManagedKeyPaths {
+      lines.append("\(keyPath): \(String(localized: "taken over from ClashMax"))")
+    }
+    lines.append(settings.listStrategy.explanation)
+    return lines
+  }
+
   private var matchSimulator: some View {
     RoutingInspectorPanel(title: "Match Simulator", systemImage: "scope") {
       TextField("Destination host or IP", text: $simulationDestination)
@@ -1088,6 +1122,8 @@ struct RoutingView: View {
           draftSnippet.payload = .dnsPatch(RuntimeSnippet.defaultDNSPatchSnippet.dnsPayload)
         case .sniffer:
           draftSnippet.payload = .sniffer(RuntimeSnippet.defaultSnifferSnippet.snifferPayload)
+        case .rawYAML:
+          draftSnippet.payload = .rawYAML(RuntimeSnippet.defaultRawYAMLSnippet.rawYAMLPayload)
         }
       }
     )
@@ -1115,6 +1151,13 @@ struct RoutingView: View {
     Binding(
       get: { draftSnippet.snifferPayload },
       set: { draftSnippet.payload = .sniffer($0) }
+    )
+  }
+
+  private var rawYAMLPayloadBinding: Binding<RawYAMLPatchSettings> {
+    Binding(
+      get: { draftSnippet.rawYAMLPayload },
+      set: { draftSnippet.payload = .rawYAML($0) }
     )
   }
 
@@ -1174,6 +1217,14 @@ struct RoutingView: View {
   private func newSnifferSnippet() {
     selectedSnippetID = nil
     draftSnippet = RuntimeSnippet.defaultSnifferSnippet
+    loadedSnippetSnapshot = nil
+    isEditingDetachedDraft = true
+    runSimulationImmediately()
+  }
+
+  private func newRawYAMLSnippet() {
+    selectedSnippetID = nil
+    draftSnippet = RuntimeSnippet.defaultRawYAMLSnippet
     loadedSnippetSnapshot = nil
     isEditingDetachedDraft = true
     runSimulationImmediately()
@@ -1420,6 +1471,13 @@ private extension RuntimeSnippet {
       return settings
     }
     return .appManagedDefault
+  }
+
+  var rawYAMLPayload: RawYAMLPatchSettings {
+    if case let .rawYAML(settings) = payload {
+      return settings
+    }
+    return .empty
   }
 }
 
@@ -1919,6 +1977,78 @@ private enum RuntimeOptionalBoolChoice: String, CaseIterable, Identifiable {
     case .disabled:
       return String(localized: "Off")
     }
+  }
+}
+
+/// The generic escape hatch (ROADMAP INV-2), as an ordinary snippet editor rather than a legacy
+/// field in Developer Mode. It is deliberately the plainest editor on this page: the point is that
+/// keys ClashMax has no UI for — `tcp-concurrent`, `ntp`, `keep-alive-interval` — are reachable
+/// through the same save, preflight and rollback path as every other snippet, so the app does not
+/// have to grow a switch per key (§2.4).
+private struct RuntimeRawYAMLPatchEditor: View {
+  @Binding var settings: RawYAMLPatchSettings
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      RoutingEditRow("Lists") {
+        Picker("Lists", selection: $settings.listStrategy) {
+          ForEach(RawYAMLPatchListStrategy.allCases) { strategy in
+            Text(strategy.displayName).tag(strategy)
+          }
+        }
+        .labelsHidden()
+        .frame(maxWidth: 180)
+      }
+
+      RoutingEditContentRow {
+        Text(settings.listStrategy.explanation)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+
+      RoutingEditRow("YAML") {
+        RoutingSnippetTextArea(
+          placeholder: String(localized: "tcp-concurrent: true\nntp:\n  enable: true\n  server: time.apple.com"),
+          text: $settings.yaml,
+          minHeight: 132
+        )
+      }
+
+      RoutingEditContentRow {
+        VStack(alignment: .leading, spacing: 6) {
+          Text("Merged after every key ClashMax manages, so this snippet has the last word.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+          // Naming the ClashMax controls that stop deciding is the honest half of INV-2: the
+          // override is allowed, but the user should not later wonder why a Settings switch does
+          // nothing.
+          if !overriddenManagedKeyPaths.isEmpty {
+            Label(
+              String(
+                format: String(localized: "These ClashMax settings no longer decide: %@."),
+                overriddenManagedKeyPaths.joined(separator: ", ")
+              ),
+              systemImage: "hand.raised.fill"
+            )
+            .font(.caption)
+            .foregroundStyle(.orange)
+            .fixedSize(horizontal: false, vertical: true)
+          }
+
+          Text("mixed-port, external-controller and secret stay with ClashMax — the app applies, verifies and rolls back this snippet through them.")
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      }
+    }
+  }
+
+  private var overriddenManagedKeyPaths: [String] {
+    settings.overriddenManagedKeyPaths
   }
 }
 

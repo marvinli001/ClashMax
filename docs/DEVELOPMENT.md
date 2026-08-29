@@ -205,6 +205,17 @@ Run command:
 ./script/build_and_run.sh
 ```
 
+Delay-transport benchmark (roadmap A6 — group endpoint vs per-node fan-out):
+
+```bash
+script/bench_group_delay.py
+```
+
+Needs the bundled core (`script/install_mihomo_core.sh`) or `--core PATH`. It
+generates its own configs, starts two cores on loopback, measures, and tears them
+down; `--nodes`, `--concurrency`, `--timeout-ms` and `--keep` are available. The
+recorded run is in `docs/ROADMAP.md` under A6.
+
 Network Extension signed-build checks are covered by `script/release_smoke_check.sh`.
 For local diagnosis, these commands remain useful:
 

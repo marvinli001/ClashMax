@@ -180,6 +180,71 @@ final class ProxyDelayBatchUnitTests: XCTestCase {
     XCTAssertEqual(units.count, 2)
   }
 
+  // MARK: Concurrency cost
+
+  /// A group unit is not one request's worth of load. Mihomo's group `URLTest` starts one goroutine
+  /// per member with no internal wave limit — the A6 measurement resolved all 1200 members of a
+  /// synthetic group inside a single 5 s window — so a group in flight is already probing every
+  /// member at once. Charging it one slot let six such groups run together, which on the
+  /// maintainer's own profile is thousands of simultaneous probes: a bigger storm than the per-node
+  /// path A6 replaced.
+  func testAGroupUnitOccupiesTheWholeConcurrencyBudget() {
+    let unit = ProxyDelayBatchUnit.group(
+      name: "Proxy",
+      testURL: testURL,
+      items: items(group: "Proxy", count: largeGroupSize)
+    )
+
+    // 6 is `AppModel.proxyDelayBatchConcurrencyLimit`, spelled out here the way the promotion
+    // floor already is, because the constant is private to the model.
+    XCTAssertEqual(unit.concurrencyCost(budget: 6), 6)
+    XCTAssertEqual(unit.concurrencyCost(budget: 24), 24)
+  }
+
+  func testANodeUnitCostsOneSlotWhateverTheBudgetIs() {
+    let unit = ProxyDelayBatchUnit.node(item(group: "Proxy", node: "Proxy-0"))
+
+    XCTAssertEqual(unit.concurrencyCost(budget: 6), 1)
+    XCTAssertEqual(unit.concurrencyCost(budget: 1), 1)
+  }
+
+  /// The scheduler subtracts the cost it charged, so a zero cost would leak budget and a cost it
+  /// can never afford would deadlock. Both are ruled out at the source.
+  func testEveryUnitCostsAtLeastOneSlotEvenWithAnEmptyBudget() {
+    let group = ProxyDelayBatchUnit.group(
+      name: "Proxy",
+      testURL: testURL,
+      items: items(group: "Proxy", count: largeGroupSize)
+    )
+
+    XCTAssertEqual(group.concurrencyCost(budget: 0), 1)
+    XCTAssertEqual(group.concurrencyCost(budget: -3), 1)
+    XCTAssertEqual(ProxyDelayBatchUnit.node(item(group: "Proxy", node: "Proxy-0")).concurrencyCost(budget: 0), 1)
+  }
+
+  // MARK: Probe attempts
+
+  /// Unified Delay used to mean two different things either side of the promotion floor: the
+  /// per-node path sampled twice from this process, the single-call group path once. What the core
+  /// does is settled by `unified-delay` in the runtime config, so ClashMax only has to repeat the
+  /// probe where the core is not involved at all.
+  func testClientSideProbeAttemptsOnlyDoubleWhereTheCoreIsNotInvolved() {
+    var settings = DelayTestSettings.default
+    settings.mode = .mihomoURL
+    settings.unifiedDelay = true
+    XCTAssertEqual(settings.clientSideProbeAttempts, 1)
+
+    settings.unifiedDelay = false
+    XCTAssertEqual(settings.clientSideProbeAttempts, 1)
+
+    settings.mode = .nativePing
+    settings.unifiedDelay = true
+    XCTAssertEqual(settings.clientSideProbeAttempts, 2)
+
+    settings.unifiedDelay = false
+    XCTAssertEqual(settings.clientSideProbeAttempts, 1)
+  }
+
   func testEmptyBatchProducesNoUnits() {
     XCTAssertTrue(AppModel.proxyDelayBatchUnits(items: [], settings: .default).isEmpty)
   }

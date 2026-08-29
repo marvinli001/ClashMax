@@ -66,6 +66,8 @@ enum RuntimeChangeKind: Equatable, Sendable {
   case dns
   /// The `sniffer` block — which protocols and ports are sniffed for a domain.
   case sniffer
+  /// A raw YAML snippet — arbitrary Mihomo keys merged in after everything the app manages.
+  case rawYAML
   /// The order of the runtime overlay snippets, which decides which rule wins.
   case snippetOrder
   /// A profile's own provider options, which carry its per-profile rule overlay.
@@ -107,10 +109,13 @@ extension RuntimeChangeApplyMode {
   static func resolve(_ change: RuntimeChangeKind, in context: RuntimeApplyContext) -> RuntimeChangeApplyMode {
     guard context.servesUserTraffic else { return .appliesOnNextStart }
     switch change {
-    case .rules, .dns, .sniffer, .snippetOrder, .profileOptions:
+    case .rules, .dns, .sniffer, .rawYAML, .snippetOrder, .profileOptions:
       // All are materialized into the generated runtime YAML, which every owner reloads in place.
       // Verified for the sniffer on 2026-08-15: `PUT /configs?force=true` with a sniffer-off config
       // flipped `/configs.sniffing` from true to false on a running core, with no restart.
+      // A raw snippet belongs here rather than in the restart branch because the two keys NE Proxy
+      // pins at start — `mixed-port` and `external-controller` — are the ones `RawYAMLPatchPolicy`
+      // refuses, so a raw patch can never move them out from under a running tunnel.
       return .hotReload
     case .inboundPort, .controllerEndpoint:
       return context.runtimeOwner == .networkExtension
@@ -209,6 +214,8 @@ extension RuntimeChangeKind {
       self = .dns
     case .sniffer:
       self = .sniffer
+    case .rawYAML:
+      self = .rawYAML
     }
   }
 
@@ -220,6 +227,8 @@ extension RuntimeChangeKind {
       return String(localized: "DNS")
     case .sniffer:
       return String(localized: "sniffer")
+    case .rawYAML:
+      return String(localized: "raw YAML")
     case .snippetOrder:
       return String(localized: "overlay order")
     case .profileOptions:

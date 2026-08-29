@@ -274,6 +274,10 @@ struct BackupSettingsSnapshot: Codable, Equatable, Sendable {
   var networkExtensionRoutingSettings: NetworkExtensionRoutingSettings
   var ruleOverlaySettings: RuleOverlaySettings
   var delayTestSettings: DelayTestSettings
+  /// Backed up alongside the other generated runtime keys. `PersistedRuntimeSettings` carries only
+  /// the five keys it always has, so without its own field a restore would silently leave a custom
+  /// mirror, auto-update flag and interval behind (roadmap B5).
+  var geoDatabaseSettings: GeoDatabaseSettings
   var subscriptionFetchSettings: SubscriptionFetchSettings
   var menuBarPinnedGroupSettings: MenuBarPinnedGroupSettings
   var menuBarTrafficSpeedVisible: Bool
@@ -290,6 +294,7 @@ struct BackupSettingsSnapshot: Codable, Equatable, Sendable {
       ?? networkExtensionRoutingSettings.validationError
       ?? ruleOverlaySettings.validationError
       ?? globalShortcutSettings.validationError
+      ?? geoDatabaseSettings.validationError
       ?? networkPolicySettings.rules.compactMap(\.validationError).first
       ?? externalControllerSettings.validationError
   }
@@ -303,6 +308,7 @@ struct BackupSettingsSnapshot: Codable, Equatable, Sendable {
     case networkExtensionRoutingSettings
     case ruleOverlaySettings
     case delayTestSettings
+    case geoDatabaseSettings
     case subscriptionFetchSettings
     case menuBarPinnedGroupSettings
     case menuBarTrafficSpeedVisible
@@ -323,6 +329,7 @@ struct BackupSettingsSnapshot: Codable, Equatable, Sendable {
     networkExtensionRoutingSettings: NetworkExtensionRoutingSettings,
     ruleOverlaySettings: RuleOverlaySettings,
     delayTestSettings: DelayTestSettings,
+    geoDatabaseSettings: GeoDatabaseSettings = .default,
     subscriptionFetchSettings: SubscriptionFetchSettings,
     menuBarPinnedGroupSettings: MenuBarPinnedGroupSettings,
     menuBarTrafficSpeedVisible: Bool = true,
@@ -341,6 +348,7 @@ struct BackupSettingsSnapshot: Codable, Equatable, Sendable {
     self.networkExtensionRoutingSettings = networkExtensionRoutingSettings
     self.ruleOverlaySettings = ruleOverlaySettings
     self.delayTestSettings = delayTestSettings
+    self.geoDatabaseSettings = geoDatabaseSettings
     self.subscriptionFetchSettings = subscriptionFetchSettings
     self.menuBarPinnedGroupSettings = menuBarPinnedGroupSettings
     self.menuBarTrafficSpeedVisible = menuBarTrafficSpeedVisible
@@ -366,6 +374,12 @@ struct BackupSettingsSnapshot: Codable, Equatable, Sendable {
       ),
       ruleOverlaySettings: container.decode(RuleOverlaySettings.self, forKey: .ruleOverlaySettings),
       delayTestSettings: container.decode(DelayTestSettings.self, forKey: .delayTestSettings),
+      // Decoded leniently: backups written before B5 have no geo key, and the core's own defaults
+      // are the right reading of their absence.
+      geoDatabaseSettings: container.decodeIfPresent(
+        GeoDatabaseSettings.self,
+        forKey: .geoDatabaseSettings
+      ) ?? .default,
       subscriptionFetchSettings: container.decode(
         SubscriptionFetchSettings.self,
         forKey: .subscriptionFetchSettings

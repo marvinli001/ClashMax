@@ -888,6 +888,100 @@ final class BackupRestoreServiceTests: XCTestCase {
     XCTAssertEqual(preview.previewSelections["Elite"], "Japan")
   }
 
+  /// Geo settings live under their own defaults key rather than inside `PersistedRuntimeSettings`,
+  /// which carries only five keys. Nothing therefore carried them through a backup: restoring a
+  /// "settings" backup silently dropped a custom mirror, the auto-update flag and the interval back
+  /// to ClashMax's defaults, and the runtime overrides went with them.
+  func testSettingsBackupCarriesGeoDatabaseSettingsThroughRestore() async throws {
+    let source = try BackupFixture()
+    let sourceStore = ProfileStore(paths: source.paths, keychain: InMemorySecretStore())
+    await sourceStore.waitForManifestLoad()
+    let sourceSettings = makeSettings(defaults: source.defaults)
+    var geo = GeoDatabaseSettings.default
+    geo.autoUpdateEnabled = true
+    geo.updateIntervalHours = 12
+    geo.geodataMode = true
+    geo.geoIPURL = "https://mirror.example.com/geoip.dat"
+    sourceSettings.geoDatabaseSettings = geo
+    let backupURL = source.root.appendingPathComponent("geo.clashmax-backup")
+
+    try await service.exportBackup(
+      to: backupURL,
+      profileStore: sourceStore,
+      settings: sourceSettings,
+      proxyPreview: ProxyPreviewStore(defaults: source.defaults),
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: source.paths),
+      includeSecrets: false,
+      password: nil
+    )
+
+    let restore = try BackupFixture()
+    let restoreStore = ProfileStore(paths: restore.paths, keychain: InMemorySecretStore())
+    await restoreStore.waitForManifestLoad()
+    let restoreSettings = makeSettings(defaults: restore.defaults)
+    XCTAssertEqual(restoreSettings.geoDatabaseSettings, .default)
+
+    try await service.restoreBackup(
+      from: backupURL,
+      password: nil,
+      profileStore: restoreStore,
+      settings: restoreSettings,
+      proxyPreview: ProxyPreviewStore(defaults: restore.defaults),
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: restore.paths)
+    )
+
+    XCTAssertEqual(restoreSettings.geoDatabaseSettings, geo)
+    // The next launch builds the runtime config from the overrides, so they have to agree.
+    XCTAssertEqual(restoreSettings.overrides.geoDatabase, geo)
+  }
+
+  /// A backup written before B5 has no geo key at all. Decoding must read that absence as "the
+  /// core's own defaults" rather than failing the whole restore.
+  func testSettingsBackupWithoutAGeoKeyRestoresTheDefaults() async throws {
+    let source = try BackupFixture()
+    let sourceStore = ProfileStore(paths: source.paths, keychain: InMemorySecretStore())
+    await sourceStore.waitForManifestLoad()
+    let sourceSettings = makeSettings(defaults: source.defaults)
+    sourceSettings.overrides.mixedPort = 17_654
+    let backupURL = source.root.appendingPathComponent("pre-b5.clashmax-backup")
+
+    try await service.exportBackup(
+      to: backupURL,
+      profileStore: sourceStore,
+      settings: sourceSettings,
+      proxyPreview: ProxyPreviewStore(defaults: source.defaults),
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: source.paths),
+      includeSecrets: false,
+      password: nil
+    )
+
+    var object = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: Data(contentsOf: backupURL)) as? [String: Any]
+    )
+    var settingsObject = try XCTUnwrap(object["settings"] as? [String: Any])
+    XCTAssertNotNil(settingsObject.removeValue(forKey: "geoDatabaseSettings"))
+    object["settings"] = settingsObject
+    try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+      .write(to: backupURL, options: [.atomic])
+
+    let restore = try BackupFixture()
+    let restoreStore = ProfileStore(paths: restore.paths, keychain: InMemorySecretStore())
+    await restoreStore.waitForManifestLoad()
+    let restoreSettings = makeSettings(defaults: restore.defaults)
+
+    try await service.restoreBackup(
+      from: backupURL,
+      password: nil,
+      profileStore: restoreStore,
+      settings: restoreSettings,
+      proxyPreview: ProxyPreviewStore(defaults: restore.defaults),
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: restore.paths)
+    )
+
+    XCTAssertEqual(restoreSettings.overrides.mixedPort, 17_654)
+    XCTAssertEqual(restoreSettings.geoDatabaseSettings, .default)
+  }
+
   func testSettingsRestoreRegeneratesControllerSecretAndClearsAppliedSnapshot() async throws {
     let source = try BackupFixture()
     let sourceStore = ProfileStore(paths: source.paths, keychain: InMemorySecretStore())

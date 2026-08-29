@@ -100,8 +100,15 @@ struct FakeIPDiagnosticsInput: Equatable, Sendable {
   var lastFlushAt: Date?
   /// When the network path or Wi-Fi network last changed.
   var networkChangedAt: Date?
-  /// When the active profile's node list was last replaced by a subscription update.
-  var profileUpdatedAt: Date?
+  /// When the active profile's **content** was last replaced, i.e. when a subscription fetch
+  /// actually brought bytes back.
+  ///
+  /// Deliberately not `Profile.updatedAt`: that is a manifest timestamp and moves for renames,
+  /// upstream-endpoint changes and update-policy edits, none of which can invalidate a single
+  /// fake-ip mapping. Feeding it here reported a stale table every time the user renamed a
+  /// profile. A local profile has no fetch timestamp and contributes nothing, which is the honest
+  /// answer — ClashMax does not observe in-place edits to a local config either way.
+  var profileContentFetchedAt: Date?
 
   init(
     isCoreRunning: Bool = true,
@@ -109,14 +116,14 @@ struct FakeIPDiagnosticsInput: Equatable, Sendable {
     runtimeAppliedAt: Date? = nil,
     lastFlushAt: Date? = nil,
     networkChangedAt: Date? = nil,
-    profileUpdatedAt: Date? = nil
+    profileContentFetchedAt: Date? = nil
   ) {
     self.isCoreRunning = isCoreRunning
     self.dnsFacts = dnsFacts
     self.runtimeAppliedAt = runtimeAppliedAt
     self.lastFlushAt = lastFlushAt
     self.networkChangedAt = networkChangedAt
-    self.profileUpdatedAt = profileUpdatedAt
+    self.profileContentFetchedAt = profileContentFetchedAt
   }
 }
 
@@ -213,11 +220,20 @@ enum FakeIPDiagnosticsBuilder {
       return date > knownGoodAt ? date : nil
     }
 
-    if let profileUpdatedAt = isInvalidating(input.profileUpdatedAt) {
+    // Both causes can be invalidating at once. Report whichever happened later: that is the state
+    // the table is actually in, where taking the branch that happens to be written first would name
+    // a cause the user has already moved past.
+    let profileInvalidatedAt = isInvalidating(input.profileContentFetchedAt)
+    let networkInvalidatedAt = isInvalidating(input.networkChangedAt)
+    let profileIsTheLaterCause = profileInvalidatedAt.map { profileAt in
+      networkInvalidatedAt.map { profileAt >= $0 } ?? true
+    } ?? false
+
+    if profileIsTheLaterCause, let profileInvalidatedAt {
       facts.append(FakeIPDiagnosticsSnapshot.Fact(
         key: .lastInvalidation,
         title: String(localized: "Profile Updated"),
-        value: Self.relativeDescription(for: profileUpdatedAt, now: now)
+        value: Self.relativeDescription(for: profileInvalidatedAt, now: now)
       ))
       return FakeIPDiagnosticsSnapshot(
         status: .warn,
@@ -230,11 +246,11 @@ enum FakeIPDiagnosticsBuilder {
       )
     }
 
-    if let networkChangedAt = isInvalidating(input.networkChangedAt) {
+    if let networkInvalidatedAt {
       facts.append(FakeIPDiagnosticsSnapshot.Fact(
         key: .lastInvalidation,
         title: String(localized: "Network Changed"),
-        value: Self.relativeDescription(for: networkChangedAt, now: now)
+        value: Self.relativeDescription(for: networkInvalidatedAt, now: now)
       ))
       return FakeIPDiagnosticsSnapshot(
         status: .warn,

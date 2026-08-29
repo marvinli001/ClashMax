@@ -96,6 +96,7 @@ enum RuntimeSnippetPayloadKind: String, Codable, CaseIterable, Identifiable, Sen
   case rules
   case dnsPatch
   case sniffer
+  case rawYAML
 
   var id: String { rawValue }
 
@@ -107,6 +108,8 @@ enum RuntimeSnippetPayloadKind: String, Codable, CaseIterable, Identifiable, Sen
       return String(localized: "DNS Patch")
     case .sniffer:
       return String(localized: "Sniffer")
+    case .rawYAML:
+      return String(localized: "Raw YAML")
     }
   }
 }
@@ -115,12 +118,14 @@ enum RuntimeSnippetPayload: Codable, Equatable, Sendable {
   case rules(RuleOverlaySettings)
   case dnsPatch(TunDNSSettings)
   case sniffer(SnifferSettings)
+  case rawYAML(RawYAMLPatchSettings)
 
   private enum CodingKeys: String, CodingKey {
     case kind
     case rules
     case dnsPatch
     case sniffer
+    case rawYAML
   }
 
   init(from decoder: Decoder) throws {
@@ -133,6 +138,8 @@ enum RuntimeSnippetPayload: Codable, Equatable, Sendable {
       self = try .dnsPatch(container.decodeIfPresent(TunDNSSettings.self, forKey: .dnsPatch) ?? .profileDefault)
     case .sniffer:
       self = try .sniffer(container.decodeIfPresent(SnifferSettings.self, forKey: .sniffer) ?? .empty)
+    case .rawYAML:
+      self = try .rawYAML(container.decodeIfPresent(RawYAMLPatchSettings.self, forKey: .rawYAML) ?? .empty)
     }
   }
 
@@ -146,6 +153,8 @@ enum RuntimeSnippetPayload: Codable, Equatable, Sendable {
       try container.encode(settings, forKey: .dnsPatch)
     case let .sniffer(settings):
       try container.encode(settings, forKey: .sniffer)
+    case let .rawYAML(settings):
+      try container.encode(settings, forKey: .rawYAML)
     }
   }
 
@@ -157,18 +166,13 @@ enum RuntimeSnippetPayload: Codable, Equatable, Sendable {
       return .dnsPatch
     case .sniffer:
       return .sniffer
+    case .rawYAML:
+      return .rawYAML
     }
   }
 
   var displayName: String {
-    switch self {
-    case .rules:
-      return String(localized: "Rules")
-    case .dnsPatch:
-      return String(localized: "DNS Patch")
-    case .sniffer:
-      return String(localized: "Sniffer")
-    }
+    kind.displayName
   }
 
   var summary: String {
@@ -183,6 +187,8 @@ enum RuntimeSnippetPayload: Codable, Equatable, Sendable {
       return String(format: String(localized: "%lld DNS changes"), Int64(count))
     case let .sniffer(settings):
       return settings.summary
+    case let .rawYAML(settings):
+      return settings.summary
     }
   }
 
@@ -194,6 +200,8 @@ enum RuntimeSnippetPayload: Codable, Equatable, Sendable {
       return settings.hasRuntimeOverlay
     case let .sniffer(settings):
       return settings.hasRuntimeOverlay
+    case let .rawYAML(settings):
+      return settings.hasRuntimeOverlay
     }
   }
 
@@ -204,6 +212,8 @@ enum RuntimeSnippetPayload: Codable, Equatable, Sendable {
     case let .dnsPatch(settings):
       return settings.validationError
     case let .sniffer(settings):
+      return settings.validationError
+    case let .rawYAML(settings):
       return settings.validationError
     }
   }
@@ -301,6 +311,16 @@ struct RuntimeSnippet: Identifiable, Codable, Equatable, Sendable {
     )
   }
 
+  /// Ships empty for the same reason the rule snippet does: an escape hatch that arrived with
+  /// content would change the runtime before the user had written anything. The placeholder in the
+  /// editor carries the example instead.
+  static var defaultRawYAMLSnippet: RuntimeSnippet {
+    RuntimeSnippet(
+      name: String(localized: "New Raw YAML Patch"),
+      payload: .rawYAML(.empty)
+    )
+  }
+
   var normalizedName: String {
     name.trimmingCharacters(in: .whitespacesAndNewlines)
   }
@@ -340,19 +360,27 @@ struct RuntimeSnippet: Identifiable, Codable, Equatable, Sendable {
 struct RuntimeSnippetApplication: Equatable, Sendable {
   var dnsPatches: [TunDNSSettings]
   var snifferPatches: [SnifferSettings]
+  var rawYAMLPatches: [RawYAMLPatchSettings]
   var ruleOverlay: RuleOverlaySettings
 
   static let empty = RuntimeSnippetApplication(dnsPatches: [], snifferPatches: [], ruleOverlay: .disabled)
 
-  init(dnsPatches: [TunDNSSettings], snifferPatches: [SnifferSettings] = [], ruleOverlay: RuleOverlaySettings) {
+  init(
+    dnsPatches: [TunDNSSettings],
+    snifferPatches: [SnifferSettings] = [],
+    rawYAMLPatches: [RawYAMLPatchSettings] = [],
+    ruleOverlay: RuleOverlaySettings
+  ) {
     self.dnsPatches = dnsPatches
     self.snifferPatches = snifferPatches
+    self.rawYAMLPatches = rawYAMLPatches
     self.ruleOverlay = ruleOverlay
   }
 
   init(snippets: [RuntimeSnippet]) {
     var dnsPatches: [TunDNSSettings] = []
     var snifferPatches: [SnifferSettings] = []
+    var rawYAMLPatches: [RawYAMLPatchSettings] = []
     var ruleOverlays: [RuleOverlaySettings] = []
     for snippet in snippets where snippet.enabled {
       switch snippet.payload {
@@ -362,12 +390,15 @@ struct RuntimeSnippetApplication: Equatable, Sendable {
         dnsPatches.append(settings)
       case let .sniffer(settings) where settings.hasRuntimeOverlay:
         snifferPatches.append(settings)
-      case .rules, .dnsPatch, .sniffer:
+      case let .rawYAML(settings) where settings.hasRuntimeOverlay:
+        rawYAMLPatches.append(settings)
+      case .rules, .dnsPatch, .sniffer, .rawYAML:
         continue
       }
     }
     self.dnsPatches = dnsPatches
     self.snifferPatches = snifferPatches
+    self.rawYAMLPatches = rawYAMLPatches
     ruleOverlay = RuleOverlaySettings.combinedRuntimeSnippetOverlays(ruleOverlays)
   }
 

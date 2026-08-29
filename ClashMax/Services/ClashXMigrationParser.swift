@@ -20,6 +20,50 @@ struct ClashXMigrationParser {
   }
 }
 
+/// The geo keys read out of a ClashX config, held as optionals until the whole directory has been
+/// inspected (roadmap B5).
+///
+/// Optionals rather than a pre-filled `GeoDatabaseSettings` because a config that sets only
+/// `geo-auto-update` should keep ClashMax's defaults for everything else, not restate them as if
+/// the user had picked them. Only values that already passed validation are stored.
+private struct ClashXGeoAccumulator {
+  /// The sub-key spellings Mihomo reads from a config **file**.
+  static let geoxURLSubKeys: Set<String> = ["geoip", "geosite", "mmdb", "asn"]
+  /// What `GET /configs` echoes back, mapped to the spelling a file has to use instead.
+  static let apiSpellingCorrections = ["geo-ip": "geoip", "geo-site": "geosite"]
+
+  var autoUpdateEnabled: Bool?
+  var updateIntervalHours: Int?
+  var geodataMode: Bool?
+  var geoIPURL: String?
+  var geoSiteURL: String?
+  var mmdbURL: String?
+  var asnURL: String?
+
+  var hasImportableValue: Bool {
+    autoUpdateEnabled != nil
+      || updateIntervalHours != nil
+      || geodataMode != nil
+      || geoIPURL != nil
+      || geoSiteURL != nil
+      || mmdbURL != nil
+      || asnURL != nil
+  }
+
+  var settings: GeoDatabaseSettings {
+    let defaults = GeoDatabaseSettings.default
+    return GeoDatabaseSettings(
+      autoUpdateEnabled: autoUpdateEnabled ?? defaults.autoUpdateEnabled,
+      updateIntervalHours: updateIntervalHours ?? defaults.updateIntervalHours,
+      geodataMode: geodataMode ?? defaults.geodataMode,
+      geoIPURL: geoIPURL ?? defaults.geoIPURL,
+      geoSiteURL: geoSiteURL ?? defaults.geoSiteURL,
+      mmdbURL: mmdbURL ?? defaults.mmdbURL,
+      asnURL: asnURL ?? defaults.asnURL
+    )
+  }
+}
+
 struct ClientMigrationParser {
   private let fileManager: FileManager
 
@@ -64,12 +108,14 @@ struct ClientMigrationParser {
     var mode: String?
     var logLevel: String?
     var systemProxyEnabled: Bool?
+    var geo = ClashXGeoAccumulator()
     var conflicts: [String] = []
     var unsupportedSettings: [String] = []
     var unknownKeys: [String] = []
     var shortcutBindings: [MigratedShortcutBinding] = []
     var menuBarMigrationSuggested = false
     var providerPaths = Set<String>()
+    let primaryConfigPath = primaryClashXConfigURL(in: directoryURL)?.standardizedFileURL.path
 
     let initialFiles = candidateYAMLFiles(in: directoryURL)
     guard !initialFiles.isEmpty else {
@@ -93,12 +139,14 @@ struct ClientMigrationParser {
         mode: &mode,
         logLevel: &logLevel,
         systemProxyEnabled: &systemProxyEnabled,
+        geo: &geo,
         conflicts: &conflicts,
         unsupportedSettings: &unsupportedSettings,
         unknownKeys: &unknownKeys,
         shortcutBindings: &shortcutBindings,
         menuBarMigrationSuggested: &menuBarMigrationSuggested,
-        providerPaths: &providerPaths
+        providerPaths: &providerPaths,
+        primaryConfigPath: primaryConfigPath
       )
     }
 
@@ -117,12 +165,14 @@ struct ClientMigrationParser {
         mode: &mode,
         logLevel: &logLevel,
         systemProxyEnabled: &systemProxyEnabled,
+        geo: &geo,
         conflicts: &conflicts,
         unsupportedSettings: &unsupportedSettings,
         unknownKeys: &unknownKeys,
         shortcutBindings: &shortcutBindings,
         menuBarMigrationSuggested: &menuBarMigrationSuggested,
-        providerPaths: &providerPaths
+        providerPaths: &providerPaths,
+        primaryConfigPath: primaryConfigPath
       )
     }
 
@@ -155,6 +205,8 @@ struct ClientMigrationParser {
       )
     }
 
+    let migratedGeoDatabase = resolvedGeoDatabaseSettings(from: geo, warnings: &warnings)
+
     return ClientMigrationReport(
       client: .clashX,
       configDirectory: directoryURL.path,
@@ -172,6 +224,7 @@ struct ClientMigrationParser {
       allowLan: allowLan,
       mode: mode,
       logLevel: logLevel,
+      geoDatabase: migratedGeoDatabase,
       systemProxyEnabled: systemProxyEnabled,
       conflicts: unique(conflicts),
       unsupportedSettings: unique(unsupportedSettings),
@@ -497,12 +550,14 @@ struct ClientMigrationParser {
     mode: inout String?,
     logLevel: inout String?,
     systemProxyEnabled: inout Bool?,
+    geo: inout ClashXGeoAccumulator,
     conflicts: inout [String],
     unsupportedSettings: inout [String],
     unknownKeys: inout [String],
     shortcutBindings: inout [MigratedShortcutBinding],
     menuBarMigrationSuggested: inout Bool,
-    providerPaths: inout Set<String>
+    providerPaths: inout Set<String>,
+    primaryConfigPath: String?
   ) {
     let standardizedPath = fileURL.standardizedFileURL.path
     guard fileManager.fileExists(atPath: standardizedPath),
@@ -533,6 +588,13 @@ struct ClientMigrationParser {
         ?? boolValue(root["cfw-system-proxy"])
         ?? boolValue(root["enable-system-proxy"])
         ?? systemProxyEnabled
+      extractGeoDatabaseSettings(
+        from: root,
+        fileLabel: fileLabel,
+        isPrimaryConfig: standardizedPath == primaryConfigPath,
+        geo: &geo,
+        warnings: &warnings
+      )
       extractShortcutBindings(
         from: root,
         fileLabel: fileLabel,
@@ -547,6 +609,27 @@ struct ClientMigrationParser {
     } catch {
       warnings.append("\(fileLabel) could not be parsed: \(String(describing: error))")
     }
+  }
+
+  /// The file ClashX actually runs. Everything else `candidateYAMLFiles` finds is a profile or a
+  /// provider fragment.
+  private static let clashXPrimaryConfigFileNames = ["config.yaml", "config.yml"]
+
+  /// The top-level keys `extractGeoDatabaseSettings` reads, kept in one place so the
+  /// "this file is not the main config" warning can name exactly what it declined to import.
+  private static let clashXGeoTopLevelKeys = [
+    "geo-auto-update",
+    "geo-update-interval",
+    "geodata-mode",
+    "geox-url",
+  ]
+
+  /// Resolves the main config, which is the only file allowed to contribute global settings that
+  /// ClashMax applies to its own runtime (see `extractGeoDatabaseSettings`).
+  private func primaryClashXConfigURL(in directoryURL: URL) -> URL? {
+    Self.clashXPrimaryConfigFileNames
+      .map { directoryURL.appendingPathComponent($0) }
+      .first { fileManager.fileExists(atPath: $0.path) }
   }
 
   private func candidateYAMLFiles(in directoryURL: URL) -> [URL] {
@@ -592,7 +675,7 @@ struct ClientMigrationParser {
   }
 
   private func clashXLocalProfiles(in directoryURL: URL) -> [MigratedProfileCandidate] {
-    for fileName in ["config.yaml", "config.yml"] {
+    for fileName in Self.clashXPrimaryConfigFileNames {
       let fileURL = directoryURL.appendingPathComponent(fileName)
       guard fileManager.fileExists(atPath: fileURL.path) else { continue }
       return [
@@ -713,6 +796,127 @@ struct ClientMigrationParser {
     )
   }
 
+  /// Reads ClashX's geo database keys (roadmap B5). ClashX recognizes the same keys Mihomo does, so
+  /// a migrating user has often already chosen an update cadence and sometimes a mirror. These keys
+  /// used to be allow-listed and dropped, which meant the migration reported success and then
+  /// silently substituted ClashMax's defaults — the exact drift B5 exists to end.
+  ///
+  /// Every field is validated on its own, so one bad URL costs that URL and not the whole import.
+  private func extractGeoDatabaseSettings(
+    from root: [String: Any],
+    fileLabel: String,
+    isPrimaryConfig: Bool,
+    geo: inout ClashXGeoAccumulator,
+    warnings: inout [String]
+  ) {
+    // Only the main config contributes. `candidateYAMLFiles` also sweeps `profiles/`,
+    // `providers/` and friends, and `FileManager.enumerator` gives no order guarantee, so a
+    // last-write-wins accumulator would let an arbitrary inactive fragment decide which mirror
+    // ClashMax downloads from — non-deterministically, and then apply it. A fragment that names
+    // the keys is reported instead of being silently ignored or silently obeyed.
+    let namedGeoKeys = Self.clashXGeoTopLevelKeys.filter { root[$0] != nil }
+    guard !namedGeoKeys.isEmpty else { return }
+    guard isPrimaryConfig else {
+      warnings.append(
+        "\(namedGeoKeys.joined(separator: ", ")) in \(fileLabel) "
+          + "\(namedGeoKeys.count == 1 ? "was" : "were") not imported: geo database settings are "
+          + "read from the main ClashX config only."
+      )
+      return
+    }
+
+    if let value = root["geo-auto-update"] {
+      if let flag = boolValue(value) {
+        geo.autoUpdateEnabled = flag
+      } else {
+        warnings.append("geo-auto-update in \(fileLabel) is not a boolean and was not imported.")
+      }
+    }
+
+    if let value = root["geo-update-interval"] {
+      if let hours = intValue(value) {
+        if hours >= GeoDatabaseSettings.minimumUpdateIntervalHours,
+           hours <= GeoDatabaseSettings.maximumUpdateIntervalHours
+        {
+          geo.updateIntervalHours = hours
+        } else {
+          warnings.append(
+            "geo-update-interval in \(fileLabel) is \(hours) hours, outside the supported "
+              + "\(GeoDatabaseSettings.minimumUpdateIntervalHours)-"
+              + "\(GeoDatabaseSettings.maximumUpdateIntervalHours) hour range, and was not imported."
+          )
+        }
+      } else {
+        warnings.append("geo-update-interval in \(fileLabel) is not a number and was not imported.")
+      }
+    }
+
+    if let value = root["geodata-mode"] {
+      if let flag = boolValue(value) {
+        geo.geodataMode = flag
+      } else {
+        warnings.append("geodata-mode in \(fileLabel) is not a boolean and was not imported.")
+      }
+    }
+
+    guard let rawGeoxURL = root["geox-url"] else { return }
+    guard let mapping = rawGeoxURL as? [String: Any] else {
+      warnings.append("geox-url in \(fileLabel) is not a mapping and was not imported.")
+      return
+    }
+    for key in mapping.keys.sorted() {
+      let normalized = key.lowercased()
+      guard let raw = stringValue(mapping[key]) else { continue }
+      guard ClashXGeoAccumulator.geoxURLSubKeys.contains(normalized) else {
+        // `geo-ip` / `geo-site` are what `GET /configs` echoes back, not what a config file may
+        // say. A file written with those spellings is ignored by the core without a word, so the
+        // migration names the mistake instead of passing it along.
+        if let fileSpelling = ClashXGeoAccumulator.apiSpellingCorrections[normalized] {
+          warnings.append(
+            "geox-url.\(key) in \(fileLabel) is the /configs spelling; a config file must say "
+              + "\"\(fileSpelling)\". It was not imported."
+          )
+        } else {
+          warnings.append("geox-url.\(key) in \(fileLabel) is not a geox-url sub-key and was ignored.")
+        }
+        continue
+      }
+      guard GeoDatabaseSettings.isValidDatabaseURL(raw) else {
+        warnings.append("geox-url.\(key) in \(fileLabel) is not an http or https URL and was not imported.")
+        continue
+      }
+      switch normalized {
+      case "geoip":
+        geo.geoIPURL = raw
+      case "geosite":
+        geo.geoSiteURL = raw
+      case "mmdb":
+        geo.mmdbURL = raw
+      default:
+        geo.asnURL = raw
+      }
+    }
+  }
+
+  /// Turns the accumulated keys into settings, or `nil` when the config named none of them.
+  ///
+  /// The final `validationError` check is a guard rather than a filter: every field was already
+  /// validated as it was read. It exists because `AppModel.updateGeoDatabaseSettings` refuses an
+  /// invalid struct whole, and a refused apply behind a report that said "imported" would be worse
+  /// than not importing at all.
+  private func resolvedGeoDatabaseSettings(
+    from accumulator: ClashXGeoAccumulator,
+    warnings: inout [String]
+  ) -> GeoDatabaseSettings? {
+    guard accumulator.hasImportableValue else { return nil }
+    let settings = accumulator.settings
+    if let validationError = settings.validationError {
+      warnings.append("Geo database settings were not imported: \(validationError)")
+      return nil
+    }
+    return settings
+  }
+
   private func hasMenuBarMigrationHint(in root: [String: Any]) -> Bool {
     root.contains { key, value in
       let normalized = key.lowercased()
@@ -747,6 +951,7 @@ struct ClientMigrationParser {
       "external-ui",
       "geodata-mode",
       "geo-auto-update",
+      "geo-update-interval",
       "geox-url",
       "hotkey",
       "hotkeys",

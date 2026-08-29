@@ -218,7 +218,17 @@ struct SettingsView: View {
             )
           )
           SettingsControlRow("Delay Test Mode", description: settings.delayTestSettings.mode.description) {
-            Picker("Delay Test Mode", selection: $settings.delayTestSettings.mode) {
+            Picker(
+              "Delay Test Mode",
+              selection: Binding(
+                get: { settings.delayTestSettings.mode },
+                set: { newValue in
+                  var delaySettings = settings.delayTestSettings
+                  delaySettings.mode = newValue
+                  appModel.updateDelayTestSettings(delaySettings)
+                }
+              )
+            ) {
               ForEach(DelayTestMode.allCases) { mode in
                 Text(mode.displayName).tag(mode)
               }
@@ -229,8 +239,15 @@ struct SettingsView: View {
           }
           SettingsToggleRow(
             "Unified Delay",
-            description: "Run manual delay tests twice and use the second result to reduce handshake bias.",
-            isOn: $settings.delayTestSettings.unifiedDelay
+            description: "Measure a second handshake and report that one, so the figure excludes first-connection setup. Mihomo URL mode has the core do it; Ping mode sends the second probe from ClashMax.",
+            isOn: Binding(
+              get: { settings.delayTestSettings.unifiedDelay },
+              set: { newValue in
+                var delaySettings = settings.delayTestSettings
+                delaySettings.unifiedDelay = newValue
+                appModel.updateDelayTestSettings(delaySettings)
+              }
+            )
           )
           if appModel.developerMode {
             ExternalControlSettingsRow()

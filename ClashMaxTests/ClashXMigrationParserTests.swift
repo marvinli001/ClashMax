@@ -81,6 +81,143 @@ final class ClashXMigrationParserTests: XCTestCase {
     XCTAssertTrue(report.inspectedFiles.contains { $0.hasSuffix("providers/main.yaml") })
   }
 
+  func testParserImportsGeoDatabaseSettingsFromClashXConfig() throws {
+    let root = try makeTemporaryDirectory()
+    try """
+    geo-auto-update: true
+    geo-update-interval: 12
+    geodata-mode: true
+    geox-url:
+      geoip: https://mirror.example.com/geoip.dat
+      geosite: https://mirror.example.com/geosite.dat
+      mmdb: https://mirror.example.com/geoip.metadb
+      asn: https://mirror.example.com/GeoLite2-ASN.mmdb
+    """.write(to: root.appendingPathComponent("config.yaml"), atomically: true, encoding: .utf8)
+
+    let report = ClashXMigrationParser().parse(directoryURL: root)
+
+    let geo = try XCTUnwrap(report.geoDatabase)
+    XCTAssertEqual(geo.autoUpdateEnabled, true)
+    XCTAssertEqual(geo.updateIntervalHours, 12)
+    XCTAssertEqual(geo.geodataMode, true)
+    XCTAssertEqual(geo.geoIPURL, "https://mirror.example.com/geoip.dat")
+    XCTAssertEqual(geo.geoSiteURL, "https://mirror.example.com/geosite.dat")
+    XCTAssertEqual(geo.mmdbURL, "https://mirror.example.com/geoip.metadb")
+    XCTAssertEqual(geo.asnURL, "https://mirror.example.com/GeoLite2-ASN.mmdb")
+    XCTAssertFalse(geo.usesDefaultURLs)
+    // The whole point of validating per field is that what the report carries can actually be
+    // applied; `AppModel.updateGeoDatabaseSettings` refuses an invalid struct whole.
+    XCTAssertNil(geo.validationError)
+    // `geo-update-interval` used to fall outside the allow-list and be reported as an unknown key.
+    XCTAssertFalse(report.unknownKeys.contains { $0.contains("geo") })
+  }
+
+  func testParserKeepsGeoDefaultsForKeysTheConfigDoesNotSet() throws {
+    let root = try makeTemporaryDirectory()
+    try """
+    geo-auto-update: true
+    """.write(to: root.appendingPathComponent("config.yaml"), atomically: true, encoding: .utf8)
+
+    let report = ClashXMigrationParser().parse(directoryURL: root)
+
+    let geo = try XCTUnwrap(report.geoDatabase)
+    XCTAssertEqual(geo.autoUpdateEnabled, true)
+    XCTAssertEqual(geo.updateIntervalHours, GeoDatabaseSettings.defaultUpdateIntervalHours)
+    XCTAssertEqual(geo.geodataMode, GeoDatabaseSettings.default.geodataMode)
+    XCTAssertTrue(geo.usesDefaultURLs)
+  }
+
+  func testParserReportsGeoDatabaseSettingsAsAbsentWhenTheConfigNamesNoGeoKeys() throws {
+    let root = try makeTemporaryDirectory()
+    try """
+    mixed-port: 7890
+    """.write(to: root.appendingPathComponent("config.yaml"), atomically: true, encoding: .utf8)
+
+    let report = ClashXMigrationParser().parse(directoryURL: root)
+
+    XCTAssertNil(report.geoDatabase)
+  }
+
+  func testParserDropsOnlyTheInvalidGeoFieldsAndSaysWhy() throws {
+    let root = try makeTemporaryDirectory()
+    try """
+    geo-update-interval: 0
+    geox-url:
+      geoip: not-a-url
+      geosite: https://mirror.example.com/geosite.dat
+      geo-site: https://wrong.example.com/geosite.dat
+      nonsense: https://mirror.example.com/other.dat
+    """.write(to: root.appendingPathComponent("config.yaml"), atomically: true, encoding: .utf8)
+
+    let report = ClashXMigrationParser().parse(directoryURL: root)
+
+    let geo = try XCTUnwrap(report.geoDatabase)
+    XCTAssertEqual(geo.geoSiteURL, "https://mirror.example.com/geosite.dat")
+    XCTAssertEqual(geo.updateIntervalHours, GeoDatabaseSettings.defaultUpdateIntervalHours)
+    XCTAssertEqual(geo.geoIPURL, GeoDatabaseSettings.defaultGeoIPURL)
+    XCTAssertNil(geo.validationError)
+    XCTAssertTrue(report.warnings.contains { $0.contains("geo-update-interval") && $0.contains("0 hours") })
+    XCTAssertTrue(report.warnings.contains { $0.contains("geox-url.geoip") && $0.contains("http") })
+    // The `/configs` spelling is silently ignored by the core, so the migration names it.
+    XCTAssertTrue(report.warnings.contains { $0.contains("geox-url.geo-site") && $0.contains("\"geosite\"") })
+    XCTAssertTrue(report.warnings.contains { $0.contains("geox-url.nonsense") })
+  }
+
+  /// `candidateYAMLFiles` sweeps `profiles/` and `providers/` too, and `FileManager.enumerator`
+  /// promises no order, so a last-write-wins accumulator let an arbitrary inactive fragment decide
+  /// which mirror ClashMax downloads from — and Apply then wrote it straight into the runtime.
+  /// Only the file ClashX actually runs contributes; a fragment that names the keys is reported.
+  func testParserImportsGeoSettingsFromTheMainConfigOnly() throws {
+    let root = try makeTemporaryDirectory()
+    let providers = root.appendingPathComponent("providers", isDirectory: true)
+    try FileManager.default.createDirectory(at: providers, withIntermediateDirectories: true)
+    try """
+    geo-update-interval: 12
+    geodata-mode: true
+    """.write(to: root.appendingPathComponent("config.yaml"), atomically: true, encoding: .utf8)
+    try """
+    geo-update-interval: 6
+    geodata-mode: false
+    geox-url:
+      geoip: https://fragment.example/geoip.dat
+    """.write(to: providers.appendingPathComponent("main.yaml"), atomically: true, encoding: .utf8)
+
+    let report = ClashXMigrationParser().parse(directoryURL: root)
+
+    let geo = try XCTUnwrap(report.geoDatabase)
+    XCTAssertEqual(geo.updateIntervalHours, 12)
+    XCTAssertTrue(geo.geodataMode)
+    XCTAssertEqual(geo.geoIPURL, GeoDatabaseSettings.defaultGeoIPURL)
+    XCTAssertTrue(report.warnings.contains {
+      $0.contains("main.yaml") && $0.contains("geo-update-interval")
+        && $0.contains("geodata-mode") && $0.contains("geox-url")
+        && $0.contains("main ClashX config only")
+    })
+    // The declined fragment is a warning, not a conflict: there is nothing left to reconcile.
+    XCTAssertFalse(report.conflicts.contains { $0.contains("geo-update-interval") })
+  }
+
+  /// A fragment that says nothing about geo must stay silent, or every provider file in a normal
+  /// ClashX directory would produce a warning nobody can act on.
+  func testParserDoesNotWarnAboutFragmentsWithoutGeoKeys() throws {
+    let root = try makeTemporaryDirectory()
+    let providers = root.appendingPathComponent("providers", isDirectory: true)
+    try FileManager.default.createDirectory(at: providers, withIntermediateDirectories: true)
+    try """
+    geo-auto-update: true
+    """.write(to: root.appendingPathComponent("config.yaml"), atomically: true, encoding: .utf8)
+    try """
+    proxies:
+      - name: Node
+        type: direct
+    """.write(to: providers.appendingPathComponent("main.yaml"), atomically: true, encoding: .utf8)
+
+    let report = ClashXMigrationParser().parse(directoryURL: root)
+
+    XCTAssertEqual(try XCTUnwrap(report.geoDatabase).autoUpdateEnabled, true)
+    XCTAssertFalse(report.warnings.contains { $0.contains("main ClashX config only") })
+  }
+
   func testParserDeduplicatesShortcutAliasesByCanonicalStorage() throws {
     let root = try makeTemporaryDirectory()
     try """

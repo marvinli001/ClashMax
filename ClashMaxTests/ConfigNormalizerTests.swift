@@ -1530,6 +1530,7 @@ final class ConfigNormalizerTests: XCTestCase {
       "Upstream Proxy",
       "DNS override",
       "Sniffer",
+      "Raw YAML overrides",
       "Final runtime YAML",
     ])
     XCTAssertEqual(snapshot.preflightStatus, .notRun)
@@ -2777,6 +2778,201 @@ final class ConfigNormalizerTests: XCTestCase {
     let sniffer = try XCTUnwrap(try (Yams.load(yaml: output) as? [String: Any])?["sniffer"] as? [String: Any])
 
     XCTAssertEqual(sniffer["enable"] as? Bool, true)
+  }
+
+  // MARK: - Raw YAML snippets (ROADMAP INV-2)
+
+  /// The whole point of the payload: the legacy per-profile merge runs *before* ClashMax writes its
+  /// managed keys, so it could never reach these. A raw snippet runs after them.
+  func testRawYAMLSnippetOverridesAppManagedKeys() throws {
+    var options = RuntimeConfigOptions.default
+    options.runtimeSnippets = [
+      RuntimeSnippet(
+        name: "Advanced",
+        payload: .rawYAML(RawYAMLPatchSettings(yaml: """
+        mode: global
+        ipv6: true
+        log-level: debug
+        tun:
+          enable: true
+          stack: gvisor
+        dns:
+          enable: true
+          enhanced-mode: redir-host
+        """))
+      ),
+    ]
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: Self.minimalProfileSource,
+      overrides: .defaultForLaunch(secret: "secret-token"),
+      options: options
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let tun = try XCTUnwrap(yaml["tun"] as? [String: Any])
+    let dns = try XCTUnwrap(yaml["dns"] as? [String: Any])
+
+    XCTAssertEqual(yaml["mode"] as? String, "global", "overrides.mode is .rule")
+    XCTAssertEqual(yaml["ipv6"] as? Bool, true, "overrides.ipv6Enabled is false")
+    XCTAssertEqual(yaml["log-level"] as? String, "debug")
+    XCTAssertEqual(tun["enable"] as? Bool, true, "overrides.tunEnabled is false")
+    XCTAssertEqual(tun["stack"] as? String, "gvisor")
+    XCTAssertEqual(dns["enable"] as? Bool, true)
+    XCTAssertEqual(dns["enhanced-mode"] as? String, "redir-host")
+  }
+
+  /// §2.4: keys ClashMax has no UI for at all must be reachable without the app growing a switch.
+  func testRawYAMLSnippetWritesKeysTheAppHasNoSettingFor() throws {
+    var options = RuntimeConfigOptions.default
+    options.runtimeSnippets = [
+      RuntimeSnippet(
+        name: "Advanced",
+        payload: .rawYAML(RawYAMLPatchSettings(yaml: """
+        tcp-concurrent: true
+        global-client-fingerprint: chrome
+        keep-alive-interval: 15
+        find-process-mode: always
+        ntp:
+          enable: true
+          server: time.apple.com
+        """))
+      ),
+    ]
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: Self.minimalProfileSource,
+      overrides: .defaultForLaunch(secret: "secret-token"),
+      options: options
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+
+    XCTAssertEqual(yaml["tcp-concurrent"] as? Bool, true)
+    XCTAssertEqual(yaml["global-client-fingerprint"] as? String, "chrome")
+    XCTAssertEqual(yaml["keep-alive-interval"] as? Int, 15)
+    XCTAssertEqual(yaml["find-process-mode"] as? String, "always")
+    XCTAssertEqual((yaml["ntp"] as? [String: Any])?["server"] as? String, "time.apple.com")
+  }
+
+  func testRawYAMLSnippetCannotMoveTheControlChannelOrTheInboundPort() throws {
+    for yaml in ["mixed-port: 1080", "external-controller: 0.0.0.0:9090", "secret: hunter2"] {
+      var options = RuntimeConfigOptions.default
+      options.runtimeSnippets = [
+        RuntimeSnippet(name: "Reserved", payload: .rawYAML(RawYAMLPatchSettings(yaml: yaml))),
+      ]
+      XCTAssertThrowsError(
+        try ConfigNormalizer().runtimeConfig(
+          from: Self.minimalProfileSource,
+          overrides: .defaultForLaunch(secret: "secret-token"),
+          options: options
+        ),
+        "Expected \(yaml) to be refused"
+      )
+    }
+
+    // The check is re-run here rather than trusted from the editor, because a snippet can also
+    // arrive from a restored backup written by a build that reserved fewer keys.
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: Self.minimalProfileSource,
+      overrides: .defaultForLaunch(secret: "secret-token")
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    XCTAssertEqual(yaml["mixed-port"] as? Int, 7890)
+    XCTAssertEqual(yaml["external-controller"] as? String, "127.0.0.1:9097")
+  }
+
+  func testRawYAMLSnippetListStrategyDecidesWhetherAListIsReplacedOrAppended() throws {
+    let source = """
+    \(Self.minimalProfileSource)
+    dns:
+      enable: true
+      nameserver:
+        - 223.5.5.5
+    """
+
+    func nameservers(_ strategy: RawYAMLPatchListStrategy) throws -> [String] {
+      var options = RuntimeConfigOptions.default
+      options.runtimeSnippets = [
+        RuntimeSnippet(
+          name: "Resolvers",
+          payload: .rawYAML(RawYAMLPatchSettings(
+            yaml: "dns:\n  nameserver:\n    - 1.1.1.1\n",
+            listStrategy: strategy
+          ))
+        ),
+      ]
+      let output = try ConfigNormalizer().runtimeConfig(
+        from: source,
+        overrides: .defaultForLaunch(secret: "secret-token"),
+        options: options
+      )
+      let dns = try XCTUnwrap(try (Yams.load(yaml: output) as? [String: Any])?["dns"] as? [String: Any])
+      return try XCTUnwrap(dns["nameserver"] as? [String])
+    }
+
+    // Replace is the only strategy that can shorten a list — "exactly this resolver" has to be
+    // sayable, which the legacy append-only merge never allowed.
+    XCTAssertEqual(try nameservers(.replace), ["1.1.1.1"])
+    XCTAssertEqual(try nameservers(.append), ["223.5.5.5", "1.1.1.1"])
+  }
+
+  func testRawYAMLSnippetsMergeInOrderSoTheLastOneWins() throws {
+    var options = RuntimeConfigOptions.default
+    options.runtimeSnippets = [
+      RuntimeSnippet(name: "First", payload: .rawYAML(RawYAMLPatchSettings(yaml: "tcp-concurrent: false"))),
+      RuntimeSnippet(name: "Second", payload: .rawYAML(RawYAMLPatchSettings(yaml: "tcp-concurrent: true"))),
+    ]
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: Self.minimalProfileSource,
+      overrides: .defaultForLaunch(secret: "secret-token"),
+      options: options
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+
+    XCTAssertEqual(yaml["tcp-concurrent"] as? Bool, true)
+  }
+
+  func testRawYAMLSnippetIsStillCheckedAgainstDNSCompatibility() {
+    var options = RuntimeConfigOptions.default
+    options.runtimeSnippets = [
+      RuntimeSnippet(
+        name: "Respect Without Proxy Server",
+        payload: .rawYAML(RawYAMLPatchSettings(yaml: """
+        dns:
+          enable: true
+          respect-rules: true
+        """))
+      ),
+    ]
+
+    // The patch runs before the final DNS check on purpose: what Mihomo reads is what gets checked.
+    XCTAssertThrowsError(
+      try ConfigNormalizer().runtimeConfig(
+        from: Self.minimalProfileSource,
+        overrides: .defaultForLaunch(secret: "secret-token"),
+        options: options
+      )
+    )
+  }
+
+  func testDisabledRawYAMLSnippetDoesNotReachTheRuntimeConfig() throws {
+    var options = RuntimeConfigOptions.default
+    options.runtimeSnippets = [
+      RuntimeSnippet(
+        name: "Off",
+        enabled: false,
+        payload: .rawYAML(RawYAMLPatchSettings(yaml: "mode: global"))
+      ),
+    ]
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: Self.minimalProfileSource,
+      overrides: .defaultForLaunch(secret: "secret-token"),
+      options: options
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+
+    XCTAssertEqual(yaml["mode"] as? String, "rule")
   }
 
   private static let minimalProfileSource = """
