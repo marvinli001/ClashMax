@@ -12422,6 +12422,7 @@ private actor RecordingPublicIPInfoFetcher: PublicIPInfoFetching {
 
 private final class ScriptedRuntimeStreamController: MihomoAPIControlling, @unchecked Sendable {
   private typealias TrafficContinuation = AsyncThrowingStream<TrafficSample, Error>.Continuation
+  private typealias MemoryContinuation = AsyncThrowingStream<CoreMemorySample, Error>.Continuation
   private typealias LogContinuation = AsyncThrowingStream<LogEntry, Error>.Continuation
   private typealias ConnectionContinuation = AsyncThrowingStream<[ConnectionSnapshot], Error>.Continuation
 
@@ -12432,9 +12433,11 @@ private final class ScriptedRuntimeStreamController: MihomoAPIControlling, @unch
   )
   private let lock = NSLock()
   private var trafficContinuations: [TrafficContinuation] = []
+  private var memoryContinuations: [MemoryContinuation] = []
   private var logContinuations: [LogContinuation] = []
   private var connectionContinuations: [ConnectionContinuation] = []
   private var terminatedTrafficSubscriptions: Set<Int> = []
+  private var terminatedMemorySubscriptions: Set<Int> = []
   private var terminatedLogSubscriptions: Set<Int> = []
   private var terminatedConnectionSubscriptions: Set<Int> = []
   private var logLevels: [String] = []
@@ -12487,6 +12490,10 @@ private final class ScriptedRuntimeStreamController: MihomoAPIControlling, @unch
     try await base.flushFakeIPCache()
   }
 
+  func dnsQuery(name: String, type: String) async throws -> DNSQueryResult {
+    try await base.dnsQuery(name: name, type: type)
+  }
+
   func updateGeoDatabases(timeout: TimeInterval) async throws {
     try await base.updateGeoDatabases(timeout: timeout)
   }
@@ -12529,6 +12536,12 @@ private final class ScriptedRuntimeStreamController: MihomoAPIControlling, @unch
     }
   }
 
+  func memoryStream() -> AsyncThrowingStream<CoreMemorySample, Error> {
+    AsyncThrowingStream { [weak self] continuation in
+      self?.installMemoryContinuation(continuation)
+    }
+  }
+
   func logStream(level: String) -> AsyncThrowingStream<LogEntry, Error> {
     AsyncThrowingStream { [weak self] continuation in
       self?.installLogContinuation(continuation, level: level)
@@ -12545,6 +12558,18 @@ private final class ScriptedRuntimeStreamController: MihomoAPIControlling, @unch
     lock.lock()
     defer { lock.unlock() }
     return [trafficContinuations.count, logContinuations.count, connectionContinuations.count]
+  }
+
+  func memorySubscriptionCount() -> Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return memoryContinuations.count
+  }
+
+  func memoryWasTerminated(subscription: Int) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return terminatedMemorySubscriptions.contains(subscription)
   }
 
   func requestedLogLevels() -> [String] {
@@ -12587,6 +12612,12 @@ private final class ScriptedRuntimeStreamController: MihomoAPIControlling, @unch
   }
 
   @discardableResult
+  func yieldMemory(_ sample: CoreMemorySample, subscription: Int) -> Bool {
+    guard let continuation = memoryContinuation(at: subscription) else { return false }
+    return Self.wasEnqueued(continuation.yield(sample))
+  }
+
+  @discardableResult
   func yieldLog(_ entry: LogEntry, subscription: Int) -> Bool {
     guard let continuation = logContinuation(at: subscription) else { return false }
     return Self.wasEnqueued(continuation.yield(entry))
@@ -12600,6 +12631,10 @@ private final class ScriptedRuntimeStreamController: MihomoAPIControlling, @unch
 
   func finishTraffic(subscription: Int) {
     trafficContinuation(at: subscription)?.finish()
+  }
+
+  func finishMemory(subscription: Int) {
+    memoryContinuation(at: subscription)?.finish()
   }
 
   func failLog(subscription: Int) {
@@ -12619,6 +12654,16 @@ private final class ScriptedRuntimeStreamController: MihomoAPIControlling, @unch
     lock.unlock()
     continuation.onTermination = { [weak self] _ in
       self?.recordTrafficTermination(index)
+    }
+  }
+
+  private func installMemoryContinuation(_ continuation: MemoryContinuation) {
+    lock.lock()
+    let index = memoryContinuations.count
+    memoryContinuations.append(continuation)
+    lock.unlock()
+    continuation.onTermination = { [weak self] _ in
+      self?.recordMemoryTermination(index)
     }
   }
 
@@ -12650,6 +12695,12 @@ private final class ScriptedRuntimeStreamController: MihomoAPIControlling, @unch
     return trafficContinuations.indices.contains(index) ? trafficContinuations[index] : nil
   }
 
+  private func memoryContinuation(at index: Int) -> MemoryContinuation? {
+    lock.lock()
+    defer { lock.unlock() }
+    return memoryContinuations.indices.contains(index) ? memoryContinuations[index] : nil
+  }
+
   private func logContinuation(at index: Int) -> LogContinuation? {
     lock.lock()
     defer { lock.unlock() }
@@ -12665,6 +12716,12 @@ private final class ScriptedRuntimeStreamController: MihomoAPIControlling, @unch
   private func recordTrafficTermination(_ index: Int) {
     lock.lock()
     terminatedTrafficSubscriptions.insert(index)
+    lock.unlock()
+  }
+
+  private func recordMemoryTermination(_ index: Int) {
+    lock.lock()
+    terminatedMemorySubscriptions.insert(index)
     lock.unlock()
   }
 
@@ -12735,6 +12792,9 @@ private actor RecordingMihomoController: MihomoAPIControlling {
   private var groupMembers: [String: [String]] = [:]
   private var fakeIPFlushRequests = 0
   private var fakeIPFlushFailureMessage: String?
+  private var dnsQueryRequests: [(name: String, type: String)] = []
+  private var dnsQueryResults: [DNSQueryResult] = []
+  private var dnsQueryFailureMessage: String?
   private var geoUpdateRequests: [TimeInterval] = []
   private var geoUpdateFailureMessage: String?
   private var healthCheckRequests: [String] = []
@@ -13041,6 +13101,30 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     fakeIPFlushRequests
   }
 
+  func dnsQuery(name: String, type: String) async throws -> DNSQueryResult {
+    dnsQueryRequests.append((name: name, type: type))
+    if let dnsQueryFailureMessage {
+      throw AppError.helperResponse(dnsQueryFailureMessage)
+    }
+    guard !dnsQueryResults.isEmpty else {
+      return DNSQueryResult(name: name, queryType: type, status: 0, answers: [])
+    }
+    let index = min(dnsQueryRequests.count - 1, dnsQueryResults.count - 1)
+    return dnsQueryResults[index]
+  }
+
+  func setDNSQueryResults(_ results: [DNSQueryResult]) {
+    dnsQueryResults = results
+  }
+
+  func setDNSQueryFailureMessage(_ message: String?) {
+    dnsQueryFailureMessage = message
+  }
+
+  func recordedDNSQueries() -> [(name: String, type: String)] {
+    dnsQueryRequests
+  }
+
   func updateGeoDatabases(timeout: TimeInterval) async throws {
     geoUpdateRequests.append(timeout)
     if let geoUpdateFailureMessage {
@@ -13118,6 +13202,10 @@ private actor RecordingMihomoController: MihomoAPIControlling {
   }
 
   nonisolated func trafficStream() -> AsyncThrowingStream<TrafficSample, Error> {
+    AsyncThrowingStream { _ in }
+  }
+
+  nonisolated func memoryStream() -> AsyncThrowingStream<CoreMemorySample, Error> {
     AsyncThrowingStream { _ in }
   }
 

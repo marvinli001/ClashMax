@@ -6334,6 +6334,36 @@ struct TrafficSample: Codable, Equatable, Sendable {
   }
 }
 
+/// One frame of the core's `/memory` stream.
+///
+/// Contract measured against the bundled core (v1.19.30) on 2026-08-30:
+/// - The socket behaves exactly like `/traffic` — a JSON object per second, over a plain HTTP
+///   chunked response or a websocket, so it reuses the same stream plumbing.
+/// - **The first frame is always `{"inuse":0,"oslimit":0}`.** It is the priming tick, not a reading:
+///   the core has tens of megabytes resident before it accepts the connection. A zero frame is
+///   therefore reported as "no reading yet" rather than as 0 bytes.
+/// - `oslimit` is **0 on macOS**. It carries a cgroup memory ceiling, which this platform does not
+///   have, so nothing here renders a percentage-of-limit gauge that would always read 0.
+struct CoreMemorySample: Codable, Equatable, Sendable {
+  /// Resident bytes as Go reports them for the core process.
+  var inUse: Int
+  /// The OS-imposed ceiling, or 0 where the platform has none — which is every macOS host.
+  var osLimit: Int
+
+  static let zero = CoreMemorySample(inUse: 0, osLimit: 0)
+
+  /// Whether this frame carries a reading at all. The priming frame does not.
+  var hasReading: Bool { inUse > 0 }
+
+  var formattedInUse: String { TrafficSample.formatBytes(inUse) }
+
+  /// `nil` wherever the platform reports no ceiling, so a caller cannot accidentally render "0 B"
+  /// as a limit.
+  var formattedOSLimit: String? {
+    osLimit > 0 ? TrafficSample.formatBytes(osLimit) : nil
+  }
+}
+
 struct LogEntry: Identifiable, Codable, Equatable, Sendable {
   var id: UUID
   var date: Date

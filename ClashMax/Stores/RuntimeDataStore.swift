@@ -15,6 +15,9 @@ final class RuntimeDataStore {
   private(set) var logs: [LogEntry] = []
   var trafficSample: TrafficSample = .zero
   var trafficHistory: [TrafficSample] = []
+  /// The core's own resident-memory reading, or `.zero` while nothing has been reported yet.
+  /// Only frames the core actually measured land here — see `appendMemorySample(_:)`.
+  var memorySample: CoreMemorySample = .zero
   private(set) var providerHealthChecksInFlight: Set<ProxyProvider.ID> = []
   private(set) var proxyProviderUpdatesInFlight: Set<ProxyProvider.ID> = []
   private(set) var ruleProviderUpdatesInFlight: Set<RuleProvider.ID> = []
@@ -229,6 +232,15 @@ final class RuntimeDataStore {
     }
   }
 
+  /// Records a `/memory` frame, dropping the core's opening `{"inuse":0,"oslimit":0}` priming tick.
+  ///
+  /// A running core is never using zero bytes, so a zero frame is the socket saying hello, not a
+  /// reading. Publishing it would flash "0 B" in the dashboard for a second on every reconnect.
+  func appendMemorySample(_ sample: CoreMemorySample) {
+    guard sample.hasReading else { return }
+    memorySample = sample
+  }
+
   func appendLog(level: String, message: String) {
     logBuffer.append(LogEntry(level: level, message: message))
     scheduleLogPublish()
@@ -264,6 +276,7 @@ final class RuntimeDataStore {
     ruleProviderUpdatesInFlight = []
     trafficSample = .zero
     trafficHistory = []
+    memorySample = .zero
   }
 
   private func scheduleLogPublish() {

@@ -384,4 +384,36 @@ final class RuntimeDataStoreTests: XCTestCase {
       ["Core ready", "controller request body"]
     )
   }
+
+  // MARK: Core memory telemetry
+
+  /// The `/memory` websocket opens with a zero frame before the core has measured anything.
+  /// Publishing it would draw "0 B" over the last real reading every time the stream reconnects,
+  /// so a reading-free frame is dropped rather than shown.
+  func testZeroMemoryFrameDoesNotOverwriteARealReading() {
+    let store = RuntimeDataStore()
+
+    store.appendMemorySample(CoreMemorySample(inUse: 48_234_496, osLimit: 0))
+    store.appendMemorySample(.zero)
+
+    XCTAssertEqual(store.memorySample.inUse, 48_234_496)
+  }
+
+  func testMemorySampleIsClearedWithTheRestOfTheRuntimeState() {
+    let store = RuntimeDataStore()
+    store.appendMemorySample(CoreMemorySample(inUse: 1_048_576, osLimit: 0))
+
+    store.clearRuntimeCollections()
+
+    XCTAssertEqual(store.memorySample, .zero)
+    XCTAssertFalse(store.memorySample.hasReading)
+  }
+
+  /// `oslimit` is 0 on macOS — the core only reports it where it enforces one — so the limit is
+  /// shown only when there is one, instead of rendering a meaningless "of 0 B".
+  func testMemorySampleFormatsOnlyWhatTheCoreReported() {
+    XCTAssertEqual(CoreMemorySample(inUse: 1_048_576, osLimit: 0).formattedInUse, TrafficSample.formatBytes(1_048_576))
+    XCTAssertNil(CoreMemorySample(inUse: 1_048_576, osLimit: 0).formattedOSLimit)
+    XCTAssertNotNil(CoreMemorySample(inUse: 1_048_576, osLimit: 2_097_152).formattedOSLimit)
+  }
 }

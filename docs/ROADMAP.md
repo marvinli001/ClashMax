@@ -2,8 +2,8 @@
 
 **English** | [简体中文](ROADMAP.zh-CN.md)
 
-**Status:** draft 2026-08-14, revised 2026-08-27, corrected 2026-08-29 · maintainer
-[@marvinli001](https://github.com/marvinli001) · app 1.0.23, bundled Mihomo
+**Status:** draft 2026-08-14, revised 2026-08-27, corrected 2026-08-29, extended 2026-08-30 ·
+maintainer [@marvinli001](https://github.com/marvinli001) · app 1.0.23, bundled Mihomo
 [v1.19.30](../Resources/Core/mihomo-manifest.json)
 
 This document records **where ClashMax is going and why**, in a form that can be checked
@@ -26,6 +26,17 @@ fixed, and each is written up under the criterion it belongs to rather than in a
 because the criterion is what was wrong. **The A3/A6/B5 "shipped" claims below are about the
 transport and the logic; the manual observations each section names as a gap are still
 open.**
+
+The 2026-08-30 revision closes the last three open rows of §3.2 — **A2** (`/dns/query`),
+**`/memory`**, and **C3** (`listeners`) — and corrects two rows that had gone stale. Two of
+the three closures are shaped by a probe that contradicted the criterion as written: the
+`/dns/query` reply carries **no nameserver field at all**, so the panel reports that it
+cannot attribute the answer rather than inventing an attribution; and `listeners` was never
+stripped, only flagged, and only inside provider-override YAML. Where a criterion asked for
+something the core does not supply, it is rewritten with the measurement that retired it
+instead of being quietly ticked. **The same caveat as 2026-08-27 applies: these are claims
+about transport, logic and test coverage. None of the three has been watched by eye in a
+running app.**
 
 Bug fixes, filed issues, and Mihomo version bumps are ongoing maintenance and are
 deliberately **not** in this document. This is about what ClashMax is *for*.
@@ -142,35 +153,36 @@ is **done** — shipping a dedicated toggle for it is a regression in L1 quality
 
 ## 3. Where ClashMax Stands Today
 
-### 3.1 Scale, as verified on 2026-08-14
+### 3.1 Scale, as verified on 2026-08-30
 
 | Claim | How to check |
 | --- | --- |
-| 89 source files, ~61.7k lines across app, helper, Network Extension, shared code | `find ClashMax Shared ClashMaxHelper ClashMaxNetworkExtension -name '*.swift' \| wc -l` |
-| 44 test files, ~38k lines, 1131 XCTest cases + 5 Swift Testing cases | `grep -rhoE 'func test[A-Za-z0-9_]*' ClashMaxTests \| sort -u \| wc -l` |
-| 1277 localized keys in `en` and `zh-Hans` | [`Resources/Localizable.xcstrings`](../Resources/Localizable.xcstrings) |
+| 101 source files, ~68.1k lines across app, helper, Network Extension, shared code | `find ClashMax Shared ClashMaxHelper ClashMaxNetworkExtension -name '*.swift' \| wc -l` |
+| 52 test files, ~42.8k lines, 1358 XCTest cases + 5 Swift Testing cases | `grep -rhoE 'func test[A-Za-z0-9_]*' ClashMaxTests \| sort -u \| wc -l` |
+| 1530 localized keys in `en` and `zh-Hans` | [`Resources/Localizable.xcstrings`](../Resources/Localizable.xcstrings) |
 | Tests run in public CI | [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) |
 
 ### 3.2 Mihomo coverage gaps
 
 Mihomo control API endpoints ClashMax already speaks, from
-[`MihomoAPIClient.swift`](../ClashMax/Services/MihomoAPIClient.swift): `/`, `/configs`,
-`/connections`, `/logs`, `/providers/proxies`, `/providers/rules`, `/proxies`, `/restart`,
-`/rules`, `/traffic`, `/version`.
+[`MihomoAPIClient.swift`](../ClashMax/Services/MihomoAPIClient.swift): `/`,
+`/cache/fakeip/flush`, `/configs`, `/configs/geo`, `/connections`, `/dns/query`,
+`/group/{name}/delay`, `/logs`, `/memory`, `/providers/proxies`, `/providers/rules`,
+`/proxies`, `/proxies/{name}/delay`, `/restart`, `/rules`, `/traffic`, `/version`.
 
 Gaps, in priority order:
 
 | Gap | Verified state | Consequence |
 | --- | --- | --- |
-| **`sniffer`** | **Zero occurrences repo-wide.** Worse: the connections decoder backfills a missing domain with the destination IP ([`MihomoAPIClient.swift:448`](../ClashMax/Services/MihomoAPIClient.swift#L448)), so nothing downstream can tell a domainless connection from a named one | Connections opened straight to an IP (hardcoded-IP apps, some CDNs, QUIC) carry no domain, so `DOMAIN-SUFFIX` rules cannot match them. Users experience this as *"my rules don't work"* — and our diagnostics cannot say why, because the fact is destroyed before diagnosis. See [A1](#a1--sniffer-recover-the-domain-the-kernel-never-saw) |
-| **`/dns/query`** | Not implemented | Cannot answer "which nameserver answered this domain, and with what address". Leaves a hole in the middle of the routing story we otherwise tell end to end. |
+| **`sniffer`** | **A1a–A1d shipped 2026-08-16, A1e still open.** The decoder no longer backfills a missing domain with the destination IP; `ConnectionSnapshot` keeps *reported*, *sniffed* and *absent* apart as typed state. ClashMax generates and owns the `sniffer:` block as a snippet payload kind ([`SnifferSettings.swift`](../ClashMax/Models/SnifferSettings.swift)), [`SnifferDiagnostics`](../ClashMax/Models/SnifferDiagnostics.swift) classifies the domainless case and writes the fix, and `sniffer` is scanned as a subscription risk key. What is **not** done is the sign-off: the end-to-end line item exists in [`MANUAL_TEST_PLAN.md`](MANUAL_TEST_PLAN.md) and nobody has run it, and per A1's definition of done that is what closes A1. See [A1](#a1--sniffer-recover-the-domain-the-kernel-never-saw) | *(was: zero occurrences repo-wide, and the missing-domain fact was destroyed inside the decoder before any diagnosis could reach it, so "my rules don't work" had no answer)* |
+| **`/dns/query`** | **Closed 2026-08-30** — `dnsQuery(name:type:)` behind a DNS Resolution panel in Routing, reachable from a Connections row for that connection's domain. One half of the original question is answered and the other half turns out not to be answerable: **the reply carries no nameserver field at all** (probed against v1.19.30), so the panel says the core does not report the upstream instead of guessing one. See [A2](#a2--wire-dnsquery-into-a-dns-resolution-panel) | *(was: cannot answer "which nameserver answered this domain, and with what address", leaving a hole in the middle of the routing story we otherwise tell end to end)* |
 | **`/cache/fakeip/flush`** | **Closed 2026-08-27** — `flushFakeIPCache()`, surfaced through `FakeIPDiagnosticsBuilder` as an L1 fix action. See [A3](#a3--flush-fake-ip-cache-as-an-l1-fix-action) | *(was: a stale fake-ip mapping can only be cleared by restarting the core)* |
 | **`/group/{name}/delay`** | **Closed 2026-08-27** — whole-group units replace per-node fan-out above 8 members. Measured 2026-08-29 on 1200 nodes by [`script/bench_group_delay.py`](../script/bench_group_delay.py): **5.00 s vs 350.88 s, 70x**. A group in flight costs the whole concurrency budget and only a 404 degrades to per-node, so the fallback cannot become a larger storm than the one it replaced. See [A6](#a6--batch-delay-testing-via-groupnamedelay) | *(was: batch delay testing is issued per node; the kernel has a whole-group endpoint)* |
 | **`geox-url`, `geo-auto-update`, `geodata-mode`** | **Closed 2026-08-27** — `GeoDatabaseSettings` is app-managed and generated into the runtime YAML by `ConfigNormalizer`. **ClashX import closed 2026-08-29** — the migration parser reads the keys instead of allow-listing them, from the main config only. Backup/restore carry the settings and the diagnostics read the applied ones. See [B5](#b5--geo-database-maintenance) | *(was: GeoIP/GeoSite databases cannot be updated, so geo-based rules silently drift out of date — measured on the maintainer's own machine on 2026-08-27: `GeoSite.dat` last written Jun 20, `geoip.metadb` May 4)* |
 | **`/configs/geo`** | **Closed 2026-08-27** — `updateGeoDatabases(timeout:)` behind an Update Now action | *(was: no in-app geo database refresh)* |
-| **`/memory`** | Not implemented | No core memory telemetry. |
+| **`/memory`** | **Closed 2026-08-30** — `memoryStream()` on the same stream plumbing as `/traffic`, kept in `RuntimeDataStore.memorySample` and shown as a **Memory** stat on the running dashboard. Two measured details are in the code rather than assumed: the first frame is always `{"inuse":0,"oslimit":0}` and is a priming tick, not a reading, so a zero sample renders as `—`; and `oslimit` is 0 on macOS, which has no cgroup ceiling, so nothing draws a percentage-of-limit gauge that would always read 0 | *(was: no core memory telemetry)* |
 | **`tcp-concurrent`, `global-client-fingerprint`, `find-process-mode`, `keep-alive-interval`, `ntp`, `experimental`, `global-ua`, `interface-name`** | **Closed 2026-08-29** — still zero occurrences by name, and deliberately so: the **Raw YAML** snippet payload ([`RawYAMLPatch.swift`](../ClashMax/Models/RawYAMLPatch.swift)) reaches all of them, and every key Mihomo ships tomorrow, without the app growing a switch. See [INV-2](#23-two-invariants) | *(was: advanced users hit a hard ceiling; per INV-2 the fix is the generic override path, not eight new toggles)* |
-| **`listeners`** | Recognized only as a subscription risk key to strip | Inbound listeners (serving other devices on the LAN) are unavailable. Needs a deliberate decision, not a default. |
+| **`listeners`** | **Decided 2026-08-30.** The old entry was wrong twice: `listeners` is *flagged*, never stripped, and only inside provider-override and runtime-merge YAML ([`CoreModels.swift:744`](../ClashMax/Models/CoreModels.swift#L744)) — a plain subscription's top-level `listeners:` has always passed through `ConfigNormalizer` untouched **and unflagged**, which is the worse half of the bug. The decision is written in [C3](#c3--decide-the-listeners-question): supported at L3 through the Raw YAML snippet per [INV-2](#23-two-invariants), on the condition that the exposure it creates is never silent. [`ListenerExposureDiagnostics`](../ClashMax/Models/ListenerExposure.swift) reads the runtime YAML back and reports an exposed inbound with no `authentication:` as an open proxy. The one criterion left open is the import-time *prompt*, which belongs to [C1](#c1--import-time-subscription-audit-report) | *(was: inbound listeners serving other devices on the LAN are unavailable; needs a deliberate decision, not a default)* |
 
 ### 3.3 Native macOS leverage already half-built
 
@@ -208,6 +220,9 @@ domain, so every `DOMAIN`, `DOMAIN-SUFFIX`, `DOMAIN-KEYWORD` and `GEOSITE` rule 
 structurally unreachable for it. The user writes a correct rule, and it never fires. No
 surface in ClashMax can currently say why — which makes this simultaneously the largest
 kernel gap and the largest hole in the diagnostic story the product is built on.
+
+**Status: A1a–A1d shipped 2026-08-16. A1e is open, and A1 is therefore not done** — the
+definition of done below is deliberate about that.
 
 ##### A1.0 — What was verified, and against what
 
@@ -257,16 +272,16 @@ first and on its own.
 
 - **Scope:** `MihomoAPIClient.decodeConnections`, `ConnectionSnapshot`. No UI work.
 - **Acceptance criteria:**
-  - [ ] `ConnectionSnapshot` distinguishes, as typed state rather than by string inspection:
+  - [x] `ConnectionSnapshot` distinguishes, as typed state rather than by string inspection:
         a natively reported domain, a domain recovered by sniffing (`sniffHost`), and no
         domain at all. The raw destination IP stays available in every case.
-  - [ ] `sniffHost`, `dnsMode`, `remoteDestination` and `specialProxy` are decoded, with the
+  - [x] `sniffHost`, `dnsMode`, `remoteDestination` and `specialProxy` are decoded, with the
         same multi-spelling tolerance `stringValue(for:in:)` already applies elsewhere.
-  - [ ] The Connections table renders exactly as it does today — the IP fallback stays a
+  - [x] The Connections table renders exactly as it does today — the IP fallback stays a
         *presentation* choice made above the model, not a fact destroyed inside the decoder.
-  - [ ] `connectionRuleHost` in `ConnectionsView` reads the new typed state instead of
+  - [x] `connectionRuleHost` in `ConnectionsView` reads the new typed state instead of
         re-deriving it from an empty string, and the comment at line 137 moves with it.
-  - [ ] Decoder tests over fixtures for: domain present, domain absent, `sniffHost` present
+  - [x] Decoder tests over fixtures for: domain present, domain absent, `sniffHost` present
         with `host` absent, `sniffHost` present with `host` also present, and both absent.
 
 ##### A1b — Generate and own the `sniffer` block (L3)
@@ -278,23 +293,23 @@ first and on its own.
   `hasRuntimeOverlay`, `summary`, `Codable` with defaulted decoding — so it drops into the
   layer/diff/preflight machinery that already exists rather than beside it.
 - **Acceptance criteria:**
-  - [ ] `sniffer` is generated into the runtime YAML and survives `mihomo -t` for every
+  - [x] `sniffer` is generated into the runtime YAML and survives `mihomo -t` for every
         template × routing mode × DNS-override combination, including the provider-backed
         template path in `providerBackedConfig`.
-  - [ ] A new `RuntimeSnippetPayloadKind.sniffer` carries user edits, so a sniffer change is
+  - [x] A new `RuntimeSnippetPayloadKind.sniffer` carries user edits, so a sniffer change is
         an ordinary snippet in the ordinary store, editable in Routing, orderable with the
         others, and diffable — no parallel storage (INV-1).
-  - [ ] `RuntimeChangeKind.sniffer` resolves to `.hotReload` when the runtime serves user
+  - [x] `RuntimeChangeKind.sniffer` resolves to `.hotReload` when the runtime serves user
         traffic, and to `.appliesOnNextStart` otherwise, matching the verified core behavior.
-  - [ ] Validation rejects an unknown protocol, a malformed port range, and an empty `sniff`
+  - [x] Validation rejects an unknown protocol, a malformed port range, and an empty `sniff`
         map with a specific message *before* the core sees it; when the core rejects a
         config anyway, the surfaced text is the `level=error msg=` line.
-  - [ ] The Routing diff preview shows the `sniffer` block as a labeled layer, the way
+  - [x] The Routing diff preview shows the `sniffer` block as a labeled layer, the way
         `dns-override` is shown today.
-  - [ ] A subscription-supplied `sniffer` block merges through the existing runtime-merge
+  - [x] A subscription-supplied `sniffer` block merges through the existing runtime-merge
         path with a deliberate, visible keep-or-override decision — never a silent overwrite
         in either direction.
-  - [ ] Tests cover: off, on with defaults, on with per-protocol ports, subscription
+  - [x] Tests cover: off, on with defaults, on with per-protocol ports, subscription
         conflict, invalid input, and the apply-mode resolution.
 
 ##### A1c — The diagnosis this exists for (L1)
@@ -320,43 +335,49 @@ folded into it would conflate two different scopes.
   | `sniffedButNotOverridden` | A domain was sniffed, but `override-destination` is off | warn |
 
 - **Acceptance criteria:**
-  - [ ] The `sniffedButNotOverridden` case is confirmed against the running core before it
+  - [x] The `sniffedButNotOverridden` case is confirmed against the running core before it
         ships — whether `override-destination: false` leaves `sniffHost` populated while
         rules still match on the IP. Encode whichever behavior the core actually has; do not
         ship a cause that describes documentation rather than observation.
-  - [ ] For a domainless connection, the verdict names the concrete consequence by reusing
+  - [x] For a domainless connection, the verdict names the concrete consequence by reusing
         `RuleMatchSimulator`: *which domain rule would have matched had the domain been
         present*. A cause without that sentence is a fact, not a diagnosis.
-  - [ ] Every non-pass cause carries a fix action that writes the A1b snippet — enable
+  - [x] Every non-pass cause carries a fix action that writes the A1b snippet — enable
         sniffing, extend it to this port, or turn on `override-destination` — and nothing
         else. No bare toggle in Settings (§2.4).
-  - [ ] After the fix applies, the existing `RuntimeApplyOutcomeBanner` reports it, and
+  - [x] After the fix applies, the existing `RuntimeApplyOutcomeBanner` reports it, and
         re-running the diagnosis on a fresh connection to the same destination returns a
         pass. The loop closes visibly.
-  - [ ] Reachable from a Connections row and from the Routing explanation for that
+  - [x] Reachable from a Connections row and from the Routing explanation for that
         connection — the two places the user is already standing when they notice.
-  - [ ] The classifier is pure and fully covered: one test per cause, plus the
+  - [x] The classifier is pure and fully covered: one test per cause, plus the
         rule-would-have-matched sentence.
 
 ##### A1d — Subscription trust for `sniffer` (folds into C1)
 
-`sniffer` is **absent** from the danger-key set at
-[`CoreModels.swift:805`](../ClashMax/Models/CoreModels.swift#L805). A subscription can
-therefore ship `skip-domain`, `force-domain`, or `override-destination: false` today and
-change which rules match the user's traffic, with nothing surfaced.
+`sniffer` **was absent** from the danger-key set at
+[`CoreModels.swift:805`](../ClashMax/Models/CoreModels.swift#L805), so a subscription could
+ship `skip-domain`, `force-domain`, or `override-destination: false` and change which rules
+match the user's traffic with nothing surfaced. It joined that set on 2026-08-16, at
+`warning` severity.
 
 - **Acceptance criteria:**
-  - [ ] `sniffer` joins the scanned key set at `warning` severity — it changes traffic
+  - [x] `sniffer` joins the scanned key set at `warning` severity — it changes traffic
         identification, not LAN exposure — with a message naming the consequence, in the
         same register as the existing `dns` and `tun` entries.
   - [ ] The import-time report (C1) states what the subscription's sniffer block would
-        change and what ClashMax kept.
+        change and what ClashMax kept. **Waits on C1, which is open.** The key is scanned
+        and flagged today; the report it should be flagged *in* does not exist yet.
 
 ##### A1e — Regression and manual proof
 
 - **Acceptance criteria:**
-  - [ ] The D2 script adds sniffer-on and sniffer-off to its template × mode matrix, so a
-        future core bump that changes the schema fails the build.
+  - [x] The template × mode matrix covers sniffer-on and sniffer-off, so a future core bump
+        that changes the schema fails the build. It landed as an XCTest rather than as the D2
+        script, because D2 has no script yet: `testBundledMihomoAccepts…Combinations` in
+        [`CoreRuntimePreflightTests.swift`](../ClashMaxTests/CoreRuntimePreflightTests.swift)
+        runs the bundled core over 5 config sources × 3 routing modes × 3 DNS modes × 3
+        sniffer states. When D2 gets a script, this moves into it.
   - [ ] `MANUAL_TEST_PLAN.md` gains the end-to-end line item, and it is signed off before
         A1 is called done: an app that connects by hardcoded IP → a `DOMAIN-SUFFIX` rule for
         it does not fire → the diagnosis names the missing domain and the rule that would
@@ -371,16 +392,51 @@ believing the user when they say their rules do not work.
 
 #### A2 — Wire `/dns/query` into a DNS resolution panel
 
+**Status: shipped 2026-08-30.** Never seen by eye — see the gap below.
+
 - **Problem:** the routing story has a hole in the middle. We can show rules and we can show
   the exit IP, but not what DNS actually returned.
+- **What the endpoint actually returns**, probed against the bundled core v1.19.30 on
+  2026-08-30. The body is DoH-*shaped* and is not DoH, so it was worth measuring rather than
+  reading off the specification:
+  - `Status`, `Question`, the `RA`/`RD`/`AD`/`CD`/`TC` flags, and `Answer` **only when there
+    is one** — a `NOERROR` with no records omits the key rather than sending `[]`.
+  - `Authority` carries the SOA on `NXDOMAIN`. It is the only place the negative answer's TTL
+    and the zone that denied the name appear.
+  - An unknown `type` is `400 {"message":"invalid query type"}`; `dns.enable: false` is `500
+    {"message":"DNS section is disabled"}`. Both put the reason in the body, so both reach
+    the user as the core's own sentence rather than as a status code.
+  - The endpoint answers from the **upstream** resolvers even in fake-ip mode. With
+    `enhanced-mode: fake-ip`, `dig` against the core's own listener returned `198.18.0.4` for
+    a name this endpoint answered with the real address.
+- **The criterion that could not be met, and why.** **There is no nameserver field anywhere
+  in the response.** The core does not report which upstream answered, so "which nameserver
+  answered" is not obtainable from this endpoint by any UI built on top of it. The panel
+  therefore carries the absence as a stated fact — *"Not reported — the core's answer carries
+  no upstream"* — instead of dropping the question or attributing the answer to whichever
+  nameserver the config happens to list first. Deleting the row would have been the easier
+  edit and the dishonest one.
 - **Acceptance criteria:**
-  - [ ] `MihomoAPIClient` gains `dnsQuery(name:type:)`.
-  - [ ] A panel takes a domain and reports: which nameserver answered, the addresses, and
-        whether the answer came from fake-ip.
-  - [ ] The result feeds `RuleMatchSimulator` so the panel shows *domain → address → matched
-        rule → group → node* in one place.
-  - [ ] Reachable from a Connections row for the domain of that connection.
-  - [ ] Failure states are explicit (core not running, DNS disabled, query timeout).
+  - [x] `MihomoAPIClient` gains `dnsQuery(name:type:)`.
+  - [x] A panel takes a domain and reports the addresses, the canonical name behind a CNAME
+        chain, the TTL, and — on a negative answer — the authority section, which is where
+        the denying zone lives. Which nameserver answered is reported as **unavailable**, per
+        the measurement above.
+  - [x] Whether the answer came from fake-ip is answered in the only way it honestly can be:
+        it never does. The panel says this is the address the core will dial while the app
+        gets the placeholder, so the two disagreeing is documented rather than discovered.
+  - [x] The result feeds `RuleMatchSimulator` so the panel shows *domain → address → matched
+        rule → group → node* in one place. It runs the simulator **twice**, once on the name
+        and once on the returned address, and labels the two matches separately — they are
+        different rules, and a panel that ran only one would be answering a question the user
+        did not ask.
+  - [x] Reachable from a Connections row for the domain of that connection.
+  - [x] Failure states are explicit. `DNSResolutionSnapshot.Cause` carries one case per state
+        the user can be in — core not running, DNS disabled, configuration not read back yet,
+        ready, querying, resolved, empty answer, `NXDOMAIN`, `SERVFAIL`, an unnamed response
+        code, and a transport failure repeating the core's message — each with its own test.
+- **Gap:** never driven by hand against a real resolver. The tests cover the builder and the
+  decoder over recorded bodies, which is exactly the failure mode D3 names.
 
 #### A3 — Flush fake-ip cache as an L1 fix action
 
@@ -681,13 +737,67 @@ A subscription can change your DNS, open listeners, and rebind the external cont
 
 #### C3 — Decide the `listeners` question
 
-- **Problem:** `listeners` is currently stripped as a risk with no path forward, which is
-  the right default and the wrong endpoint.
+**Status: decided and shipped 2026-08-30.** Never seen by eye — see the gap below.
+
+- **The problem, restated correctly.** This section used to say `listeners` is *"currently
+  stripped as a risk with no path forward"*. It is not, and never was. `ProviderOptionsRisk`
+  ([`CoreModels.swift:744`](../ClashMax/Models/CoreModels.swift#L744)) **flags** the key, and
+  only when it appears in provider-override or runtime-merge YAML. A plain subscription that
+  ships a top-level `listeners:` block has always gone through `ConfigNormalizer` untouched
+  **and unflagged**. The real state was not "the door is locked" but "the door is unlocked
+  and unlabeled" — which inverts what a decision here has to protect: the risk was never
+  that users could not open inbound listeners, it was that a subscription could open them
+  without anyone being told.
+- **What the core actually does**, probed against the bundled core v1.19.30 on 2026-08-30.
+  All four contradict the obvious assumption, which is why each is written down next to the
+  criterion it constrains:
+  - **`GET /configs` carries no `listeners` key at all.** The generated runtime YAML is the
+    only place the active set can be read back from — the same situation as `dns` and
+    `sniffer`, and the reason
+    [`ActiveListenerConfigReader`](../ClashMax/Services/ActiveListenerConfigReader.swift)
+    mirrors `ActiveDNSConfigReader` instead of asking the API.
+  - **`allow-lan: false` does not gate them.** A `listen: 0.0.0.0` entry answered a request
+    from another host on the LAN with `200` while the app-managed `mixed-port` refused the
+    same request. `allow-lan` governs the default inbounds only.
+  - **An omitted `listen` binds every interface** (`*:port`). The exposed choice is the
+    *default* one, so a config that merely does not mention `listen` is already sharing the
+    port with the network.
+  - **The global `authentication:` list does apply to them.** The same LAN request answered
+    `407` without credentials and `200` with them. An exposed listener plus an empty
+    `authentication` list is an open proxy for anyone who can reach the port.
+- **The decision.** `listeners` is **supported at L3 through the generic Raw YAML snippet,
+  and gets no bespoke UI.** §2.4 and [INV-2](#23-two-invariants) settle the first half: a key
+  the generic override already reaches is done, and a listener editor would be exactly the
+  advanced tab this document exists to refuse. The support is conditional on one thing —
+  **the exposure it creates is never silent** — and that condition is the part that had to be
+  built.
 - **Acceptance criteria:**
-  - [ ] A written decision in this document: supported at L3 with explicit user consent, or
-        permanently unsupported with the reason stated.
-  - [ ] If supported: LAN exposure is opt-in per listener, shown in the runtime diff, and
-        never inherited from a subscription without a prompt.
+  - [x] A written decision in this document: supported at L3 with explicit user consent, or
+        permanently unsupported with the reason stated. → **supported at L3**, above. The
+        consent is the Raw YAML snippet itself: the user writes the block, sees it in the
+        runtime diff like every other snippet, and can revert it the same way.
+  - [x] If supported: LAN exposure is opt-in per listener, and shown in the runtime diff.
+        Both fall out of the snippet: nothing writes a listener except the user, one entry
+        at a time, and the snippet appears in the diff like every other one.
+  - [x] The condition the decision adds on top: a listener that is *already* there is read
+        back and judged.
+        [`ListenerExposureDiagnostics`](../ClashMax/Models/ListenerExposure.swift) is a pure
+        classifier over the runtime YAML the core was actually handed — snippet-authored or
+        subscription-supplied, it cannot tell and does not need to. An exposed inbound with
+        no `authentication:` is `fail`, *"Open proxy on your network"*; with authentication
+        it is `warn`; all-loopback is `pass`; and `allow-lan` is reported for what it does
+        **not** cover, because a user who turned it off has every reason to believe it did.
+        Surfaced as an **Inbound Listeners** panel in Routing and as a line in the copyable
+        diagnostics report, so it is a standing verdict rather than a notification that
+        scrolls away.
+  - [ ] Never inherited from a subscription **without a prompt**. The standing verdict above
+        catches an inherited listener, but the *prompt* belongs to the import-time report in
+        [C1](#c1--import-time-subscription-audit-report), which is open. Filed here rather
+        than ticked, because a verdict the user has to go look at is not the same promise as
+        a question asked at import.
+- **Gap:** never seen by eye. Nothing here has been watched making its claim in a running
+  app against a real second machine on the LAN — the exposure probes were run against the
+  core directly.
 
 ---
 
@@ -740,13 +850,13 @@ Deliberately conservative — one track at a time, with D interleaved.
 
 | Horizon | Content | Why this order |
 | --- | --- | --- |
-| **First** | **A1a** | A decoder fix with no UI, and a hard prerequisite: until the connections decoder stops collapsing "no domain" into "the destination IP", the diagnosis in A1c is not computable. Ships on its own, in a day. |
-| **Then** | **A1b + A1c + A1d** | The highest-priority item in this document, and the smallest closed loop that validates the whole thesis: a real kernel gap, a real diagnostic gap, one fix button, no new UI paradigm. If the three-layer model is wrong, this is where it shows cheaply. |
-| **Then** | A2 | The other half of the routing story. Do it after A1 so the domain shown in the DNS panel and the domain the rules actually matched on are known to be the same value. |
+| **First** | ~~**A1a**~~ | A decoder fix with no UI, and a hard prerequisite: until the connections decoder stops collapsing "no domain" into "the destination IP", the diagnosis in A1c is not computable. Ships on its own, in a day. |
+| **Then** | ~~**A1b + A1c**~~, A1d | The highest-priority item in this document, and the smallest closed loop that validates the whole thesis: a real kernel gap, a real diagnostic gap, one fix button, no new UI paradigm. If the three-layer model is wrong, this is where it shows cheaply. **A1a–A1c shipped 2026-08-16**; A1d's scanner shipped with them and the rest of it folds into C1. A1e's manual sign-off is what still holds A1 open. |
+| **Then** | ~~A2~~ | The other half of the routing story. Do it after A1 so the domain shown in the DNS panel and the domain the rules actually matched on are known to be the same value. **Shipped 2026-08-30**, after A1a–A1d, as ordered. |
 | **Then** | ~~A3~~, A5, C1 | Low-risk, high-leverage. A5 and C1 both reduce maintainer load directly; C1 absorbs A1d. **A3 shipped 2026-08-27** alongside B5. |
 | **Then** | B1, A4 | B1 is the headline user-facing feature; A4 is the screen that makes the moat obvious. Do B1 after A1 so process rules are not the second thing to fail on domainless connections. |
 | **Then** | B2, C2 | Both are stateful and need the earlier work to be trustworthy first. |
-| **Later** | B3, B4, ~~B5~~, ~~A6~~, C3 | Valuable, not load-bearing. **B5 and A6 were pulled forward and shipped 2026-08-27.** B5 because it was the one item on this list that degrades while nothing happens — and it had already been degrading for four months on the maintainer's own machine, which "not load-bearing" failed to predict. A6 because the #10 / #11 / #18 jank series all originate in the per-node fan-out it removes. |
+| **Later** | B3, B4, ~~B5~~, ~~A6~~, ~~C3~~ | Valuable, not load-bearing. **C3 was pulled forward and decided 2026-08-30**, because the review that went looking for it found the opposite of what this document claimed: a top-level `listeners:` block was passing through unflagged, so the item was not a dormant feature request but an unlabeled exposure. **B5 and A6 were pulled forward and shipped 2026-08-27.** B5 because it was the one item on this list that degrades while nothing happens — and it had already been degrading for four months on the maintainer's own machine, which "not load-bearing" failed to predict. A6 because the #10 / #11 / #18 jank series all originate in the per-node fan-out it removes. |
 | **Throughout** | D1, D2, D3 | Never a milestone of its own. |
 
 ---
@@ -773,7 +883,7 @@ Stated so they do not get relitigated:
 
 - The **principles in §2 are normative.** Changing them requires a written reason here, not
   a one-off exception in a pull request.
-- The **gaps in §3 are dated claims.** Re-verify before citing them; they are true as of
-  2026-08-14.
+- The **gaps in §3 are dated claims.** Re-verify before citing them. §3.1 was re-measured on
+  2026-08-30; every row in §3.2 carries the date its state was verified.
 - The **tracks in §4 are a queue, not a contract.** Reorder freely; do not silently drop an
   item — move it to §6 with a reason.

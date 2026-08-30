@@ -12,6 +12,7 @@ protocol MihomoAPIControlling: Sendable {
   func testDelay(proxy: String, testURL: URL, timeout: Int) async throws -> Int
   func testGroupDelay(group: String, testURL: URL, timeout: Int) async throws -> [String: Int]
   func flushFakeIPCache() async throws
+  func dnsQuery(name: String, type: String) async throws -> DNSQueryResult
   func updateGeoDatabases(timeout: TimeInterval) async throws
   func healthCheckProvider(named provider: String) async throws
   func updateProxyProvider(named provider: String) async throws
@@ -22,6 +23,7 @@ protocol MihomoAPIControlling: Sendable {
   func reloadConfig(path: String, force: Bool) async throws
   func restart(configPath: String?) async throws
   func trafficStream() -> AsyncThrowingStream<TrafficSample, Error>
+  func memoryStream() -> AsyncThrowingStream<CoreMemorySample, Error>
   func logStream(level: String) -> AsyncThrowingStream<LogEntry, Error>
   func connectionStream(interval: Int) -> AsyncThrowingStream<[ConnectionSnapshot], Error>
 }
@@ -33,6 +35,10 @@ extension MihomoAPIControlling {
 
   func updateGeoDatabases() async throws {
     try await updateGeoDatabases(timeout: MihomoAPIClient.defaultGeoUpdateTimeout)
+  }
+
+  func dnsQuery(name: String) async throws -> DNSQueryResult {
+    try await dnsQuery(name: name, type: DNSQueryType.coreDefault.rawValue)
   }
 }
 
@@ -343,6 +349,33 @@ struct MihomoAPIClient: Sendable {
     _ = try await data(for: request)
   }
 
+  /// Asks the running core to resolve a name, via `GET /dns/query?name=&type=`.
+  ///
+  /// This is the core's *own* resolver path — the same nameservers, the same `nameserver-policy`,
+  /// the same `respect-rules` routing — which is the entire point: a system `dig` answers a
+  /// different question from the one that decides where the user's traffic goes.
+  ///
+  /// Failure modes are the core's, preserved verbatim through `ClientError.coreMessage` because the
+  /// message *is* the diagnosis: `dns.enable: false` answers 500 `DNS section is disabled`, and an
+  /// unknown type answers 400 `invalid query type`. Both are user-fixable and neither is legible as
+  /// a status code. An empty `name` is **not** an error — the core resolves the root zone and
+  /// answers 200 — so callers reject a blank query before it is sent rather than reading the reply
+  /// as an answer about nothing.
+  func dnsQuery(name: String, type: String = DNSQueryType.coreDefault.rawValue) async throws -> DNSQueryResult {
+    let request = try request(
+      path: "/dns/query",
+      queryItems: [
+        URLQueryItem(name: "name", value: name),
+        URLQueryItem(name: "type", value: type),
+      ]
+    )
+    let data = try await dataPreservingCoreMessage(for: request)
+    guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+      throw ClientError.invalidResponse
+    }
+    return DNSQueryResult.decode(object, queryType: type, fallbackName: name)
+  }
+
   /// Re-downloads the GeoIP/GeoSite/ASN databases via `POST /configs/geo`.
   ///
   /// Contract measured against the bundled core (v1.19.30) on 2026-08-27:
@@ -400,6 +433,21 @@ struct MihomoAPIClient: Sendable {
     webSocketStream(path: "/traffic") { data in
       let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
       return TrafficSample(upload: object?["up"] as? Int ?? 0, download: object?["down"] as? Int ?? 0)
+    }
+  }
+
+  /// The core's resident memory, one frame per second, over the same socket shape as `/traffic`.
+  ///
+  /// The core opens with a `{"inuse":0,"oslimit":0}` priming frame before its first real reading
+  /// (measured on the bundled core, v1.19.30), which is why `CoreMemorySample.hasReading` exists:
+  /// yielding that frame as "0 B resident" would report a number the core never claimed.
+  func memoryStream() -> AsyncThrowingStream<CoreMemorySample, Error> {
+    webSocketStream(path: "/memory") { data in
+      let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+      return CoreMemorySample(
+        inUse: object?["inuse"] as? Int ?? 0,
+        osLimit: object?["oslimit"] as? Int ?? 0
+      )
     }
   }
 

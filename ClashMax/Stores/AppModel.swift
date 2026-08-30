@@ -298,6 +298,11 @@ struct RuntimeDiagnosticsReport: Equatable, Sendable {
   var proxyEffect: ProxyEffectDiagnosticsSnapshot?
   var fakeIP: FakeIPDiagnosticsSnapshot?
   var geoDatabases: GeoDatabaseDiagnosticsSnapshot?
+  /// Reported whenever the running config opened an inbound (roadmap C3). An exposed port is the
+  /// kind of fact a bug report has to carry even when the reporter never noticed it.
+  var listenerExposure: ListenerExposureSnapshot?
+  /// The core's resident memory, when it has reported a reading (`/memory`).
+  var coreMemory: CoreMemorySample?
 
   var plainText: String {
     let lines = rawLines().map(redacted)
@@ -338,6 +343,12 @@ struct RuntimeDiagnosticsReport: Equatable, Sendable {
     }
     if let geoDatabases {
       lines.append(contentsOf: geoDatabases.plainTextLines)
+    }
+    if let listenerExposure {
+      lines.append(contentsOf: listenerExposure.plainTextLines)
+    }
+    if let coreMemory, coreMemory.hasReading {
+      lines.append("Core Memory: \(coreMemory.formattedInUse)")
     }
     if let readinessIssue {
       lines.append("Readiness: \(readinessIssue)")
@@ -896,6 +907,17 @@ final class AppModel {
   /// come from the file because `GET /configs` carries no `dns` key at all.
   private(set) var activeDNSFacts: DNSRuntimeFacts?
   @ObservationIgnored private var activeDNSFactsTask: Task<Void, Never>?
+  /// The `listeners` and `authentication` blocks of the config the core is running. `nil` means
+  /// "not read yet"; the exposure verdict reports that as unknown rather than as "nothing is
+  /// listening" (roadmap C3). It has to come from the file because `GET /configs` carries no
+  /// `listeners` key at all.
+  private(set) var activeListenerFacts: ListenerRuntimeFacts?
+  @ObservationIgnored private var activeListenerFactsTask: Task<Void, Never>?
+  /// The name the DNS resolution panel is asking about, and what came back (roadmap A2).
+  var dnsResolutionQuery = ""
+  var dnsResolutionQueryType: DNSQueryType = .a
+  private(set) var dnsResolutionOutcome: DNSResolutionOutcome = .idle
+  @ObservationIgnored private var dnsResolutionTask: Task<Void, Never>?
   /// When the core was last handed a config. The fake-ip table is empty at that moment (Mihomo's
   /// `profile.store-fake-ip` defaults to off and ClashMax never turns it on), so it is the baseline
   /// every later invalidating event is compared against.
@@ -1873,7 +1895,9 @@ final class AppModel {
       probeHost: proxyEffectProbeHost,
       proxyEffect: proxyEffect,
       fakeIP: fakeIPDiagnostics,
-      geoDatabases: geoDatabaseDiagnostics
+      geoDatabases: geoDatabaseDiagnostics,
+      listenerExposure: listenerExposureDiagnostics,
+      coreMemory: runtimeData.memorySample
     )
   }
 
@@ -2001,6 +2025,15 @@ final class AppModel {
       )
     )
     selectedSection = .routing
+  }
+
+  /// Hands a connection's domain to the DNS resolution panel (roadmap A2). "Why did this go
+  /// DIRECT?" is asked from a Connections row, and the answer usually starts with what the core's
+  /// own resolver returns for that name — which is not necessarily what the Mac's resolver returns.
+  func openDNSResolution(for connection: ConnectionSnapshot) {
+    guard let domain = connection.domain, !domain.isEmpty else { return }
+    selectedSection = .routing
+    resolveDNS(for: domain)
   }
 
   func openLogsFolder() {
@@ -8565,6 +8598,7 @@ final class AppModel {
     lastRuntimeConfigAppliedAt = Date()
     refreshActiveSnifferSettings(from: materialization.runtimeConfigURL)
     refreshActiveDNSFacts(from: materialization.runtimeConfigURL)
+    refreshActiveListenerFacts(from: materialization.runtimeConfigURL)
     refreshGeoDatabaseInventory()
   }
 
@@ -8577,6 +8611,12 @@ final class AppModel {
     activeDNSFactsTask?.cancel()
     activeDNSFactsTask = nil
     activeDNSFacts = nil
+    activeListenerFactsTask?.cancel()
+    activeListenerFactsTask = nil
+    activeListenerFacts = nil
+    dnsResolutionTask?.cancel()
+    dnsResolutionTask = nil
+    dnsResolutionOutcome = .idle
     lastRuntimeConfigAppliedAt = nil
     lastFakeIPFlushAt = nil
   }
@@ -8608,6 +8648,89 @@ final class AppModel {
       let facts = await ActiveDNSConfigReader.facts(at: url)
       guard !Task.isCancelled, let self else { return }
       activeDNSFacts = facts
+    }
+  }
+
+  /// Reads the applied config's `listeners` block in the background, for the same reason as the
+  /// `dns` block and with more at stake: `GET /configs` carries no `listeners` key, so nothing else
+  /// can tell the user that the running config opened a port other machines can reach (roadmap C3).
+  private func refreshActiveListenerFacts(from url: URL) {
+    activeListenerFactsTask?.cancel()
+    activeListenerFactsTask = Task { @MainActor [weak self] in
+      let facts = await ActiveListenerConfigReader.facts(at: url)
+      guard !Task.isCancelled, let self else { return }
+      activeListenerFacts = facts
+    }
+  }
+
+  /// Whether the running config exposes an inbound to the rest of the network (roadmap C3).
+  var listenerExposureDiagnostics: ListenerExposureSnapshot {
+    ListenerExposureDiagnosticsBuilder.snapshot(for: ListenerExposureInput(
+      isCoreRunning: isCoreRunning,
+      facts: activeListenerFacts,
+      allowLan: currentRuntimeOverrides.allowLan
+    ))
+  }
+
+  /// What the core's own resolver says about the name in the DNS panel (roadmap A2).
+  var dnsResolutionDiagnostics: DNSResolutionSnapshot {
+    DNSResolutionDiagnosticsBuilder.snapshot(for: DNSResolutionInput(
+      isCoreRunning: isCoreRunning,
+      dnsFacts: activeDNSFacts,
+      query: dnsResolutionQuery,
+      queryType: dnsResolutionQueryType,
+      outcome: dnsResolutionOutcome,
+      rules: rules
+    ))
+  }
+
+  var canResolveDNSQuery: Bool {
+    guard apiClient != nil, dnsResolutionTask == nil else { return false }
+    let input = DNSResolutionInput(
+      isCoreRunning: isCoreRunning,
+      dnsFacts: activeDNSFacts,
+      query: dnsResolutionQuery,
+      queryType: dnsResolutionQueryType,
+      outcome: dnsResolutionOutcome,
+      rules: []
+    )
+    return input.hasQuery && DNSResolutionDiagnosticsBuilder.snapshot(for: input).canQuery
+  }
+
+  /// Points the DNS panel at a name and resolves it, so a Connections or Routing row can hand its
+  /// own domain over instead of making the user retype it.
+  func resolveDNS(for name: String, type: DNSQueryType? = nil) {
+    dnsResolutionQuery = name
+    if let type {
+      dnsResolutionQueryType = type
+    }
+    resolveDNSQuery()
+  }
+
+  /// Asks the running core to resolve the panel's name through its **own** resolver — the same
+  /// nameservers and policies that decide routing, which is why a `dig` on this Mac answers a
+  /// different question (roadmap A2).
+  func resolveDNSQuery() {
+    guard dnsResolutionTask == nil, let apiClient else { return }
+    let name = dnsResolutionQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+    // The core resolves an empty `name` against the root zone and answers 200, so a blank query
+    // would come back looking like a successful answer about nothing.
+    guard !name.isEmpty else { return }
+    let type = dnsResolutionQueryType
+    dnsResolutionOutcome = .querying
+    dnsResolutionTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer { dnsResolutionTask = nil }
+      do {
+        let result = try await apiClient.dnsQuery(name: name, type: type.rawValue)
+        guard !Task.isCancelled else { return }
+        dnsResolutionOutcome = .answered(result)
+      } catch is CancellationError {
+        return
+      } catch {
+        guard !Task.isCancelled else { return }
+        dnsResolutionOutcome = .failed(UserFacingError.message(for: error))
+      }
     }
   }
 
@@ -8994,6 +9117,9 @@ final class AppModel {
         await self?.runTrafficStream(client: client, token: token)
       },
       Task { [weak self] in
+        await self?.runMemoryStream(client: client, token: token)
+      },
+      Task { [weak self] in
         await self?.runLogStream(client: client, logLevel: logLevel, token: token)
       },
       Task { [weak self] in
@@ -9028,6 +9154,27 @@ final class AppModel {
 
       guard shouldRetryRuntimeStream(token: token) else { return }
       clearStaleTrafficSampleDuringReconnect()
+      guard await waitBeforeRuntimeStreamReconnect(token: token) else { return }
+    }
+  }
+
+  /// Mirrors `runTrafficStream`, including the reconnect clear: a memory reading from a core that
+  /// has since been replaced is worse than no reading, because nothing on screen says it is stale.
+  private func runMemoryStream(client: any MihomoAPIControlling, token: UUID) async {
+    while shouldRetryRuntimeStream(token: token) {
+      do {
+        for try await sample in client.memoryStream() {
+          guard !Task.isCancelled else { return }
+          runtimeData.appendMemorySample(sample)
+        }
+      } catch is CancellationError {
+        return
+      } catch {
+        guard shouldRetryRuntimeStream(token: token) else { return }
+      }
+
+      guard shouldRetryRuntimeStream(token: token) else { return }
+      clearStaleMemorySampleDuringReconnect()
       guard await waitBeforeRuntimeStreamReconnect(token: token) else { return }
     }
   }
@@ -9086,6 +9233,11 @@ final class AppModel {
 
   private func appendTrafficSample(_ sample: TrafficSample) {
     runtimeData.appendTrafficSample(sample)
+  }
+
+  private func clearStaleMemorySampleDuringReconnect() {
+    guard runtimeData.memorySample != .zero else { return }
+    runtimeData.memorySample = .zero
   }
 
   private func appendAppLog(level: String, message: String) {

@@ -713,7 +713,7 @@ private struct RunningStatusCard: View {
         HStack(spacing: 10) {
           RuntimeStat(title: "Uptime", value: dashboardDurationString(from: appModel.sessionStartedAt, now: context.date), tint: .cyan)
           RuntimeStat(title: "Connections", value: "\(runtimeData.connections.count)", tint: .orange)
-          RuntimeStat(title: "Memory", value: "Runtime", tint: .green)
+          RuntimeStat(title: "Memory", value: memoryValue, tint: .green)
         }
       }
 
@@ -727,6 +727,12 @@ private struct RunningStatusCard: View {
     .padding(14)
     .frame(maxWidth: .infinity, minHeight: 210, alignment: .topLeading)
     .dashboardCard()
+  }
+
+  /// The core's own `/memory` reading. Until the first real frame arrives there is nothing to
+  /// report, and an em dash says that honestly where "0 B" would have claimed a measurement.
+  private var memoryValue: String {
+    runtimeData.memorySample.hasReading ? runtimeData.memorySample.formattedInUse : "—"
   }
 }
 

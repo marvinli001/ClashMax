@@ -816,4 +816,91 @@ final class MihomoAPIClientTests: XCTestCase {
       XCTAssertEqual(status, 502)
     }
   }
+
+  // MARK: DNS query (roadmap A2)
+
+  func testDNSQuerySendsTheNameAndTypeAsQueryItems() async throws {
+    let recorder = URLProtocolRecorder(
+      responseBody: #"{"Status":0,"Question":[{"Name":"example.com."}],"Answer":[{"name":"example.com.","type":1,"TTL":30,"data":"1.2.3.4"}]}"#
+    )
+    let session = URLSession(configuration: recorder.configuration)
+    let client = MihomoAPIClient(
+      baseURL: URL(string: "http://127.0.0.1:9097")!,
+      secret: "abc",
+      session: session
+    )
+
+    let result = try await client.dnsQuery(name: "example.com", type: "A")
+
+    let request = try XCTUnwrap(recorder.lastRequest)
+    let components = try XCTUnwrap(try URLComponents(url: XCTUnwrap(request.url), resolvingAgainstBaseURL: false))
+    XCTAssertEqual(components.path, "/dns/query")
+    XCTAssertEqual(components.queryItems?.first { $0.name == "name" }?.value, "example.com")
+    XCTAssertEqual(components.queryItems?.first { $0.name == "type" }?.value, "A")
+    XCTAssertEqual(result.addresses, ["1.2.3.4"])
+  }
+
+  /// The convenience overload exists so callers do not have to know the core's default; it has to
+  /// send the same `A` the core would have assumed rather than omitting the parameter.
+  func testDNSQueryWithoutATypeAsksForTheCoreDefault() async throws {
+    let recorder = URLProtocolRecorder(responseBody: #"{"Status":0}"#)
+    let session = URLSession(configuration: recorder.configuration)
+    let client = MihomoAPIClient(
+      baseURL: URL(string: "http://127.0.0.1:9097")!,
+      secret: "abc",
+      session: session
+    )
+
+    _ = try await client.dnsQuery(name: "example.com")
+
+    let request = try XCTUnwrap(recorder.lastRequest)
+    let components = try XCTUnwrap(try URLComponents(url: XCTUnwrap(request.url), resolvingAgainstBaseURL: false))
+    XCTAssertEqual(components.queryItems?.first { $0.name == "type" }?.value, "A")
+  }
+
+  /// `dns.enable: false` answers 500 with the reason in the body, and an unknown type answers 400
+  /// the same way. That sentence is the only text that names the fix, so it must survive the
+  /// throw instead of collapsing into a status code.
+  func testDNSQueryPreservesTheCoreReason() async throws {
+    let recorder = URLProtocolRecorder(responseBody: #"{"message":"DNS section is disabled"}"#, statusCode: 500)
+    let session = URLSession(configuration: recorder.configuration)
+    let client = MihomoAPIClient(
+      baseURL: URL(string: "http://127.0.0.1:9097")!,
+      secret: "abc",
+      session: session
+    )
+
+    do {
+      _ = try await client.dnsQuery(name: "example.com", type: "A")
+      XCTFail("Expected a disabled DNS section to throw")
+    } catch let MihomoAPIClient.ClientError.coreMessage(status, message) {
+      XCTAssertEqual(status, 500)
+      XCTAssertEqual(message, "DNS section is disabled")
+    }
+  }
+
+  func testDNSQueryRejectsANonObjectBody() async throws {
+    let recorder = URLProtocolRecorder(responseBody: "[]")
+    let session = URLSession(configuration: recorder.configuration)
+    let client = MihomoAPIClient(
+      baseURL: URL(string: "http://127.0.0.1:9097")!,
+      secret: "abc",
+      session: session
+    )
+
+    do {
+      _ = try await client.dnsQuery(name: "example.com", type: "A")
+      XCTFail("Expected a non-object body to throw")
+    } catch MihomoAPIClient.ClientError.invalidResponse {}
+  }
+
+  func testMemoryStreamRejectsInvalidBaseURLInsteadOfCrashing() async throws {
+    let client = MihomoAPIClient(baseURL: URL(string: "http://:9097")!, secret: "abc")
+    var iterator = client.memoryStream().makeAsyncIterator()
+
+    do {
+      _ = try await iterator.next()
+      XCTFail("Expected invalid URL to throw")
+    } catch MihomoAPIClient.ClientError.invalidURL {}
+  }
 }

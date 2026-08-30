@@ -485,7 +485,9 @@ struct RoutingView: View {
       snippetStatus
       effectiveConfigPreview
       dnsOverrideStatus
+      dnsResolutionStatus
       fakeIPStatus
+      listenerExposureStatus
       geoDatabaseStatus
       runtimeDiffPreview
       connectionExplanation
@@ -536,6 +538,105 @@ struct RoutingView: View {
         .font(.caption)
         .foregroundStyle(.tertiary)
         .fixedSize(horizontal: false, vertical: true)
+    }
+  }
+
+  /// Roadmap A2. `GET /dns/query` asks the **core's** resolver, which is a different question from
+  /// the one `dig` answers on this Mac and the only one that explains routing: the answer is carried
+  /// straight into the rule engine, so the panel reads name → address → the rule each would match.
+  private var dnsResolutionStatus: some View {
+    @Bindable var appModel = appModel
+    let diagnosis = appModel.dnsResolutionDiagnostics
+    return RoutingInspectorPanel(title: "DNS Resolution", systemImage: "magnifyingglass.circle") {
+      HStack(spacing: 8) {
+        TextField("Domain", text: $appModel.dnsResolutionQuery)
+          .textFieldStyle(.roundedBorder)
+          .controlSize(.small)
+          .onSubmit { appModel.resolveDNSQuery() }
+
+        Picker("Type", selection: $appModel.dnsResolutionQueryType) {
+          ForEach(DNSQueryType.allCases) { type in
+            Text(type.displayName).tag(type)
+          }
+        }
+        .labelsHidden()
+        .controlSize(.small)
+        .fixedSize()
+
+        Button {
+          appModel.resolveDNSQuery()
+        } label: {
+          if case .querying = appModel.dnsResolutionOutcome {
+            ProgressView()
+              .controlSize(.small)
+          } else {
+            Text("Resolve")
+          }
+        }
+        .controlSize(.small)
+        .disabled(!appModel.canResolveDNSQuery)
+        // Same rule as the fake-ip and geo actions: the control stays visible when it would do
+        // nothing, with the diagnosis as its tooltip.
+        .help(diagnosis.reason)
+      }
+
+      RoutingDiagnosisHeadline(headline: diagnosis.headline, status: diagnosis.status)
+      Text(diagnosis.reason)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+
+      ForEach(Array(diagnosis.facts.enumerated()), id: \.offset) { _, fact in
+        RoutingDiagnosisFactRow(title: fact.title, value: fact.value)
+      }
+
+      if !diagnosis.records.isEmpty {
+        VStack(alignment: .leading, spacing: 2) {
+          ForEach(Array(diagnosis.records.enumerated()), id: \.offset) { _, record in
+            // Wire data, not copy: rendered verbatim so it is neither extracted for translation
+            // nor reformatted by the locale.
+            Text(verbatim: "\(record.name) \(record.ttl) \(record.typeName) \(record.data)")
+              .font(.caption2.monospaced())
+              .foregroundStyle(.secondary)
+              .textSelection(.enabled)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+      }
+
+      ForEach(diagnosis.recoveryActions, id: \.self) { action in
+        Label(action, systemImage: "arrow.right.circle")
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+  }
+
+  /// Roadmap C3. `listeners:` is supported at L3 through the Raw YAML snippet, on one condition:
+  /// exposure is never silent. `allow-lan` does not gate these inbounds, `GET /configs` does not
+  /// report them, and an entry with no `listen` key binds every interface — all three measured
+  /// against the bundled core — so without this panel an open port would be invisible.
+  private var listenerExposureStatus: some View {
+    let diagnosis = appModel.listenerExposureDiagnostics
+    return RoutingInspectorPanel(title: "Inbound Listeners", systemImage: "antenna.radiowaves.left.and.right") {
+      RoutingDiagnosisHeadline(headline: diagnosis.headline, status: diagnosis.status)
+      Text(diagnosis.reason)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+
+      ForEach(Array(diagnosis.facts.enumerated()), id: \.offset) { _, fact in
+        RoutingDiagnosisFactRow(title: fact.title, value: fact.value)
+      }
+
+      ForEach(diagnosis.recoveryActions, id: \.self) { action in
+        Label(action, systemImage: "arrow.right.circle")
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
     }
   }
 
@@ -2137,6 +2238,7 @@ private struct RoutingDiagnosisHeadline: View {
     case pass
     case info
     case warn
+    case fail
 
     init(_ status: FakeIPDiagnosticsSnapshot.Status) {
       switch status {
@@ -2154,11 +2256,30 @@ private struct RoutingDiagnosisHeadline: View {
       }
     }
 
+    init(_ status: DNSResolutionSnapshot.Status) {
+      switch status {
+      case .pass: self = .pass
+      case .info: self = .info
+      case .warn: self = .warn
+      case .fail: self = .fail
+      }
+    }
+
+    init(_ status: ListenerExposureSnapshot.Status) {
+      switch status {
+      case .pass: self = .pass
+      case .info: self = .info
+      case .warn: self = .warn
+      case .fail: self = .fail
+      }
+    }
+
     var systemImage: String {
       switch self {
       case .pass: return "checkmark.seal.fill"
       case .info: return "info.circle.fill"
       case .warn: return "exclamationmark.triangle.fill"
+      case .fail: return "xmark.octagon.fill"
       }
     }
 
@@ -2167,6 +2288,7 @@ private struct RoutingDiagnosisHeadline: View {
       case .pass: return .green
       case .info: return .secondary
       case .warn: return .orange
+      case .fail: return .red
       }
     }
   }
@@ -2177,6 +2299,16 @@ private struct RoutingDiagnosisHeadline: View {
   }
 
   init(headline: String, status: GeoDatabaseDiagnosticsSnapshot.Status) {
+    self.headline = headline
+    self.status = DiagnosisStatus(status)
+  }
+
+  init(headline: String, status: DNSResolutionSnapshot.Status) {
+    self.headline = headline
+    self.status = DiagnosisStatus(status)
+  }
+
+  init(headline: String, status: ListenerExposureSnapshot.Status) {
     self.headline = headline
     self.status = DiagnosisStatus(status)
   }

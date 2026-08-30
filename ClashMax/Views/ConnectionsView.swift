@@ -136,6 +136,14 @@ struct ConnectionsView: View {
         appModel.openRoutingExplanation(for: connection)
       }
 
+      // Roadmap A2: the name is right here, and the core's resolver — not the Mac's — is what
+      // decides where it goes.
+      if let domain = connection.domain, !domain.isEmpty {
+        Button(String(format: String(localized: "Resolve DNS for %@"), domain)) {
+          appModel.openDNSResolution(for: connection)
+        }
+      }
+
       Divider()
 
       Button("Copy Host") { copy(connectionRuleHost(connection)) }

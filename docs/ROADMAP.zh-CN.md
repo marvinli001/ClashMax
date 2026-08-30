@@ -4,7 +4,7 @@
 
 > 本文是 [`ROADMAP.md`](ROADMAP.md) 的中文版本，内容与英文版逐节对应。两者出现不一致时，以英文版为准。
 
-**状态：** 草案 2026-08-14，2026-08-27 修订，2026-08-29 校正 · 维护者 [@marvinli001](https://github.com/marvinli001) ·
+**状态：** 草案 2026-08-14，2026-08-27 修订，2026-08-29 校正，2026-08-30 扩充 · 维护者 [@marvinli001](https://github.com/marvinli001) ·
 应用 1.0.23，内置 Mihomo [v1.19.30](../Resources/Core/mihomo-manifest.json)
 
 本文记录 **ClashMax 要往哪里走、以及为什么**，并且写成可以对着代码树逐条核对的形式。它不是许愿单。
@@ -20,6 +20,14 @@
 实际生效值的 geo 诊断，以及一个「谁说了算」取决于目录枚举顺序的 ClashX 导入。五处全部已修，并且都写在它
 所属的那条验收标准之下、而不是塞进变更日志里，因为出问题的正是那条标准本身。**下文 A3/A6/B5 的「已交付」
 说的是传输层与逻辑；每一节各自点名的人工观察缺口仍然没有关掉。**
+
+2026-08-30 的这次扩充关掉了 §3.2 里最后三行未完成项——**A2**（`/dns/query`）、**`/memory`**、
+**C3**（`listeners`）——并校正了两行已经过时的表述。三处里有两处的形态是被实测结果改写的：`/dns/query`
+的应答里**根本没有 nameserver 字段**，因此面板报告的是「无法归因」，而不是编一个归因出来；而 `listeners`
+从来就没有被剥离过，只是被标记，并且只在 provider 覆盖 YAML 里被标记。凡是某条验收标准要的东西内核压根
+给不了，就用把它作废掉的那次实测重写这条标准，而不是悄悄打上勾。**2026-08-27 那条注意事项在这里同样成立：
+这些说的是传输层、逻辑与测试覆盖。三项没有任何一项在运行中的应用里被亲眼看过。**
+
 Bug 修复、已提交的 issue、Mihomo 版本升级属于日常维护，**刻意**不写进本文。本文讨论的是 ClashMax 存在的
 *意义*。
 
@@ -121,35 +129,36 @@ L1 的修复按钮和 L2 的意图表单，必须写入 L3 用户手工编辑的
 
 ## 3. ClashMax 的现状
 
-### 3.1 规模，2026-08-14 实测
+### 3.1 规模，2026-08-30 实测
 
 | 结论 | 如何核对 |
 | --- | --- |
-| 89 个源文件，约 6.17 万行，覆盖 app、helper、Network Extension、共享代码 | `find ClashMax Shared ClashMaxHelper ClashMaxNetworkExtension -name '*.swift' \| wc -l` |
-| 44 个测试文件，约 3.8 万行，1131 个 XCTest 用例 + 5 个 Swift Testing 用例 | `grep -rhoE 'func test[A-Za-z0-9_]*' ClashMaxTests \| sort -u \| wc -l` |
-| `en` 与 `zh-Hans` 各 1277 个本地化 key | [`Resources/Localizable.xcstrings`](../Resources/Localizable.xcstrings) |
+| 101 个源文件，约 6.81 万行，覆盖 app、helper、Network Extension、共享代码 | `find ClashMax Shared ClashMaxHelper ClashMaxNetworkExtension -name '*.swift' \| wc -l` |
+| 52 个测试文件，约 4.28 万行，1358 个 XCTest 用例 + 5 个 Swift Testing 用例 | `grep -rhoE 'func test[A-Za-z0-9_]*' ClashMaxTests \| sort -u \| wc -l` |
+| `en` 与 `zh-Hans` 各 1530 个本地化 key | [`Resources/Localizable.xcstrings`](../Resources/Localizable.xcstrings) |
 | 测试在公开 CI 中运行 | [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) |
 
 ### 3.2 Mihomo 能力覆盖缺口
 
 ClashMax 已经在用的 Mihomo 控制 API 端点，来自
-[`MihomoAPIClient.swift`](../ClashMax/Services/MihomoAPIClient.swift)：`/`、`/configs`、
-`/connections`、`/logs`、`/providers/proxies`、`/providers/rules`、`/proxies`、`/restart`、
-`/rules`、`/traffic`、`/version`。
+[`MihomoAPIClient.swift`](../ClashMax/Services/MihomoAPIClient.swift)：`/`、
+`/cache/fakeip/flush`、`/configs`、`/configs/geo`、`/connections`、`/dns/query`、
+`/group/{name}/delay`、`/logs`、`/memory`、`/providers/proxies`、`/providers/rules`、
+`/proxies`、`/proxies/{name}/delay`、`/restart`、`/rules`、`/traffic`、`/version`。
 
 缺口，按优先级排列：
 
 | 缺口 | 核实状态 | 后果 |
 | --- | --- | --- |
-| **`sniffer`** | **全仓 0 命中。** 更糟的是：连接解码器会用目标 IP 回填缺失的域名（[`MihomoAPIClient.swift:448`](../ClashMax/Services/MihomoAPIClient.swift#L448)），导致下游没有任何一处能区分"无域名连接"和"有域名连接" | 直连 IP 打开的连接（硬编码 IP 的 app、部分 CDN、QUIC）不携带域名，因此 `DOMAIN-SUFFIX` 规则无法命中它们。用户的感受是*"我写的规则不生效"*——而我们的诊断说不出原因，因为这个事实在诊断之前就已经被销毁了。参见 [A1](#a1sniffer把内核从未看到的域名找回来) |
-| **`/dns/query`** | 未实现 | 无法回答"这个域名到底被哪个 nameserver 解析成了什么"。在我们本来能端到端讲完的路由故事中间留了一个洞。 |
+| **`sniffer`** | **A1a–A1d 已于 2026-08-16 交付，A1e 仍未关闭。** 解码器不再用目标 IP 回填缺失的域名，`ConnectionSnapshot` 把*原生上报*、*嗅探恢复*、*完全没有*三种情况作为类型化状态分开。ClashMax 以片段载荷的形式生成并接管 `sniffer:` 块（[`SnifferSettings.swift`](../ClashMax/Models/SnifferSettings.swift)），[`SnifferDiagnostics`](../ClashMax/Models/SnifferDiagnostics.swift) 对无域名场景分类并写入修复，`sniffer` 也已作为订阅风险 key 被扫描。**没做完的是签核**：[`MANUAL_TEST_PLAN.md`](MANUAL_TEST_PLAN.md) 里的端到端条目已经写好但没人跑过，而按 A1 的完成定义，正是这次签核才关得掉 A1。参见 [A1](#a1sniffer把内核从未看到的域名找回来) | *（原：全仓 0 命中，且「缺失域名」这个事实在解码器内部就被销毁，任何诊断都够不着它，于是"我写的规则不生效"没有答案）* |
+| **`/dns/query`** | **2026-08-30 已补齐**——`dnsQuery(name:type:)`，对应 Routing 里的「DNS 解析」面板，可从 Connections 行按该连接的域名进入。原问题的一半有了答案，另一半则被证明无从回答：**应答里根本没有 nameserver 字段**（对 v1.19.30 实测），因此面板直说内核不报告上游，而不是猜一个出来。参见 [A2](#a2把-dnsquery-接进-dns-解析面板) | *（原：无法回答"这个域名到底被哪个 nameserver 解析成了什么"，在我们本来能端到端讲完的路由故事中间留了一个洞）* |
 | **`/cache/fakeip/flush`** | **2026-08-27 已补齐**——`flushFakeIPCache()`，通过 `FakeIPDiagnosticsBuilder` 以 L1 修复动作的形式呈现。参见 [A3](#a3把清空-fake-ip-缓存做成-l1-修复动作) | *（原：fake-ip 映射脏了只能靠重启内核清除）* |
 | **`/group/{name}/delay`** | **2026-08-27 已补齐**——成员数超过 8 的组会合并成一次整组请求，不再逐节点扇出。2026-08-29 由 [`script/bench_group_delay.py`](../script/bench_group_delay.py) 在 1200 节点上实测：**5.00 秒 对 350.88 秒，70 倍**。在途的整组单元占满整个并发预算，且只有 404 才降级到逐节点，因此这条兜底路径不会变成一场比它替换掉的更大的风暴。参见 [A6](#a6通过-groupnamedelay-做批量测速) | *（原：批量测速是逐节点打的，而内核有整组接口）* |
 | **`geox-url`、`geo-auto-update`、`geodata-mode`** | **2026-08-27 已补齐**——`GeoDatabaseSettings` 由应用管理，并由 `ConfigNormalizer` 写进运行时 YAML。**ClashX 导入已于 2026-08-29 补齐**——迁移解析器现在会读取这些 key，而不再只是放行，且只认主配置文件。备份/恢复带上了这些设置，诊断读的是实际生效的那份。参见 [B5](#b5geo-数据库维护) | *（原：GeoIP/GeoSite 数据库无法更新，geo 类规则会悄悄过期——2026-08-27 在维护者本机实测：`GeoSite.dat` 最后写入于 6 月 20 日，`geoip.metadb` 于 5 月 4 日）* |
 | **`/configs/geo`** | **2026-08-27 已补齐**——`updateGeoDatabases(timeout:)`，对应「立即更新」动作 | *（原：没有应用内 geo 数据库刷新）* |
-| **`/memory`** | 未实现 | 没有内核内存遥测。 |
+| **`/memory`** | **2026-08-30 已补齐**——`memoryStream()` 复用 `/traffic` 的同一套流式管道，采样存入 `RuntimeDataStore.memorySample`，并在运行中仪表盘上以 **Memory** 指标呈现。两处实测细节写进了代码而不是靠猜：第一帧恒为 `{"inuse":0,"oslimit":0}`，那是握手用的空帧而不是读数，因此 0 样本渲染为 `—`；`oslimit` 在 macOS 上恒为 0（本平台没有 cgroup 上限），因此不画那种永远读作 0 的「占上限百分比」表盘 | *（原：没有内核内存遥测）* |
 | **`tcp-concurrent`、`global-client-fingerprint`、`find-process-mode`、`keep-alive-interval`、`ntp`、`experimental`、`global-ua`、`interface-name`** | **2026-08-29 关闭**——按名字算依然是全仓 0 命中，而且是有意为之：**Raw YAML** 片段载荷（[`RawYAMLPatch.swift`](../ClashMax/Models/RawYAMLPatch.swift)）能够到达它们全部，以及 Mihomo 明天新增的任何 key，应用不需要为此多长一个开关。见 [INV-2](#23-两条不变量) | *（曾经：高级用户会撞到硬天花板；按 INV-2，解法是通用覆盖路径，而不是八个新开关）* |
-| **`listeners`** | 只被当作订阅风险 key 剥离 | 入站监听（给局域网其他设备用）不可用。这需要一个明确的决定，而不是一个默认值。 |
+| **`listeners`** | **2026-08-30 已作出决定。** 旧条目错了两处：`listeners` 是被*标记*、从未被剥离，而且只在 provider 覆盖 YAML 与 runtime-merge YAML 里被标记（[`CoreModels.swift:744`](../ClashMax/Models/CoreModels.swift#L744)）——普通订阅顶层的 `listeners:` 一直是原封不动地穿过 `ConfigNormalizer`，**并且不带任何标记**，而这才是这个 bug 更糟的那一半。决定写在 [C3](#c3就-listeners-做出决定)：按 [INV-2](#23-两条不变量) 在 L3 经由 Raw YAML 片段支持，条件是它造成的暴露永远不能是无声的。[`ListenerExposureDiagnostics`](../ClashMax/Models/ListenerExposure.swift) 把运行时 YAML 读回来，把「已暴露且没有 `authentication:`」的入站报告为开放代理。唯一还开着的那条标准是导入时的*提示*，它归 [C1](#c1导入时的订阅审计报告) | *（原：入站监听（给局域网其他设备用）不可用；这需要一个明确的决定，而不是一个默认值）* |
 
 ### 3.3 已经建到一半的原生 macOS 优势
 
@@ -184,6 +193,8 @@ Issue ID 是稳定的 slug，不是 GitHub 编号，因此可以按任意顺序�
 不携带域名，因此对它而言，每一条 `DOMAIN`、`DOMAIN-SUFFIX`、`DOMAIN-KEYWORD` 和 `GEOSITE` 规则在结构
 上都不可达。用户写了一条正确的规则，而它永远不会触发。ClashMax 目前没有任何一个界面能说出原因——这使它
 同时成为最大的内核缺口，和产品赖以立足的诊断故事里最大的一个洞。
+
+**状态：A1a–A1d 已于 2026-08-16 交付。A1e 仍开着，因此 A1 并未完成**——下文的完成定义对此是刻意的。
 
 ##### A1.0——验证了什么，对着什么验证的
 
@@ -226,15 +237,15 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
 
 - **范围：** `MihomoAPIClient.decodeConnections`、`ConnectionSnapshot`。不做 UI。
 - **验收标准：**
-  - [ ] `ConnectionSnapshot` 以类型化状态（而非靠字符串判断）区分三种情况：原生上报的域名、由嗅探恢复的
+  - [x] `ConnectionSnapshot` 以类型化状态（而非靠字符串判断）区分三种情况：原生上报的域名、由嗅探恢复的
         域名（`sniffHost`）、以及完全没有域名。原始目标 IP 在每种情况下都仍然可取。
-  - [ ] 解码 `sniffHost`、`dnsMode`、`remoteDestination`、`specialProxy`，并沿用
+  - [x] 解码 `sniffHost`、`dnsMode`、`remoteDestination`、`specialProxy`，并沿用
         `stringValue(for:in:)` 在别处已有的多拼写容忍。
-  - [ ] Connections 表格的渲染与今天完全一致——IP 回退成为模型之上的*展示*选择，而不是解码器内部对事实的
+  - [x] Connections 表格的渲染与今天完全一致——IP 回退成为模型之上的*展示*选择，而不是解码器内部对事实的
         销毁。
-  - [ ] `ConnectionsView` 中的 `connectionRuleHost` 改读新的类型化状态，不再从空字符串反推，第 137 行的
+  - [x] `ConnectionsView` 中的 `connectionRuleHost` 改读新的类型化状态，不再从空字符串反推，第 137 行的
         注释随之迁移。
-  - [ ] 解码器测试覆盖以下 fixture：有域名、无域名、有 `sniffHost` 且无 `host`、有 `sniffHost` 且同时有
+  - [x] 解码器测试覆盖以下 fixture：有域名、无域名、有 `sniffHost` 且无 `host`、有 `sniffHost` 且同时有
         `host`、两者皆无。
 
 ##### A1b——生成并接管 `sniffer` 块（L3）
@@ -246,18 +257,18 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
   `hasRuntimeOverlay`、`summary`、带默认值解码的 `Codable`——这样它是落进已有的 layer / diff / preflight
   机器里，而不是并排另起一套。
 - **验收标准：**
-  - [ ] `sniffer` 被生成进运行时 YAML，并在每一种 模板 × 路由模式 × DNS 覆盖 组合下通过 `mihomo -t`，
+  - [x] `sniffer` 被生成进运行时 YAML，并在每一种 模板 × 路由模式 × DNS 覆盖 组合下通过 `mihomo -t`，
         包括 `providerBackedConfig` 里的 provider 模板路径。
-  - [ ] 新增 `RuntimeSnippetPayloadKind.sniffer` 承载用户编辑，使 sniffer 改动就是普通存储里的一个普通
+  - [x] 新增 `RuntimeSnippetPayloadKind.sniffer` 承载用户编辑，使 sniffer 改动就是普通存储里的一个普通
         片段：在 Routing 中可编辑、可与其他片段一起排序、可 diff——没有平行存储（INV-1）。
-  - [ ] 当运行时正在承载用户流量时，`RuntimeChangeKind.sniffer` 解析为 `.hotReload`，否则为
+  - [x] 当运行时正在承载用户流量时，`RuntimeChangeKind.sniffer` 解析为 `.hotReload`，否则为
         `.appliesOnNextStart`，与已验证的内核行为一致。
-  - [ ] 校验在内核看到配置*之前*，就以明确的信息拒绝未知协议、格式错误的端口范围、以及空的 `sniff` map；
+  - [x] 校验在内核看到配置*之前*，就以明确的信息拒绝未知协议、格式错误的端口范围、以及空的 `sniff` map；
         当内核仍然拒绝某份配置时，界面呈现的文本取 `level=error msg=` 那一行。
-  - [ ] Routing 的 diff 预览把 `sniffer` 块作为一个带标签的 layer 展示，就像今天展示 `dns-override` 那样。
-  - [ ] 订阅自带的 `sniffer` 块经由已有的 runtime-merge 路径合并，并伴随一个明确、可见的保留或覆盖决定
+  - [x] Routing 的 diff 预览把 `sniffer` 块作为一个带标签的 layer 展示，就像今天展示 `dns-override` 那样。
+  - [x] 订阅自带的 `sniffer` 块经由已有的 runtime-merge 路径合并，并伴随一个明确、可见的保留或覆盖决定
         ——任何一个方向上都不能是静默覆盖。
-  - [ ] 测试覆盖：关闭、按默认值开启、按每协议端口开启、订阅冲突、非法输入，以及 apply 模式的解析结果。
+  - [x] 测试覆盖：关闭、按默认值开启、按每协议端口开启、订阅冲突、非法输入，以及 apply 模式的解析结果。
 
 ##### A1c——这一切存在的理由：那条诊断（L1）
 
@@ -280,34 +291,38 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
   | `sniffedButNotOverridden` | 嗅探出了域名，但 `override-destination` 是关的 | warn |
 
 - **验收标准：**
-  - [ ] `sniffedButNotOverridden` 这一条必须先对着运行中的内核确认再发布——即 `override-destination: false`
+  - [x] `sniffedButNotOverridden` 这一条必须先对着运行中的内核确认再发布——即 `override-destination: false`
         时是否会保留 `sniffHost` 但规则仍然按 IP 匹配。以内核的实际行为为准编码；不要发布一个描述文档而非
         观测结果的 cause。
-  - [ ] 对无域名连接，结论要通过复用 `RuleMatchSimulator` 说出具体后果：*如果域名当时在，本会命中哪条域名
+  - [x] 对无域名连接，结论要通过复用 `RuleMatchSimulator` 说出具体后果：*如果域名当时在，本会命中哪条域名
         规则*。缺了这句话的 cause 只是一个事实，不是一条诊断。
-  - [ ] 每个非 pass 的 cause 都带一个修复动作，且该动作只做一件事：写入 A1b 的片段——开启嗅探、把它扩展到
+  - [x] 每个非 pass 的 cause 都带一个修复动作，且该动作只做一件事：写入 A1b 的片段——开启嗅探、把它扩展到
         这个端口、或打开 `override-destination`。不要在设置里放裸开关（§2.4）。
-  - [ ] 修复应用之后，已有的 `RuntimeApplyOutcomeBanner` 会报告结果；对同一目标的新连接重跑诊断会返回
+  - [x] 修复应用之后，已有的 `RuntimeApplyOutcomeBanner` 会报告结果；对同一目标的新连接重跑诊断会返回
         pass。闭环是看得见的。
-  - [ ] 可从 Connections 行进入，也可从该连接的 Routing 解释进入——用户注意到问题时正站着的那两个地方。
-  - [ ] 分类器保持纯函数并被完整覆盖：每个 cause 一个测试，外加"本会命中哪条规则"那句话的测试。
+  - [x] 可从 Connections 行进入，也可从该连接的 Routing 解释进入——用户注意到问题时正站着的那两个地方。
+  - [x] 分类器保持纯函数并被完整覆盖：每个 cause 一个测试，外加"本会命中哪条规则"那句话的测试。
 
 ##### A1d——`sniffer` 的订阅可信度（并入 C1）
 
-`sniffer` **不在** [`CoreModels.swift:805`](../ClashMax/Models/CoreModels.swift#L805) 的危险 key 集合里。
-也就是说，订阅今天就可以下发 `skip-domain`、`force-domain` 或 `override-destination: false`，改变哪些
-规则命中用户的流量，而界面上不会呈现任何提示。
+`sniffer` 此前**不在** [`CoreModels.swift:805`](../ClashMax/Models/CoreModels.swift#L805) 的危险 key
+集合里。也就是说，订阅可以下发 `skip-domain`、`force-domain` 或 `override-destination: false`，改变哪些
+规则命中用户的流量，而界面上不会呈现任何提示。它已于 2026-08-16 以 `warning` 级别加入该集合。
 
 - **验收标准：**
-  - [ ] `sniffer` 以 `warning` 级别加入被扫描的 key 集合——它改变的是流量识别，不是局域网暴露面——并给出
+  - [x] `sniffer` 以 `warning` 级别加入被扫描的 key 集合——它改变的是流量识别，不是局域网暴露面——并给出
         点明后果的信息，语气与现有的 `dns`、`tun` 条目一致。
-  - [ ] 导入时的报告（C1）说明该订阅的 sniffer 块想改什么、以及 ClashMax 保留了什么。
+  - [ ] 导入时的报告（C1）说明该订阅的 sniffer 块想改什么、以及 ClashMax 保留了什么。**等 C1，而 C1 还
+        开着。** 这个 key 今天已经被扫描、被标记；缺的是它本该被标记*在里面*的那份报告。
 
 ##### A1e——回归与手工验证
 
 - **验收标准：**
-  - [ ] D2 的脚本把 sniffer 开启与关闭加入其 模板 × 模式 矩阵，使未来某次改变 schema 的内核升级会让构建
-        失败。
+  - [x] 模板 × 模式 矩阵覆盖了 sniffer 开启与关闭，使未来某次改变 schema 的内核升级会让构建失败。它最终
+        落成了一个 XCTest 而不是 D2 的脚本，因为 D2 还没有脚本：
+        [`CoreRuntimePreflightTests.swift`](../ClashMaxTests/CoreRuntimePreflightTests.swift) 里的
+        `testBundledMihomoAccepts…Combinations` 用内置内核跑 5 种配置来源 × 3 种路由模式 × 3 种 DNS
+        模式 × 3 种 sniffer 状态。等 D2 有了脚本，这条就搬进去。
   - [ ] `MANUAL_TEST_PLAN.md` 增加端到端条目，并在 A1 宣告完成之前签核：一个走硬编码 IP 的 app → 为它写的
         `DOMAIN-SUFFIX` 规则不触发 → 诊断点名缺失的域名以及本会命中的那条规则 → 按下修复按钮 → 规则现在
         触发了，并在 Connections 行的 chain 中得到确认。
@@ -319,13 +334,38 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
 
 #### A2——把 `/dns/query` 接进 DNS 解析面板
 
+**状态：2026-08-30 已交付。** 从没亲眼看过——见下文的缺口。
+
 - **问题：** 路由故事中间有个洞。我们能展示规则，也能展示出口 IP，但展示不了 DNS 实际返回了什么。
+- **这个端点实际返回什么**——2026-08-30 对内置内核 v1.19.30 实测。它的响应体只是长得*像* DoH 而并不是
+  DoH，所以值得实测一遍，而不是照抄规范：
+  - `Status`、`Question`、`RA`/`RD`/`AD`/`CD`/`TC` 标志位，以及**只有真的有答案时才出现的** `Answer`
+    ——`NOERROR` 但无记录时，这个 key 是整个缺席，而不是给一个 `[]`。
+  - `NXDOMAIN` 时 SOA 在 `Authority` 里。那是否定应答的 TTL 与「是哪个 zone 否认了这个名字」唯一的出处。
+  - 未知的 `type` 是 `400 {"message":"invalid query type"}`；`dns.enable: false` 是
+    `500 {"message":"DNS section is disabled"}`。两者都把原因放在响应体里，于是用户看到的是内核自己的
+    那句话，而不是一个状态码。
+  - **即使处在 fake-ip 模式，这个端点应答的也是上游解析结果。** 在 `enhanced-mode: fake-ip` 下，对内核
+    自己的监听端口 `dig` 同一个域名拿到的是 `198.18.0.4`，而这个端点给的是真实地址。
+- **有一条标准做不到，以及为什么。** **应答里从头到尾没有任何 nameserver 字段。** 内核不报告是哪个上游
+  应答的，因此"哪个 nameserver 应答的"这个问题，任何建立在这个端点上的界面都拿不到答案。于是面板把这处
+  缺席作为一条明确的事实写出来——*"内核未报告——它的应答不携带上游信息"*——而不是把这个问题悄悄删掉，
+  也不是把答案归给配置里排在最前面的那个 nameserver。删掉那一行是更省事的改法，也是不诚实的改法。
 - **验收标准：**
-  - [ ] `MihomoAPIClient` 增加 `dnsQuery(name:type:)`。
-  - [ ] 面板接受一个域名，并报告：哪个 nameserver 应答的、地址是什么、以及该应答是否来自 fake-ip。
-  - [ ] 结果喂给 `RuleMatchSimulator`，使面板在一处呈现 *域名 → 地址 → 命中规则 → 组 → 节点*。
-  - [ ] 可从 Connections 行针对该连接的域名进入。
-  - [ ] 失败状态是明确的（内核未运行、DNS 已禁用、查询超时）。
+  - [x] `MihomoAPIClient` 增加 `dnsQuery(name:type:)`。
+  - [x] 面板接受一个域名，并报告地址、CNAME 链背后的规范名、TTL，以及否定应答时的 authority 段——否认该
+        名字的 zone 就在那里。至于哪个 nameserver 应答的，按上面的实测结果报告为**不可得**。
+  - [x] "该应答是否来自 fake-ip"这个问题得到了它唯一诚实的答案：从来都不是。面板会说明这是内核实际会去
+        拨的地址，而 app 拿到的是占位地址，于是"两边对不上"是被写明的，而不是等用户自己撞见。
+  - [x] 结果喂给 `RuleMatchSimulator`，使面板在一处呈现 *域名 → 地址 → 命中规则 → 组 → 节点*。它把模拟器
+        **跑两遍**——一遍按名字，一遍按返回的地址——并把两次命中分别标注：它们是两条不同的规则，只跑其中
+        一遍的面板，回答的是用户没有问的那个问题。
+  - [x] 可从 Connections 行针对该连接的域名进入。
+  - [x] 失败状态是明确的。`DNSResolutionSnapshot.Cause` 为用户可能所处的每一种状态各留一个 case——内核未
+        运行、DNS 已禁用、配置尚未读回、就绪、查询中、已解析、空应答、`NXDOMAIN`、`SERVFAIL`、未命名的
+        响应码，以及原样转述内核信息的传输失败——每一个都有自己的测试。
+- **缺口：** 从没对着一个真实的解析器手工跑过。测试覆盖的是分类器与解码器在录制响应上的行为，而这恰恰是
+  D3 点名的那个失败模式。
 
 #### A3——把清空 fake-ip 缓存做成 L1 修复动作
 
@@ -557,10 +597,48 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
 
 #### C3——就 `listeners` 做出决定
 
-- **问题：** `listeners` 目前被当作风险直接剥离，没有后续路径——这是正确的默认值，和错误的终点。
+**状态：2026-08-30 已作出决定并交付。** 从没亲眼看过——见下文的缺口。
+
+- **把问题重新说对。** 本节此前写的是 `listeners` *"目前被当作风险直接剥离，没有后续路径"*。并不是，也从
+  来不是。`ProviderOptionsRisk`（[`CoreModels.swift:744`](../ClashMax/Models/CoreModels.swift#L744)）是
+  **标记**这个 key，而且只在它出现于 provider 覆盖 YAML 或 runtime-merge YAML 时才标记。普通订阅顶层下发
+  的 `listeners:` 块，一直是原封不动地穿过 `ConfigNormalizer`，**并且不带任何标记**。所以真实状态不是
+  "门锁着"，而是"门开着，且没有挂牌"——这把这条决定要防的东西整个颠倒了过来：风险从来不是用户开不了入站
+  监听，而是订阅可以在没人被告知的情况下替他把监听开起来。
+- **内核实际的行为**——2026-08-30 对内置内核 v1.19.30 实测。四条全都和"想当然"的结论相反，所以每一条都写
+  在它约束的那条标准旁边：
+  - **`GET /configs` 里根本没有 `listeners` 这个 key。** 生效的那份运行时 YAML 是唯一能把它读回来的地方
+    ——和 `dns`、`sniffer` 的处境一样，这也是
+    [`ActiveListenerConfigReader`](../ClashMax/Services/ActiveListenerConfigReader.swift)
+    仿照 `ActiveDNSConfigReader` 而不是去问 API 的原因。
+  - **`allow-lan: false` 管不住它们。** 在 `allow-lan: false` 下，一条 `listen: 0.0.0.0` 的条目对局域网内
+    另一台主机的请求回了 `200`，而应用自己管理的 `mixed-port` 拒绝了同一个请求。`allow-lan` 只管默认入站。
+  - **省略 `listen` 等于绑定所有网卡**（`*:port`）。也就是说，暴露的那一种才是*默认*，一份根本没提到
+    `listen` 的配置其实已经把端口分享给整个网络了。
+  - **全局的 `authentication:` 列表对它们是生效的。** 同一个局域网请求，不带凭据回 `407`，带凭据回 `200`。
+    「已暴露的监听 + 空的 `authentication` 列表」，对任何能够到这个端口的人来说就是一个开放代理。
+- **决定。** `listeners` **在 L3 经由通用的 Raw YAML 片段支持，且不为它做任何专用 UI。** 前半句由 §2.4 与
+  [INV-2](#23-两条不变量) 决定：通用覆盖路径已经够得着的 key 就算做完了，而一个监听器编辑器恰恰是本文存在
+  就是为了拒绝的那种「高级选项卡」。这份支持只附带一个条件——**它造成的暴露永远不能是无声的**——而这个
+  条件才是真正需要动手建的部分。
 - **验收标准：**
-  - [ ] 在本文中写下一个决定：要么在 L3 经用户明确同意后支持，要么永久不支持并说明理由。
-  - [ ] 若支持：局域网暴露按监听器逐个选择加入，出现在运行时 diff 中，并且绝不在无提示的情况下从订阅继承。
+  - [x] 在本文中写下一个决定：要么在 L3 经用户明确同意后支持，要么永久不支持并说明理由。→ 见上文，
+        **在 L3 支持**。所谓明确同意就是 Raw YAML 片段本身：用户自己写下这个块，像其他任何片段一样在运行
+        时 diff 里看到它，也用同样的方式撤销它。
+  - [x] 若支持：局域网暴露按监听器逐个选择加入，并且出现在运行时 diff 中。这两点都是片段本身带来的：除了
+        用户自己一条一条写，没有别的东西会写入监听器；而这个片段和其他任何片段一样出现在 diff 里。
+  - [x] 这条决定额外附加的条件：*已经*存在的监听会被读回来并给出判断。
+        [`ListenerExposureDiagnostics`](../ClashMax/Models/ListenerExposure.swift) 是一个跑在「内核实际拿
+        到的那份运行时 YAML」上的纯分类器——片段写的还是订阅带的，它分不出来，也不需要分。已暴露且没有
+        `authentication:` 的入站是 `fail`，*"局域网上的开放代理"*；带认证的是 `warn`；全部只听回环的是
+        `pass`；并且会点名 `allow-lan` **管不着**什么，因为一个把它关掉的用户完全有理由以为它管得着。以
+        Routing 里的 **Inbound Listeners** 面板、以及可复制诊断报告里的一行呈现——是一个持续在那儿的结论，
+        而不是一条滚过去就没了的通知。
+  - [ ] 绝不在**无提示**的情况下从订阅继承。上面那个持续结论抓得住被继承的监听，但那个*提示*属于
+        [C1](#c1导入时的订阅审计报告) 的导入时报告，而 C1 还开着。这里选择记下而不是打勾，因为"用户得自己
+        走过去看"的结论，和"导入时就问一句"不是同一个承诺。
+- **缺口：** 从没亲眼看过。没有任何一处是在运行中的应用里、对着局域网上真实的第二台机器被观察着做出它的
+  结论的——那几次暴露探测是直接打内核跑的。
 
 ---
 
@@ -607,13 +685,13 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
 
 | 阶段 | 内容 | 为什么是这个顺序 |
 | --- | --- | --- |
-| **首先** | **A1a** | 一个不带 UI 的解码器修复，也是硬前置：在连接解码器停止把"没有域名"坍缩成"目标 IP"之前，A1c 的诊断根本算不出来。可以单独发布，一天的量。 |
-| **然后** | **A1b + A1c + A1d** | 本文中优先级最高的一项，也是能验证整套论点的最小闭环：一个真实的内核缺口、一个真实的诊断缺口、一个修复按钮、不需要新的 UI 范式。如果三层模型是错的，这里能以最低代价暴露出来。 |
-| **然后** | A2 | 路由故事的另一半。放在 A1 之后做，这样 DNS 面板里显示的域名和规则实际匹配所用的域名，是已知同一个值。 |
+| **首先** | ~~**A1a**~~ | 一个不带 UI 的解码器修复，也是硬前置：在连接解码器停止把"没有域名"坍缩成"目标 IP"之前，A1c 的诊断根本算不出来。可以单独发布，一天的量。 |
+| **然后** | ~~**A1b + A1c**~~、A1d | 本文中优先级最高的一项，也是能验证整套论点的最小闭环：一个真实的内核缺口、一个真实的诊断缺口、一个修复按钮、不需要新的 UI 范式。如果三层模型是错的，这里能以最低代价暴露出来。**A1a–A1c 已于 2026-08-16 交付**；A1d 的扫描器随它们一起交付，剩下的部分并入 C1。现在还把 A1 摁着不放的是 A1e 的人工签核。 |
+| **然后** | ~~A2~~ | 路由故事的另一半。放在 A1 之后做，这样 DNS 面板里显示的域名和规则实际匹配所用的域名，是已知同一个值。**2026-08-30 交付**，如约排在 A1a–A1d 之后。 |
 | **然后** | ~~A3~~、A5、C1 | 低风险、高杠杆。A5 与 C1 都直接降低维护者负担；C1 吸收 A1d。**A3 已于 2026-08-27 随 B5 一并交付。** |
 | **然后** | B1、A4 | B1 是最重磅的面向用户功能；A4 是让护城河变得显而易见的那个界面。B1 放在 A1 之后，免得进程规则成为第二个在无域名连接上失效的东西。 |
 | **然后** | B2、C2 | 两者都是有状态的，需要先让前面的工作变得可信。 |
-| **之后** | B3、B4、~~B5~~、~~A6~~、C3 | 有价值，但不承重。**B5 与 A6 已被提前，于 2026-08-27 交付。** B5 是因为它是本列表上唯一一项什么都不做也会持续劣化的东西——而且在维护者自己的机器上已经劣化了四个月，这是「不承重」这个判断没能预见到的。A6 是因为 #10 / #11 / #18 这一串卡顿问题，源头都在它去掉的那套逐节点扇出上。 |
+| **之后** | B3、B4、~~B5~~、~~A6~~、~~C3~~ | 有价值，但不承重。**C3 已被提前，于 2026-08-30 作出决定**，因为那次专门去看它的评审发现的事实和本文原先的说法正好相反：顶层的 `listeners:` 块一直在不带标记地穿过去，于是这一项根本不是一个躺着的功能请求，而是一处没挂牌的暴露面。**B5 与 A6 已被提前，于 2026-08-27 交付。** B5 是因为它是本列表上唯一一项什么都不做也会持续劣化的东西——而且在维护者自己的机器上已经劣化了四个月，这是「不承重」这个判断没能预见到的。A6 是因为 #10 / #11 / #18 这一串卡顿问题，源头都在它去掉的那套逐节点扇出上。 |
 | **贯穿始终** | D1、D2、D3 | 永远不作为独立里程碑。 |
 
 ---
@@ -635,5 +713,6 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
 ## 7. 如何修改本文
 
 - **§2 的原则具有规范效力。** 修改它们需要在本文中写下理由，而不是在某个 pull request 里开一次性例外。
-- **§3 的缺口是带日期的结论。** 引用前请重新核实；它们截至 2026-08-14 为真。
+- **§3 的缺口是带日期的结论。** 引用前请重新核实。§3.1 已于 2026-08-30 重新实测；§3.2 的每一行都带着它
+  的状态被核实的日期。
 - **§4 的主线是一个队列，不是合同。** 可以自由重排；但不要悄悄丢弃某一项——把它移到 §6 并说明理由。
