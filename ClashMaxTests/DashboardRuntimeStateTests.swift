@@ -11439,6 +11439,90 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
   }
 
+  func testCoreOutputAttachedToAnErrorBecomesBannerDetailsNotBannerText() throws {
+    // Issue #33: the banner used to show only the canned "could not connect"
+    // sentence and truncate the core's own explanation away.
+    let tail = (1...70).map { index in "time=\"t\(index)\" level=info msg=\"line \(index)\"" }.joined(separator: "\n")
+    let raw = UserFacingError.attachDetails(["Do this first.", "Core output:\n\(tail)"], to: "Could not connect to the server.")
+
+    XCTAssertEqual(
+      UserFacingError.message(from: raw),
+      "Could not connect to the Mihomo controller at 127.0.0.1:9097. The core may still be starting or failed to open its controller port."
+    )
+    let details = try XCTUnwrap(UserFacingError.details(from: raw))
+    XCTAssertTrue(details.hasSuffix("line 70\""), details)
+    XCTAssertFalse(details.contains("line 5\""), "only the last 60 lines are kept: \(details)")
+    XCTAssertTrue(details.contains("line 20\""), details)
+    XCTAssertFalse(details.contains("Do this first."), "the advice was pushed out by the line cap: \(details)")
+    XCTAssertFalse(details.contains("---"), details)
+
+    let short = UserFacingError.attachDetails(["Do this first."], to: "Summary.")
+    XCTAssertEqual(UserFacingError.message(from: short), "Summary.")
+    XCTAssertEqual(UserFacingError.details(from: short), "Do this first.")
+    XCTAssertNil(UserFacingError.details(from: "Summary."))
+    XCTAssertEqual(UserFacingError.attachDetails([" ", ""], to: "Summary."), "Summary.")
+  }
+
+  func testAppAuthoredErrorsAreNotTruncatedButForeignMessagesStillAre() {
+    let advice = Array(repeating: "Switch back to TUN mode and stop.", count: 12).joined(separator: " ")
+    XCTAssertGreaterThan(advice.count, 220)
+
+    XCTAssertEqual(UserFacingError.message(for: AppError.portUnavailable(advice)), advice)
+    XCTAssertNil(UserFacingError.details(for: AppError.portUnavailable(advice)))
+    XCTAssertNil(UserFacingError.details(for: NSError(domain: "x", code: 1)))
+    XCTAssertTrue(UserFacingError.message(from: advice).hasSuffix("..."))
+    XCTAssertEqual(UserFacingError.message(from: advice).count, 220)
+  }
+
+  func testUserModeStartFailureExposesControllerBindAdviceInBannerDetails() async throws {
+    // Issue #33 end to end: NE/system-proxy start, core alive, controller port
+    // held by something lsof cannot see -> banner names the cause, Details carry
+    // the recovery steps and the core output, and the Logs page keeps the tail.
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let launcher = FakeProcessLauncher()
+    launcher.process.stubbedOutputTail = """
+    time="2026-09-04T22:03:14.680271000+12:00" level=info msg="Start initial configuration in progress"
+    time="2026-09-04T22:03:14.681025000+12:00" level=error msg="External controller listen error: listen tcp 127.0.0.1:9097: bind: address already in use"
+    time="2026-09-04T22:03:14.682439000+12:00" level=info msg="Mixed(http+socks) proxy listening at: 127.0.0.1:7890"
+    """
+    let model = try AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: CoreProcessController(
+        launcher: launcher,
+        validator: RecordingRuntimeConfigValidator(result: .success(())),
+        readinessProbe: FailingCoreReadinessProbe(
+          message: "Could not connect to the Mihomo controller at 127.0.0.1:9097. The core may still be starting or failed to open its controller port."
+        ),
+        reaper: RecordingCoreProcessReaper(),
+        portChecker: EmptyRuntimePortChecker()
+      ),
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      defaults: Self.makeIsolatedDefaults()
+    )
+
+    model.start()
+    await waitUntil { !model.startInFlight && model.lastError != nil }
+
+    let banner: String = try XCTUnwrap(model.lastError)
+    XCTAssertTrue(banner.hasPrefix("Mihomo controller did not become ready. Mihomo started but could not open its controller port 127.0.0.1:9097: address already in use."), banner)
+    XCTAssertFalse(banner.contains("sudo lsof"), "recovery steps belong in Details, not the three-line banner: \(banner)")
+    let details: String = try XCTUnwrap(model.lastErrorDetails)
+    XCTAssertTrue(details.contains("sudo lsof -nP -iTCP:9097 -sTCP:LISTEN"), details)
+    XCTAssertTrue(details.contains("Mixed(http+socks) proxy listening at: 127.0.0.1:7890"), details)
+    XCTAssertFalse(model.isRunning)
+    XCTAssertTrue(launcher.process.didTerminate)
+    let logMessages: [String] = model.logs.map { $0.message }
+    XCTAssertTrue(
+      logMessages.contains { $0.contains("Readiness failed: Mihomo started but could not open its controller port") },
+      logMessages.joined(separator: "\n")
+    )
+  }
+
   func testHelperCodesigningErrorsAreSummarizedForTunRecovery() {
     let error = NSError(
       domain: "SMAppServiceErrorDomain",

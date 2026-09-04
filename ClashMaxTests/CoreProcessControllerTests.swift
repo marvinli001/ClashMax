@@ -315,6 +315,216 @@ final class CoreProcessControllerTests: XCTestCase {
     XCTAssertTrue(controller.startupDiagnostics.contains { $0.contains("Port 9097 is occupied by pid 1234") })
   }
 
+  func testReadinessFailureWithLiveCoreExplainsControllerBindFailure() async throws {
+    // Issue #33: mihomo keeps running when it cannot bind its external
+    // controller, so the readiness probe times out while the process is alive.
+    let launcher = FakeProcessLauncher()
+    launcher.process.stubbedOutputTail = """
+    time="2026-09-04T22:03:14.680271000+12:00" level=info msg="Start initial configuration in progress"
+    time="2026-09-04T22:03:14.681025000+12:00" level=error msg="External controller listen error: listen tcp 127.0.0.1:9097: bind: address already in use"
+    time="2026-09-04T22:03:14.682439000+12:00" level=info msg="Mixed(http+socks) proxy listening at: 127.0.0.1:7890"
+    """
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: FailingCoreReadinessProbe(
+        message: "Could not connect to the Mihomo controller at 127.0.0.1:9097. The core may still be starting or failed to open its controller port."
+      ),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: FakePortChecker(listeners: [])
+    )
+
+    do {
+      try await controller.startUserMode(
+        coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+        configURL: URL(fileURLWithPath: "/tmp/config.yaml"),
+        workDirectory: URL(fileURLWithPath: "/tmp"),
+        api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc"),
+        proxyPort: 7890
+      )
+      XCTFail("Expected readiness failure")
+    } catch let error as AppError {
+      guard case let .coreNotReady(message) = error else {
+        XCTFail("Expected coreNotReady, got \(error)")
+        return
+      }
+      XCTAssertTrue(message.contains("could not open its controller port 127.0.0.1:9097: address already in use"), message)
+      XCTAssertTrue(message.contains("TUN mode"), message)
+
+      let banner = UserFacingError.message(for: error)
+      XCTAssertEqual(
+        banner,
+        "Mihomo controller did not become ready. Mihomo started but could not open its controller port 127.0.0.1:9097: address already in use. Another process, probably a root-owned Mihomo left behind by TUN mode, is holding it. Open Details for how to release it."
+      )
+
+      let details = try XCTUnwrap(UserFacingError.details(for: error))
+      XCTAssertTrue(details.contains("Mihomo reported: External controller listen error: listen tcp 127.0.0.1:9097: bind: address already in use"), details)
+      XCTAssertTrue(details.contains("sudo lsof -nP -iTCP:9097 -sTCP:LISTEN"), details)
+      XCTAssertTrue(details.contains("Core output:"), details)
+      XCTAssertTrue(details.contains("Mixed(http+socks) proxy listening at: 127.0.0.1:7890"), details)
+      XCTAssertFalse(details.contains("---"), details)
+    }
+
+    XCTAssertTrue(launcher.process.didTerminate)
+    XCTAssertTrue(controller.startupDiagnostics.contains { $0.hasPrefix("Readiness failed: Mihomo started but could not open its controller port") })
+  }
+
+  func testReadinessFailureWithoutBindErrorKeepsGenericMessage() async throws {
+    let launcher = FakeProcessLauncher()
+    launcher.process.stubbedOutputTail = "level=info msg=\"Start initial configuration in progress\""
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: FailingCoreReadinessProbe(message: "Could not connect to the Mihomo controller at 127.0.0.1:9097."),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: FakePortChecker(listeners: [])
+    )
+
+    do {
+      try await controller.startUserMode(
+        coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+        configURL: URL(fileURLWithPath: "/tmp/config.yaml"),
+        workDirectory: URL(fileURLWithPath: "/tmp"),
+        api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+      )
+      XCTFail("Expected readiness failure")
+    } catch let error as AppError {
+      guard case let .coreNotReady(message) = error else {
+        XCTFail("Expected coreNotReady, got \(error)")
+        return
+      }
+      XCTAssertTrue(message.hasPrefix("Could not connect to the Mihomo controller at 127.0.0.1:9097."), message)
+      XCTAssertEqual(
+        UserFacingError.message(for: error),
+        "Mihomo controller did not become ready. Could not connect to the Mihomo controller at 127.0.0.1:9097."
+      )
+      XCTAssertEqual(
+        UserFacingError.details(for: error),
+        "Core output:\nlevel=info msg=\"Start initial configuration in progress\""
+      )
+    }
+  }
+
+  func testStartFailsWhenPortIsHeldByListenerLsofCannotIdentify() async throws {
+    let launcher = FakeProcessLauncher()
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: FakePortChecker(listeners: [.unidentified(port: 9097)])
+    )
+
+    do {
+      try await controller.startUserMode(
+        coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+        configURL: URL(fileURLWithPath: "/tmp/config.yaml"),
+        workDirectory: URL(fileURLWithPath: "/tmp"),
+        api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc"),
+        proxyPort: 7890
+      )
+      XCTFail("Expected occupied port failure")
+    } catch let error as AppError {
+      guard case let .portUnavailable(message) = error else {
+        XCTFail("Expected portUnavailable, got \(error)")
+        return
+      }
+      XCTAssertEqual(
+        UserFacingError.message(for: error),
+        "Cannot start Mihomo because required runtime ports are already in use: port 9097 is held by a process this account cannot inspect, probably a root-owned Mihomo left behind by TUN mode. Open Details for how to release it."
+      )
+      let details = try XCTUnwrap(UserFacingError.details(for: error))
+      XCTAssertTrue(details.hasPrefix("To release port 9097:"), details)
+      XCTAssertTrue(details.contains("sudo lsof -nP -iTCP:9097 -sTCP:LISTEN"), details)
+      XCTAssertTrue(details.contains("Switch back to TUN mode and click Stop"), details)
+      XCTAssertFalse(UserFacingError.message(for: error).contains("pid "), "no fake pid for a listener lsof cannot see: \(message)")
+    }
+
+    XCTAssertEqual(launcher.lastArguments, [])
+    XCTAssertTrue(controller.startupDiagnostics.contains { $0.hasPrefix("Port 9097 accepts TCP connections but lsof lists no owner") })
+  }
+
+  func testPortConflictMessageWithIdentifiedProcessesKeepsTheShortForm() {
+    let message = CoreProcessController.portConflictMessage(for: [
+      PortListener(port: 9097, pid: 1234, command: "/opt/homebrew/bin/mihomo"),
+    ])
+
+    XCTAssertEqual(
+      message,
+      "Cannot start Mihomo because required runtime ports are already in use: port 9097 is used by pid 1234 (/opt/homebrew/bin/mihomo). Quit the conflicting process or change ClashMax's controller/mixed port settings."
+    )
+    XCTAssertNil(UserFacingError.details(for: AppError.portUnavailable(message)))
+  }
+
+  func testRuntimePortCheckerFallsBackToConnectProbeWhenLsofSeesNothing() async {
+    let checker = MihomoRuntimePortChecker(
+      lookupListeners: { port in
+        port == 7890 ? [PortListener(port: 7890, pid: 4321, command: "/usr/local/bin/proxy")] : []
+      },
+      acceptsConnections: { port in port == 9097 || port == 7890 }
+    )
+
+    let listeners = await checker.listeners(on: [9097, 7890, 1053])
+
+    XCTAssertEqual(listeners, [
+      .unidentified(port: 9097),
+      PortListener(port: 7890, pid: 4321, command: "/usr/local/bin/proxy"),
+    ])
+  }
+
+  func testIsAcceptingConnectionsSeesARealListenerAndNotAClosedPort() throws {
+    let (descriptor, port) = try Self.openLoopbackListener()
+    XCTAssertTrue(SocksProxyReadinessProbe.isAcceptingConnections(host: "127.0.0.1", port: port, timeout: 0.5))
+    close(descriptor)
+    XCTAssertFalse(SocksProxyReadinessProbe.isAcceptingConnections(host: "127.0.0.1", port: port, timeout: 0.5))
+  }
+
+  func testRealRuntimePortCheckerIdentifiesThisProcessThroughLsofAndReportsNothingForAFreePort() async throws {
+    let (descriptor, port) = try Self.openLoopbackListener()
+    defer { close(descriptor) }
+    let checker = MihomoRuntimePortChecker()
+
+    let listeners = await checker.listeners(on: [port])
+
+    XCTAssertEqual(listeners.count, 1, "\(listeners)")
+    XCTAssertEqual(listeners.first?.port, port)
+    XCTAssertEqual(listeners.first?.pid, getpid(), "our own listener is visible to lsof, so it must not be reported as unidentified")
+    XCTAssertFalse(listeners.first?.isUnidentified ?? true)
+
+    close(descriptor)
+    let afterClose = await checker.listeners(on: [port])
+    XCTAssertEqual(afterClose, [])
+  }
+
+  private static func openLoopbackListener() throws -> (descriptor: Int32, port: Int) {
+    let descriptor = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
+    XCTAssertGreaterThanOrEqual(descriptor, 0)
+
+    var address = sockaddr_in()
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_port = 0
+    address.sin_addr.s_addr = inet_addr("127.0.0.1")
+    let bindResult = withUnsafePointer(to: &address) {
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+        Darwin.bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+      }
+    }
+    XCTAssertEqual(bindResult, 0)
+    XCTAssertEqual(Darwin.listen(descriptor, 4), 0)
+
+    var bound = sockaddr_in()
+    var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+    let nameResult = withUnsafeMutablePointer(to: &bound) {
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+        getsockname(descriptor, $0, &length)
+      }
+    }
+    XCTAssertEqual(nameResult, 0)
+    let port = Int(UInt16(bigEndian: bound.sin_port))
+    XCTAssertGreaterThan(port, 0)
+    return (descriptor, port)
+  }
+
   func testProcessExitBeforeTerminationHandlerIsInstalledFailsStartupImmediately() async throws {
     let process = AlreadyTerminatedRunningProcess(exitCode: 7, outputTail: "fatal: bind failed")
     let controller = CoreProcessController(
@@ -669,6 +879,19 @@ private final class CancellableCoreReadinessProbe: CoreReadinessProbing {
     didStart = true
     try await Task.sleep(nanoseconds: 10_000_000_000)
     return "v-test"
+  }
+}
+
+@MainActor
+private final class FailingCoreReadinessProbe: CoreReadinessProbing {
+  private let message: String
+
+  init(message: String) {
+    self.message = message
+  }
+
+  func waitUntilReady(api: CoreAPIEndpoint) async throws -> String {
+    throw AppError.coreNotReady(message)
   }
 }
 

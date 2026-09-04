@@ -187,7 +187,9 @@ enum UserFacingError {
 
   static func message(for error: Error) -> String {
     if let appError = error as? AppError {
-      return message(from: appError.description)
+      // ClashMax wrote this text itself; it is already sized for a banner and
+      // cutting it at 220 characters would drop the recovery advice.
+      return message(from: appError.description, condense: false)
     }
 
     let nsError = error as NSError
@@ -207,7 +209,47 @@ enum UserFacingError {
     return message(from: localized)
   }
 
-  static func message(from rawMessage: String) -> String {
+  /// Separates a banner-sized summary from the longer material attached to it:
+  /// recovery steps and the core's own output. The banner shows three lines of
+  /// `message(for:)`; everything after the separator is `details(for:)`, shown
+  /// in the banner's expandable, copyable Details pane. Issue #33 shipped with
+  /// the canned "could not connect" sentence and nothing else, because the
+  /// core's explanation was truncated away with the rest of the message.
+  static let detailSeparator = "\n---\n"
+  private static let detailLineLimit = 60
+  private static let detailCharacterLimit = 6000
+
+  static func attachDetails(_ details: [String], to summary: String) -> String {
+    let sections = details.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+    guard !sections.isEmpty else { return summary }
+    return ([summary] + sections).joined(separator: detailSeparator)
+  }
+
+  static func message(from rawMessage: String, condense: Bool = true) -> String {
+    summaryMessage(from: rawMessage.components(separatedBy: detailSeparator)[0], condense: condense)
+  }
+
+  /// The long-form part of an app-authored error, or nil when there is none.
+  static func details(for error: Error) -> String? {
+    guard let appError = error as? AppError else { return nil }
+    return details(from: appError.description)
+  }
+
+  static func details(from rawMessage: String) -> String? {
+    let parts = rawMessage.components(separatedBy: detailSeparator)
+    guard parts.count > 1 else { return nil }
+    let lines = parts.dropFirst()
+      .joined(separator: "\n\n")
+      .split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+      .map { $0.trimmingCharacters(in: .whitespaces) }
+    var kept = Array(lines.suffix(detailLineLimit)).joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    if kept.count > detailCharacterLimit {
+      kept = "...\(kept.suffix(detailCharacterLimit))"
+    }
+    return kept.isEmpty ? nil : kept
+  }
+
+  private static func summaryMessage(from rawMessage: String, condense: Bool) -> String {
     if let helperMessage = helperRegistrationMessage(domain: nil, code: nil, message: rawMessage) {
       return helperMessage
     }
@@ -220,7 +262,7 @@ enum UserFacingError {
     }
 
     let trimmed = rawMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard trimmed.count > 220 else { return trimmed }
+    guard condense, trimmed.count > 220 else { return trimmed }
     return "\(trimmed.prefix(217))..."
   }
 

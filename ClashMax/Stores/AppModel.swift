@@ -821,9 +821,14 @@ final class AppModel {
     // The preflight wrapper already carries the extracted short summary; using it
     // avoids re-truncating to the benign Mihomo log head (issue #7).
     let summary = preflightError?.message ?? UserFacingError.message(for: error)
-    let details = preflightError?.fullMessage
+    publishLastError(summary, details: preflightError?.fullMessage)
+  }
+
+  /// Sets `lastError` together with the copyable long-form text the banner
+  /// shows under "Show Details". Assigning `lastError` alone clears the details.
+  private func publishLastError(_ message: String, details: String?) {
     isPublishingLastErrorWithDetails = true
-    lastError = summary
+    lastError = message
     isPublishingLastErrorWithDetails = false
     lastErrorDetails = details
   }
@@ -3519,7 +3524,12 @@ final class AppModel {
         helperOwnedCore: helperOwnedCore,
         includeCoreSummary: false
       )
-      lastError = diagnostics.isEmpty ? message : "\(message)\n\(diagnostics)"
+      // Recovery steps and the core's own output (issue #33) go to the banner's
+      // Details pane; the banner itself only shows three lines.
+      publishLastError(
+        diagnostics.isEmpty ? message : "\(message)\n\(diagnostics)",
+        details: UserFacingError.details(for: error)
+      )
     }
   }
 

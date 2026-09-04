@@ -102,6 +102,12 @@ struct SocksProxyReadinessProbe: ProxyPortReadinessProbing {
     throw lastError ?? AppError.coreNotReady("Could not connect to mixed-port.")
   }
 
+  /// True when something accepts a TCP connection on `host:port`. Unlike
+  /// `lsof`, this sees listeners owned by any user.
+  nonisolated static func isAcceptingConnections(host: String, port: Int, timeout: TimeInterval) -> Bool {
+    (try? performConnect(host: host, port: port, timeout: timeout)) != nil
+  }
+
   private nonisolated static func performConnect(host: String, port: Int, timeout: TimeInterval) throws {
     var hints = addrinfo()
     hints.ai_family = AF_UNSPEC

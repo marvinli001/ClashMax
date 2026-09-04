@@ -59,8 +59,26 @@ protocol CoreProcessReaping {
 
 struct PortListener: Equatable, Sendable {
   var port: Int
-  var pid: Int32
+  /// `nil` when the listener was found by connecting to the port rather than
+  /// through `lsof`. An unprivileged `lsof` only lists the current user's
+  /// sockets, so a root-owned process (typically a privileged Mihomo left
+  /// behind by TUN mode) holds the port without ever showing up there.
+  var pid: Int32?
   var command: String
+
+  init(port: Int, pid: Int32?, command: String) {
+    self.port = port
+    self.pid = pid
+    self.command = command
+  }
+
+  static func unidentified(port: Int) -> PortListener {
+    PortListener(port: port, pid: nil, command: unidentifiedCommand)
+  }
+
+  static let unidentifiedCommand = "a process this account cannot inspect, probably a root-owned Mihomo left behind by TUN mode"
+
+  var isUnidentified: Bool { pid == nil }
 }
 
 struct CoreStopResult {
@@ -175,7 +193,11 @@ final class CoreProcessController {
       let listeners = await portChecker.listeners(on: portsToCheck)
       if !listeners.isEmpty {
         for listener in listeners {
-          recordStartup("Port \(listener.port) is occupied by pid \(listener.pid): \(listener.command)")
+          if let pid = listener.pid {
+            recordStartup("Port \(listener.port) is occupied by pid \(pid): \(listener.command)")
+          } else {
+            recordStartup("Port \(listener.port) accepts TCP connections but lsof lists no owner: \(listener.command)")
+          }
         }
         throw AppError.portUnavailable(Self.portConflictMessage(for: listeners))
       }
@@ -236,7 +258,16 @@ final class CoreProcessController {
         if case let .coreNotReady(message) = appError {
           let tail = process.recentOutputTail(maxBytes: 4096)
           recentCoreLog = tail
-          let combined = tail.isEmpty ? message : "\(message)\n---\n\(tail)"
+          var summary = message
+          var detailSections: [String] = []
+          if process.isRunning, let bindFailure = Self.controllerBindFailure(api: api, outputTail: tail) {
+            summary = bindFailure.summary
+            detailSections.append(bindFailure.advice)
+          }
+          if !tail.isEmpty {
+            detailSections.append("Core output:\n\(tail)")
+          }
+          let combined = UserFacingError.attachDetails(detailSections, to: summary)
           recordStartup("Readiness failed: \(combined)")
           throw AppError.coreNotReady(combined)
         }
@@ -386,14 +417,73 @@ final class CoreProcessController {
     }
   }
 
-  private static func portConflictMessage(for listeners: [PortListener]) -> String {
+  static func portConflictMessage(for listeners: [PortListener]) -> String {
     let details = listeners
       .sorted { lhs, rhs in
-        lhs.port == rhs.port ? lhs.pid < rhs.pid : lhs.port < rhs.port
+        lhs.port == rhs.port ? (lhs.pid ?? 0) < (rhs.pid ?? 0) : lhs.port < rhs.port
       }
-      .map { "port \($0.port) is used by pid \($0.pid) (\($0.command))" }
+      .map { listener in
+        if let pid = listener.pid {
+          return "port \(listener.port) is used by pid \(pid) (\(listener.command))"
+        }
+        return "port \(listener.port) is held by \(listener.command)"
+      }
       .joined(separator: "; ")
-    return "Cannot start Mihomo because required runtime ports are already in use: \(details). Quit the conflicting process or change ClashMax's controller/mixed port settings."
+    let unidentifiedPorts = listeners.filter(\.isUnidentified).map(\.port)
+    guard !unidentifiedPorts.isEmpty else {
+      return "Cannot start Mihomo because required runtime ports are already in use: \(details). Quit the conflicting process or change ClashMax's controller/mixed port settings."
+    }
+    return UserFacingError.attachDetails(
+      [Self.privilegedListenerAdvice(ports: unidentifiedPorts)],
+      to: "Cannot start Mihomo because required runtime ports are already in use: \(details). Open Details for how to release it."
+    )
+  }
+
+  /// How to release a port held by a process the app can neither see nor kill.
+  /// Issue #33: after switching TUN -> NE Proxy the user-mode core could not
+  /// bind 127.0.0.1:9097 because a root-owned Mihomo still held it.
+  static func privilegedListenerAdvice(ports: [Int]) -> String {
+    let list = ports.map(String.init).joined(separator: ",")
+    return """
+    To release port \(list):
+    1. Switch back to TUN mode and click Stop, so ClashMax's privileged helper terminates the Mihomo it launched.
+    2. Or run in Terminal: sudo lsof -nP -iTCP:\(list) -sTCP:LISTEN — then quit that process (sudo kill <pid>).
+    3. Restarting macOS also releases it.
+    Alternatively change ClashMax's controller/mixed port settings so the ports no longer collide.
+    """
+  }
+
+  struct ControllerBindFailure: Equatable {
+    var summary: String
+    var advice: String
+  }
+
+  /// Mihomo keeps running when its external controller cannot bind (it only
+  /// logs `External controller listen error: ... bind: address already in use`),
+  /// so a readiness timeout with a live process is almost always this. Turn the
+  /// bare "could not connect" into what actually happened.
+  static func controllerBindFailure(api: CoreAPIEndpoint, outputTail: String) -> ControllerBindFailure? {
+    let lines = outputTail.split(whereSeparator: \.isNewline).map(String.init)
+    guard let line = lines.last(where: { $0.localizedCaseInsensitiveContains("controller listen error") }) else {
+      return nil
+    }
+    let reported: String
+    if let range = line.range(of: "msg=\"") {
+      reported = String(line[range.upperBound...]).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+    } else {
+      reported = line.trimmingCharacters(in: .whitespaces)
+    }
+    let endpoint = "\(api.host):\(api.port)"
+    guard reported.localizedCaseInsensitiveContains("address already in use") else {
+      return ControllerBindFailure(
+        summary: "Mihomo started but could not open its controller port \(endpoint). Open Details for the core's report.",
+        advice: "Mihomo reported: \(reported)"
+      )
+    }
+    return ControllerBindFailure(
+      summary: "Mihomo started but could not open its controller port \(endpoint): address already in use. Another process, probably a root-owned Mihomo left behind by TUN mode, is holding it. Open Details for how to release it.",
+      advice: "Mihomo reported: \(reported)\n\(Self.privilegedListenerAdvice(ports: [api.port]))"
+    )
   }
 
   private static func processExitMessage(exitCode: Int32, outputTail: String) -> String {
@@ -404,16 +494,53 @@ final class CoreProcessController {
 
 struct MihomoRuntimePortChecker: RuntimePortChecking {
   private static let commandTimeoutSeconds: TimeInterval = 3
+  private static let connectProbeTimeoutSeconds: TimeInterval = 0.5
+
+  /// Finds listeners the way `lsof` does: only sockets owned by this user.
+  private let lookupListeners: @Sendable (Int) async -> [PortListener]
+  /// Bind-independent check: does anything at all accept TCP on 127.0.0.1:port?
+  private let acceptsConnections: @Sendable (Int) async -> Bool
+
+  init() {
+    self.init(
+      lookupListeners: { await MihomoRuntimePortChecker.lsofListeners(on: $0) },
+      acceptsConnections: { port in
+        await Task.detached(priority: .utility) {
+          SocksProxyReadinessProbe.isAcceptingConnections(
+            host: "127.0.0.1",
+            port: port,
+            timeout: MihomoRuntimePortChecker.connectProbeTimeoutSeconds
+          )
+        }.value
+      }
+    )
+  }
+
+  init(
+    lookupListeners: @escaping @Sendable (Int) async -> [PortListener],
+    acceptsConnections: @escaping @Sendable (Int) async -> Bool
+  ) {
+    self.lookupListeners = lookupListeners
+    self.acceptsConnections = acceptsConnections
+  }
 
   func listeners(on ports: [Int]) async -> [PortListener] {
     var listeners: [PortListener] = []
     for port in ports {
-      await listeners.append(contentsOf: Self.listeners(on: port))
+      let found = await lookupListeners(port)
+      if !found.isEmpty {
+        listeners.append(contentsOf: found)
+      } else if await acceptsConnections(port) {
+        // lsof saw nothing, yet something answers: a listener this account
+        // cannot enumerate (root-owned). Report it instead of launching a core
+        // that will silently fail to bind its controller (issue #33).
+        listeners.append(.unidentified(port: port))
+      }
     }
     return listeners
   }
 
-  private static func listeners(on port: Int) async -> [PortListener] {
+  private static func lsofListeners(on port: Int) async -> [PortListener] {
     guard let output = await run("/usr/sbin/lsof", ["-nP", "-iTCP:\(port)", "-sTCP:LISTEN"]) else {
       return []
     }
