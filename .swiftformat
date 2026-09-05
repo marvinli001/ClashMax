@@ -13,7 +13,7 @@
 
 # Pinned so a stale local binary cannot disagree with CI about what is legal.
 # script/swiftformat_lint.sh parses this line; CI installs exactly this version.
---minversion 0.62.1
+--minversion 0.63.0
 
 # Matches SWIFT_VERSION in project.yml. Keeps SwiftFormat from applying
 # rewrites that need a newer language mode than the project builds with.

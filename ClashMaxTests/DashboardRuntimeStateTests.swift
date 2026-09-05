@@ -11516,7 +11516,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(details.contains("Mixed(http+socks) proxy listening at: 127.0.0.1:7890"), details)
     XCTAssertFalse(model.isRunning)
     XCTAssertTrue(launcher.process.didTerminate)
-    let logMessages: [String] = model.logs.map { $0.message }
+    let logMessages: [String] = model.logs.map(\.message)
     XCTAssertTrue(
       logMessages.contains { $0.contains("Readiness failed: Mihomo started but could not open its controller port") },
       logMessages.joined(separator: "\n")
