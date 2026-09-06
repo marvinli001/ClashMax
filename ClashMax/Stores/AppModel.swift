@@ -983,6 +983,10 @@ final class AppModel {
   /// no-change recompute into a no-op publish.
   let proxiesSearchCoordinator = ProxySearchCoordinator()
   let dashboardCurrentNodeCoordinator = ProxySearchCoordinator()
+  /// The Routing page's selection, draft and open tool. Owned here for the same reason as the search
+  /// coordinators: the page view is rebuilt on every section switch, and an unsaved snippet draft must
+  /// survive that.
+  let routingEditor = RoutingEditorState()
   @ObservationIgnored private var didResumeInitialTunHelperPromptAfterUserOpen = false
   @ObservationIgnored private var didWarmPreviewRuntimeOnLaunch = false
   @ObservationIgnored private var modeUpdateTask: Task<Void, Never>?
@@ -2029,6 +2033,7 @@ final class AppModel {
         )
       )
     )
+    routingEditor.openTool(.simulator)
     selectedSection = .routing
   }
 
@@ -2037,6 +2042,8 @@ final class AppModel {
   /// own resolver returns for that name — which is not necessarily what the Mac's resolver returns.
   func openDNSResolution(for connection: ConnectionSnapshot) {
     guard let domain = connection.domain, !domain.isEmpty else { return }
+    routingEditor.selectedDiagnostic = .dnsResolution
+    routingEditor.openTool(.diagnostics)
     selectedSection = .routing
     resolveDNS(for: domain)
   }

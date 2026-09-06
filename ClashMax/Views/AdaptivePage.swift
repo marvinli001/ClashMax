@@ -19,6 +19,16 @@ extension EnvironmentValues {
   @Entry var pageHeight: CGFloat = 0
 }
 
+/// Whether a page should repeat `AppModel.lastError` in its own body. The status strip above every
+/// page already shows the last error as one line, so a page adds its own copy only when the strip is
+/// busy with a readiness issue (which it prefers over the error) or when the page can offer more than
+/// the one line — the expandable details of a subscription preflight failure (issue #7).
+enum PageErrorPresentation {
+  static func showsInlineError(readinessIssue: String?, hasDetails: Bool) -> Bool {
+    readinessIssue != nil || hasDetails
+  }
+}
+
 struct AdaptivePage<Actions: View, Content: View>: View {
   let title: String
   var maxContentWidth: CGFloat = .infinity

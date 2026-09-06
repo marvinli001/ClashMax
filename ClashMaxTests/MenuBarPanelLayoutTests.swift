@@ -492,11 +492,16 @@ final class MenuBarPanelLayoutTests: XCTestCase {
 
 @MainActor
 final class MainWindowLayoutTests: XCTestCase {
-  func testRoutingWorkspaceLayoutUsesThreeDeterministicBreakpoints() {
-    XCTAssertEqual(RoutingWorkspaceLayout.mode(forWidth: 819), .singleColumn)
-    XCTAssertEqual(RoutingWorkspaceLayout.mode(forWidth: 820), .twoColumn)
-    XCTAssertEqual(RoutingWorkspaceLayout.mode(forWidth: 1_219), .twoColumn)
-    XCTAssertEqual(RoutingWorkspaceLayout.mode(forWidth: 1_220), .threeColumn)
+  /// The Routing tools never stack under the editor: below the breakpoint they open as a sheet, so
+  /// the snippet list and editor keep the whole width to themselves.
+  func testRoutingToolPaneOnlyOpensBesideTheEditorOnWidePages() {
+    XCTAssertFalse(RoutingWorkspaceLayout.showsToolPane(pageWidth: RoutingWorkspaceLayout.toolPaneBreakpoint - 1))
+    XCTAssertTrue(RoutingWorkspaceLayout.showsToolPane(pageWidth: RoutingWorkspaceLayout.toolPaneBreakpoint))
+    XCTAssertFalse(RoutingWorkspaceLayout.showsToolPane(pageWidth: 0))
+    XCTAssertFalse(RoutingWorkspaceLayout.showsToolPane(pageWidth: .nan))
+    // A 980pt window minus the sidebar is well under the breakpoint, so the minimum window never
+    // sees a third column.
+    XCTAssertFalse(RoutingWorkspaceLayout.showsToolPane(pageWidth: 980 - 215))
   }
 
   func testConnectionsLayoutMovesDetailBelowAtNarrowWidths() {

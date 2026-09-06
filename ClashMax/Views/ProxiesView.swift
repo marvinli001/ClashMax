@@ -1,6 +1,23 @@
 import AppKit
 import SwiftUI
 
+/// Layout policy for the Proxies page, kept pure so it can be unit-tested.
+enum ProxiesLayout {
+  /// The group navigator is a fixed column: a group name plus its current node fit here, and the
+  /// remaining width always belongs to the node list the page exists for.
+  static let groupListWidth: CGFloat = 224
+}
+
+/// Keeps the browsing selection inside the node list pointed at a node that is still displayed.
+/// A search, a sort change or a runtime reload can drop the previously selected node, and the
+/// detail bar must then close instead of describing a node that is not in the list.
+enum ProxyNodeSelectionPolicy {
+  static func resolvedSelection(current: ProxyNode.ID?, nodes: [ProxyNode]) -> ProxyNode.ID? {
+    guard let current, nodes.contains(where: { $0.id == current }) else { return nil }
+    return current
+  }
+}
+
 struct ProxiesView: View {
   @Environment(AppModel.self) private var appModel
   @Environment(RuntimeDataStore.self) private var runtimeData
@@ -9,12 +26,25 @@ struct ProxiesView: View {
   // per-page instance made every return to this page repaint from empty.
   private let searchCoordinator: ProxySearchCoordinator
   @State private var searchText = ""
-  @State private var expandedGroupIDs: Set<String>?
+  /// Browsing selection for the group navigator. Changing it never changes which node a group uses.
   @State private var selectedGroupID: ProxyGroup.ID?
+  /// Browsing selection inside the node list. Using a node is a separate, explicit action.
+  @State private var selectedNodeID: ProxyNode.ID?
   @State private var showsBatchFailureDetails = false
+  @State private var customDelayURLPopoverPresented = false
+  @State private var providersPopoverPresented = false
+  @State private var scrollToCurrentNodeRequest = 0
 
-  init(searchCoordinator: ProxySearchCoordinator) {
+  /// `initialSelectedGroupID` / `initialSelectedNodeID` seed the browsing selection for previews and
+  /// fixture renders; the app always starts from the default selection.
+  init(
+    searchCoordinator: ProxySearchCoordinator,
+    initialSelectedGroupID: ProxyGroup.ID? = nil,
+    initialSelectedNodeID: ProxyNode.ID? = nil
+  ) {
     self.searchCoordinator = searchCoordinator
+    _selectedGroupID = State(initialValue: initialSelectedGroupID)
+    _selectedNodeID = State(initialValue: initialSelectedNodeID)
   }
 
   var body: some View {
@@ -28,50 +58,25 @@ struct ProxiesView: View {
     let groups = snapshot.filteredGroups
     let searchQuery = snapshot.query
     let dataSignature = ProxySearchInputSignature(groups: rawGroups, providers: runtimeData.proxyProviders)
-    let visibleExpandedGroupIDs = ProxyGroupExpansionPolicy.resolvedExpansion(
-      current: expandedGroupIDs,
-      groups: groups,
-      searchQuery: searchQuery.rawValue
-    )
-    let listAnimationState = ProxyGroupListAnimationState(
-      groups: groups,
-      expandedGroupIDs: visibleExpandedGroupIDs,
-      searchQuery: searchQuery.rawValue,
-      sortOrder: pageSettings.sortOrder
-    )
     let isStarting = appModel.dashboardRuntimeState.isStarting
-    let canStart = ProxiesPageActionState.canStart(
-      isRunning: appModel.isRunning,
-      hasActiveProfile: appModel.profileStore.activeProfile != nil,
-      isStarting: isStarting,
-      readinessIssue: appModel.readinessIssue
-    )
+    let selectedGroup = resolvedSelectedGroup(in: groups)
+    let isDelayBatchRunning = appModel.proxyDelayBatchProgress?.isRunning == true
 
     AdaptivePage(title: "Proxies") {
       // The spinner's fade is scoped to this action bar on purpose. `isComputing` flips twice per
       // pipeline run (once on submit, once on publish) and a delay batch runs the pipeline on
-      // every coalesced flush, so as a page-level modifier this put the *entire* Proxies tree —
-      // every group card, node card and layout change — into a continuous 150ms interpolation.
+      // every coalesced flush, so as a page-level modifier this put the *entire* Proxies tree into
+      // a continuous 150ms interpolation.
       HStack(spacing: 8) {
         searchProgressIndicator
-        testAllButton(hasGroups: !rawGroups.isEmpty)
-        if !appModel.isRunning, appModel.profileStore.activeProfile != nil {
-          Button {
-            appModel.start()
-          } label: {
-            Label(
-              localizedProxiesText(isStarting ? "Starting" : "Start"),
-              systemImage: isStarting ? "clock.arrow.circlepath" : "play.fill"
-            )
-          }
-          .disabled(!canStart)
-        }
-        Button {
-          appModel.reloadRuntimeData()
-        } label: {
-          Label(localizedProxiesText("Refresh"), systemImage: "arrow.clockwise")
-        }
-        .disabled(!ProxiesPageActionState.canRefresh(isStarting: isStarting))
+        testGroupButton(selectedGroup, isDelayBatchRunning: isDelayBatchRunning)
+        sortMenu
+        moreMenu(
+          selectedGroup: selectedGroup,
+          hasGroups: !rawGroups.isEmpty,
+          isStarting: isStarting,
+          isDelayBatchRunning: isDelayBatchRunning
+        )
       }
       .animation(.easeInOut(duration: 0.15), value: searchCoordinator.isComputing)
     } content: {
@@ -88,15 +93,11 @@ struct ProxiesView: View {
           message: emptyStateMessage(rawGroups: rawGroups, searchQuery: searchQuery)
         )
       } else {
-        VStack(alignment: .leading, spacing: 10) {
-          proxyWorkspace(
-            groups: groups,
-            searchQuery: searchQuery,
-            visibleExpandedGroupIDs: visibleExpandedGroupIDs,
-            listAnimationState: listAnimationState
-          )
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        proxyWorkspace(
+          groups: groups,
+          selectedGroup: selectedGroup,
+          isDelayBatchRunning: isDelayBatchRunning
+        )
       }
     }
     .searchable(text: $searchText, placement: .toolbar, prompt: Text("Search"))
@@ -127,12 +128,10 @@ struct ProxiesView: View {
     }
     .onChange(of: snapshot.resultIdentity) { _, _ in
       selectDefaultGroupIfNeeded(from: groups)
-      withAnimation(ProxyInteractionAnimation.list(reduceMotion: reduceMotion)) {
-        expandedGroupIDs = ProxyGroupExpansionPolicy.retainedExpansion(
-          current: expandedGroupIDs,
-          groups: groups
-        )
-      }
+      reconcileNodeSelection(in: resolvedSelectedGroup(in: groups))
+    }
+    .onChange(of: selectedGroupID) { _, _ in
+      reconcileNodeSelection(in: resolvedSelectedGroup(in: groups))
     }
   }
 
@@ -157,22 +156,15 @@ struct ProxiesView: View {
     return snapshot.hasResolved && snapshot.filteredGroups.isEmpty
   }
 
+  // MARK: - Workspace
+
   private func proxyWorkspace(
     groups: [ProxyGroup],
-    searchQuery: ProxySearchQuery,
-    visibleExpandedGroupIDs: Set<String>,
-    listAnimationState: ProxyGroupListAnimationState
+    selectedGroup: ProxyGroup?,
+    isDelayBatchRunning: Bool
   ) -> some View {
-    let batchProgress = appModel.proxyDelayBatchProgress
-    let isDelayBatchRunning = batchProgress?.isRunning == true
-
-    return ProxyWorkspaceSurface {
-      proxyWorkspaceControls
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-
-      if let progress = batchProgress {
-        Divider()
+    VStack(alignment: .leading, spacing: 0) {
+      if let progress = appModel.proxyDelayBatchProgress {
         ProxyDelayBatchProgressStrip(
           progress: progress,
           showsFailureDetails: $showsBatchFailureDetails
@@ -181,6 +173,7 @@ struct ProxiesView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
+        Divider()
       }
 
       if let notice = ProxyPreviewNoticeKind.resolve(
@@ -188,69 +181,37 @@ struct ProxiesView: View {
         previewRuntimeActive: appModel.previewRuntimeActive,
         isShowingProxyPreview: appModel.isShowingProxyPreview
       ) {
-        Divider()
         ProxyPreviewNotice(icon: notice.icon, message: notice.message)
-      }
-
-      if ProxyPageVisibilityPolicy.showsProviderSummary(
-        developerMode: appModel.developerMode,
-        providerCount: runtimeData.proxyProviders.count
-      ) {
         Divider()
-        ProxyProviderList(providers: runtimeData.proxyProviders)
-          .padding(10)
       }
 
-      Divider()
+      HStack(spacing: 0) {
+        ProxyGroupNavigator(groups: groups, selectedGroupID: $selectedGroupID)
+          .frame(width: ProxiesLayout.groupListWidth)
 
-      if appModel.proxyPageSettings.viewMode == .allGroups {
-        ScrollView {
-          LazyVStack(alignment: .leading, spacing: 10) {
-            ForEach(groups) { group in
-              ProxyGroupCard(
-                group: group,
-                customDelayTestURL: appModel.customDelayTestURL(forGroupName: group.name),
-                showsDeveloperDetails: appModel.developerMode || appModel.proxyPageSettings.showsNodeDetails,
-                closesOldConnectionsAfterSwitch: appModel.proxyPageSettings.closesOldConnectionsAfterSwitch,
-                isExpanded: visibleExpandedGroupIDs.contains(group.id),
-                isSearchActive: !searchQuery.isEmpty,
-                isDelayBatchRunning: isDelayBatchRunning
-              ) {
-                toggleExpansion(for: group, visibleGroups: groups, searchQuery: searchQuery)
-              }
-            }
-          }
-          .padding(10)
-          .frame(maxWidth: .infinity, alignment: .topLeading)
-          .animation(ProxyInteractionAnimation.list(reduceMotion: reduceMotion), value: listAnimationState)
+        Divider()
+
+        if let selectedGroup {
+          ProxyGroupNodePane(
+            group: selectedGroup,
+            selectedNodeID: $selectedNodeID,
+            isDelayBatchRunning: isDelayBatchRunning,
+            scrollToCurrentNodeRequest: scrollToCurrentNodeRequest
+          )
+        } else {
+          CenteredUnavailableState(
+            title: "No group selected",
+            systemImage: "point.3.connected.trianglepath.dotted",
+            message: "Select a proxy group to inspect nodes."
+          )
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-      } else {
-        ProxyGroupSplitView(
-          groups: groups,
-          selectedGroupID: $selectedGroupID,
-          nodePresentation: appModel.proxyPageSettings.nodePresentation,
-          showsNodeDetails: appModel.proxyPageSettings.showsNodeDetails,
-          closesOldConnectionsAfterSwitch: appModel.proxyPageSettings.closesOldConnectionsAfterSwitch,
-          isDelayBatchRunning: isDelayBatchRunning,
-          customDelayTestURLText: customDelayTestURLBinding(for: selectedGroupID)
-        )
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       }
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
-  }
-
-  /// Search now lives in the window toolbar via `.searchable`, so this strip only
-  /// carries the view/sort/presentation controls.
-  private var proxyWorkspaceControls: some View {
-    ViewThatFits(in: .horizontal) {
-      HStack(spacing: 10) {
-        proxyWorkspaceControlStrip
-        Spacer(minLength: 0)
-      }
-
-      splitProxyWorkspaceControlStrip
-    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    .background(.cardSurface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(.separator, lineWidth: 1))
   }
 
   @ViewBuilder
@@ -266,129 +227,136 @@ struct ProxiesView: View {
     }
   }
 
-  private var proxyWorkspaceControlStrip: some View {
-    HStack(spacing: 10) {
-      viewModePicker
-      sortPicker
-      nodePresentationPicker
-      nodeDetailsButton
-      closeOldConnectionsToggle
-    }
-    .fixedSize(horizontal: true, vertical: false)
-  }
+  // MARK: - Page actions
 
-  private var splitProxyWorkspaceControlStrip: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      HStack(spacing: 10) {
-        viewModePicker
-        sortPicker
-        nodePresentationPicker
-      }
-      HStack(spacing: 10) {
-        nodeDetailsButton
-        closeOldConnectionsToggle
-      }
-    }
-  }
-
-  /// `hasGroups` comes from the `rawGroups` the body already read. Asking `appModel` again would
-  /// rebuild `visibleProxyGroups` (profile ordering + preview-selection merge) a second time on
-  /// every pass just to check for emptiness.
-  private func testAllButton(hasGroups: Bool) -> some View {
+  /// Testing the group the user is looking at is the everyday action; everything wider or rarer
+  /// lives one level down in the More menu.
+  private func testGroupButton(_ group: ProxyGroup?, isDelayBatchRunning: Bool) -> some View {
     Button {
-      appModel.testDelayForAllProxyGroups()
+      guard let group else { return }
+      appModel.testDelay(in: group, testURL: appModel.customDelayTestURL(forGroupName: group.name))
     } label: {
-      Label("Test All", systemImage: "waveform.path.ecg")
+      Label("Test Group", systemImage: "waveform.path.ecg")
     }
-    .disabled(!appModel.canControlRuntimeProxies || !hasGroups || appModel.isProxyDelayBatchRunning)
-    .help("Test delay for every selectable node")
+    .disabled(!canTestGroup(group, isDelayBatchRunning: isDelayBatchRunning))
+    .help(group.map { String(format: String(localized: "Test delay for every node in %@"), $0.name) } ?? String(localized: "Test delay for this group"))
   }
 
-  private var nodeDetailsButton: some View {
-    Button {
-      appModel.updateProxyPageSettings { settings in
-        settings.showsNodeDetails.toggle()
-      }
-    } label: {
-      Image(
-        systemName: appModel.proxyPageSettings.showsNodeDetails
-          ? "list.bullet.rectangle.portrait.fill"
-          : "list.bullet.rectangle.portrait"
-      )
-    }
-    .buttonStyle(.borderless)
-    .help(appModel.proxyPageSettings.showsNodeDetails ? "Hide node details" : "Show node details")
+  private func canTestGroup(_ group: ProxyGroup?, isDelayBatchRunning: Bool) -> Bool {
+    guard let group else { return false }
+    return appModel.canControlRuntimeProxies
+      && group.nodes.contains { $0.isSelectable && $0.supportsDelayTesting }
+      && !isDelayBatchRunning
   }
 
-  private var closeOldConnectionsToggle: some View {
-    Toggle(isOn: closeOldConnectionsBinding) {
-      Label("Close Old", systemImage: "xmark.circle")
-    }
-    .toggleStyle(.checkbox)
-    .fixedSize(horizontal: true, vertical: false)
-    .help("After switching nodes, close active connections whose chain contains the previous selected node.")
-  }
-
-  private var viewModePicker: some View {
-    Picker("View", selection: viewModeBinding) {
-      ForEach(ProxyPageViewMode.allCases) { mode in
-        Text(mode.displayName).tag(mode)
-      }
-    }
-    .pickerStyle(.segmented)
-    .frame(width: 190)
-  }
-
-  private var sortPicker: some View {
-    Picker("Sort", selection: sortOrderBinding) {
-      ForEach(ProxyNodeSort.allCases) { order in
-        Text(order.displayName).tag(order)
-      }
-    }
-    .pickerStyle(.segmented)
-    .frame(width: 260)
-  }
-
-  private var nodePresentationPicker: some View {
-    Picker("Layout", selection: nodePresentationBinding) {
-      ForEach(ProxyNodePresentation.allCases) { presentation in
-        Image(systemName: presentation.systemImage).tag(presentation)
-      }
-    }
-    .pickerStyle(.segmented)
-    .frame(width: 88)
-    .fixedSize(horizontal: true, vertical: false)
-    .help("Switch node layout")
-  }
-
-  private var viewModeBinding: Binding<ProxyPageViewMode> {
-    Binding(
-      get: { appModel.proxyPageSettings.viewMode },
-      set: { value in
-        appModel.updateProxyPageSettings { settings in
-          settings.viewMode = value
+  private var sortMenu: some View {
+    Menu {
+      Picker("Sort", selection: sortOrderBinding) {
+        ForEach(ProxyNodeSort.allCases) { order in
+          Text(order.displayName).tag(order)
         }
       }
-    )
+      .pickerStyle(.inline)
+    } label: {
+      Label("Sort", systemImage: "arrow.up.arrow.down")
+    }
+    .help("Sort nodes by profile order, name, delay, or type")
+  }
+
+  private func moreMenu(
+    selectedGroup: ProxyGroup?,
+    hasGroups: Bool,
+    isStarting: Bool,
+    isDelayBatchRunning: Bool
+  ) -> some View {
+    let isPinned = selectedGroup.map { appModel.menuBarPinnedGroupSettings.contains($0.name) } ?? false
+    return Menu {
+      Button {
+        appModel.testDelayForAllProxyGroups()
+      } label: {
+        Label("Test All Groups", systemImage: "waveform.path.ecg.rectangle")
+      }
+      .disabled(!appModel.canControlRuntimeProxies || !hasGroups || isDelayBatchRunning)
+
+      Button {
+        appModel.reloadRuntimeData()
+      } label: {
+        Label("Refresh", systemImage: "arrow.clockwise")
+      }
+      .disabled(!ProxiesPageActionState.canRefresh(isStarting: isStarting))
+
+      Divider()
+
+      Button {
+        scrollToCurrentNodeRequest += 1
+      } label: {
+        Label("Locate Current Node", systemImage: "scope")
+      }
+      .disabled(selectedGroup?.selected == nil)
+
+      Button {
+        if let selectedGroup {
+          appModel.toggleMenuBarPinnedGroup(selectedGroup)
+        }
+      } label: {
+        Label(isPinned ? "Unpin from Menu Bar" : "Pin to Menu Bar", systemImage: isPinned ? "pin.slash" : "pin")
+      }
+      .disabled(selectedGroup == nil)
+
+      Button {
+        customDelayURLPopoverPresented = true
+      } label: {
+        Label("Custom Delay URL…", systemImage: "link")
+      }
+      .disabled(selectedGroup == nil)
+
+      if ProxyPageVisibilityPolicy.showsProviderSummary(
+        developerMode: appModel.developerMode,
+        providerCount: runtimeData.proxyProviders.count
+      ) {
+        Button {
+          providersPopoverPresented = true
+        } label: {
+          Label("Proxy Providers…", systemImage: "shippingbox")
+        }
+      }
+
+      Divider()
+
+      // A preference with real consequences, kept exactly where it applies rather than as a
+      // permanent checkbox in the header.
+      Toggle(isOn: closeOldConnectionsBinding) {
+        Label("Close Old Connections After Switching", systemImage: "xmark.circle")
+      }
+    } label: {
+      Label("More", systemImage: "ellipsis.circle")
+    }
+    .help("More proxy actions")
+    .popover(isPresented: $customDelayURLPopoverPresented, arrowEdge: .bottom) {
+      if let selectedGroup {
+        CustomDelayURLPopover(
+          groupName: selectedGroup.name,
+          text: customDelayTestURLBinding(for: selectedGroup.id),
+          isInvalid: appModel.proxyPageSettings.hasInvalidCustomDelayTestURL(forGroupName: selectedGroup.name)
+        )
+      }
+    }
+    .popover(isPresented: $providersPopoverPresented, arrowEdge: .bottom) {
+      ProxyProviderList(providers: runtimeData.proxyProviders)
+        .padding(12)
+        .frame(width: 520)
+        .environment(appModel)
+        .environment(runtimeData)
+    }
   }
 
   private var sortOrderBinding: Binding<ProxyNodeSort> {
     Binding(
       get: { appModel.proxyPageSettings.sortOrder },
       set: { value in
+        guard value != appModel.proxyPageSettings.sortOrder else { return }
         appModel.updateProxyPageSettings { settings in
           settings.sortOrder = value
-        }
-      }
-    )
-  }
-
-  private var nodePresentationBinding: Binding<ProxyNodePresentation> {
-    Binding(
-      get: { appModel.proxyPageSettings.nodePresentation },
-      set: { value in
-        appModel.updateProxyPageSettings { settings in
-          settings.nodePresentation = value
         }
       }
     )
@@ -405,6 +373,21 @@ struct ProxiesView: View {
     )
   }
 
+  private func customDelayTestURLBinding(for groupID: ProxyGroup.ID) -> Binding<String> {
+    Binding(
+      get: {
+        appModel.proxyPageSettings.customDelayTestURLText(forGroupName: groupID)
+      },
+      set: { value in
+        appModel.updateProxyPageSettings { settings in
+          settings.setCustomDelayTestURLText(value, forGroupName: groupID)
+        }
+      }
+    )
+  }
+
+  // MARK: - Empty states
+
   private func emptyStateTitle(rawGroups: [ProxyGroup], searchQuery: ProxySearchQuery) -> String {
     if !searchQuery.isEmpty, !rawGroups.isEmpty {
       return String(localized: "No matching proxies")
@@ -419,6 +402,15 @@ struct ProxiesView: View {
     return appModel.proxyGroupsUnavailableMessage
   }
 
+  // MARK: - Selection
+
+  private func resolvedSelectedGroup(in groups: [ProxyGroup]) -> ProxyGroup? {
+    guard let id = ProxyGroupSelectionPolicy.resolvedSelection(current: selectedGroupID, groups: groups) else {
+      return nil
+    }
+    return groups.first { $0.id == id }
+  }
+
   private func selectDefaultGroupIfNeeded(from groups: [ProxyGroup]) {
     let resolved = ProxyGroupSelectionPolicy.resolvedSelection(current: selectedGroupID, groups: groups)
     // Only write when it actually changes, so keeping a still-valid selection doesn't churn @State.
@@ -427,76 +419,399 @@ struct ProxiesView: View {
     }
   }
 
-  private func customDelayTestURLBinding(for groupID: ProxyGroup.ID?) -> Binding<String> {
-    Binding(
-      get: {
-        guard let groupID else { return "" }
-        return appModel.proxyPageSettings.customDelayTestURLText(forGroupName: groupID)
-      },
-      set: { value in
-        guard let groupID else { return }
-        appModel.updateProxyPageSettings { settings in
-          settings.setCustomDelayTestURLText(value, forGroupName: groupID)
-        }
+  private func reconcileNodeSelection(in group: ProxyGroup?) {
+    let resolved = ProxyNodeSelectionPolicy.resolvedSelection(current: selectedNodeID, nodes: group?.nodes ?? [])
+    if resolved != selectedNodeID {
+      selectedNodeID = resolved
+    }
+  }
+}
+
+/// The group column: one row per group, name and current node only. Everything else about a group
+/// is visible the moment it is selected.
+private struct ProxyGroupNavigator: View {
+  let groups: [ProxyGroup]
+  @Binding var selectedGroupID: ProxyGroup.ID?
+
+  var body: some View {
+    List(groups, selection: $selectedGroupID) { group in
+      ProxyGroupRow(group: group)
+        .tag(group.id)
+    }
+    .listStyle(.inset)
+    .scrollContentBackground(.hidden)
+    .accessibilityLabel("Proxy groups")
+  }
+}
+
+private struct ProxyGroupRow: View {
+  let group: ProxyGroup
+
+  var body: some View {
+    HStack(spacing: 8) {
+      Image(systemName: group.allowsManualProxySelection ? "point.3.connected.trianglepath.dotted" : "gearshape.2")
+        .foregroundStyle(.secondary)
+        .frame(width: 16)
+        .accessibilityHidden(true)
+
+      VStack(alignment: .leading, spacing: 2) {
+        Text(group.name)
+          .lineLimit(1)
+          .truncationMode(.tail)
+        Text(group.selected ?? String(localized: "No selection"))
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+          .truncationMode(.tail)
       }
-    )
+    }
+    .padding(.vertical, 2)
+    .help(group.allowsManualProxySelection ? group.name : String(format: String(localized: "%@ is managed automatically by Mihomo."), group.name))
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel(accessibilityLabel)
   }
 
-  private func toggleExpansion(for group: ProxyGroup, visibleGroups: [ProxyGroup], searchQuery: ProxySearchQuery) {
-    guard searchQuery.isEmpty else { return }
-    let currentExpansion = ProxyGroupExpansionPolicy.resolvedExpansion(
-      current: expandedGroupIDs,
-      groups: visibleGroups,
-      searchQuery: searchQuery.rawValue
-    )
-    withAnimation(ProxyInteractionAnimation.expansion(reduceMotion: reduceMotion)) {
-      expandedGroupIDs = ProxyGroupExpansionPolicy.toggled(groupID: group.id, in: currentExpansion)
+  private var accessibilityLabel: String {
+    let selection = group.selected ?? String(localized: "No selection")
+    return "\(group.name), \(selection)"
+  }
+}
+
+/// The node list for the selected group plus a one-line detail bar for the highlighted node.
+///
+/// Highlighting a row only browses. Using a node is a deliberate action — double-click, Return, the
+/// detail bar's button or the context menu — so a runtime reload or a list refresh can never switch
+/// the group's node on its own.
+private struct ProxyGroupNodePane: View {
+  @Environment(AppModel.self) private var appModel
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  let group: ProxyGroup
+  @Binding var selectedNodeID: ProxyNode.ID?
+  /// Passed in rather than read from `appModel`: the getter touches `proxyDelayBatchProgress`, and
+  /// Observation tracks the stored property, not the derived flag. Reading it here would subscribe
+  /// the whole node list to every coalesced batch flush.
+  let isDelayBatchRunning: Bool
+  let scrollToCurrentNodeRequest: Int
+
+  var body: some View {
+    let canSelect = group.allowsManualProxySelection
+      && (appModel.canControlRuntimeProxies || appModel.canSelectProxyOffline)
+    let closesOldConnections = appModel.proxyPageSettings.closesOldConnectionsAfterSwitch
+
+    VStack(alignment: .leading, spacing: 0) {
+      header
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+
+      Divider()
+
+      ScrollViewReader { proxy in
+        List(group.nodes, selection: $selectedNodeID) { node in
+          ProxyNodeRow(node: node, isCurrent: group.selected == node.name)
+            .tag(node.id)
+            .id(node.id)
+        }
+        .listStyle(.inset)
+        .scrollContentBackground(.hidden)
+        .contextMenu(forSelectionType: ProxyNode.ID.self) { ids in
+          if let node = ids.first.flatMap(node(for:)) {
+            nodeMenu(for: node, canSelect: canSelect, closesOldConnections: closesOldConnections)
+          }
+        } primaryAction: { ids in
+          if let node = ids.first.flatMap(node(for:)) {
+            useNode(node, canSelect: canSelect, closesOldConnections: closesOldConnections)
+          }
+        }
+        .onKeyPress(.return) {
+          guard let node = selectedNodeID.flatMap(node(for:)) else { return .ignored }
+          useNode(node, canSelect: canSelect, closesOldConnections: closesOldConnections)
+          return .handled
+        }
+        .onChange(of: scrollToCurrentNodeRequest) { _, _ in
+          guard let currentNodeID else { return }
+          selectedNodeID = currentNodeID
+          withAnimation(reduceMotion ? nil : .snappy(duration: 0.22)) {
+            proxy.scrollTo(currentNodeID, anchor: .center)
+          }
+        }
+        .accessibilityLabel(String(format: String(localized: "Nodes in %@"), group.name))
+      }
+
+      if let node = selectedNodeID.flatMap(node(for:)) {
+        Divider()
+        ProxyNodeDetailBar(
+          group: group,
+          node: node,
+          canSelect: canSelect,
+          canTest: canTest(node),
+          onUse: { useNode(node, canSelect: canSelect, closesOldConnections: closesOldConnections) },
+          onTest: { testDelay(for: node) }
+        )
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+      }
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+  }
+
+  private var header: some View {
+    HStack(alignment: .firstTextBaseline, spacing: 8) {
+      Text(group.name)
+        .font(.headline)
+        .lineLimit(1)
+      Text(headerSubtitle)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+      Spacer(minLength: 8)
+      if !group.allowsManualProxySelection {
+        Label("Automatic", systemImage: "gearshape.2")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .help(String(format: String(localized: "%@ is managed automatically by Mihomo."), group.name))
+      }
+    }
+  }
+
+  private var headerSubtitle: String {
+    let count = String.localizedStringWithFormat(NSLocalizedString("%lld nodes", comment: ""), Int64(group.nodes.count))
+    let type = group.type.trimmingCharacters(in: .whitespacesAndNewlines)
+    return type.isEmpty ? count : "\(count) · \(type)"
+  }
+
+  @ViewBuilder
+  private func nodeMenu(for node: ProxyNode, canSelect: Bool, closesOldConnections: Bool) -> some View {
+    Button("Use Node") {
+      useNode(node, canSelect: canSelect, closesOldConnections: closesOldConnections)
+    }
+    .disabled(!(canSelect && node.isSelectable))
+
+    Button("Test Delay") {
+      testDelay(for: node)
+    }
+    .disabled(!canTest(node))
+
+    Divider()
+
+    Button("Copy Node Name") {
+      NSPasteboard.general.clearContents()
+      NSPasteboard.general.setString(node.name, forType: .string)
+    }
+  }
+
+  private func node(for id: ProxyNode.ID) -> ProxyNode? {
+    group.nodes.first { $0.id == id }
+  }
+
+  private var currentNodeID: ProxyNode.ID? {
+    group.nodes.first(where: { $0.name == group.selected })?.id
+  }
+
+  private func canTest(_ node: ProxyNode) -> Bool {
+    node.isSelectable
+      && node.supportsDelayTesting
+      && appModel.canControlRuntimeProxies
+      && !isDelayBatchRunning
+  }
+
+  /// Double-click, Return and "Use Node" all land here. Re-submitting the node the group already
+  /// uses is skipped: it would only send the same selection to the core again (and, with the
+  /// close-old-connections preference on, needlessly cut the group's live connections).
+  private func useNode(_ node: ProxyNode, canSelect: Bool, closesOldConnections: Bool) {
+    guard canSelect, node.isSelectable, group.selected != node.name else { return }
+    appModel.selectProxy(group: group, node: node, closeOldConnections: closesOldConnections)
+  }
+
+  private func testDelay(for node: ProxyNode) {
+    appModel.testDelay(in: group, for: node, testURL: appModel.customDelayTestURL(forGroupName: group.name))
+  }
+}
+
+private struct ProxyNodeRow: View {
+  let node: ProxyNode
+  let isCurrent: Bool
+
+  var body: some View {
+    let delay = ProxyNodeDelayLabel(node: node)
+    HStack(spacing: 8) {
+      Image(systemName: "checkmark.circle.fill")
+        .foregroundStyle(Color.accentColor)
+        .opacity(isCurrent ? 1 : 0)
+        .frame(width: 16)
+        .accessibilityHidden(true)
+
+      Text(node.name)
+        .fontWeight(isCurrent ? .semibold : .regular)
+        .foregroundStyle(node.isSelectable ? .primary : .secondary)
+        .lineLimit(1)
+        .truncationMode(.middle)
+
+      Spacer(minLength: 12)
+
+      if node.resolvedDelayState == .testing {
+        ProgressView()
+          .controlSize(.mini)
+      } else {
+        Text(delay.text)
+          .font(.callout.monospacedDigit())
+          .foregroundStyle(delay.color)
+          .lineLimit(1)
+          .help(delay.help)
+      }
+    }
+    .padding(.vertical, 1)
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel(accessibilityLabel(delay: delay))
+  }
+
+  private func accessibilityLabel(delay: ProxyNodeDelayLabel) -> String {
+    var parts = [node.name]
+    if isCurrent {
+      parts.append(String(localized: "current node"))
+    }
+    parts.append(delay.help)
+    return parts.joined(separator: ", ")
+  }
+}
+
+/// Delay as text that never lies: a node that cannot be measured says so instead of showing a number.
+struct ProxyNodeDelayLabel {
+  let text: String
+  let help: String
+  let color: Color
+
+  init(node: ProxyNode) {
+    guard node.supportsDelayTesting else {
+      text = "—"
+      help = String(localized: "Built-in outbounds have no connection to measure.")
+      color = .secondary
+      return
+    }
+    let display = ProxyDelayDisplay(state: node.resolvedDelayState)
+    text = display.localizedLabel
+    color = display.tone.color
+    switch node.resolvedDelayState {
+    case .unknown:
+      help = String(localized: "Not tested yet")
+    case .testing:
+      help = String(localized: "Testing")
+    case let .measured(delay):
+      help = String(format: String(localized: "Measured %lld ms"), Int64(delay))
+    case .timeout:
+      help = String(localized: "The delay test timed out.")
+    case let .error(message):
+      help = message.isEmpty ? String(localized: "No result") : message
     }
   }
 }
 
-private func localizedProxiesText(_ value: String) -> String {
-  NSLocalizedString(value, comment: "")
-}
+/// The one place a node's technical facts appear: protocol, provider, endpoint, capabilities and the
+/// delay verdict for the highlighted node, with the two actions that apply to it.
+private struct ProxyNodeDetailBar: View {
+  let group: ProxyGroup
+  let node: ProxyNode
+  let canSelect: Bool
+  let canTest: Bool
+  let onUse: () -> Void
+  let onTest: () -> Void
 
-private func localizedProxiesCount(_ formatKey: String, _ count: Int) -> String {
-  String.localizedStringWithFormat(NSLocalizedString(formatKey, comment: ""), Int64(count))
-}
+  var body: some View {
+    let isCurrent = group.selected == node.name
+    ViewThatFits(in: .horizontal) {
+      HStack(alignment: .firstTextBaseline, spacing: 12) {
+        facts
+        Spacer(minLength: 12)
+        actions(isCurrent: isCurrent)
+      }
 
-private struct ProxyGroupListAnimationState: Equatable {
-  let groupIDs: [String]
-  let expandedGroupIDs: [String]
-  let nodeIDsByGroup: [[String]]
-  let selections: [String]
-  let searchQuery: String
-  let sortOrder: ProxyNodeSort
-
-  init(
-    groups: [ProxyGroup],
-    expandedGroupIDs: Set<String>,
-    searchQuery: String,
-    sortOrder: ProxyNodeSort
-  ) {
-    groupIDs = groups.map(\.id)
-    self.expandedGroupIDs = expandedGroupIDs.sorted()
-    nodeIDsByGroup = groups.map { group in
-      group.nodes.map(\.id)
+      VStack(alignment: .leading, spacing: 8) {
+        facts
+        actions(isCurrent: isCurrent)
+      }
     }
-    selections = groups.map { group in
-      group.selected ?? ""
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel("Node details")
+  }
+
+  private var facts: some View {
+    VStack(alignment: .leading, spacing: 2) {
+      Text(node.name)
+        .font(.callout.weight(.semibold))
+        .lineLimit(1)
+        .truncationMode(.middle)
+      Text(detailLine)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .lineLimit(2)
+        .textSelection(.enabled)
     }
-    self.searchQuery = searchQuery
-    self.sortOrder = sortOrder
+  }
+
+  private func actions(isCurrent: Bool) -> some View {
+    HStack(spacing: 8) {
+      Button("Test Delay", action: onTest)
+        .disabled(!canTest)
+        .help(canTest ? String(localized: "Test delay") : ProxyNodeDelayLabel(node: node).help)
+
+      if group.allowsManualProxySelection {
+        if isCurrent {
+          Label("In Use", systemImage: "checkmark.circle.fill")
+            .font(.callout)
+            .foregroundStyle(Color.accentColor)
+        } else {
+          Button("Use Node", action: onUse)
+            .buttonStyle(.borderedProminent)
+            .disabled(!(canSelect && node.isSelectable))
+        }
+      } else {
+        Text("Selected automatically")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+    }
+    .controlSize(.small)
+  }
+
+  private var detailLine: String {
+    var parts: [String] = []
+    let type = node.type.trimmingCharacters(in: .whitespacesAndNewlines)
+    parts.append(type.isEmpty ? String(localized: "proxy") : type)
+    if let providerName = node.providerName {
+      parts.append(providerName)
+    }
+    if let endpoint = node.endpointSummary {
+      parts.append(endpoint)
+    }
+    parts.append(contentsOf: node.capabilityLabels)
+    parts.append(ProxyNodeDelayLabel(node: node).help)
+    return parts.joined(separator: " · ")
   }
 }
 
-private struct ProxyNodeGridAnimationState: Equatable {
-  let nodeIDs: [String]
-  let selected: String?
+private struct CustomDelayURLPopover: View {
+  let groupName: String
+  @Binding var text: String
+  let isInvalid: Bool
 
-  init(group: ProxyGroup) {
-    nodeIDs = group.nodes.map(\.id)
-    selected = group.selected
+  var body: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text("Custom Delay URL")
+        .font(.headline)
+      Text(String(format: String(localized: "Used by delay tests for %@. Leave empty for the default URL."), groupName))
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+      TextField("Custom delay URL", text: $text)
+        .textFieldStyle(.roundedBorder)
+      if isInvalid {
+        Label("Invalid custom delay URL. Falling back to default delay URL.", systemImage: "exclamationmark.triangle.fill")
+          .font(.caption)
+          .foregroundStyle(.orange)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .padding(14)
+    .frame(width: 360)
   }
 }
 
@@ -512,58 +827,6 @@ enum ProxyPageVisibilityPolicy {
     isStarting: Bool
   ) -> Bool {
     unfilteredGroupCount == 0 && hasActiveProfile && (isRuntimeDataLoading || isStarting)
-  }
-}
-
-enum ProxyGroupExpansionPolicy {
-  static func resolvedExpansion(
-    current: Set<String>?,
-    groups: [ProxyGroup],
-    searchQuery: String
-  ) -> Set<String> {
-    let groupIDs = Set(groups.map(\.id))
-    guard !groupIDs.isEmpty else { return [] }
-    if !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-      return groupIDs
-    }
-    guard let current else {
-      return defaultExpandedIDs(for: groups)
-    }
-    let retained = current.intersection(groupIDs)
-    if !current.isEmpty, retained.isEmpty {
-      return defaultExpandedIDs(for: groups)
-    }
-    return retained
-  }
-
-  static func retainedExpansion(current: Set<String>?, groups: [ProxyGroup]) -> Set<String>? {
-    guard let current else { return nil }
-    let groupIDs = Set(groups.map(\.id))
-    let retained = current.intersection(groupIDs)
-    if !current.isEmpty, retained.isEmpty {
-      return defaultExpandedIDs(for: groups)
-    }
-    return retained
-  }
-
-  static func toggled(groupID: String, in expansion: Set<String>) -> Set<String> {
-    var next = expansion
-    if next.contains(groupID) {
-      next.remove(groupID)
-    } else {
-      next.insert(groupID)
-    }
-    return next
-  }
-
-  private static func defaultExpandedIDs(for groups: [ProxyGroup]) -> Set<String> {
-    let selectedGroupIDs = groups.compactMap { group in
-      group.selected == nil ? nil : group.id
-    }
-    if !selectedGroupIDs.isEmpty {
-      return Set(selectedGroupIDs)
-    }
-    return groups.first.map { [$0.id] } ?? []
   }
 }
 
@@ -606,6 +869,7 @@ enum ProxyNodeSorter {
 /// searching "韩国" filters out a group with no Korea nodes). When that happens the right pane must
 /// re-point at a group that is actually present instead of rendering a stale/empty list. Pure and
 /// `@State`-free so it can be unit-tested.
+
 enum ProxyGroupSelectionPolicy {
   static func resolvedSelection(current: ProxyGroup.ID?, groups: [ProxyGroup]) -> ProxyGroup.ID? {
     guard !groups.isEmpty else { return nil }
@@ -789,319 +1053,6 @@ struct ProxySearchQuery: Equatable, Sendable {
       in: text,
       range: NSRange(text.startIndex..<text.endIndex, in: text)
     ) != nil
-  }
-}
-
-private struct ProxyWorkspaceSurface<Content: View>: View {
-  let content: Content
-
-  init(@ViewBuilder content: () -> Content) {
-    self.content = content()
-  }
-
-  var body: some View {
-    let shape = SurfaceRadius.shape(SurfaceRadius.card)
-    VStack(alignment: .leading, spacing: 0) {
-      content
-    }
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    .background(.cardSurface, in: shape)
-    .clipShape(shape)
-    .overlay(shape.strokeBorder(.separator, lineWidth: 1))
-  }
-}
-
-private struct ProxyGroupSplitView: View {
-  @Binding var selectedGroupID: ProxyGroup.ID?
-  let groups: [ProxyGroup]
-  let nodePresentation: ProxyNodePresentation
-  let showsNodeDetails: Bool
-  let closesOldConnectionsAfterSwitch: Bool
-  let isDelayBatchRunning: Bool
-  @Binding var customDelayTestURLText: String
-
-  init(
-    groups: [ProxyGroup],
-    selectedGroupID: Binding<ProxyGroup.ID?>,
-    nodePresentation: ProxyNodePresentation,
-    showsNodeDetails: Bool,
-    closesOldConnectionsAfterSwitch: Bool,
-    isDelayBatchRunning: Bool,
-    customDelayTestURLText: Binding<String>
-  ) {
-    self.groups = groups
-    _selectedGroupID = selectedGroupID
-    self.nodePresentation = nodePresentation
-    self.showsNodeDetails = showsNodeDetails
-    self.closesOldConnectionsAfterSwitch = closesOldConnectionsAfterSwitch
-    self.isDelayBatchRunning = isDelayBatchRunning
-    _customDelayTestURLText = customDelayTestURLText
-  }
-
-  var body: some View {
-    HStack(spacing: 0) {
-      ProxyGroupNavigator(groups: groups, selectedGroupID: $selectedGroupID)
-        .frame(minWidth: 180, idealWidth: 208, maxWidth: 240)
-
-      Divider()
-
-      if let selectedGroup {
-        ProxyGroupDetailPane(
-          group: selectedGroup,
-          nodePresentation: nodePresentation,
-          showsNodeDetails: showsNodeDetails,
-          closesOldConnectionsAfterSwitch: closesOldConnectionsAfterSwitch,
-          isDelayBatchRunning: isDelayBatchRunning,
-          customDelayTestURLText: $customDelayTestURLText
-        )
-      } else {
-        CenteredUnavailableState(
-          title: "No group selected",
-          systemImage: "point.3.connected.trianglepath.dotted",
-          message: "Select a proxy group to inspect nodes."
-        )
-      }
-    }
-  }
-
-  private var selectedGroup: ProxyGroup? {
-    if let selectedGroupID,
-       let group = groups.first(where: { $0.id == selectedGroupID })
-    {
-      return group
-    }
-    return groups.first
-  }
-}
-
-private struct ProxyGroupNavigator: View {
-  let groups: [ProxyGroup]
-  @Binding var selectedGroupID: ProxyGroup.ID?
-
-  var body: some View {
-    ScrollView {
-      LazyVStack(alignment: .leading, spacing: 3) {
-        ForEach(groups) { group in
-          Button {
-            selectedGroupID = group.id
-          } label: {
-            ProxyGroupNavigatorRow(group: group, isSelected: isSelected(group))
-          }
-          .buttonStyle(.plain)
-          .help("Show \(group.name)")
-          .accessibilityLabel(group.name)
-        }
-      }
-      .padding(8)
-      .frame(maxWidth: .infinity, alignment: .topLeading)
-    }
-    .background(.cardSurface)
-  }
-
-  private func isSelected(_ group: ProxyGroup) -> Bool {
-    if let selectedGroupID {
-      return group.id == selectedGroupID
-    }
-    return group.id == groups.first?.id
-  }
-}
-
-private struct ProxyGroupNavigatorRow: View {
-  let group: ProxyGroup
-  let isSelected: Bool
-
-  var body: some View {
-    HStack(spacing: 9) {
-      Image(systemName: group.allowsManualProxySelection ? "point.3.connected.trianglepath.dotted" : "gearshape.2")
-        .foregroundStyle(iconStyle)
-        .frame(width: 16)
-
-      VStack(alignment: .leading, spacing: 2) {
-        Text(group.name)
-          .foregroundStyle(isSelected ? .white : .primary)
-          .lineLimit(1)
-        Text(subtitle)
-          .font(.caption)
-          .foregroundStyle(isSelected ? .white.opacity(0.82) : .secondary)
-          .lineLimit(1)
-      }
-    }
-    .padding(.horizontal, 10)
-    .padding(.vertical, 7)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .contentShape(SurfaceRadius.shape(SurfaceRadius.tile))
-    .background {
-      SurfaceRadius.shape(SurfaceRadius.tile)
-        .fill(isSelected ? Color.accentColor : .clear)
-    }
-  }
-
-  private var subtitle: String {
-    let selected = group.selected ?? "No selection"
-    let best = group.nodes.compactMap(\.resolvedDelayState.measuredDelay).min()
-    if let best {
-      return "\(group.nodes.count) nodes - \(selected) - best \(best) ms"
-    }
-    return "\(group.nodes.count) nodes - \(selected)"
-  }
-
-  private var iconStyle: Color {
-    if isSelected {
-      return .white
-    }
-    return group.allowsManualProxySelection ? .cyan : .secondary
-  }
-}
-
-private struct ProxyGroupDetailPane: View {
-  @Environment(AppModel.self) private var appModel
-  @State private var scrollToSelectedRequest = 0
-  let group: ProxyGroup
-  let nodePresentation: ProxyNodePresentation
-  let showsNodeDetails: Bool
-  let closesOldConnectionsAfterSwitch: Bool
-  let isDelayBatchRunning: Bool
-  @Binding var customDelayTestURLText: String
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      detailToolbar
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-      Divider()
-      ScrollViewReader { proxy in
-        ScrollView {
-          if nodePresentation == .grid {
-            LazyVGrid(
-              columns: [GridItem(.adaptive(minimum: 210, maximum: 320), spacing: 10, alignment: .topLeading)],
-              alignment: .leading,
-              spacing: 10
-            ) {
-              nodeCards
-            }
-            .padding(10)
-          } else {
-            LazyVStack(alignment: .leading, spacing: 8) {
-              nodeCards
-            }
-            .padding(10)
-          }
-        }
-        .onChange(of: scrollToSelectedRequest) { _, _ in
-          if let selectedNodeID {
-            withAnimation(.snappy(duration: 0.22)) {
-              proxy.scrollTo(selectedNodeID, anchor: .center)
-            }
-          }
-        }
-      }
-    }
-  }
-
-  private var nodeCards: some View {
-    ForEach(group.nodes) { node in
-      ProxyNodeCard(
-        group: group,
-        node: node,
-        customDelayTestURL: parsedCustomDelayTestURL,
-        showsDetails: showsNodeDetails,
-        closesOldConnectionsAfterSwitch: closesOldConnectionsAfterSwitch,
-        isDelayBatchRunning: isDelayBatchRunning
-      )
-      .id(node.id)
-    }
-  }
-
-  private var detailToolbar: some View {
-    ViewThatFits(in: .horizontal) {
-      HStack(spacing: 10) {
-        groupSummary
-        Spacer(minLength: 12)
-        customDelayURLControl
-        detailActions
-      }
-
-      VStack(alignment: .leading, spacing: 8) {
-        groupSummary
-        HStack(spacing: 10) {
-          customDelayURLControl
-          detailActions
-        }
-      }
-    }
-  }
-
-  private var groupSummary: some View {
-    VStack(alignment: .leading, spacing: 3) {
-      HStack(spacing: 8) {
-        Text(group.name)
-          .font(.callout.weight(.semibold))
-          .lineLimit(1)
-        ProxyTypeBadge(text: group.type)
-      }
-      Text("\(group.nodes.count) nodes")
-        .font(.caption)
-        .foregroundStyle(.secondary)
-    }
-  }
-
-  private var customDelayURLControl: some View {
-    VStack(alignment: .leading, spacing: 3) {
-      TextField("Custom delay URL", text: $customDelayTestURLText)
-        .textFieldStyle(.roundedBorder)
-        .help("Optional URL for this group's Mihomo delay test")
-      if hasInvalidCustomDelayTestURL {
-        Text("Invalid custom delay URL. Falling back to default delay URL.")
-          .font(.caption2)
-          .foregroundStyle(.orange)
-          .lineLimit(1)
-      }
-    }
-    .frame(minWidth: 180, idealWidth: 250, maxWidth: 320)
-  }
-
-  private var detailActions: some View {
-    HStack(spacing: 8) {
-      Button {
-        scrollToSelectedRequest += 1
-      } label: {
-        Image(systemName: "scope")
-      }
-      .disabled(selectedNodeID == nil)
-      .help("Locate selected node")
-
-      Button {
-        appModel.testDelay(in: group, testURL: parsedCustomDelayTestURL)
-      } label: {
-        Label("Test Group", systemImage: "waveform.path.ecg")
-          .labelStyle(.titleAndIcon)
-      }
-      .disabled(
-        !appModel.canControlRuntimeProxies
-          || !group.nodes.contains { $0.isSelectable && $0.supportsDelayTesting }
-          || isDelayBatchRunning
-      )
-      .help("Test delay for this group")
-
-      Button {
-        appModel.toggleMenuBarPinnedGroup(group)
-      } label: {
-        Image(systemName: appModel.menuBarPinnedGroupSettings.contains(group.name) ? "pin.fill" : "pin")
-      }
-      .help(appModel.menuBarPinnedGroupSettings.contains(group.name) ? "Unpin from menu bar" : "Pin to menu bar")
-    }
-  }
-
-  private var selectedNodeID: ProxyNode.ID? {
-    group.nodes.first(where: { $0.name == group.selected })?.id
-  }
-
-  private var parsedCustomDelayTestURL: URL? {
-    appModel.customDelayTestURL(forGroupName: group.name)
-  }
-
-  private var hasInvalidCustomDelayTestURL: Bool {
-    appModel.proxyPageSettings.hasInvalidCustomDelayTestURL(forGroupName: group.name)
   }
 }
 
@@ -1425,13 +1376,6 @@ private struct ProxyProviderList: View {
         }
       }
     }
-    .padding(.horizontal, 12)
-    .padding(.vertical, 8)
-    .background(.insetSurface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .strokeBorder(.separator, lineWidth: 1)
-    }
   }
 
   private var allUpdatesInFlight: Bool {
@@ -1444,444 +1388,21 @@ private struct ProxyProviderList: View {
   }
 }
 
-private struct ProxyGroupCard: View {
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  let group: ProxyGroup
-  let customDelayTestURL: URL?
-  let showsDeveloperDetails: Bool
-  let closesOldConnectionsAfterSwitch: Bool
-  let isExpanded: Bool
-  let isSearchActive: Bool
-  let isDelayBatchRunning: Bool
-  let onToggle: () -> Void
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      Button {
-        onToggle()
-      } label: {
-        groupHeader
-      }
-      .buttonStyle(.plain)
-      .help(groupHeaderHelp)
-      .accessibilityLabel(groupHeaderAccessibilityLabel)
-
-      if isExpanded {
-        expandedContent
-          .transition(ProxyInteractionAnimation.expansionTransition(reduceMotion: reduceMotion))
-      }
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .background(.cardSurface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .strokeBorder(.separator, lineWidth: 1)
-    }
-  }
-
-  private var expandedContent: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      Divider()
-        .padding(.horizontal, 12)
-      LazyVGrid(
-        columns: [GridItem(.adaptive(minimum: 190, maximum: 280), spacing: 10, alignment: .topLeading)],
-        alignment: .leading,
-        spacing: 10
-      ) {
-        ForEach(group.nodes) { node in
-          ProxyNodeCard(
-            group: group,
-            node: node,
-            customDelayTestURL: customDelayTestURL,
-            showsDetails: showsDeveloperDetails,
-            closesOldConnectionsAfterSwitch: closesOldConnectionsAfterSwitch,
-            isDelayBatchRunning: isDelayBatchRunning
-          )
-          .transition(ProxyInteractionAnimation.nodeTransition(reduceMotion: reduceMotion))
-        }
-      }
-      .padding(10)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .animation(
-        ProxyInteractionAnimation.list(reduceMotion: reduceMotion),
-        value: ProxyNodeGridAnimationState(group: group)
-      )
-    }
-    .clipped()
-  }
-
-  private var groupHeader: some View {
-    HStack(spacing: 10) {
-      Image(systemName: "chevron.right")
-        .font(.caption.weight(.semibold))
-        .foregroundStyle(.secondary)
-        .frame(width: 12)
-        .rotationEffect(.degrees(isExpanded ? 90 : 0))
-        .animation(ProxyInteractionAnimation.chevron(reduceMotion: reduceMotion), value: isExpanded)
-
-      Image(systemName: "point.3.connected.trianglepath.dotted")
-        .foregroundStyle(.cyan)
-        .frame(width: 18)
-
-      VStack(alignment: .leading, spacing: 5) {
-        HStack(spacing: 8) {
-          Text(group.name)
-            .font(.callout.weight(.semibold))
-            .foregroundStyle(.primary)
-            .lineLimit(1)
-          if showsDeveloperDetails {
-            ProxyTypeBadge(text: group.type)
-          }
-        }
-
-        ViewThatFits(in: .horizontal) {
-          HStack(spacing: 10) {
-            nodeCountLabel
-            selectedLabel
-            selectedDelayLabel
-          }
-
-          VStack(alignment: .leading, spacing: 3) {
-            nodeCountLabel
-            selectedLabel
-            selectedDelayLabel
-          }
-        }
-      }
-
-      Spacer(minLength: 12)
-    }
-    .padding(.horizontal, 12)
-    .padding(.vertical, 10)
-    .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-  }
-
-  private var groupHeaderHelp: String {
-    if isSearchActive {
-      return "Search results expand matching groups automatically."
-    }
-    return "Toggle \(group.name)"
-  }
-
-  private var groupHeaderAccessibilityLabel: String {
-    "\(isExpanded ? "Collapse" : "Expand") \(group.name)"
-  }
-
-  private var nodeCountLabel: some View {
-    Label("\(group.nodes.count) nodes", systemImage: "circle.grid.2x2")
-      .font(.caption)
-      .foregroundStyle(.secondary)
-      .lineLimit(1)
-  }
-
-  private var selectedLabel: some View {
-    Group {
-      if let selected = group.selected {
-        Label(selected, systemImage: "checkmark.circle.fill")
-          .foregroundStyle(.secondary)
-      } else {
-        Label("No selection", systemImage: "circle")
-          .foregroundStyle(.tertiary)
-      }
-    }
-    .font(.caption)
-    .lineLimit(1)
-  }
-
-  private var selectedDelayLabel: some View {
-    Group {
-      if let selectedNode = group.nodes.first(where: { $0.name == group.selected }) {
-        let delayDisplay = ProxyDelayDisplay(state: selectedNode.resolvedDelayState)
-        Text(delayDisplay.label)
-          .foregroundStyle(delayDisplay.tone.color)
-      }
-    }
-    .font(.caption.monospacedDigit())
-    .lineLimit(1)
-  }
-}
-
-private struct ProxyNodeCard: View {
-  @Environment(AppModel.self) private var appModel
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @GestureState private var isPressing = false
-  let group: ProxyGroup
-  let node: ProxyNode
-  let customDelayTestURL: URL?
-  let showsDetails: Bool
-  let closesOldConnectionsAfterSwitch: Bool
-  /// Passed in rather than read from `appModel`: the getter touches `proxyDelayBatchProgress`, and
-  /// Observation tracks the stored property, not the derived flag. Reading it here subscribed every
-  /// node card to every coalesced batch flush, so all of them re-ran their body several times a
-  /// second while "Test All" was running even though the flag itself never changed.
-  let isDelayBatchRunning: Bool
-
-  var body: some View {
-    let canSelect = group.allowsManualProxySelection
-      && node.isSelectable
-      && (appModel.canControlRuntimeProxies || appModel.canSelectProxyOffline)
-    let canTest = node.isSelectable
-      && node.supportsDelayTesting
-      && appModel.canControlRuntimeProxies
-      && !isDelayBatchRunning
-    let delayDisplay = ProxyDelayDisplay(state: node.resolvedDelayState)
-    let isSelected = group.selected == node.name
-
-    ZStack(alignment: .topTrailing) {
-      Button {
-        guard canSelect else { return }
-        withAnimation(ProxyInteractionAnimation.selection(reduceMotion: reduceMotion)) {
-          appModel.selectProxy(
-            group: group,
-            node: node,
-            closeOldConnections: closesOldConnectionsAfterSwitch
-          )
-        }
-      } label: {
-        VStack(alignment: .leading, spacing: 8) {
-          HStack(alignment: .top, spacing: 8) {
-            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-              .foregroundStyle(isSelected ? .green : .secondary)
-              .frame(width: 16)
-              .scaleEffect(isSelected ? 1.04 : 1)
-              .animation(ProxyInteractionAnimation.selection(reduceMotion: reduceMotion), value: isSelected)
-
-            Text(node.name)
-              .font(.callout.weight(isSelected ? .semibold : .regular))
-              .foregroundStyle(node.isSelectable ? .primary : .secondary)
-              .lineLimit(2)
-              .fixedSize(horizontal: false, vertical: true)
-
-            Spacer(minLength: 20)
-          }
-
-          ProxyNodeMetadataRow(node: node, delayDisplay: delayDisplay)
-
-          if showsDetails, let endpoint = node.endpointSummary {
-            Label(endpoint, systemImage: "network")
-              .font(.caption)
-              .foregroundStyle(.secondary)
-              .lineLimit(1)
-          }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 9)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-      }
-      .buttonStyle(.plain)
-      .allowsHitTesting(canSelect)
-      .help(selectionHelp(canSelect: canSelect))
-
-      Button {
-        appModel.testDelay(
-          in: group,
-          for: node,
-          testURL: customDelayTestURL ?? appModel.customDelayTestURL(forGroupName: group.name)
-        )
-      } label: {
-        DelayActionIcon(state: node.resolvedDelayState)
-      }
-      .buttonStyle(.borderless)
-      .controlSize(.small)
-      .disabled(!canTest)
-      .help(delayTestHelp(canTest: canTest))
-      .accessibilityLabel("Test delay for \(node.name)")
-      .padding(.top, 7)
-      .padding(.trailing, 7)
-    }
-    .frame(maxWidth: .infinity, alignment: .topLeading)
-    .scaleEffect(nodeScale(canSelect: canSelect))
-    .background {
-      RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .fill(.insetSurface)
-      RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .fill(nodeInteractionTint(isSelected: isSelected, canSelect: canSelect))
-    }
-    .overlay {
-      RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .strokeBorder(
-          nodeBorder(isSelected: isSelected, canSelect: canSelect),
-          lineWidth: isSelected || (isPressing && canSelect) ? 1.2 : 1
-        )
-    }
-    .simultaneousGesture(pressGesture(isEnabled: canSelect))
-    .animation(ProxyInteractionAnimation.press(reduceMotion: reduceMotion), value: isPressing)
-    .animation(ProxyInteractionAnimation.selection(reduceMotion: reduceMotion), value: isSelected)
-  }
-
-  private func nodeScale(canSelect: Bool) -> Double {
-    guard canSelect, isPressing, !reduceMotion else { return 1 }
-    return 0.992
-  }
-
-  private func delayTestHelp(canTest: Bool) -> String {
-    if canTest {
-      return String(localized: "Test delay")
-    }
-    if !node.supportsDelayTesting {
-      return String(localized: "Built-in outbounds have no connection to measure.")
-    }
-    return String(localized: "Preview core needs a moment to come up before delay testing.")
-  }
-
-  private func selectionHelp(canSelect: Bool) -> String {
-    if canSelect {
-      return "Select \(node.name)"
-    }
-    if !group.allowsManualProxySelection {
-      return "\(group.name) is managed automatically by Mihomo."
-    }
-    return appModel.proxyRuntimeActionMessage
-  }
-
-  private func nodeInteractionTint(isSelected: Bool, canSelect: Bool) -> Color {
-    if isSelected {
-      return .green.opacity(0.05)
-    }
-    if canSelect, isPressing {
-      return Color.accentColor.opacity(0.045)
-    }
-    return .clear
-  }
-
-  private func nodeBorder(isSelected: Bool, canSelect: Bool) -> AnyShapeStyle {
-    if isSelected {
-      return AnyShapeStyle(.green.opacity(0.75))
-    }
-    if canSelect, isPressing {
-      return AnyShapeStyle(Color.accentColor.opacity(0.35))
-    }
-    return AnyShapeStyle(.separator)
-  }
-
-  private func pressGesture(isEnabled: Bool) -> some Gesture {
-    DragGesture(minimumDistance: 0)
-      .updating($isPressing) { _, state, _ in
-        state = isEnabled
-      }
-  }
-}
-
-private struct ProxyNodeMetadataRow: View {
-  let node: ProxyNode
-  let delayDisplay: ProxyDelayDisplay
-
-  var body: some View {
-    ViewThatFits(in: .horizontal) {
-      HStack(spacing: 8) {
-        allBadges
-        Spacer(minLength: 8)
-        DelayChip(display: delayDisplay)
-      }
-
-      VStack(alignment: .leading, spacing: 6) {
-        allBadges
-        DelayChip(display: delayDisplay)
-      }
-
-      HStack(spacing: 8) {
-        coreBadges
-        Spacer(minLength: 8)
-        DelayChip(display: delayDisplay)
-      }
-
-      DelayChip(display: delayDisplay)
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
-  }
-
-  private var allBadges: some View {
-    HStack(spacing: 8) {
-      coreBadges
-      ForEach(node.capabilityLabels, id: \.self) { label in
-        ProxyTypeBadge(text: label, isSelectable: node.isSelectable)
-      }
-    }
-  }
-
-  private var coreBadges: some View {
-    HStack(spacing: 8) {
-      ProxyTypeBadge(text: node.type, isSelectable: node.isSelectable)
-      if let providerName = node.providerName {
-        ProxyTypeBadge(text: providerName, isSelectable: node.isSelectable)
-      }
-    }
-  }
-}
-
-private enum ProxyInteractionAnimation {
-  static func expansion(reduceMotion: Bool) -> Animation {
-    reduceMotion
-      ? .easeInOut(duration: 0.12)
-      : .spring(response: 0.34, dampingFraction: 0.88)
-  }
-
-  static func list(reduceMotion: Bool) -> Animation {
-    reduceMotion
-      ? .easeInOut(duration: 0.12)
-      : .spring(response: 0.38, dampingFraction: 0.90)
-  }
-
-  static func chevron(reduceMotion: Bool) -> Animation {
-    reduceMotion
-      ? .easeInOut(duration: 0.10)
-      : .spring(response: 0.24, dampingFraction: 0.78)
-  }
-
-  static func press(reduceMotion: Bool) -> Animation {
-    reduceMotion
-      ? .easeInOut(duration: 0.08)
-      : .spring(response: 0.18, dampingFraction: 0.72)
-  }
-
-  static func selection(reduceMotion: Bool) -> Animation {
-    reduceMotion
-      ? .easeInOut(duration: 0.12)
-      : .spring(response: 0.26, dampingFraction: 0.82)
-  }
-
-  static func expansionTransition(reduceMotion: Bool) -> AnyTransition {
-    if reduceMotion {
-      return .opacity
-    }
-    return .asymmetric(
-      insertion: .opacity.combined(with: .move(edge: .top)),
-      removal: .opacity
-    )
-  }
-
-  static func nodeTransition(reduceMotion: Bool) -> AnyTransition {
-    if reduceMotion {
-      return .opacity
-    }
-    return .opacity.combined(with: .scale(scale: 0.98, anchor: .top))
-  }
-}
-
-private struct ProxyTypeBadge: View {
-  let text: String
-  var isSelectable = true
-
-  var body: some View {
-    Text(displayText)
-      .font(.caption2.weight(.medium))
-      .foregroundStyle(isSelectable ? .secondary : .tertiary)
-      .lineLimit(1)
-      .padding(.horizontal, 7)
-      .padding(.vertical, 3)
-      .background(.tertiary.opacity(isSelectable ? 0.16 : 0.08), in: Capsule())
-  }
-
-  private var displayText: String {
-    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-    return trimmed.isEmpty ? "proxy" : trimmed
-  }
-}
-
 struct ProxyDelayDisplay: Equatable {
+  /// Locale-independent label, kept for the menu bar and for tests that pin the wire-level wording.
   let label: String
   let tone: ProxyDelayTone
+
+  /// The same verdict in the user's language, for the node list where it is the main column.
+  var localizedLabel: String {
+    switch label {
+    case "Unknown": String(localized: "Unknown")
+    case "Testing": String(localized: "Testing")
+    case "Timeout": String(localized: "Timeout")
+    case "No result": String(localized: "No result")
+    default: label
+    }
+  }
 
   init(delay: Int?) {
     self.init(state: delay.map(ProxyDelayState.measured) ?? .unknown)
@@ -1953,39 +1474,6 @@ enum ProxyDelayTone: Equatable {
   }
 }
 
-private struct DelayChip: View {
-  let display: ProxyDelayDisplay
-
-  var body: some View {
-    Text(display.label)
-      .font(.caption.monospacedDigit())
-      .foregroundStyle(display.tone.color)
-      .lineLimit(1)
-      .padding(.horizontal, 7)
-      .padding(.vertical, 3)
-      .background(display.tone.color.opacity(0.10), in: Capsule())
-      .layoutPriority(10)
-      .fixedSize(horizontal: true, vertical: false)
-  }
-}
-
-private struct DelayActionIcon: View {
-  let state: ProxyDelayState
-
-  var body: some View {
-    Group {
-      if state == .testing {
-        ProgressView()
-          .controlSize(.small)
-      } else {
-        Image(systemName: "dot.radiowaves.left.and.right")
-          .font(.system(size: 13, weight: .medium))
-      }
-    }
-    .frame(width: 20, height: 20)
-  }
-}
-
 enum ProxyPreviewNoticeKind: Equatable {
   case previewRuntime
   case offlinePreview
@@ -2020,10 +1508,6 @@ enum ProxyPreviewNoticeKind: Equatable {
 }
 
 enum ProxiesPageActionState {
-  static func canStart(isRunning: Bool, hasActiveProfile: Bool, isStarting: Bool, readinessIssue: String?) -> Bool {
-    !isRunning && hasActiveProfile && !isStarting && readinessIssue == nil
-  }
-
   static func canRefresh(isStarting: Bool) -> Bool {
     !isStarting
   }

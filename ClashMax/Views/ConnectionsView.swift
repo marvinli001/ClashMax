@@ -15,17 +15,16 @@ enum ConnectionsLayout {
     width >= splitDetailBreakpoint ? .splitDetail : .stackedDetail
   }
 
-  /// Issue #27: the stacked layout puts the detail card *under* the list, so the two share one
-  /// page. `stackedListMinHeight` alone outgrew a short window, and an oversized page does not
-  /// clip — it stretches the whole window's layout. Both blocks therefore scale with the room
-  /// they actually have.
+  /// Issue #27: the stacked layout puts the detail *under* the list, so the two share one page.
+  /// `stackedListMinHeight` alone outgrew a short window, and an oversized page does not clip — it
+  /// stretches the whole window's layout. Both blocks therefore scale with the room they have.
   static func stackedListMinHeight(availableHeight: CGFloat) -> CGFloat {
     guard availableHeight.isFinite, availableHeight > 0 else { return stackedListMinHeight }
     return min(stackedListMinHeight, max(availableHeight * 0.45, 120))
   }
 
-  /// How tall the detail card may grow before its contents scroll inside it. Beside the list it
-  /// owns a full column; under the list it may claim only part of the page.
+  /// How tall the detail may grow before its contents scroll inside it. Beside the list it owns a
+  /// full column; under the list it may claim only part of the page.
   static func detailMaxHeight(mode: ConnectionsLayoutMode, availableHeight: CGFloat) -> CGFloat {
     guard availableHeight.isFinite, availableHeight > 0 else { return 320 }
     switch mode {
@@ -43,6 +42,9 @@ struct ConnectionsView: View {
   @State private var searchText = ""
   @State private var mode = ConnectionViewMode.active
   @State private var groupsByApp = false
+  /// Details are opt-in: the table alone answers most questions, and a permanent detail block used
+  /// to take a third of every page even with nothing selected.
+  @State private var showsDetail = false
   @State private var selectedConnectionIDs = Set<ConnectionSnapshot.ID>()
   @State private var appIconCache = ConnectionAppIconCache()
   @State private var quickRuleContext: QuickRuleSheetContext?
@@ -57,14 +59,139 @@ struct ConnectionsView: View {
     case failed(String)
   }
 
+  init() {}
+
+  /// Seeds the page's view state for previews and fixture renders; the app starts from the defaults.
+  init(
+    initialMode: ConnectionViewMode,
+    initialGroupsByApp: Bool = false,
+    initialShowsDetail: Bool = false,
+    initialSelection: Set<ConnectionSnapshot.ID> = []
+  ) {
+    _mode = State(initialValue: initialMode)
+    _groupsByApp = State(initialValue: initialGroupsByApp)
+    _showsDetail = State(initialValue: initialShowsDetail)
+    _selectedConnectionIDs = State(initialValue: initialSelection)
+  }
+
   var body: some View {
+    let visibleConnections = visibleConnections
+    // Only visible rows count as selected — a row hidden by the search is not — and only the ones
+    // still open and not already being closed may be the target of a Close action.
+    let selection = visibleConnections.filter { selectedConnectionIDs.contains($0.id) }
+    let selectedActive = selection.filter(canCloseConnection)
+
     AdaptivePage(title: "Connections") {
-      Button {
-        closeSelected()
-      } label: {
-        Label("Close Selected", systemImage: "xmark.circle")
+      EmptyView()
+    } content: {
+      VStack(alignment: .leading, spacing: 10) {
+        // Always rendered, whatever the list holds: a search with no result, or an Active view with
+        // zero connections while History still has some, must keep its way back.
+        controls(selection: selection, selectedActive: selectedActive)
+
+        if showsLoadingSkeleton {
+          ClashMaxSkeletonTable(rows: 7)
+        } else if visibleConnections.isEmpty {
+          CenteredUnavailableState(
+            title: emptyTitle,
+            systemImage: "network.slash",
+            message: emptyMessage
+          )
+        } else {
+          VStack(spacing: 8) {
+            GeometryReader { proxy in
+              connectionsWorkspace(
+                visibleConnections: visibleConnections,
+                mode: ConnectionsLayout.mode(forWidth: proxy.size.width),
+                availableHeight: proxy.size.height
+              )
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+            PageStatusFooter(text: String.localizedStringWithFormat(
+              NSLocalizedString("%lld active, %lld retained", comment: ""),
+              Int64(runtimeData.connections.count),
+              Int64(runtimeData.connectionRecords.count)
+            ))
+          }
+        }
       }
-      .disabled(selectedActiveConnections.isEmpty || !appModel.canControlRuntimeProxies)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+    .onChange(of: visibleConnections.map(\.id)) { _, ids in
+      // Rows that left the list leave the selection too, so a closed connection can never stay the
+      // target of Close Selected; rows that stay keep their highlight through every refresh.
+      let retained = selectedConnectionIDs.intersection(Set(ids))
+      if retained != selectedConnectionIDs {
+        selectedConnectionIDs = retained
+      }
+    }
+    .onChange(of: selectedConnectionIDs) { _, _ in
+      snifferFixPhase = .idle
+    }
+    .quickRuleSheet($quickRuleContext)
+  }
+
+  // MARK: - Controls
+
+  private func controls(selection: [ConnectionSnapshot], selectedActive: [ConnectionSnapshot]) -> some View {
+    HStack(spacing: 10) {
+      TextField("Search app, host, IP, rule, chain", text: $searchText)
+        .textFieldStyle(.roundedBorder)
+        .frame(minWidth: 200, idealWidth: 320, maxWidth: 400)
+
+      Picker("Mode", selection: $mode) {
+        ForEach(ConnectionViewMode.allCases) { mode in
+          Text(mode.displayName).tag(mode)
+        }
+      }
+      .pickerStyle(.segmented)
+      .labelsHidden()
+      .frame(width: 150)
+      .help("Active shows live connections; History keeps recently closed ones")
+
+      Spacer(minLength: 8)
+
+      if !selectedActive.isEmpty {
+        Button {
+          closeSelected(selectedActive)
+        } label: {
+          Label(
+            String.localizedStringWithFormat(NSLocalizedString("Close Selected (%lld)", comment: ""), Int64(selectedActive.count)),
+            systemImage: "xmark.circle"
+          )
+        }
+        .disabled(!appModel.canControlRuntimeProxies)
+        .help("Close the selected active connections")
+      }
+
+      Toggle(isOn: $showsDetail) {
+        Label("Show Details", systemImage: "info.circle")
+          .labelStyle(.iconOnly)
+      }
+      .toggleStyle(.button)
+      .keyboardShortcut("i", modifiers: [.command, .option])
+      .help("Show details for the selected connection (⌥⌘I)")
+      .accessibilityLabel("Show Details")
+
+      moreMenu(selection: selection)
+    }
+  }
+
+  /// The selected rows' actions come first — the same ones the row's context menu offers, from the
+  /// same code — so a keyboard or VoiceOver user has a discoverable path to "Add Rule" and "Resolve
+  /// DNS" without a right-click. With nothing selected the section says so instead of vanishing.
+  private func moreMenu(selection: [ConnectionSnapshot]) -> some View {
+    Menu {
+      if selection.isEmpty {
+        Text("Select a connection")
+      } else {
+        Section(ConnectionMenuPolicy.selectionTitle(for: selection)) {
+          connectionMenu(for: selection, includesShowDetails: false)
+        }
+      }
+
+      Divider()
 
       Button {
         appModel.closeAllRuntimeConnections()
@@ -72,50 +199,145 @@ struct ConnectionsView: View {
         if runtimeData.closingAllConnections {
           Label("Closing", systemImage: "clock.arrow.circlepath")
         } else {
-          Label("Close All", systemImage: "xmark.circle")
+          Label("Close All Connections", systemImage: "xmark.circle")
         }
       }
       .disabled(runtimeData.connections.isEmpty || runtimeData.closingAllConnections || !appModel.canControlRuntimeProxies)
-    } content: {
-      if showsLoadingSkeleton {
-        ClashMaxSkeletonTable(rows: 7)
-      } else if visibleConnections.isEmpty {
-        CenteredUnavailableState(
-          title: emptyTitle,
-          systemImage: "network.slash",
-          message: emptyMessage
-        )
-      } else {
-        VStack(spacing: 8) {
-          GeometryReader { proxy in
-            connectionsWorkspace(
-              mode: ConnectionsLayout.mode(forWidth: proxy.size.width),
-              availableHeight: proxy.size.height
-            )
-          }
-          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
-          PageStatusFooter(text: String.localizedStringWithFormat(
-            NSLocalizedString("%lld active, %lld retained", comment: ""),
-            Int64(runtimeData.connections.count),
-            Int64(runtimeData.connectionRecords.count)
-          ))
+      Divider()
+
+      Toggle("Group by App", isOn: $groupsByApp)
+      Toggle("Show Details", isOn: $showsDetail)
+    } label: {
+      Label("More", systemImage: "ellipsis.circle")
+    }
+    .help("Actions for the selected connections, Close All, and view options")
+  }
+
+  // MARK: - Workspace
+
+  @ViewBuilder
+  private func connectionsWorkspace(
+    visibleConnections: [ConnectionSnapshot],
+    mode layoutMode: ConnectionsLayoutMode,
+    availableHeight: CGFloat
+  ) -> some View {
+    let detailMaxHeight = ConnectionsLayout.detailMaxHeight(
+      mode: layoutMode,
+      availableHeight: availableHeight
+    )
+    let list = connectionList(visibleConnections)
+
+    if showsDetail {
+      switch layoutMode {
+      case .splitDetail:
+        HStack(alignment: .top, spacing: 12) {
+          list
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+          connectionDetail(visibleConnections: visibleConnections, maxHeight: detailMaxHeight)
+            .frame(width: ConnectionsLayout.detailWidth, alignment: .topLeading)
+        }
+      case .stackedDetail:
+        VStack(alignment: .leading, spacing: 12) {
+          list
+            .frame(minHeight: ConnectionsLayout.stackedListMinHeight(availableHeight: availableHeight))
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+          connectionDetail(visibleConnections: visibleConnections, maxHeight: detailMaxHeight)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
       }
+    } else {
+      list
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
-    .onChange(of: visibleConnections.map(\.id)) { _, ids in
-      selectedConnectionIDs = selectedConnectionIDs.intersection(Set(ids))
+  }
+
+  @ViewBuilder
+  private func connectionList(_ visibleConnections: [ConnectionSnapshot]) -> some View {
+    if groupsByApp {
+      List(selection: $selectedConnectionIDs) {
+        ForEach(groupedConnections(visibleConnections), id: \.app) { group in
+          Section(group.app) {
+            ForEach(group.connections) { connection in
+              HStack(spacing: 10) {
+                ConnectionAppLabel(connection: connection, iconCache: appIconCache)
+                  .frame(width: 150, alignment: .leading)
+                Text(connection.host)
+                  .lineLimit(1)
+                  .truncationMode(.middle)
+                Spacer(minLength: 12)
+                Text(connection.ruleSummary)
+                  .font(.callout)
+                  .foregroundStyle(.secondary)
+                  .lineLimit(1)
+                Text(TrafficSample.formatBytes(connection.download + connection.upload))
+                  .font(.callout.monospacedDigit())
+                  .foregroundStyle(.secondary)
+                  .frame(width: 84, alignment: .trailing)
+              }
+              .tag(connection.id)
+            }
+          }
+        }
+      }
+      .listStyle(.inset)
+      .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+      .contextMenu(forSelectionType: ConnectionSnapshot.ID.self) { ids in
+        connectionMenu(for: visibleConnections.filter { ids.contains($0.id) })
+      } primaryAction: { _ in
+        showsDetail = true
+      }
+    } else {
+      Table(visibleConnections, selection: $selectedConnectionIDs) {
+        TableColumn("App") { connection in
+          ConnectionAppLabel(connection: connection, iconCache: appIconCache)
+        }
+        .width(min: 110, ideal: 150)
+
+        TableColumn("Destination") { connection in
+          Text(connection.host)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .help(connection.destinationAddress)
+        }
+
+        TableColumn("Rule") { connection in
+          Text(connection.ruleSummary.isEmpty ? "-" : connection.ruleSummary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .help(connection.ruleSummary)
+        }
+        .width(min: 100, ideal: 150)
+
+        TableColumn("Policy") { connection in
+          Text(connection.chain.first ?? "-")
+            .lineLimit(1)
+            .help(connection.chain.joined(separator: " / "))
+        }
+        .width(min: 80, ideal: 110)
+
+        TableColumn("Traffic") { connection in
+          // Totals, not a rate: the column reads "1.2 MB", the same way the detail row does.
+          Text(TrafficSample.formatBytes(connection.download + connection.upload))
+            .font(.callout.monospacedDigit())
+            .foregroundStyle(.secondary)
+        }
+        .width(min: 76, ideal: 90, max: 110)
+      }
+      .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+      .contextMenu(forSelectionType: ConnectionSnapshot.ID.self) { ids in
+        connectionMenu(for: visibleConnections.filter { ids.contains($0.id) })
+      } primaryAction: { _ in
+        // Double-click opens the details for the row under the pointer.
+        showsDetail = true
+      }
     }
-    .onChange(of: selectedConnection?.id) { _, _ in
-      snifferFixPhase = .idle
-    }
-    .quickRuleSheet($quickRuleContext)
   }
 
   /// Issue #15 phase B2: a connection going the wrong way is where the user notices the problem,
   /// so the rule that fixes it is written from here, prefilled with the host in front of them.
   @ViewBuilder
-  private func connectionMenu(for selection: [ConnectionSnapshot]) -> some View {
+  private func connectionMenu(for selection: [ConnectionSnapshot], includesShowDetails: Bool = true) -> some View {
     if let connection = selection.first, selection.count == 1 {
       Button(String(format: String(localized: "Add Rule for %@…"), connectionRuleHost(connection))) {
         let host = connectionRuleHost(connection)
@@ -137,30 +359,46 @@ struct ConnectionsView: View {
       }
 
       // Roadmap A2: the name is right here, and the core's resolver — not the Mac's — is what
-      // decides where it goes.
-      if let domain = connection.domain, !domain.isEmpty {
+      // decides where it goes. A connection opened by IP has nothing to resolve.
+      if let domain = ConnectionMenuPolicy.resolvableDomain(for: connection) {
         Button(String(format: String(localized: "Resolve DNS for %@"), domain)) {
           appModel.openDNSResolution(for: connection)
         }
       }
 
+      if includesShowDetails {
+        Button("Show Details") {
+          showsDetail = true
+        }
+      }
+
       Divider()
+
+      if canCloseConnection(connection) {
+        Button("Close Connection") {
+          appModel.closeConnection(connection)
+        }
+        Divider()
+      }
 
       Button("Copy Host") { copy(connectionRuleHost(connection)) }
       Button("Copy Destination") { copy(connection.destinationAddress) }
     } else if !selection.isEmpty {
+      let closable = selection.filter(canCloseConnection)
+      if !closable.isEmpty {
+        Button(String.localizedStringWithFormat(NSLocalizedString("Close Selected (%lld)", comment: ""), Int64(closable.count))) {
+          closeSelected(closable)
+        }
+        Divider()
+      }
       Button("Copy Hosts") {
         copy(selection.map(connectionRuleHost).filter { !$0.isEmpty }.joined(separator: "\n"))
       }
     }
   }
 
-  /// A connection opened without a hostname has no domain to key a rule on, so the draft is
-  /// prefilled with the destination address and turned into a CIDR rule. Reads the typed state
-  /// instead of re-deriving it: `host` is the display fallback, so testing it for emptiness could
-  /// never have told the two cases apart (roadmap A1a).
   private func connectionRuleHost(_ connection: ConnectionSnapshot) -> String {
-    connection.domain ?? connection.destinationIPAddress ?? ""
+    ConnectionMenuPolicy.ruleHost(for: connection)
   }
 
   private func copy(_ text: String) {
@@ -169,192 +407,16 @@ struct ConnectionsView: View {
     NSPasteboard.general.setString(text, forType: .string)
   }
 
-  private var controls: some View {
-    ViewThatFits(in: .horizontal) {
-      HStack(spacing: 10) {
-        searchField
+  // MARK: - Detail
 
-        modePicker
-
-        groupByAppToggle
-
-        Spacer()
-      }
-
-      VStack(alignment: .leading, spacing: 8) {
-        searchField
-        HStack(spacing: 10) {
-          modePicker
-          groupByAppToggle
-          Spacer()
-        }
-      }
-    }
-  }
-
-  @ViewBuilder
-  private func connectionsWorkspace(mode layoutMode: ConnectionsLayoutMode, availableHeight: CGFloat) -> some View {
-    let detailMaxHeight = ConnectionsLayout.detailMaxHeight(
-      mode: layoutMode,
-      availableHeight: availableHeight
-    )
-
-    VStack(alignment: .leading, spacing: 10) {
-      controls
-
-      switch layoutMode {
-      case .splitDetail:
-        HStack(alignment: .top, spacing: 12) {
-          connectionList
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-          connectionDetail(maxHeight: detailMaxHeight)
-            .frame(width: ConnectionsLayout.detailWidth, alignment: .topLeading)
-        }
-      case .stackedDetail:
-        VStack(alignment: .leading, spacing: 12) {
-          connectionList
-            .frame(minHeight: ConnectionsLayout.stackedListMinHeight(availableHeight: availableHeight))
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-          connectionDetail(maxHeight: detailMaxHeight)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-        }
-      }
-    }
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-  }
-
-  private var searchField: some View {
-    TextField("Search app, host, IP, rule, chain", text: $searchText)
-      .textFieldStyle(.roundedBorder)
-      .frame(minWidth: 240, idealWidth: 360, maxWidth: 460)
-  }
-
-  private var modePicker: some View {
-    Picker("Mode", selection: $mode) {
-      ForEach(ConnectionViewMode.allCases) { mode in
-        Text(mode.displayName).tag(mode)
-      }
-    }
-    .pickerStyle(.segmented)
-    .frame(width: 170)
-  }
-
-  private var groupByAppToggle: some View {
-    Toggle("Group by App", isOn: $groupsByApp)
-      .toggleStyle(.checkbox)
-      .fixedSize(horizontal: true, vertical: false)
-  }
-
-  @ViewBuilder
-  private var connectionList: some View {
-    if groupsByApp {
-      ScrollView {
-        LazyVStack(alignment: .leading, spacing: 10) {
-          ForEach(groupedConnections, id: \.app) { group in
-            VStack(alignment: .leading, spacing: 6) {
-              Text(group.app)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-              ForEach(group.connections) { connection in
-                let canClose = canCloseConnection(connection)
-                ConnectionRow(
-                  connection: connection,
-                  iconCache: appIconCache,
-                  isSelected: selectedConnectionIDs.contains(connection.id),
-                  isClosing: runtimeData.closingConnectionIDs.contains(connection.id),
-                  canClose: canClose
-                ) {
-                  toggleSelection(connection)
-                } closeAction: {
-                  guard canClose else { return }
-                  appModel.closeConnection(connection)
-                }
-                .contextMenu {
-                  connectionMenu(for: [connection])
-                }
-              }
-            }
-          }
-        }
-        .padding(.vertical, 2)
-      }
-    } else {
-      Table(visibleConnections, selection: $selectedConnectionIDs) {
-        TableColumn("App") { connection in
-          ConnectionAppLabel(connection: connection, iconCache: appIconCache)
-        }
-        .width(min: 130, ideal: 180)
-
-        TableColumn("Host") { connection in
-          Text(connection.host)
-            .lineLimit(1)
-        }
-
-        TableColumn("Source") { connection in
-          Text(connection.sourceAddress)
-            .font(.caption.monospacedDigit())
-            .foregroundStyle(.secondary)
-        }
-        .width(min: 120, ideal: 150)
-
-        TableColumn("Destination") { connection in
-          Text(connection.destinationAddress)
-            .font(.caption.monospacedDigit())
-            .foregroundStyle(.secondary)
-        }
-        .width(min: 120, ideal: 160)
-
-        TableColumn("Rule") { connection in
-          Text(connection.ruleSummary)
-            .lineLimit(1)
-        }
-        .width(min: 110, ideal: 150)
-
-        TableColumn("Chain") { connection in
-          Text(connection.chain.joined(separator: " / "))
-            .lineLimit(1)
-        }
-
-        TableColumn("Traffic") { connection in
-          Text(TrafficSample.format(connection.download + connection.upload))
-            .font(.caption.monospacedDigit())
-            .foregroundStyle(.secondary)
-        }
-        .width(min: 84, ideal: 100, max: 120)
-
-        TableColumn("Actions") { connection in
-          Button {
-            appModel.closeConnection(connection)
-          } label: {
-            if runtimeData.closingConnectionIDs.contains(connection.id) {
-              Image(systemName: "clock.arrow.circlepath")
-            } else {
-              Image(systemName: "xmark.circle")
-            }
-          }
-          .buttonStyle(.borderless)
-          .disabled(mode == .history || runtimeData.closingConnectionIDs.contains(connection.id) || !appModel.canControlRuntimeProxies)
-          .help("Close connection")
-          .accessibilityLabel("Close connection to \(connection.host)")
-        }
-        .width(min: 64, ideal: 72, max: 82)
-      }
-      .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-      .contextMenu(forSelectionType: ConnectionSnapshot.ID.self) { ids in
-        connectionMenu(for: visibleConnections.filter { ids.contains($0.id) })
-      }
-    }
-  }
-
-  /// The card scrolls its own rows rather than growing past `maxHeight`, so a long chain or process
+  /// The detail scrolls its own rows rather than growing past `maxHeight`, so a long chain or process
   /// path can never push the connection list out of the page (issue #27).
-  private func connectionDetail(maxHeight: CGFloat) -> some View {
-    BoundedHeightSection(maxHeight: maxHeight) {
-      VStack(alignment: .leading, spacing: 10) {
-        Label("Connection Detail", systemImage: "info.circle")
-          .font(.headline)
-
-        if let connection = selectedConnection {
+  private func connectionDetail(visibleConnections: [ConnectionSnapshot], maxHeight: CGFloat) -> some View {
+    let connection = selectedConnection(in: visibleConnections)
+    return BoundedHeightSection(maxHeight: maxHeight) {
+      VStack(alignment: .leading, spacing: 6) {
+        if let connection {
+          detailHeader(connection)
           detailRow("App", connection.appDisplayName)
           detailRow("Process", connection.processPath ?? "-")
           detailRow("Network", connection.network.isEmpty ? "-" : connection.network)
@@ -365,16 +427,49 @@ struct ConnectionsView: View {
           detailRow("Traffic", TrafficSample.formatBytes(connection.download + connection.upload))
           whyThisRule(connection)
           domainVisibility(connection)
+        } else if selectedConnectionIDs.count > 1 {
+          Text(String.localizedStringWithFormat(NSLocalizedString("%lld connections selected", comment: ""), Int64(selectedConnectionIDs.count)))
+            .font(.callout)
+            .foregroundStyle(.secondary)
         } else {
           Text("Select a connection to inspect the process, rule, and chain.")
-            .font(.caption)
+            .font(.callout)
             .foregroundStyle(.secondary)
-            .lineLimit(4)
+            .fixedSize(horizontal: false, vertical: true)
         }
       }
     }
     .padding(12)
-    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel("Connection details")
+  }
+
+  private func detailHeader(_ connection: ConnectionSnapshot) -> some View {
+    let isActive = runtimeData.connections.contains { $0.id == connection.id }
+    return HStack(alignment: .firstTextBaseline, spacing: 8) {
+      Text(connection.host.isEmpty ? connection.destinationAddress : connection.host)
+        .font(.headline)
+        .lineLimit(2)
+        .truncationMode(.middle)
+      Spacer(minLength: 8)
+      if isActive {
+        if canCloseConnection(connection) {
+          Button("Close") {
+            appModel.closeConnection(connection)
+          }
+          .controlSize(.small)
+        } else if runtimeData.closingConnectionIDs.contains(connection.id) {
+          ProgressView()
+            .controlSize(.small)
+        }
+      } else {
+        // The truth about a row that lingers in History: nothing here can act on it any more.
+        Text("Closed")
+          .font(.caption.weight(.medium))
+          .foregroundStyle(.secondary)
+      }
+    }
   }
 
   private func whyThisRule(_ connection: ConnectionSnapshot) -> some View {
@@ -519,17 +614,24 @@ struct ConnectionsView: View {
     }
   }
 
+  /// Label and value on one line: under the list the detail has little height to spend, and a
+  /// two-column row shows twice as many facts as stacked caption pairs did.
   private func detailRow(_ title: LocalizedStringResource, _ value: String) -> some View {
-    VStack(alignment: .leading, spacing: 2) {
+    HStack(alignment: .firstTextBaseline, spacing: 10) {
       Text(title)
-        .font(.caption2)
-        .foregroundStyle(.tertiary)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .frame(width: 88, alignment: .leading)
       Text(value)
         .font(.caption)
         .lineLimit(2)
+        .truncationMode(.middle)
         .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
   }
+
+  // MARK: - Data
 
   private var visibleConnections: [ConnectionSnapshot] {
     let base: [ConnectionSnapshot]
@@ -544,24 +646,15 @@ struct ConnectionsView: View {
     return base.filter(query.matches)
   }
 
-  private var groupedConnections: [(app: String, connections: [ConnectionSnapshot])] {
-    Dictionary(grouping: visibleConnections, by: \.appDisplayName)
+  private func groupedConnections(_ connections: [ConnectionSnapshot]) -> [(app: String, connections: [ConnectionSnapshot])] {
+    Dictionary(grouping: connections, by: \.appDisplayName)
       .map { (app: $0.key, connections: $0.value) }
       .sorted { $0.app.localizedStandardCompare($1.app) == .orderedAscending }
   }
 
-  private var selectedConnection: ConnectionSnapshot? {
-    guard let id = selectedConnectionIDs.first else { return nil }
+  private func selectedConnection(in visibleConnections: [ConnectionSnapshot]) -> ConnectionSnapshot? {
+    guard selectedConnectionIDs.count == 1, let id = selectedConnectionIDs.first else { return nil }
     return visibleConnections.first { $0.id == id }
-  }
-
-  private var selectedActiveConnections: [ConnectionSnapshot] {
-    let activeIDs = Set(runtimeData.connections.map(\.id))
-    return visibleConnections.filter {
-      selectedConnectionIDs.contains($0.id)
-        && activeIDs.contains($0.id)
-        && !runtimeData.closingConnectionIDs.contains($0.id)
-    }
   }
 
   private var showsLoadingSkeleton: Bool {
@@ -581,21 +674,17 @@ struct ConnectionsView: View {
   }
 
   private var emptyMessage: String {
-    searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-      ? String(localized: "Connections will appear here after apps send traffic through ClashMax.")
-      : String(localized: "No app, host, rule, or chain matches the current search.")
-  }
-
-  private func toggleSelection(_ connection: ConnectionSnapshot) {
-    if selectedConnectionIDs.contains(connection.id) {
-      selectedConnectionIDs.remove(connection.id)
-    } else {
-      selectedConnectionIDs.insert(connection.id)
+    if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      return String(localized: "No app, host, rule, or chain matches the current search.")
     }
+    if mode == .active, !runtimeData.connectionRecords.isEmpty {
+      return String(localized: "Recently closed connections are kept under History.")
+    }
+    return String(localized: "Connections will appear here after apps send traffic through ClashMax.")
   }
 
-  private func closeSelected() {
-    for connection in selectedActiveConnections {
+  private func closeSelected(_ connections: [ConnectionSnapshot]) {
+    for connection in connections {
       appModel.closeConnection(connection)
     }
   }
@@ -608,7 +697,36 @@ struct ConnectionsView: View {
   }
 }
 
-private enum ConnectionViewMode: String, CaseIterable, Identifiable {
+/// What the selection-driven menus can offer for a connection. Shared by the row context menu and
+/// the page's More menu so both agree on when "Resolve DNS" exists and what a rule is keyed on.
+enum ConnectionMenuPolicy {
+  /// A connection opened without a hostname has no domain to key a rule on, so the draft is
+  /// prefilled with the destination address and turned into a CIDR rule. Reads the typed state
+  /// instead of re-deriving it: `host` is the display fallback, so testing it for emptiness could
+  /// never have told the two cases apart (roadmap A1a).
+  static func ruleHost(for connection: ConnectionSnapshot) -> String {
+    connection.domain ?? connection.destinationIPAddress ?? ""
+  }
+
+  /// The core's resolver can only be asked about a name; an IP-only connection offers no DNS action.
+  static func resolvableDomain(for connection: ConnectionSnapshot) -> String? {
+    guard let domain = connection.domain?.trimmingCharacters(in: .whitespacesAndNewlines), !domain.isEmpty else {
+      return nil
+    }
+    return domain
+  }
+
+  /// Header of the selection section in the More menu: the one host, or how many rows are selected.
+  static func selectionTitle(for selection: [ConnectionSnapshot]) -> String {
+    if selection.count == 1, let connection = selection.first {
+      let host = ruleHost(for: connection)
+      return host.isEmpty ? connection.destinationAddress : host
+    }
+    return String.localizedStringWithFormat(NSLocalizedString("%lld connections selected", comment: ""), Int64(selection.count))
+  }
+}
+
+enum ConnectionViewMode: String, CaseIterable, Identifiable {
   case active
   case history
 
@@ -730,45 +848,5 @@ private struct ConnectionAppLabel: View {
       Text(connection.appDisplayName)
         .lineLimit(1)
     }
-  }
-}
-
-private struct ConnectionRow: View {
-  let connection: ConnectionSnapshot
-  let iconCache: ConnectionAppIconCache
-  let isSelected: Bool
-  let isClosing: Bool
-  let canClose: Bool
-  let selectAction: () -> Void
-  let closeAction: () -> Void
-
-  var body: some View {
-    HStack(spacing: 10) {
-      Button(action: selectAction) {
-        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-          .frame(width: 18, height: 18)
-      }
-      .buttonStyle(.borderless)
-
-      ConnectionAppLabel(connection: connection, iconCache: iconCache)
-        .frame(width: 160, alignment: .leading)
-      Text(connection.host)
-        .lineLimit(1)
-      Spacer()
-      Text(connection.ruleSummary)
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .lineLimit(1)
-      Button(action: closeAction) {
-        Image(systemName: isClosing ? "clock.arrow.circlepath" : "xmark.circle")
-      }
-      .buttonStyle(.borderless)
-      .disabled(!canClose || isClosing)
-      .help("Close connection")
-      .accessibilityLabel("Close connection to \(connection.host)")
-    }
-    .padding(.horizontal, 10)
-    .padding(.vertical, 7)
-    .background(isSelected ? Color.accentColor.opacity(0.12) : Color.clear, in: SurfaceRadius.shape(SurfaceRadius.chip))
   }
 }

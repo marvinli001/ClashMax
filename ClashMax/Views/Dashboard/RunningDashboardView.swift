@@ -1018,51 +1018,654 @@ private struct NetworkExtensionDiagnosticsRuntimeCard: View {
   }
 }
 
-struct StatusView: View {
-  @Environment(AppModel.self) private var appModel
+/// The first thing the Status page has to answer, computed once from the runtime facts so the
+/// headline, the summary sentence and the tint can never disagree with each other. Pure so tests can
+/// pin the wording of each state.
+struct StatusOverview: Equatable {
+  enum Tone: Equatable {
+    case running
+    case attention
+    case failure
+    case idle
+  }
 
-  var body: some View {
-    AdaptivePage(title: "Status") {
-      ViewThatFits(in: .horizontal) {
-        HStack(spacing: 8) {
-          statusActions
-        }
-        VStack(alignment: .leading, spacing: 8) {
-          statusActions
-        }
-      }
-    } content: {
-      GeometryReader { proxy in
-        ScrollView {
-          VStack(spacing: 12) {
-            StatusRuntimeOverviewCard()
+  let headline: String
+  let detail: String
+  let systemImage: String
+  let tone: Tone
 
-            StatusDNSCard()
-            StatusRuleOverlayCard()
+  init(
+    isRunning: Bool,
+    previewRuntimeActive: Bool,
+    coreStatus: CoreStatus,
+    isStarting: Bool,
+    routingMode: ProxyRoutingMode,
+    systemProxyEnabled: Bool,
+    tunEnabled: Bool,
+    networkExtensionEnabled: Bool,
+    readinessIssue: String?
+  ) {
+    let captureActive = systemProxyEnabled || tunEnabled || networkExtensionEnabled
+    if case let .crashed(message) = coreStatus {
+      headline = String(localized: "Core crashed")
+      detail = message
+      systemImage = "exclamationmark.triangle.fill"
+      tone = .failure
+      return
+    }
+    if isStarting {
+      headline = String(localized: "Starting")
+      detail = String(format: String(localized: "Bringing up the core with %@ routing."), routingMode.displayName)
+      systemImage = "clock.arrow.circlepath"
+      tone = .attention
+      return
+    }
+    if isRunning, captureActive {
+      headline = String(format: String(localized: "Traffic is routed through ClashMax via %@"), routingMode.displayName)
+      detail = String(localized: "The core is running and the selected capture mode is active.")
+      systemImage = "checkmark.shield.fill"
+      tone = .running
+      return
+    }
+    if isRunning {
+      headline = String(localized: "Core is running, but no traffic is captured")
+      detail = String(format: String(localized: "%@ is not enabled yet, so apps still connect directly."), routingMode.displayName)
+      systemImage = "exclamationmark.shield"
+      tone = .attention
+      return
+    }
+    if previewRuntimeActive {
+      headline = String(localized: "Preview core is running for delay tests")
+      detail = String(localized: "It listens on loopback only. Traffic is not captured until you start ClashMax.")
+      systemImage = "wand.and.stars"
+      tone = .idle
+      return
+    }
+    if let readinessIssue {
+      headline = String(localized: "Cannot start")
+      detail = readinessIssue
+      systemImage = "exclamationmark.triangle.fill"
+      tone = .attention
+      return
+    }
+    headline = String(localized: "Stopped")
+    detail = String(format: String(localized: "Start ClashMax to route traffic via %@."), routingMode.displayName)
+    systemImage = "stop.circle"
+    tone = .idle
+  }
+}
 
-            StatusHelperDiagnosticsCard()
+/// The on-demand sections of the Status page.
+enum StatusDetailSection: String, CaseIterable, Identifiable {
+  case runtime
+  case dns
+  case ruleOverlay
+  case helper
+  case tun
+  case networkExtension
 
-            if showsTunDiagnostics, showsNetworkExtensionDiagnostics {
-              StatusResponsivePair(availableWidth: proxy.size.width) {
-                StatusTunDiagnosticsCard()
-              } trailing: {
-                StatusNetworkExtensionDiagnosticsCard()
-              }
-            } else if showsTunDiagnostics {
-              StatusTunDiagnosticsCard()
-            } else if showsNetworkExtensionDiagnostics {
-              StatusNetworkExtensionDiagnosticsCard()
-            }
+  var id: String { rawValue }
 
-            RecentLogsRuntimeCard()
-          }
-          .frame(maxWidth: 1080)
-          .frame(maxWidth: .infinity)
-        }
+  /// Which sections open by default: the runtime facts always, and a diagnostics section only when
+  /// it is both relevant to the selected routing mode and reporting something to look at. Everything
+  /// healthy and unrelated stays folded.
+  static func defaultExpanded(
+    routingMode: ProxyRoutingMode,
+    helperHasIssue: Bool,
+    tunHasIssue: Bool,
+    networkExtensionHasIssue: Bool
+  ) -> Set<StatusDetailSection> {
+    var expanded: Set<StatusDetailSection> = [.runtime]
+    if routingMode == .tun, helperHasIssue {
+      expanded.insert(.helper)
+    }
+    if routingMode == .tun, tunHasIssue {
+      expanded.insert(.tun)
+    }
+    if routingMode == .neProxy, networkExtensionHasIssue {
+      expanded.insert(.networkExtension)
+    }
+    return expanded
+  }
+}
+
+/// Keeps the Status page's Attention list free of the same problem twice: the generic last error is
+/// dropped when a specific item already carries its text (or it carries theirs).
+enum StatusAttentionDeduplication {
+  static func isRedundant(lastError: String, specificMessages: [String]) -> Bool {
+    let error = lastError.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !error.isEmpty else { return true }
+    return specificMessages.contains { message in
+      let message = message.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !message.isEmpty else { return false }
+      return error.localizedCaseInsensitiveContains(message) || message.localizedCaseInsensitiveContains(error)
+    }
+  }
+}
+
+/// One thing that needs the user's attention, with the recovery the app already offers for it.
+private struct StatusAttentionItem: Identifiable {
+  enum Action {
+    case repairHelper
+    case openHelperSettings
+    case repairTunDNS
+    case repairTunRouting
+    case disableResidualSystemProxy
+    case showSection(StatusDetailSection)
+
+    var title: String {
+      switch self {
+      case .repairHelper: String(localized: "Repair Helper")
+      case .openHelperSettings: String(localized: "Open System Settings")
+      case .repairTunDNS: String(localized: "Repair DNS")
+      case .repairTunRouting: String(localized: "Repair Routing")
+      case .disableResidualSystemProxy: String(localized: "Disable System Proxy")
+      case .showSection: String(localized: "Show Details")
       }
     }
-    .background(Color(nsColor: .windowBackgroundColor))
   }
+
+  let id: String
+  let title: String
+  let message: String
+  let isError: Bool
+  let actions: [Action]
+}
+
+struct StatusView: View {
+  @Environment(AppModel.self) private var appModel
+  @Environment(RuntimeDataStore.self) private var runtimeData
+  @State private var expandedSections: Set<StatusDetailSection> = [.runtime]
+  @State private var hasResolvedDefaultExpansion = false
+
+  var body: some View {
+    let overview = overview
+    let attention = attentionItems
+    AdaptivePage(title: "Status") {
+      Button {
+        refreshStatus()
+      } label: {
+        Label("Refresh", systemImage: "arrow.clockwise")
+      }
+      .help("Refresh helper, extension and TUN diagnostics")
+
+      Button {
+        appModel.copyRuntimeDiagnostics()
+      } label: {
+        Label("Copy Diagnostics", systemImage: "doc.on.doc")
+      }
+      .help("Copy a redacted diagnostics report")
+
+      moreMenu
+    } content: {
+      Form {
+        Section {
+          StatusOverviewRow(overview: overview)
+          LabeledContent("Mode", value: appModel.proxyRoutingMode.displayName)
+          LabeledContent("Profile", value: appModel.profileStore.activeProfile?.name ?? String(localized: "None"))
+          LabeledContent("Core", value: coreText)
+          LabeledContent("Run Mode", value: appModel.currentRuntimeOverrides.mode.displayName)
+        }
+
+        // Only present while something is actually wrong: the overview row above already says the
+        // runtime is healthy, so an "all clear" group would repeat it. Every real problem still lands
+        // here, each once, with its recovery next to it.
+        if !attention.isEmpty {
+          Section("Attention") {
+            ForEach(attention) { item in
+              attentionRow(item)
+            }
+          }
+        }
+
+        section(.runtime, title: "Runtime") {
+          runtimeRows
+        }
+        section(.dns, title: "DNS") {
+          dnsRows
+        }
+        section(.ruleOverlay, title: "Rule Overlay") {
+          ruleOverlayRows
+        }
+        section(.helper, title: "Helper") {
+          helperRows
+        }
+        if showsTunDiagnostics {
+          section(.tun, title: "TUN Diagnostics") {
+            tunRows
+          }
+        }
+        if showsNetworkExtensionDiagnostics {
+          section(.networkExtension, title: "NE Diagnostics") {
+            networkExtensionRows
+          }
+        }
+      }
+      .formStyle(.grouped)
+      .scrollContentBackground(.hidden)
+      .frame(maxWidth: 1_080)
+      .frame(maxWidth: .infinity)
+    }
+    .background(Color(nsColor: .windowBackgroundColor))
+    .onAppear {
+      appModel.refreshHelperRegistrationStatus()
+      guard !hasResolvedDefaultExpansion else { return }
+      hasResolvedDefaultExpansion = true
+      expandedSections = StatusDetailSection.defaultExpanded(
+        routingMode: appModel.proxyRoutingMode,
+        helperHasIssue: helperHasIssue,
+        tunHasIssue: appModel.tunDiagnostics.overallStatus == .warn || appModel.tunDiagnostics.overallStatus == .fail,
+        networkExtensionHasIssue: !appModel.networkExtensionController.diagnostics.recentErrors.isEmpty
+          || appModel.networkExtensionSystemDNSState.errorMessage != nil
+      )
+    }
+  }
+
+  // MARK: - Actions
+
+  private var moreMenu: some View {
+    Menu {
+      Button {
+        appModel.openRuntimeLogs()
+      } label: {
+        Label("Open Logs", systemImage: "terminal")
+      }
+      Button {
+        appModel.openLogsFolder()
+      } label: {
+        Label("Open Log Folder", systemImage: "folder")
+      }
+
+      Divider()
+
+      Button("Repair Helper") {
+        appModel.repairHelperRegistration()
+      }
+      Button("Open Helper Approval Settings") {
+        appModel.openHelperApprovalSettings()
+      }
+
+      if showsTunDiagnostics {
+        Divider()
+        Button("Refresh TUN Diagnostics") {
+          appModel.refreshTunDiagnostics()
+        }
+        Button("Repair TUN System DNS") {
+          appModel.repairTunDNS()
+        }
+        .disabled(!appModel.canRepairTunDNS)
+        Button("Repair TUN Routing") {
+          appModel.repairTunRouting()
+        }
+        .disabled(!appModel.canRepairTunRouting)
+      }
+
+      if appModel.hasResidualSystemProxy {
+        Divider()
+        Button("Disable Residual System Proxy") {
+          appModel.disableResidualSystemProxy()
+        }
+        .disabled(!appModel.canDisableResidualSystemProxy)
+      }
+    } label: {
+      Label("More", systemImage: "ellipsis.circle")
+    }
+    .help("Logs and repair actions")
+  }
+
+  private func refreshStatus() {
+    appModel.refreshHelperStatus()
+    appModel.refreshHelperRegistrationStatus()
+    appModel.refreshNetworkExtensionStatus()
+    appModel.refreshTunDiagnostics()
+    if appModel.isCoreRunning {
+      appModel.reloadRuntimeData()
+    }
+  }
+
+  private func perform(_ action: StatusAttentionItem.Action) {
+    switch action {
+    case .repairHelper:
+      appModel.repairHelperRegistration()
+    case .openHelperSettings:
+      appModel.openHelperApprovalSettings()
+    case .repairTunDNS:
+      appModel.repairTunDNS()
+    case .repairTunRouting:
+      appModel.repairTunRouting()
+    case .disableResidualSystemProxy:
+      appModel.disableResidualSystemProxy()
+    case let .showSection(section):
+      expandedSections.insert(section)
+    }
+  }
+
+  // MARK: - Overview and attention
+
+  private var overview: StatusOverview {
+    StatusOverview(
+      isRunning: appModel.isRunning,
+      previewRuntimeActive: appModel.previewRuntimeActive,
+      coreStatus: appModel.coreController.status,
+      isStarting: appModel.dashboardRuntimeState.isStarting,
+      routingMode: appModel.proxyRoutingMode,
+      systemProxyEnabled: appModel.systemProxyEnabled,
+      tunEnabled: appModel.tunEnabled,
+      networkExtensionEnabled: appModel.networkExtensionEnabled,
+      readinessIssue: appModel.readinessIssue
+    )
+  }
+
+  /// Every problem the page knows about, each exactly once and each with its recovery next to it.
+  /// Folding a section never hides one of these.
+  private var attentionItems: [StatusAttentionItem] {
+    var items: [StatusAttentionItem] = []
+    if let readinessIssue = appModel.readinessIssue {
+      items.append(StatusAttentionItem(
+        id: "readiness",
+        title: String(localized: "Cannot start"),
+        message: readinessIssue,
+        isError: false,
+        actions: []
+      ))
+    }
+    items.append(contentsOf: diagnosticAttentionItems)
+    // The generic last error comes after the specific items and only when it says something they
+    // do not: a failed DNS repair, for instance, already stands there with its Repair button, so
+    // repeating its text as "Last Error" would show the same problem twice.
+    if let error = appModel.lastError,
+       !StatusAttentionDeduplication.isRedundant(lastError: error, specificMessages: items.map(\.message))
+    {
+      items.append(StatusAttentionItem(
+        id: "last-error",
+        title: String(localized: "Last Error"),
+        message: error,
+        isError: true,
+        actions: []
+      ))
+    }
+    return items
+  }
+
+  private var diagnosticAttentionItems: [StatusAttentionItem] {
+    var items: [StatusAttentionItem] = []
+    if appModel.proxyRoutingMode == .tun || appModel.tunEnabled, helperHasIssue {
+      items.append(StatusAttentionItem(
+        id: "helper",
+        title: String(localized: "TUN helper needs attention"),
+        message: appModel.tunHelperStatusDetail.message,
+        isError: false,
+        actions: appModel.tunHelperStatusDetail.requiresApproval
+          ? [.openHelperSettings, .repairHelper, .showSection(.helper)]
+          : [.repairHelper, .showSection(.helper)]
+      ))
+    }
+    if let dnsError = appModel.tunSystemDNSState.errorMessage {
+      items.append(StatusAttentionItem(
+        id: "tun-dns",
+        title: String(localized: "TUN system DNS repair needed"),
+        message: dnsError,
+        isError: true,
+        actions: appModel.canRepairTunDNS ? [.repairTunDNS] : [.showSection(.tun)]
+      ))
+    }
+    if showsTunDiagnostics, let issue = appModel.tunDiagnostics.primaryIssue {
+      items.append(StatusAttentionItem(
+        id: "tun-\(issue.id)",
+        title: issue.title,
+        message: issue.detail ?? issue.message,
+        isError: issue.status == .fail,
+        actions: appModel.canRepairTunRouting ? [.repairTunRouting, .showSection(.tun)] : [.showSection(.tun)]
+      ))
+    }
+    if let dnsError = appModel.networkExtensionSystemDNSState.errorMessage {
+      items.append(StatusAttentionItem(
+        id: "ne-dns",
+        title: String(localized: "NE system DNS repair needed"),
+        message: dnsError,
+        isError: true,
+        actions: [.showSection(.networkExtension)]
+      ))
+    }
+    if appModel.hasResidualSystemProxy {
+      items.append(StatusAttentionItem(
+        id: "residual-proxy",
+        title: String(localized: "System Proxy still points at a stale port"),
+        message: String(localized: "macOS still has a System Proxy configured for a ClashMax port that is not the current one."),
+        isError: false,
+        actions: appModel.canDisableResidualSystemProxy ? [.disableResidualSystemProxy] : []
+      ))
+    }
+    return items
+  }
+
+  private var helperHasIssue: Bool {
+    let detail = appModel.tunHelperStatusDetail
+    return detail.requiresApproval || detail.migrationRequired || detail.fingerprintMatches == false
+      || (detail.registered && !detail.xpcReachable) || detail.serviceStatus == .notFound
+  }
+
+  private func attentionRow(_ item: StatusAttentionItem) -> some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Label {
+        Text(item.title)
+          .fontWeight(.medium)
+      } icon: {
+        Image(systemName: item.isError ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
+          .foregroundStyle(item.isError ? Color.red : Color.orange)
+      }
+      Text(item.message)
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .textSelection(.enabled)
+        .fixedSize(horizontal: false, vertical: true)
+      if !item.actions.isEmpty {
+        HStack(spacing: 8) {
+          ForEach(Array(item.actions.enumerated()), id: \.offset) { _, action in
+            Button(action.title) {
+              perform(action)
+            }
+          }
+        }
+        .controlSize(.small)
+      }
+    }
+    .padding(.vertical, 2)
+    .accessibilityElement(children: .contain)
+  }
+
+  // MARK: - Sections
+
+  private func section<Content: View>(
+    _ section: StatusDetailSection,
+    title: LocalizedStringKey,
+    @ViewBuilder content: () -> Content
+  ) -> some View {
+    Section(isExpanded: expansionBinding(section)) {
+      content()
+    } header: {
+      Text(title)
+    }
+  }
+
+  private func expansionBinding(_ section: StatusDetailSection) -> Binding<Bool> {
+    Binding(
+      get: { expandedSections.contains(section) },
+      set: { isExpanded in
+        if isExpanded {
+          expandedSections.insert(section)
+        } else {
+          expandedSections.remove(section)
+        }
+      }
+    )
+  }
+
+  @ViewBuilder
+  private var runtimeRows: some View {
+    let overrides = appModel.currentRuntimeOverrides
+    LabeledContent("State", value: localizedRuntimeText(appModel.statusSummary))
+    LabeledContent("Controller", value: "\(overrides.externalControllerHost):\(overrides.externalControllerPort)")
+    LabeledContent("Controller Secret", value: RuntimeDiagnosticsReport.redactedSecret)
+    LabeledContent("Mixed Port", value: "\(overrides.mixedPort)")
+    LabeledContent("System Proxy", value: onOff(appModel.systemProxyEnabled))
+    LabeledContent("TUN", value: onOff(appModel.tunEnabled))
+    LabeledContent("NE Proxy", value: onOff(appModel.networkExtensionEnabled))
+    LabeledContent("Logs") {
+      HStack(spacing: 10) {
+        Text(String.localizedStringWithFormat(NSLocalizedString("%lld retained", comment: ""), Int64(runtimeData.logs.count)))
+          .foregroundStyle(.secondary)
+        Button("Open Logs") {
+          appModel.openRuntimeLogs()
+        }
+        .controlSize(.small)
+      }
+    }
+  }
+
+  @ViewBuilder
+  private var dnsRows: some View {
+    let tun = appModel.currentRuntimeOverrides.tunSettings
+    LabeledContent("Routing", value: appModel.proxyRoutingMode.displayName)
+    LabeledContent("TUN DNS Mode", value: tun.dnsFakeIPEnabled ? String(localized: "Fake IP") : String(localized: "Profile"))
+    LabeledContent("TUN System DNS", value: tun.systemDNSOverrideEnabled ? appModel.tunSystemDNSState.displayName : String(localized: "Off"))
+    LabeledContent("DNS Hijack", value: tun.normalizedDNSHijack.joined(separator: ", "))
+    LabeledContent("Fake IP Range", value: tun.dnsFakeIPEnabled ? tun.normalizedFakeIPRange : String(localized: "Off"))
+    LabeledContent("Nameserver", value: summarized(tun.dns.nameserver))
+    LabeledContent("Fallback", value: summarized(tun.dns.fallback))
+    LabeledContent("NE System DNS", value: appModel.networkExtensionSystemDNSState.displayName)
+  }
+
+  @ViewBuilder
+  private var ruleOverlayRows: some View {
+    let overlay = appModel.ruleOverlaySettings
+    LabeledContent("Status", value: overlay.enabled ? String(localized: "Enabled") : String(localized: "Disabled"))
+    LabeledContent("Before", value: "\(overlay.prependRules.count)")
+    LabeledContent("After", value: "\(overlay.appendRules.count)")
+    LabeledContent("Disabled", value: "\(overlay.disabledRuleMatchers.count)")
+    LabeledContent("Runtime Source", value: String(localized: "Generated runtime YAML"))
+    LabeledContent("Profile YAML", value: String(localized: "Unchanged"))
+    if let validationError = overlay.validationError {
+      LabeledContent("Validation") {
+        Text(validationError)
+          .foregroundStyle(.red)
+      }
+    }
+    ForEach(Array((overlay.prependRules + overlay.appendRules).prefix(4))) { rule in
+      LabeledContent(rule.kind.displayName) {
+        Text(rule.runtimeRule)
+          .font(.system(.callout, design: .monospaced))
+          .lineLimit(1)
+          .truncationMode(.middle)
+      }
+    }
+    ForEach(Array(overlay.disabledRuleMatchers.prefix(4))) { matcher in
+      LabeledContent(String(format: String(localized: "Disable %@"), matcher.mode.displayName)) {
+        Text(matcher.normalizedPattern)
+          .font(.system(.callout, design: .monospaced))
+          .lineLimit(1)
+          .truncationMode(.middle)
+      }
+    }
+  }
+
+  @ViewBuilder
+  private var helperRows: some View {
+    let detail = appModel.tunHelperStatusDetail
+    LabeledContent("Registered", value: yesNo(detail.registered))
+    LabeledContent("Approval", value: detail.requiresApproval ? String(localized: "Required") : String(localized: "Clear"))
+    LabeledContent("XPC", value: detail.xpcReachable ? String(localized: "Reachable") : String(localized: "Unreachable"))
+    LabeledContent("Running", value: runningText(detail))
+    LabeledContent("Service", value: detail.serviceStatus.displayName)
+    LabeledContent("Fingerprint", value: fingerprintText(detail))
+    LabeledContent("Protocol", value: protocolText(detail))
+    LabeledContent("Helper Build", value: detail.helperBuildVersion ?? String(localized: "Unknown"))
+    LabeledContent("Launchctl", value: latestLaunchctlStatus)
+    LabeledContent("Last Exit", value: latestExitSummary ?? String(localized: "Unknown"))
+    LabeledContent("Message") {
+      Text(detail.message)
+        .multilineTextAlignment(.trailing)
+        .textSelection(.enabled)
+    }
+    HStack(spacing: 8) {
+      Button("Repair Helper") {
+        appModel.repairHelperRegistration()
+      }
+      Button("Open Helper Approval Settings") {
+        appModel.openHelperApprovalSettings()
+      }
+    }
+    .controlSize(.small)
+  }
+
+  @ViewBuilder
+  private var tunRows: some View {
+    let tun = appModel.currentRuntimeOverrides.tunSettings
+    let diagnostics = appModel.tunDiagnostics
+    LabeledContent("Helper", value: helperPIDText)
+    LabeledContent("Stack", value: tun.stack.displayName)
+    LabeledContent("Checks", value: diagnosticCounterText(diagnostics))
+    LabeledContent("Device", value: tun.normalizedDevice)
+    LabeledContent("Last Check", value: diagnostics.updatedAt == Date.distantPast
+      ? String(localized: "Waiting")
+      : diagnostics.updatedAt.formatted(date: .omitted, time: .standard))
+    if appModel.developerMode, let helperLog = appModel.helperLogs.last {
+      LabeledContent("Helper Log") {
+        Text(helperLog)
+          .font(.system(.callout, design: .monospaced))
+          .lineLimit(2)
+          .truncationMode(.middle)
+      }
+    }
+    ForEach(Array(diagnostics.checks.prefix(appModel.developerMode ? 8 : 4))) { check in
+      StatusTunDiagnosticCheckRow(check: check)
+    }
+    HStack(spacing: 8) {
+      Button("Refresh TUN Diagnostics") {
+        appModel.refreshTunDiagnostics()
+      }
+      Button("Repair TUN System DNS") {
+        appModel.repairTunDNS()
+      }
+      .disabled(!appModel.canRepairTunDNS)
+      Button("Repair TUN Routing") {
+        appModel.repairTunRouting()
+      }
+      .disabled(!appModel.canRepairTunRouting)
+    }
+    .controlSize(.small)
+  }
+
+  @ViewBuilder
+  private var networkExtensionRows: some View {
+    let diagnostics = appModel.networkExtensionController.diagnostics
+    let routing = appModel.networkExtensionRoutingSettings
+    LabeledContent("TCP", value: "\(diagnostics.activeTCPBridgeCount)")
+    LabeledContent("UDP", value: "\(diagnostics.activeUDPBridgeCount)")
+    LabeledContent("DNS", value: "\(diagnostics.dnsCaptureCount)")
+    LabeledContent("SOCKS Fail") {
+      Text("\(diagnostics.socksHandshakeFailureCount)")
+        .foregroundStyle(diagnostics.socksHandshakeFailureCount > 0 ? Color.red : Color.primary)
+    }
+    LabeledContent("Excluded CIDR", value: "\(routing.effectiveRouteExcludeCIDRs.count)")
+    LabeledContent("DNS Runtime", value: routing.dnsFakeIPEnabled ? String(localized: "Fake IP") : String(localized: "Profile default"))
+    LabeledContent("DNS Capture", value: routing.dnsCaptureEnabled ? "127.0.0.1:\(routing.normalizedDNSListenPort)" : String(localized: "Off"))
+    LabeledContent("System DNS", value: appModel.networkExtensionSystemDNSState.displayName)
+    LabeledContent("Last Update", value: diagnostics.updatedAt == Date.distantPast
+      ? String(localized: "Waiting")
+      : diagnostics.updatedAt.formatted(date: .omitted, time: .standard))
+    if let event = diagnostics.recentBypasses.last {
+      LabeledContent("Last Bypass", value: eventSummary(event))
+    }
+    if let event = diagnostics.recentErrors.last {
+      LabeledContent("Last Error") {
+        Text(eventSummary(event))
+          .foregroundStyle(.red)
+      }
+    }
+  }
+
+  // MARK: - Facts
 
   private var showsTunDiagnostics: Bool {
     appModel.proxyRoutingMode == .tun || appModel.tunEnabled || appModel.tunnelCoreRunning
@@ -1072,558 +1675,56 @@ struct StatusView: View {
     appModel.proxyRoutingMode == .neProxy || appModel.networkExtensionController.vpnStatus.isActive
   }
 
-  private var statusActions: some View {
-    Group {
-      Button {
-        refreshStatus()
-      } label: {
-        Label("Refresh", systemImage: "arrow.clockwise")
-      }
-
-      Button {
-        appModel.copyRuntimeDiagnostics()
-      } label: {
-        Label("Copy Diagnostics", systemImage: "doc.on.doc")
-      }
-
-      Button {
-        appModel.openRuntimeLogs()
-      } label: {
-        Label("Open Logs", systemImage: "terminal")
-      }
-
-      Button {
-        appModel.openLogsFolder()
-      } label: {
-        Label("Open Log Folder", systemImage: "folder")
-      }
+  /// In TUN mode the helper owns the core process, so `coreController` reports stopped while the
+  /// tunnel is up; naming the owner keeps the row from contradicting the headline.
+  private var coreText: String {
+    if appModel.tunnelCoreRunning {
+      return String(localized: "Running via helper")
     }
-  }
-
-  private func refreshStatus() {
-    appModel.refreshHelperStatus()
-    appModel.refreshNetworkExtensionStatus()
-    appModel.refreshTunDiagnostics()
-    if appModel.isCoreRunning {
-      appModel.reloadRuntimeData()
+    if appModel.previewRuntimeActive {
+      return String(localized: "Preview")
     }
-  }
-}
-
-private struct StatusResponsivePair<Leading: View, Trailing: View>: View {
-  let availableWidth: CGFloat
-  @ViewBuilder var leading: Leading
-  @ViewBuilder var trailing: Trailing
-
-  var body: some View {
-    StatusEqualHeightPairLayout(
-      axis: availableWidth >= DashboardLayoutMetrics.runningPairColumnsBreakpoint ? .horizontal : .vertical,
-      spacing: DashboardLayoutMetrics.dashboardGridSpacing
-    ) {
-      leading
-      trailing
-    }
-  }
-}
-
-private struct StatusEqualHeightPairLayout: Layout {
-  let axis: Axis
-  let spacing: CGFloat
-
-  func sizeThatFits(
-    proposal: ProposedViewSize,
-    subviews: Subviews,
-    cache _: inout ()
-  ) -> CGSize {
-    guard !subviews.isEmpty else { return .zero }
-
-    switch axis {
-    case .horizontal:
-      let totalWidth = max(0, proposal.width ?? subviews.reduce(CGFloat.zero) { partial, subview in
-        partial + subview.sizeThatFits(.unspecified).width
-      } + spacing * CGFloat(max(0, subviews.count - 1)))
-      let itemWidth = max(0, (totalWidth - spacing * CGFloat(max(0, subviews.count - 1))) / CGFloat(subviews.count))
-      let itemHeight = equalizedHeight(for: subviews, width: itemWidth)
-      return CGSize(width: totalWidth, height: itemHeight)
-
-    case .vertical:
-      let totalWidth = max(0, proposal.width ?? subviews.map { $0.sizeThatFits(.unspecified).width }.max() ?? 0)
-      let itemHeight = equalizedHeight(for: subviews, width: totalWidth)
-      return CGSize(
-        width: totalWidth,
-        height: itemHeight * CGFloat(subviews.count) + spacing * CGFloat(max(0, subviews.count - 1))
-      )
-    }
+    return appModel.coreController.status.displayName
   }
 
-  func placeSubviews(
-    in bounds: CGRect,
-    proposal _: ProposedViewSize,
-    subviews: Subviews,
-    cache _: inout ()
-  ) {
-    guard !subviews.isEmpty else { return }
-
-    switch axis {
-    case .horizontal:
-      let itemWidth = max(0, (bounds.width - spacing * CGFloat(max(0, subviews.count - 1))) / CGFloat(subviews.count))
-      let itemHeight = equalizedHeight(for: subviews, width: itemWidth)
-      for (index, subview) in subviews.enumerated() {
-        subview.place(
-          at: CGPoint(x: bounds.minX + CGFloat(index) * (itemWidth + spacing), y: bounds.minY),
-          anchor: .topLeading,
-          proposal: ProposedViewSize(width: itemWidth, height: itemHeight)
-        )
-      }
-
-    case .vertical:
-      let itemHeight = equalizedHeight(for: subviews, width: bounds.width)
-      for (index, subview) in subviews.enumerated() {
-        subview.place(
-          at: CGPoint(x: bounds.minX, y: bounds.minY + CGFloat(index) * (itemHeight + spacing)),
-          anchor: .topLeading,
-          proposal: ProposedViewSize(width: bounds.width, height: itemHeight)
-        )
-      }
-    }
-  }
-
-  private func equalizedHeight(for subviews: Subviews, width: CGFloat) -> CGFloat {
-    subviews
-      .map { $0.sizeThatFits(ProposedViewSize(width: width, height: nil)).height }
-      .max() ?? 0
-  }
-}
-
-private struct StatusFactGrid<Content: View>: View {
-  let minimumColumnWidth: CGFloat
-  let spacing: CGFloat
-  let content: Content
-
-  init(
-    minimumColumnWidth: CGFloat = 108,
-    spacing: CGFloat = 8,
-    @ViewBuilder content: () -> Content
-  ) {
-    self.minimumColumnWidth = minimumColumnWidth
-    self.spacing = spacing
-    self.content = content()
-  }
-
-  var body: some View {
-    StatusFactFlowLayout(
-      minimumItemWidth: minimumColumnWidth,
-      spacing: spacing
-    ) {
-      content
-    }
-  }
-}
-
-private struct StatusFactFlowLayout: Layout {
-  let minimumItemWidth: CGFloat
-  let spacing: CGFloat
-
-  func sizeThatFits(
-    proposal: ProposedViewSize,
-    subviews: Subviews,
-    cache _: inout ()
-  ) -> CGSize {
-    guard !subviews.isEmpty else { return .zero }
-
-    let availableWidth = proposal.width ?? unconstrainedWidth(for: subviews)
-    let rows = rows(for: subviews, availableWidth: availableWidth)
-    let height = rows.reduce(CGFloat.zero) { partial, row in
-      partial + row.height
-    } + spacing * CGFloat(max(0, rows.count - 1))
-
-    return CGSize(
-      width: proposal.width ?? rows.map(\.width).max() ?? 0,
-      height: height
-    )
-  }
-
-  func placeSubviews(
-    in bounds: CGRect,
-    proposal _: ProposedViewSize,
-    subviews: Subviews,
-    cache _: inout ()
-  ) {
-    var y = bounds.minY
-
-    for row in rows(for: subviews, availableWidth: bounds.width) {
-      var x = bounds.minX
-
-      for item in row.items {
-        subviews[item.index].place(
-          at: CGPoint(x: x, y: y),
-          anchor: .topLeading,
-          proposal: ProposedViewSize(width: item.size.width, height: row.height)
-        )
-        x += item.size.width + spacing
-      }
-      y += row.height + spacing
-    }
-  }
-
-  private func rows(for subviews: Subviews, availableWidth: CGFloat) -> [FlowRow] {
-    let usableWidth = max(0, availableWidth)
-    let rowCounts = rowCounts(itemCount: subviews.count, availableWidth: usableWidth)
-    var rows: [FlowRow] = []
-
-    var startIndex = 0
-    for rowCount in rowCounts {
-      let itemWidth = widthForRow(itemCount: rowCount, availableWidth: usableWidth)
-      var items: [FlowItem] = []
-      var rowHeight: CGFloat = 0
-
-      for index in startIndex..<startIndex + rowCount {
-        let measuredSize = subviews[index].sizeThatFits(ProposedViewSize(width: itemWidth, height: nil))
-        items.append(FlowItem(index: index, size: CGSize(width: itemWidth, height: measuredSize.height)))
-        rowHeight = max(rowHeight, measuredSize.height)
-      }
-
-      let rowWidth = itemWidth * CGFloat(rowCount) + spacing * CGFloat(max(0, rowCount - 1))
-      rows.append(FlowRow(items: items, width: rowWidth, height: rowHeight))
-      startIndex += rowCount
-    }
-
-    return rows
-  }
-
-  private func rowCounts(itemCount: Int, availableWidth: CGFloat) -> [Int] {
-    guard itemCount > 0 else { return [] }
-
-    let maximumColumns = maximumColumns(itemCount: itemCount, availableWidth: availableWidth)
-    let rowCount = Int(ceil(Double(itemCount) / Double(maximumColumns)))
-    let baseCount = itemCount / rowCount
-    let extraCount = itemCount % rowCount
-
-    return (0..<rowCount).map { rowIndex in
-      baseCount + (rowIndex < extraCount ? 1 : 0)
-    }
-  }
-
-  private func maximumColumns(itemCount: Int, availableWidth: CGFloat) -> Int {
-    guard availableWidth > 0 else { return 1 }
-
-    let columns = Int(floor((availableWidth + spacing) / (minimumItemWidth + spacing)))
-    return max(1, min(itemCount, columns))
-  }
-
-  private func widthForRow(itemCount: Int, availableWidth: CGFloat) -> CGFloat {
-    guard itemCount > 0 else { return 0 }
-
-    let reservedSpacing = spacing * CGFloat(max(0, itemCount - 1))
-    return max(0, (availableWidth - reservedSpacing) / CGFloat(itemCount))
-  }
-
-  private func unconstrainedWidth(for subviews: Subviews) -> CGFloat {
-    minimumItemWidth * CGFloat(subviews.count) + spacing * CGFloat(max(0, subviews.count - 1))
-  }
-
-  private struct FlowItem {
-    let index: Int
-    let size: CGSize
-  }
-
-  private struct FlowRow {
-    let items: [FlowItem]
-    let width: CGFloat
-    let height: CGFloat
-  }
-}
-
-private struct StatusFactTile: View {
-  let title: String
-  let value: String
-  var tint: Color = .primary
-  var valueLineLimit = 1
-  var isProminent = false
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 5) {
-      Text(LocalizedStringKey(title))
-        .font(.caption2.weight(.medium))
-        .foregroundStyle(.secondary)
-        .lineLimit(1)
-
-      Text(localizedValue)
-        .font(valueFont)
-        .foregroundStyle(tint)
-        .lineLimit(valueLineLimit)
-        .minimumScaleFactor(isProminent ? 0.68 : 0.76)
-        .truncationMode(.middle)
-        .fixedSize(horizontal: false, vertical: true)
-    }
-    .padding(.horizontal, 10)
-    .padding(.vertical, 8)
-    .frame(maxWidth: .infinity, minHeight: isProminent ? 62 : 52, maxHeight: .infinity, alignment: .topLeading)
-    .statusFactSurface()
-    .help(localizedValue)
-    .accessibilityElement(children: .combine)
-  }
-
-  private var localizedValue: String {
-    localizedRuntimeText(value)
-  }
-
-  private var valueFont: Font {
-    isProminent ? .system(.title3, design: .rounded).weight(.semibold) : .callout.weight(.semibold)
-  }
-}
-
-private struct DashboardInsetSurfaceModifier: ViewModifier {
-  func body(content: Content) -> some View {
-    let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
-    content
-      .background(.insetSurface, in: shape)
-      .overlay(shape.strokeBorder(.separator.opacity(0.6), lineWidth: 1))
-  }
-}
-
-private extension View {
-  func dashboardInsetSurface() -> some View {
-    modifier(DashboardInsetSurfaceModifier())
-  }
-
-  func statusFactSurface() -> some View {
-    let shape = SurfaceRadius.shape(SurfaceRadius.tile)
-    return background(.tileSurface, in: shape)
-      .overlay(shape.strokeBorder(.separator.opacity(0.7), lineWidth: 0.75))
-  }
-}
-
-private struct StatusRuntimeOverviewCard: View {
-  @Environment(AppModel.self) private var appModel
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      DashboardSectionHeader(title: "Runtime Status", symbolName: "waveform.path.ecg.rectangle")
-
-      StatusFactGrid(minimumColumnWidth: 108) {
-        StatusFactTile(title: "State", value: appModel.statusSummary, tint: statusTint, isProminent: true)
-        StatusFactTile(title: "Mode", value: appModel.proxyRoutingMode.displayName, tint: .cyan, isProminent: true)
-        StatusFactTile(title: "Profile", value: appModel.profileStore.activeProfile?.name ?? "None", tint: .orange, isProminent: true)
-        StatusFactTile(title: "Core", value: appModel.coreController.status.displayName, tint: coreTint, isProminent: true)
-      }
-
-      StatusFactGrid(minimumColumnWidth: 96) {
-        StatusFactTile(title: "Controller", value: "\(appModel.currentRuntimeOverrides.externalControllerHost):\(appModel.currentRuntimeOverrides.externalControllerPort)")
-        StatusFactTile(title: "Controller Secret", value: RuntimeDiagnosticsReport.redactedSecret)
-        StatusFactTile(title: "Run Mode", value: appModel.currentRuntimeOverrides.mode.displayName)
-        StatusFactTile(title: "System Proxy", value: appModel.systemProxyEnabled ? "Enabled" : "Not Enabled")
-        StatusFactTile(title: "TUN", value: appModel.tunEnabled ? "Enabled" : "Not Enabled")
-        StatusFactTile(title: "NE Proxy", value: appModel.networkExtensionEnabled ? "Enabled" : "Not Enabled")
-        if let readinessIssue = appModel.readinessIssue {
-          StatusFactTile(title: "Readiness", value: readinessIssue, valueLineLimit: 2)
-        }
-        if let error = appModel.lastError {
-          StatusFactTile(title: "Last Error", value: error, tint: .red, valueLineLimit: 2)
-        }
-      }
-    }
-    .padding(14)
-    .frame(maxWidth: .infinity, alignment: .topLeading)
-    .dashboardCard()
-  }
-
-  private var statusTint: Color {
-    appModel.isRunning ? .green : .secondary
-  }
-
-  private var coreTint: Color {
-    switch appModel.coreController.status {
-    case .running:
-      return .green
-    case .crashed:
-      return .red
-    case .starting, .restarting:
-      return .orange
-    case .stopped:
-      return .secondary
-    }
-  }
-}
-
-private struct StatusDNSCard: View {
-  @Environment(AppModel.self) private var appModel
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      DashboardSectionHeader(title: "Effective DNS", symbolName: "server.rack")
-
-      StatusFactGrid(minimumColumnWidth: 112) {
-        StatusFactTile(title: "Routing", value: appModel.proxyRoutingMode.displayName)
-        StatusFactTile(title: "TUN DNS Mode", value: appModel.currentRuntimeOverrides.tunSettings.dnsFakeIPEnabled ? "Fake IP" : "Profile", tint: .orange)
-        StatusFactTile(
-          title: "TUN System DNS",
-          value: appModel.currentRuntimeOverrides.tunSettings.systemDNSOverrideEnabled ? appModel.tunSystemDNSState.displayName : "Off"
-        )
-        StatusFactTile(
-          title: "DNS Hijack",
-          value: appModel.currentRuntimeOverrides.tunSettings.normalizedDNSHijack.joined(separator: ", "),
-          valueLineLimit: 2
-        )
-        StatusFactTile(
-          title: "Fake IP Range",
-          value: appModel.currentRuntimeOverrides.tunSettings.dnsFakeIPEnabled
-            ? appModel.currentRuntimeOverrides.tunSettings.normalizedFakeIPRange
-            : "Off"
-        )
-        StatusFactTile(title: "Nameserver", value: summarized(appModel.currentRuntimeOverrides.tunSettings.dns.nameserver), valueLineLimit: 2)
-        StatusFactTile(title: "Fallback", value: summarized(appModel.currentRuntimeOverrides.tunSettings.dns.fallback), valueLineLimit: 2)
-        StatusFactTile(title: "NE System DNS", value: appModel.networkExtensionSystemDNSState.displayName)
-        if let dnsError = appModel.tunSystemDNSState.errorMessage ?? appModel.networkExtensionSystemDNSState.errorMessage {
-          StatusFactTile(title: "DNS Repair", value: dnsError, tint: .red, valueLineLimit: 2)
-        }
-      }
-    }
-    .padding(14)
-    .frame(maxWidth: .infinity, alignment: .topLeading)
-    .dashboardCard()
-  }
-
-  private func summarized(_ values: [String]) -> String {
-    values.isEmpty ? "Profile" : values.prefix(3).joined(separator: ", ")
-  }
-}
-
-private struct StatusRuleOverlayCard: View {
-  @Environment(AppModel.self) private var appModel
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      DashboardSectionHeader(title: "Rule Overlay", symbolName: "list.bullet.rectangle")
-
-      StatusFactGrid(minimumColumnWidth: 96) {
-        StatusFactTile(
-          title: "Status",
-          value: appModel.ruleOverlaySettings.enabled ? "Enabled" : "Disabled",
-          tint: appModel.ruleOverlaySettings.enabled ? .green : .secondary,
-          isProminent: true
-        )
-        StatusFactTile(
-          title: "Before",
-          value: "\(appModel.ruleOverlaySettings.prependRules.count)",
-          tint: .cyan,
-          isProminent: true
-        )
-        StatusFactTile(
-          title: "After",
-          value: "\(appModel.ruleOverlaySettings.appendRules.count)",
-          tint: .orange,
-          isProminent: true
-        )
-        StatusFactTile(
-          title: "Disabled",
-          value: "\(appModel.ruleOverlaySettings.disabledRuleMatchers.count)",
-          tint: .red,
-          isProminent: true
-        )
-      }
-
-      StatusFactGrid(minimumColumnWidth: 132) {
-        StatusFactTile(title: "Runtime Source", value: "Generated runtime YAML", valueLineLimit: 2)
-        StatusFactTile(title: "Profile YAML", value: "Unchanged")
-        if let validationError = appModel.ruleOverlaySettings.validationError {
-          StatusFactTile(title: "Validation", value: validationError, tint: .red, valueLineLimit: 2)
-        }
-        ForEach(Array((appModel.ruleOverlaySettings.prependRules + appModel.ruleOverlaySettings.appendRules).prefix(4))) { rule in
-          StatusFactTile(title: rule.kind.displayName, value: rule.runtimeRule, valueLineLimit: 2)
-        }
-        ForEach(Array(appModel.ruleOverlaySettings.disabledRuleMatchers.prefix(4))) { matcher in
-          StatusFactTile(title: "Disable \(matcher.mode.displayName)", value: matcher.normalizedPattern, valueLineLimit: 2)
-        }
-      }
-    }
-    .padding(14)
-    .frame(maxWidth: .infinity, alignment: .topLeading)
-    .dashboardCard()
-  }
-}
-
-private struct StatusHelperDiagnosticsCard: View {
-  @Environment(AppModel.self) private var appModel
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      HStack(spacing: 10) {
-        DashboardSectionHeader(title: "Helper Diagnostics", symbolName: "checkmark.shield")
-        Spacer()
-        Button {
-          appModel.repairHelperRegistration()
-        } label: {
-          Image(systemName: "wrench.and.screwdriver")
-        }
-        .buttonStyle(.borderless)
-        .help("Repair Helper")
-
-        Button {
-          appModel.openHelperApprovalSettings()
-        } label: {
-          Image(systemName: "gearshape")
-        }
-        .buttonStyle(.borderless)
-        .help("Open helper approval settings")
-      }
-
-      StatusFactGrid(minimumColumnWidth: 108) {
-        StatusFactTile(title: "Registered", value: yesNo(appModel.tunHelperStatusDetail.registered), tint: appModel.tunHelperStatusDetail.registered ? .green : .secondary, isProminent: true)
-        StatusFactTile(title: "Approval", value: appModel.tunHelperStatusDetail.requiresApproval ? "Required" : "Clear", tint: appModel.tunHelperStatusDetail.requiresApproval ? .orange : .green, isProminent: true)
-        StatusFactTile(title: "XPC", value: appModel.tunHelperStatusDetail.xpcReachable ? "Reachable" : "Unreachable", tint: appModel.tunHelperStatusDetail.xpcReachable ? .green : .secondary, isProminent: true)
-        StatusFactTile(title: "Running", value: runningText, tint: appModel.tunHelperStatusDetail.running ? .green : .secondary, isProminent: true)
-      }
-
-      StatusFactGrid {
-        StatusFactTile(title: "Service", value: appModel.tunHelperStatusDetail.serviceStatus.displayName)
-        StatusFactTile(title: "Fingerprint", value: fingerprintText)
-        StatusFactTile(title: "Protocol", value: protocolText)
-        StatusFactTile(title: "Helper Build", value: appModel.tunHelperStatusDetail.helperBuildVersion ?? "Unknown")
-        StatusFactTile(title: "Launchctl", value: latestLaunchctlStatus, valueLineLimit: 2)
-        StatusFactTile(title: "Last Exit", value: latestExitSummary ?? "Unknown", valueLineLimit: 2)
-        StatusFactTile(title: "Safe Paths", value: "Bundled core, runtime config, and work directory validated", valueLineLimit: 2)
-        StatusFactTile(title: "Message", value: appModel.tunHelperStatusDetail.message, valueLineLimit: 2)
-      }
-    }
-    .padding(14)
-    .frame(maxWidth: .infinity, alignment: .topLeading)
-    .dashboardCard()
-    .onAppear {
-      appModel.refreshHelperRegistrationStatus()
-    }
+  private func onOff(_ value: Bool) -> String {
+    value ? String(localized: "On") : String(localized: "Off")
   }
 
   private func yesNo(_ value: Bool) -> String {
-    value ? "Yes" : "No"
+    value ? String(localized: "Yes") : String(localized: "No")
   }
 
-  private var runningText: String {
-    if let pid = appModel.tunHelperStatusDetail.pid {
+  private func summarized(_ values: [String]) -> String {
+    values.isEmpty ? String(localized: "Profile") : values.prefix(3).joined(separator: ", ")
+  }
+
+  private func runningText(_ detail: TunnelHelperStatusDetail) -> String {
+    if let pid = detail.pid {
       return "PID \(pid)"
     }
-    return yesNo(appModel.tunHelperStatusDetail.running)
+    return yesNo(detail.running)
   }
 
-  private var fingerprintText: String {
-    guard appModel.tunHelperStatusDetail.fingerprintRecorded else {
-      return "Not Recorded"
+  private func fingerprintText(_ detail: TunnelHelperStatusDetail) -> String {
+    guard detail.fingerprintRecorded else {
+      return String(localized: "Not Recorded")
     }
-    switch appModel.tunHelperStatusDetail.fingerprintMatches {
+    switch detail.fingerprintMatches {
     case true:
-      return "Match"
+      return String(localized: "Match")
     case false:
-      return "Mismatch"
+      return String(localized: "Mismatch")
     case nil:
-      return "Unknown"
+      return String(localized: "Unknown")
     }
   }
 
-  private var protocolText: String {
-    guard let version = appModel.tunHelperStatusDetail.protocolVersion else {
-      return appModel.tunHelperStatusDetail.migrationRequired ? "Missing" : "Unknown"
+  private func protocolText(_ detail: TunnelHelperStatusDetail) -> String {
+    guard let version = detail.protocolVersion else {
+      return detail.migrationRequired ? String(localized: "Missing") : String(localized: "Unknown")
     }
-    return appModel.tunHelperStatusDetail.migrationRequired ? "v\(version) Needs Repair" : "v\(version)"
+    return detail.migrationRequired ? String(format: String(localized: "v%lld Needs Repair"), Int64(version)) : "v\(version)"
   }
 
   private var latestExitSummary: String? {
@@ -1637,177 +1738,95 @@ private struct StatusHelperDiagnosticsCard: View {
     appModel.helperLogs.reversed().first { line in
       line.localizedCaseInsensitiveContains("state =")
         || line.localizedCaseInsensitiveContains("job state =")
-    } ?? "Unknown"
-  }
-}
-
-private struct StatusTunDiagnosticsCard: View {
-  @Environment(AppModel.self) private var appModel
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      HStack(spacing: 10) {
-        DashboardSectionHeader(title: "TUN Diagnostics", symbolName: "point.topleft.down.curvedto.point.bottomright.up")
-        Spacer()
-        Button {
-          appModel.refreshTunDiagnostics()
-        } label: {
-          Image(systemName: "arrow.clockwise")
-        }
-        .buttonStyle(.borderless)
-        .help("Refresh TUN diagnostics")
-
-        Button {
-          appModel.repairTunDNS()
-        } label: {
-          Image(systemName: "wrench.and.screwdriver")
-        }
-        .buttonStyle(.borderless)
-        .disabled(!appModel.canRepairTunDNS)
-        .help("Repair TUN system DNS")
-
-        Button {
-          appModel.repairTunRouting()
-        } label: {
-          Image(systemName: "network")
-        }
-        .buttonStyle(.borderless)
-        .disabled(!appModel.canRepairTunRouting)
-        .help("Repair TUN routing")
-
-        if appModel.hasResidualSystemProxy {
-          Button {
-            appModel.disableResidualSystemProxy()
-          } label: {
-            Image(systemName: "xmark.shield")
-          }
-          .buttonStyle(.borderless)
-          .disabled(!appModel.canDisableResidualSystemProxy)
-          .help("Disable residual System Proxy")
-        }
-      }
-
-      StatusFactGrid(minimumColumnWidth: 108) {
-        StatusFactTile(title: "Helper", value: helperPIDText, tint: appModel.tunEnabled ? .green : .secondary, isProminent: true)
-        StatusFactTile(title: "Stack", value: appModel.currentRuntimeOverrides.tunSettings.stack.displayName, tint: .cyan, isProminent: true)
-        StatusFactTile(title: "Checks", value: diagnosticCounterText, tint: diagnosticTint, isProminent: true)
-        StatusFactTile(title: "DNS", value: appModel.currentRuntimeOverrides.tunSettings.dnsFakeIPEnabled ? "Fake IP" : "Profile", tint: .orange, isProminent: true)
-      }
-
-      StatusFactGrid {
-        StatusFactTile(title: "Controller", value: "\(appModel.currentRuntimeOverrides.externalControllerHost):\(appModel.currentRuntimeOverrides.externalControllerPort)")
-        StatusFactTile(title: "Device", value: appModel.currentRuntimeOverrides.tunSettings.normalizedDevice)
-        StatusFactTile(
-          title: "DNS Hijack",
-          value: appModel.currentRuntimeOverrides.tunSettings.normalizedDNSHijack.joined(separator: ", "),
-          valueLineLimit: 2
-        )
-        StatusFactTile(
-          title: "Fake IP Range",
-          value: appModel.currentRuntimeOverrides.tunSettings.dnsFakeIPEnabled
-            ? appModel.currentRuntimeOverrides.tunSettings.normalizedFakeIPRange
-            : "Off"
-        )
-        StatusFactTile(
-          title: "System DNS",
-          value: appModel.currentRuntimeOverrides.tunSettings.systemDNSOverrideEnabled ? appModel.tunSystemDNSState.displayName : "Off"
-        )
-        StatusFactTile(title: "Last Check", value: lastUpdateText)
-        if let dnsError = appModel.tunSystemDNSState.errorMessage {
-          StatusFactTile(title: "DNS Repair", value: dnsError, tint: .red, valueLineLimit: 2)
-        }
-        if let issue = appModel.tunDiagnostics.primaryIssue {
-          StatusFactTile(title: "Primary Issue", value: issue.message, tint: .orange, valueLineLimit: 2)
-        }
-        if appModel.developerMode, let helperLog = appModel.helperLogs.last {
-          StatusFactTile(title: "Helper Log", value: helperLog, valueLineLimit: 2)
-        }
-      }
-
-      if !appModel.tunDiagnostics.checks.isEmpty {
-        VStack(spacing: 8) {
-          ForEach(Array(appModel.tunDiagnostics.checks.prefix(appModel.developerMode ? 8 : 4))) { check in
-            StatusTunDiagnosticCheckTile(check: check)
-          }
-        }
-      }
-    }
-    .padding(14)
-    .frame(maxWidth: .infinity, minHeight: 252, maxHeight: .infinity, alignment: .topLeading)
-    .dashboardCard()
+    } ?? String(localized: "Unknown")
   }
 
   private var helperPIDText: String {
     guard let pid = appModel.tunHelperPID else {
-      return appModel.tunEnabled ? "Running" : "Ready"
+      return appModel.tunEnabled ? String(localized: "Running") : String(localized: "Ready")
     }
     return "#\(pid)"
   }
 
-  private var diagnosticCounterText: String {
-    let diagnostics = appModel.tunDiagnostics
-    guard !diagnostics.checks.isEmpty else { return "Waiting" }
+  private func diagnosticCounterText(_ diagnostics: TunDiagnosticsSnapshot) -> String {
+    guard !diagnostics.checks.isEmpty else { return String(localized: "Waiting") }
     let base = "\(diagnostics.passCount)/\(diagnostics.warnCount)/\(diagnostics.failCount)"
-    // Only widen the tile when something was actually downgraded, so the segments always
+    // Only widen the value when something was actually downgraded, so the segments always
     // account for every listed check.
     return diagnostics.infoCount > 0 ? "\(base)/\(diagnostics.infoCount)" : base
   }
 
-  private var lastUpdateText: String {
-    let updatedAt = appModel.tunDiagnostics.updatedAt
-    return updatedAt == Date.distantPast ? "Waiting" : updatedAt.formatted(date: .omitted, time: .standard)
+  private func eventSummary(_ event: NetworkExtensionDiagnosticEvent) -> String {
+    let context = [
+      event.flowProtocol?.displayName,
+      event.remoteEndpoint,
+      event.sourceAppSigningIdentifier,
+    ]
+    .compactMap(\.self)
+    .filter { !$0.isEmpty }
+    .joined(separator: " ")
+    return context.isEmpty ? event.message : context
+  }
+}
+
+private struct StatusOverviewRow: View {
+  let overview: StatusOverview
+
+  var body: some View {
+    HStack(alignment: .top, spacing: 12) {
+      Image(systemName: overview.systemImage)
+        .font(.title2)
+        .foregroundStyle(tint)
+        .frame(width: 28)
+        .accessibilityHidden(true)
+
+      VStack(alignment: .leading, spacing: 3) {
+        Text(overview.headline)
+          .font(.headline)
+          .fixedSize(horizontal: false, vertical: true)
+        Text(overview.detail)
+          .font(.callout)
+          .foregroundStyle(.secondary)
+          .textSelection(.enabled)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .padding(.vertical, 4)
+    .accessibilityElement(children: .combine)
   }
 
-  private var diagnosticTint: Color {
-    switch appModel.tunDiagnostics.overallStatus {
-    case .pass:
-      return .green
-    case .warn:
-      return .orange
-    case .fail:
-      return .red
-    case .info:
-      return .blue
-    case .skipped:
-      return .secondary
+  private var tint: Color {
+    switch overview.tone {
+    case .running: .green
+    case .attention: .orange
+    case .failure: .red
+    case .idle: .secondary
     }
   }
 }
 
-private struct StatusTunDiagnosticCheckTile: View {
+private struct StatusTunDiagnosticCheckRow: View {
   let check: TunDiagnosticCheck
 
   var body: some View {
-    HStack(alignment: .top, spacing: 10) {
-      Image(systemName: symbolName)
-        .font(.system(size: 12, weight: .semibold))
-        .foregroundStyle(tint)
-        .frame(width: 16, height: 18)
-
-      VStack(alignment: .leading, spacing: 3) {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-          Text(check.title)
-            .font(.callout.weight(.semibold))
-            .foregroundStyle(.primary)
-            .lineLimit(1)
-          Spacer(minLength: 8)
-          Text(check.status.displayName)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(tint)
-            .lineLimit(1)
-        }
-
+    LabeledContent {
+      VStack(alignment: .trailing, spacing: 2) {
+        Text(check.status.displayName)
+          .foregroundStyle(tint)
         Text(check.detail ?? check.message)
           .font(.caption)
           .foregroundStyle(.secondary)
-          .lineLimit(2)
-          .minimumScaleFactor(0.78)
+          .multilineTextAlignment(.trailing)
+          .lineLimit(3)
+      }
+    } label: {
+      Label {
+        Text(check.title)
+      } icon: {
+        Image(systemName: symbolName)
+          .foregroundStyle(tint)
       }
     }
-    .padding(.horizontal, 10)
-    .padding(.vertical, 8)
-    .frame(maxWidth: .infinity, alignment: .topLeading)
-    .statusFactSurface()
   }
 
   private var symbolName: String {
@@ -1841,60 +1860,18 @@ private struct StatusTunDiagnosticCheckTile: View {
   }
 }
 
-private struct StatusNetworkExtensionDiagnosticsCard: View {
-  @Environment(AppModel.self) private var appModel
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      DashboardSectionHeader(title: "NE Diagnostics", symbolName: "network")
-
-      StatusFactGrid(minimumColumnWidth: 96) {
-        StatusFactTile(title: "TCP", value: "\(diagnostics.activeTCPBridgeCount)", tint: .cyan, isProminent: true)
-        StatusFactTile(title: "UDP", value: "\(diagnostics.activeUDPBridgeCount)", tint: .indigo, isProminent: true)
-        StatusFactTile(title: "DNS", value: "\(diagnostics.dnsCaptureCount)", tint: .orange, isProminent: true)
-        StatusFactTile(title: "SOCKS Fail", value: "\(diagnostics.socksHandshakeFailureCount)", tint: diagnostics.socksHandshakeFailureCount > 0 ? .red : .green, isProminent: true)
-      }
-
-      StatusFactGrid {
-        StatusFactTile(title: "Excluded CIDR", value: "\(appModel.networkExtensionRoutingSettings.effectiveRouteExcludeCIDRs.count)")
-        StatusFactTile(title: "DNS Runtime", value: appModel.networkExtensionRoutingSettings.dnsFakeIPEnabled ? "Fake IP" : "Profile default")
-        StatusFactTile(title: "DNS Capture", value: appModel.networkExtensionRoutingSettings.dnsCaptureEnabled ? "127.0.0.1:\(appModel.networkExtensionRoutingSettings.normalizedDNSListenPort)" : "Off")
-        StatusFactTile(title: "System DNS", value: appModel.networkExtensionSystemDNSState.displayName)
-        StatusFactTile(title: "Last Update", value: lastUpdateText)
-        if let dnsError = appModel.networkExtensionSystemDNSState.errorMessage {
-          StatusFactTile(title: "DNS Repair", value: dnsError, tint: .red, valueLineLimit: 2)
-        }
-        if let event = diagnostics.recentBypasses.last {
-          StatusFactTile(title: "Last Bypass", value: eventSummary(event), valueLineLimit: 2)
-        }
-        if let event = diagnostics.recentErrors.last {
-          StatusFactTile(title: "Last Error", value: eventSummary(event), tint: .red, valueLineLimit: 2)
-        }
-      }
-    }
-    .padding(14)
-    .frame(maxWidth: .infinity, minHeight: 252, maxHeight: .infinity, alignment: .topLeading)
-    .dashboardCard()
+private struct DashboardInsetSurfaceModifier: ViewModifier {
+  func body(content: Content) -> some View {
+    let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+    content
+      .background(.insetSurface, in: shape)
+      .overlay(shape.strokeBorder(.separator.opacity(0.6), lineWidth: 1))
   }
+}
 
-  private var diagnostics: NetworkExtensionDiagnosticsSnapshot {
-    appModel.networkExtensionController.diagnostics
-  }
-
-  private var lastUpdateText: String {
-    diagnostics.updatedAt == Date.distantPast ? "Waiting" : diagnostics.updatedAt.formatted(date: .omitted, time: .standard)
-  }
-
-  private func eventSummary(_ event: NetworkExtensionDiagnosticEvent) -> String {
-    let context = [
-      event.flowProtocol?.displayName,
-      event.remoteEndpoint,
-      event.sourceAppSigningIdentifier,
-    ]
-    .compactMap(\.self)
-    .filter { !$0.isEmpty }
-    .joined(separator: " ")
-    return context.isEmpty ? event.message : context
+private extension View {
+  func dashboardInsetSurface() -> some View {
+    modifier(DashboardInsetSurfaceModifier())
   }
 }
 

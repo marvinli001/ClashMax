@@ -3,13 +3,99 @@ import Foundation
 import SwiftUI
 import Yams
 
+/// Layout policy for the Profiles page, kept pure so it can be unit-tested.
+enum ProfilesLayout {
+  /// Below this page width the detail pane would squeeze the Name column into uselessness, so the
+  /// pane steps aside and every one of its actions stays reachable through the More and context menus.
+  static let detailPaneBreakpoint: CGFloat = 700
+  static let detailPaneWidth: CGFloat = 256
+  /// The Usage column is the one column the table can do without: below this width it would only
+  /// buy a horizontal scroller, and the detail pane carries the same facts for the selected profile.
+  static let usageColumnBreakpoint: CGFloat = 1_000
+
+  static func showsDetailPane(pageWidth: CGFloat, requested: Bool) -> Bool {
+    requested && pageWidth.isFinite && pageWidth >= detailPaneBreakpoint
+  }
+
+  static func showsUsageColumn(pageWidth: CGFloat, hasUsageData: Bool) -> Bool {
+    hasUsageData && pageWidth.isFinite && pageWidth >= usageColumnBreakpoint
+  }
+}
+
+/// The one line of status a profile row carries. Everything else about a profile lives in the detail
+/// pane or the edit sheet, so the list stays a list.
+enum ProfileStatusSummary {
+  static func text(for profile: Profile, isUpdating: Bool) -> String {
+    switch profile.source {
+    case .subscription:
+      if isUpdating || profile.subscriptionUpdateStatus.result == .running {
+        return String(localized: "Updating…")
+      }
+      let status = profile.subscriptionUpdateStatus
+      switch status.result {
+      case .failed:
+        if let error = status.lastError {
+          return String(format: String(localized: "Update failed: %@"), error)
+        }
+        return String(localized: "Update failed")
+      case .succeeded:
+        if let date = status.lastSucceededAt ?? status.lastFinishedAt {
+          return String(
+            format: String(localized: "Updated %@"),
+            date.formatted(.relative(presentation: .named))
+          )
+        }
+        return String(localized: "Updated")
+      case .skipped:
+        return String(localized: "Update skipped")
+      case .never, .running:
+        return String(localized: "Not updated yet")
+      }
+    case .localFile:
+      return String(
+        format: String(localized: "Imported %@"),
+        profile.updatedAt.formatted(date: .abbreviated, time: .omitted)
+      )
+    case .manualProxy:
+      return String(localized: "Manual proxy")
+    }
+  }
+
+  static func isFailure(_ profile: Profile) -> Bool {
+    profile.isSubscription && profile.subscriptionUpdateStatus.result == .failed
+  }
+
+  /// Traffic and expiry are only worth a column when at least one profile reports them.
+  static func showsUsageColumn(for profiles: [Profile]) -> Bool {
+    profiles.contains { usageText(for: $0) != nil }
+  }
+
+  static func usageText(for profile: Profile) -> String? {
+    var parts: [String] = []
+    if let traffic = profile.subscriptionMetadata?.trafficSummary {
+      parts.append(traffic)
+    }
+    if let expireAt = profile.subscriptionMetadata?.traffic?.expireAt {
+      parts.append(String(
+        format: String(localized: "Expires %@"),
+        expireAt.formatted(date: .abbreviated, time: .omitted)
+      ))
+    }
+    return parts.isEmpty ? nil : parts.joined(separator: " · ")
+  }
+}
+
 struct ProfilesView: View {
   @Environment(AppModel.self) private var appModel
   @Environment(ProfileStore.self) private var profileStore
   @Environment(ProfileCoordinator.self) private var profileCoordinator
   @Environment(ProviderAnalyticsStore.self) private var providerAnalytics
-  @State private var subscriptionURL = ""
-  @State private var subscriptionUpstreamEndpointID: UUID?
+  /// Browsing selection only. Making a profile current is a separate, explicit action, so restoring
+  /// or moving this selection can never switch the runtime's profile.
+  @State private var selectedProfileID: Profile.ID?
+  @State private var showsDetailPane = true
+  @State private var pageWidth: CGFloat = 0
+  @State private var addSubscriptionPresented = false
   @State private var profileBeingEdited: Profile?
   @State private var providerInsightsProfile: Profile?
   @State private var editProfileName = ""
@@ -23,81 +109,29 @@ struct ProfilesView: View {
   @State private var manualProxySheetPresented = false
   @State private var endpointManagerPresented = false
 
+  init() {}
+
+  /// Seeds the browsing selection and detail pane for previews and fixture renders; the app starts
+  /// from the defaults (current profile selected, pane shown).
+  init(initialSelectedProfileID: Profile.ID?, initialShowsDetailPane: Bool = true) {
+    _selectedProfileID = State(initialValue: initialSelectedProfileID)
+    _showsDetailPane = State(initialValue: initialShowsDetailPane)
+  }
+
   var body: some View {
+    let profiles = profileStore.profiles
+    let selectedProfile = selectedProfile(in: profiles)
+
     AdaptivePage(title: "Profiles") {
-      Button {
-        appModel.updateDueSubscriptions()
-      } label: {
-        Label("Update Due", systemImage: "clock.arrow.circlepath")
-      }
-      .disabled(!profileStore.profiles.contains(where: \.isSubscription))
-
-      Button {
-        appModel.updateAllSubscriptions()
-      } label: {
-        Label("Update All", systemImage: "arrow.triangle.2.circlepath.circle")
-      }
-      .disabled(!profileStore.profiles.contains(where: \.isSubscription))
-
-      Button {
-        appModel.importLocalProfile()
-      } label: {
-        Label("Import YAML", systemImage: "square.and.arrow.down")
-      }
-
-      Button {
-        manualProxySheetPresented = true
-      } label: {
-        Label("Add Manual Proxy", systemImage: "point.3.connected.trianglepath.dotted")
-      }
-
-      Button {
-        endpointManagerPresented = true
-      } label: {
-        Label("Manage Proxy Endpoints", systemImage: "network")
-      }
-
-      Button {
-        importClientMigration()
-      } label: {
-        Label("Import Client", systemImage: "arrow.triangle.branch")
-      }
+      addMenu
+      updateButton(selectedProfile: selectedProfile)
+      moreMenu(selectedProfile: selectedProfile, hasSubscriptions: profiles.contains(where: \.isSubscription))
     } content: {
-      VStack(alignment: .leading, spacing: 14) {
-        subscriptionControls
-
-        if profileStore.profiles.isEmpty {
-          CenteredUnavailableState(
-            title: "No profiles",
-            systemImage: "doc.badge.plus",
-            message: "Profiles stay unchanged on disk; ClashMax generates a runtime copy when starting."
-          )
+      VStack(alignment: .leading, spacing: 10) {
+        if profiles.isEmpty {
+          emptyState
         } else {
-          ScrollView {
-            LazyVGrid(columns: profileGridColumns, alignment: .leading, spacing: 12) {
-              ForEach(profileStore.profiles) { profile in
-                ProfileCard(
-                  profile: profile,
-                  isActive: profileStore.activeProfileID == profile.id,
-                  isUpdating: profileCoordinator.updatingProfileIDs.contains(profile.id),
-                  sourceURLString: profileStore.subscriptionURLString(for: profile),
-                  manualEndpoint: manualEndpoint(for: profile),
-                  upstreamEndpoint: upstreamEndpoint(for: profile),
-                  selectAction: { appModel.selectProfile(profile) },
-                  editAction: { beginEditing(profile) },
-                  providerInsightsAction: { providerInsightsProfile = profile },
-                  updateAction: {
-                    Task { @MainActor in
-                      await appModel.updateSubscription(profile)
-                    }
-                  },
-                  deleteAction: { profilePendingDeletion = profile }
-                )
-              }
-            }
-            .padding(.vertical, 2)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-          }
+          workspace(profiles: profiles, selectedProfile: selectedProfile)
         }
 
         if let message = profileCoordinator.message {
@@ -111,13 +145,33 @@ struct ProfilesView: View {
           RuntimeApplyOutcomeBanner()
         }
 
-        if let error = appModel.lastError {
+        if let error = appModel.lastError,
+           PageErrorPresentation.showsInlineError(readinessIssue: appModel.readinessIssue, hasDetails: appModel.lastErrorDetails != nil)
+        {
           GlobalErrorBanner(
             message: error,
             details: appModel.lastErrorDetails
           )
         }
       }
+    }
+    .onAppear {
+      reconcileSelection(with: profiles)
+    }
+    .onChange(of: profiles.map(\.id)) { _, _ in
+      reconcileSelection(with: profileStore.profiles)
+    }
+    .onDeleteCommand {
+      if let selectedProfile {
+        profilePendingDeletion = selectedProfile
+      }
+    }
+    .sheet(isPresented: $addSubscriptionPresented) {
+      AddSubscriptionSheet(onCancel: { addSubscriptionPresented = false }) {
+        addSubscriptionPresented = false
+      }
+      .environment(appModel)
+      .environment(profileCoordinator)
     }
     .sheet(item: $profileBeingEdited) { profile in
       ProfileEditSheet(
@@ -201,100 +255,277 @@ struct ProfilesView: View {
     }
   }
 
-  private var subscriptionControls: some View {
-    GroupBox("Subscription") {
-      VStack(alignment: .leading, spacing: 8) {
-        ViewThatFits(in: .horizontal) {
-          HStack(spacing: 10) {
-            subscriptionField
-            addSubscriptionButton
-          }
+  // MARK: - Page actions
 
-          VStack(alignment: .leading, spacing: 10) {
-            subscriptionField
-            addSubscriptionButton
-          }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-
-        HStack(spacing: 10) {
-          Text("Download via")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-          Picker("Download via", selection: $subscriptionUpstreamEndpointID) {
-            Text("No Upstream").tag(nil as UUID?)
-            ForEach(appModel.outboundProxyEndpoints) { endpoint in
-              Text(endpointPickerLabel(endpoint))
-                .tag(Optional(endpoint.id))
-            }
-          }
-          .labelsHidden()
-          .frame(maxWidth: 260)
-          Spacer()
-        }
-
-        if profileCoordinator.isAddingSubscription {
-          subscriptionLoadingIndicator
-        }
+  /// Every way a profile enters ClashMax, in one place. The subscription URL field used to sit
+  /// permanently above the list; it now appears only when the user asks to add one.
+  private var addMenu: some View {
+    Menu {
+      Button {
+        addSubscriptionPresented = true
+      } label: {
+        Label("Add Subscription…", systemImage: "link.badge.plus")
       }
-      .animation(.easeInOut(duration: 0.16), value: profileCoordinator.isAddingSubscription)
-    }
-  }
-
-  private var subscriptionField: some View {
-    TextField("Subscription URL", text: $subscriptionURL)
-      .textFieldStyle(.roundedBorder)
-      .frame(minWidth: 320)
-      .disabled(profileCoordinator.isAddingSubscription)
-  }
-
-  private var addSubscriptionButton: some View {
-    Button {
-      let urlString = subscriptionURL
-      Task { @MainActor in
-        let didAdd = await appModel.addSubscription(
-          urlString: urlString,
-          upstreamEndpointID: subscriptionUpstreamEndpointID
-        )
-        if didAdd {
-          subscriptionURL = ""
-        }
+      Button {
+        appModel.importLocalProfile()
+      } label: {
+        Label("Import YAML…", systemImage: "square.and.arrow.down")
+      }
+      Button {
+        manualProxySheetPresented = true
+      } label: {
+        Label("Add Manual Proxy…", systemImage: "point.3.connected.trianglepath.dotted")
+      }
+      Divider()
+      Button {
+        importClientMigration()
+      } label: {
+        Label("Import from Other Client…", systemImage: "arrow.triangle.branch")
       }
     } label: {
-      HStack(spacing: 6) {
-        if profileCoordinator.isAddingSubscription {
-          ProgressView()
-            .controlSize(.small)
-        } else {
-          Image(systemName: "plus")
-        }
-        Text(profileCoordinator.isAddingSubscription ? "Adding" : "Add")
+      Label("Add", systemImage: "plus")
+    }
+    .help("Add a subscription, import a YAML file, add a manual proxy, or import from another client")
+  }
+
+  /// Updating the selected subscription is the page's one primary action. The wider scopes (all, due)
+  /// live in More ▾: a split button would have put them one click away, but SwiftUI's split menu
+  /// exposes its chevron to VoiceOver as an unnamed menu button, so the plain button won.
+  private func updateButton(selectedProfile: Profile?) -> some View {
+    let canUpdateSelected = selectedProfile.map { $0.isSubscription && !isUpdating($0) } ?? false
+    let isUpdatingSelected = selectedProfile.map(isUpdating) ?? false
+    return Button {
+      if let selectedProfile {
+        updateSubscription(selectedProfile)
       }
-      .frame(minWidth: 64)
+    } label: {
+      Label(
+        isUpdatingSelected ? "Updating" : "Update",
+        systemImage: isUpdatingSelected ? "clock.arrow.circlepath" : "arrow.triangle.2.circlepath"
+      )
     }
-    .disabled(subscriptionURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || profileCoordinator.isAddingSubscription)
+    .disabled(!canUpdateSelected)
+    .help(canUpdateSelected ? "Update the selected subscription" : "Only subscription profiles can be updated")
   }
 
-  private var profileGridColumns: [GridItem] {
-    [
-      GridItem(
-        .adaptive(minimum: 280, maximum: 360),
-        spacing: 12,
-        alignment: .topLeading
-      ),
-    ]
+  private func moreMenu(selectedProfile: Profile?, hasSubscriptions: Bool) -> some View {
+    Menu {
+      profileActions(for: selectedProfile, includesEdit: true)
+      Divider()
+      Button("Update All") {
+        appModel.updateAllSubscriptions()
+      }
+      .disabled(!hasSubscriptions)
+      Button("Update Due") {
+        appModel.updateDueSubscriptions()
+      }
+      .disabled(!hasSubscriptions)
+      Divider()
+      Toggle("Show Details", isOn: $showsDetailPane)
+      Button {
+        endpointManagerPresented = true
+      } label: {
+        Label("Manage Proxy Endpoints…", systemImage: "network")
+      }
+    } label: {
+      Label("More", systemImage: "ellipsis.circle")
+    }
+    .help("More profile actions")
   }
 
-  private var subscriptionLoadingIndicator: some View {
-    HStack(spacing: 8) {
-      ProgressView()
-        .controlSize(.small)
-      Text("Fetching and validating subscription...")
-        .font(.caption)
-        .foregroundStyle(.secondary)
+  /// Shared between the More menu and the row context menu so both offer exactly the same set.
+  @ViewBuilder
+  private func profileActions(for profile: Profile?, includesEdit: Bool) -> some View {
+    let isActive = profile.map { profileStore.activeProfileID == $0.id } ?? false
+    Button("Set as Current") {
+      if let profile {
+        appModel.selectProfile(profile)
+      }
     }
-    .accessibilityElement(children: .combine)
-    .transition(.opacity)
+    .disabled(profile == nil || isActive)
+
+    if includesEdit {
+      Button("Edit…") {
+        if let profile {
+          beginEditing(profile)
+        }
+      }
+      .disabled(profile == nil)
+    }
+
+    Button("Update Subscription") {
+      if let profile {
+        updateSubscription(profile)
+      }
+    }
+    .disabled(!(profile.map { $0.isSubscription && !isUpdating($0) } ?? false))
+
+    Button("Provider Details…") {
+      providerInsightsProfile = profile
+    }
+    .disabled(profile == nil)
+
+    Divider()
+
+    Button("Delete…", role: .destructive) {
+      profilePendingDeletion = profile
+    }
+    .disabled(profile == nil)
+  }
+
+  // MARK: - Content
+
+  private var emptyState: some View {
+    ContentUnavailableView {
+      Label("No profiles", systemImage: "doc.badge.plus")
+    } description: {
+      Text("Profiles stay unchanged on disk; ClashMax generates a runtime copy when starting.")
+    } actions: {
+      Button("Add Subscription…") {
+        addSubscriptionPresented = true
+      }
+      Button("Import YAML…") {
+        appModel.importLocalProfile()
+      }
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+  }
+
+  private func workspace(profiles: [Profile], selectedProfile: Profile?) -> some View {
+    let showsPane = ProfilesLayout.showsDetailPane(pageWidth: pageWidth, requested: showsDetailPane)
+    return VStack(spacing: 8) {
+      HStack(alignment: .top, spacing: 12) {
+        profileTable(profiles: profiles)
+          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+        if showsPane {
+          ProfileDetailPane(
+            profile: selectedProfile,
+            isActive: selectedProfile.map { profileStore.activeProfileID == $0.id } ?? false,
+            isUpdating: selectedProfile.map(isUpdating) ?? false,
+            sourceSummary: selectedProfile.map(sourceSummary) ?? "",
+            upstreamEndpointName: selectedProfile.flatMap(upstreamEndpoint)?.name,
+            onActivate: { profile in appModel.selectProfile(profile) },
+            onEdit: beginEditing,
+            onUpdate: updateSubscription,
+            onProviderDetails: { profile in providerInsightsProfile = profile }
+          )
+          .frame(width: ProfilesLayout.detailPaneWidth, alignment: .topLeading)
+          .frame(maxHeight: .infinity, alignment: .topLeading)
+        }
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+      PageStatusFooter(text: String.localizedStringWithFormat(
+        NSLocalizedString("%lld profiles", comment: ""),
+        Int64(profiles.count)
+      ))
+    }
+    .onGeometryChange(for: CGFloat.self) { proxy in
+      proxy.size.width
+    } action: { width in
+      pageWidth = width
+    }
+  }
+
+  private func profileTable(profiles: [Profile]) -> some View {
+    Table(profiles, selection: $selectedProfileID) {
+      TableColumn("Name") { profile in
+        ProfileNameCell(
+          profile: profile,
+          isActive: profileStore.activeProfileID == profile.id,
+          isUpdating: isUpdating(profile)
+        )
+      }
+      .width(min: 130, ideal: 180)
+
+      TableColumn("Source") { profile in
+        Text(profile.source.displayName)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+      }
+      .width(min: 72, ideal: 84, max: 120)
+
+      // No fixed width: the status line takes whatever the pane leaves, so the table never needs a
+      // horizontal scroller at the minimum window.
+      TableColumn("Status") { profile in
+        Text(ProfileStatusSummary.text(for: profile, isUpdating: isUpdating(profile)))
+          .foregroundStyle(ProfileStatusSummary.isFailure(profile) ? Color.red : Color.secondary)
+          .lineLimit(1)
+          .truncationMode(.tail)
+          .help(ProfileStatusSummary.text(for: profile, isUpdating: isUpdating(profile)))
+      }
+
+      if ProfilesLayout.showsUsageColumn(pageWidth: pageWidth, hasUsageData: ProfileStatusSummary.showsUsageColumn(for: profiles)) {
+        TableColumn("Usage") { profile in
+          Text(ProfileStatusSummary.usageText(for: profile) ?? "")
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
+        .width(min: 120, ideal: 200)
+      }
+    }
+    .contextMenu(forSelectionType: Profile.ID.self) { ids in
+      profileActions(for: ids.first.flatMap { id in profiles.first { $0.id == id } }, includesEdit: true)
+    } primaryAction: { ids in
+      // Double-click opens the editor; making a profile current stays a deliberate menu action.
+      if let id = ids.first, let profile = profiles.first(where: { $0.id == id }) {
+        beginEditing(profile)
+      }
+    }
+    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+  }
+
+  // MARK: - Selection
+
+  private func selectedProfile(in profiles: [Profile]) -> Profile? {
+    guard let selectedProfileID else { return nil }
+    return profiles.first { $0.id == selectedProfileID }
+  }
+
+  /// Keeps the browsing selection pointing at a profile that still exists, defaulting to the current
+  /// profile the first time the page appears. This only ever writes `selectedProfileID`.
+  private func reconcileSelection(with profiles: [Profile]) {
+    if let selectedProfileID, profiles.contains(where: { $0.id == selectedProfileID }) {
+      return
+    }
+    selectedProfileID = profileStore.activeProfileID.flatMap { activeID in
+      profiles.first { $0.id == activeID }?.id
+    } ?? profiles.first?.id
+  }
+
+  private func isUpdating(_ profile: Profile) -> Bool {
+    profileCoordinator.updatingProfileIDs.contains(profile.id)
+  }
+
+  private func updateSubscription(_ profile: Profile) {
+    guard profile.isSubscription else { return }
+    Task { @MainActor in
+      await appModel.updateSubscription(profile)
+    }
+  }
+
+  /// What the detail pane says about where a profile comes from. Never the full subscription URL:
+  /// the host is enough to tell profiles apart, and the URL itself carries the token.
+  private func sourceSummary(_ profile: Profile) -> String {
+    switch profile.source {
+    case .subscription:
+      if let sourceURLString = profileStore.subscriptionURLString(for: profile),
+         let host = URL(string: sourceURLString)?.host(percentEncoded: false)
+      {
+        return host
+      }
+      return String(localized: "Subscription URL unavailable")
+    case let .localFile(originalPath):
+      guard let originalPath else { return String(localized: "Local YAML") }
+      return URL(fileURLWithPath: originalPath).lastPathComponent
+    case .manualProxy:
+      guard let manualEndpoint = manualEndpoint(for: profile) else {
+        return String(localized: "Manual Proxy · Missing Endpoint")
+      }
+      let type = manualEndpoint.kind == .socks5 ? "SOCKS5" : "HTTP"
+      return "\(type) · \(manualEndpoint.name)"
+    }
   }
 
   private var deleteConfirmationPresented: Binding<Bool> {
@@ -425,15 +656,6 @@ struct ProfilesView: View {
       manualEndpointID = nil
     }
     return appModel.outboundProxyEndpoints.filter { $0.id != manualEndpointID }
-  }
-
-  private func endpointPickerLabel(_ endpoint: OutboundProxyEndpoint) -> String {
-    let type = endpoint.kind == .socks5 ? "SOCKS5" : "HTTP"
-    let secretState = appModel.outboundProxyEndpointSecretStates[endpoint.id]
-    if secretState == .missingSecret {
-      return "\(endpoint.name) · \(type) · \(String(localized: "Missing Password"))"
-    }
-    return "\(endpoint.name) · \(type)"
   }
 
   private func resetRemoteName(_ profile: Profile) {
@@ -836,194 +1058,290 @@ private struct ClientMigrationReportSheet: View {
   }
 }
 
-private struct ProfileCard: View {
+private struct ProfileNameCell: View {
   let profile: Profile
   let isActive: Bool
   let isUpdating: Bool
-  let sourceURLString: String?
-  let manualEndpoint: OutboundProxyEndpoint?
-  let upstreamEndpoint: OutboundProxyEndpoint?
-  let selectAction: () -> Void
-  let editAction: () -> Void
-  let providerInsightsAction: () -> Void
-  let updateAction: () -> Void
-  let deleteAction: () -> Void
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      titleBlock
-
-      ProfileMetricsRow(profile: profile)
-
-      Spacer(minLength: 4)
-
-      actionButtons
-    }
-    .padding(12)
-    .frame(maxWidth: .infinity, minHeight: 184, alignment: .topLeading)
-    .dashboardCard(interactive: true)
-    .overlay(alignment: .leading) {
-      RoundedRectangle(cornerRadius: 2, style: .continuous)
-        .fill(isActive ? Color.accentColor : Color.clear)
-        .frame(width: 3)
-        .padding(.vertical, 8)
-    }
-    .contentShape(Rectangle())
-    .onTapGesture(perform: selectAction)
-  }
-
-  private var titleBlock: some View {
-    VStack(alignment: .leading, spacing: 4) {
-      HStack(alignment: .firstTextBaseline, spacing: 7) {
-        Text(profile.name)
-          .font(.headline)
-          .lineLimit(1)
-          .minimumScaleFactor(0.76)
-        if isActive {
-          Text("Active")
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(Color.accentColor, in: Capsule())
-        }
-      }
-
-      Text(sourceLine)
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .lineLimit(1)
-        .truncationMode(.middle)
-
-      if let upstreamEndpoint {
-        Label(
-          String(format: String(localized: "Via %@"), upstreamEndpoint.name),
-          systemImage: "arrow.triangle.branch"
-        )
-        .font(.caption2.weight(.medium))
-        .foregroundStyle(.secondary)
-        .lineLimit(1)
-      }
-    }
-  }
-
-  private var actionButtons: some View {
     HStack(spacing: 8) {
-      Button {
-        editAction()
-      } label: {
-        Label("Edit", systemImage: "pencil")
-      }
-      .help("Edit profile")
+      Image(systemName: "checkmark.circle.fill")
+        .foregroundStyle(Color.accentColor)
+        .opacity(isActive ? 1 : 0)
+        .frame(width: 16)
+        .accessibilityHidden(!isActive)
+        .accessibilityLabel("Current")
 
-      Button {
-        providerInsightsAction()
-      } label: {
-        Label("Providers", systemImage: "shippingbox")
-      }
-      .help("Show provider analytics")
+      Text(profile.name)
+        .fontWeight(isActive ? .semibold : .regular)
+        .lineLimit(1)
+        .truncationMode(.tail)
 
-      Button {
-        updateAction()
-      } label: {
-        HStack(spacing: 5) {
-          if isUpdating {
-            ProgressView()
-              .controlSize(.small)
-          } else {
-            Image(systemName: "arrow.triangle.2.circlepath")
-          }
-          Text(localizedProfilesText(isUpdating ? "Updating" : "Update"))
-        }
+      if isUpdating {
+        ProgressView()
+          .controlSize(.mini)
       }
-      .disabled(!profile.isSubscription || isUpdating)
-      .help(profile.isSubscription ? "Refresh nodes from the subscription URL" : "Only subscription profiles can be updated")
-
-      Button(role: .destructive) {
-        deleteAction()
-      } label: {
-        Label("Delete", systemImage: "trash")
-      }
-      .help("Delete profile")
     }
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .buttonStyle(.borderless)
-    .controlSize(.small)
-  }
-
-  private var sourceLine: String {
-    if let sourceURLString, let url = URL(string: sourceURLString), let host = url.host(percentEncoded: false) {
-      return "\(host) - \(sourceURLString)"
-    }
-    switch profile.source {
-    case let .localFile(originalPath):
-      return originalPath ?? localizedProfilesText("Local YAML")
-    case .subscription:
-      return localizedProfilesText("Subscription URL unavailable")
-    case .manualProxy:
-      guard let manualEndpoint else {
-        return localizedProfilesText("Manual Proxy · Missing Endpoint")
-      }
-      let type = manualEndpoint.kind == .socks5 ? "SOCKS5" : "HTTP"
-      return "\(localizedProfilesText("Manual")) \(type) · \(manualEndpoint.name)"
-    }
+    .help(profile.name)
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel(isActive ? String(format: String(localized: "%@, current profile"), profile.name) : profile.name)
   }
 }
 
-private struct ProfileMetricsRow: View {
-  let profile: Profile
+/// Facts and actions for the selected profile. Selection-driven so the list never carries them.
+private struct ProfileDetailPane: View {
+  let profile: Profile?
+  let isActive: Bool
+  let isUpdating: Bool
+  let sourceSummary: String
+  let upstreamEndpointName: String?
+  let onActivate: (Profile) -> Void
+  let onEdit: (Profile) -> Void
+  let onUpdate: (Profile) -> Void
+  let onProviderDetails: (Profile) -> Void
 
   var body: some View {
-    LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
-      metric("Source", profile.source.displayName, "externaldrive")
-      metric("Usage", profile.subscriptionMetadata?.trafficSummary ?? "-", "chart.bar")
-      metric("Expires", expiresLabel, "calendar")
-      metric("Interval", updateIntervalLabel(profile.subscriptionMetadata?.updateIntervalMinutes), "clock.arrow.circlepath")
-      metric("Next", nextUpdateLabel, "calendar.badge.clock")
-      metric("Result", profile.subscriptionUpdateStatus.result.displayName, "checkmark.seal")
-      metric("Updated", profile.updatedAt.formatted(date: .abbreviated, time: .omitted), "arrow.triangle.2.circlepath")
+    ScrollView {
+      VStack(alignment: .leading, spacing: 14) {
+        if let profile {
+          header(profile)
+          facts(profile)
+          actions(profile)
+        } else {
+          Text("Select a profile to see its details.")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      }
+      .padding(.top, 4)
+      .padding(.leading, 12)
+      .frame(maxWidth: .infinity, alignment: .topLeading)
     }
+    .overlay(alignment: .leading) {
+      Divider()
+    }
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel("Profile details")
   }
 
-  private var columns: [GridItem] {
-    [
-      GridItem(.flexible(minimum: 92), spacing: 8, alignment: .topLeading),
-      GridItem(.flexible(minimum: 92), spacing: 8, alignment: .topLeading),
-    ]
-  }
+  private func header(_ profile: Profile) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text(profile.name)
+        .font(.headline)
+        .lineLimit(2)
+        .fixedSize(horizontal: false, vertical: true)
 
-  private func metric(_ title: String, _ value: String, _ symbolName: String) -> some View {
-    HStack(spacing: 6) {
-      Image(systemName: symbolName)
-        .foregroundStyle(.secondary)
-        .frame(width: 14)
-      VStack(alignment: .leading, spacing: 1) {
-        Text(localizedProfilesText(title))
-          .font(.caption2)
-          .foregroundStyle(.tertiary)
-        Text(value)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
-          .minimumScaleFactor(0.72)
+      if isActive {
+        Label("Current profile", systemImage: "checkmark.circle.fill")
+          .font(.callout)
+          .foregroundStyle(Color.accentColor)
+      } else {
+        Button {
+          onActivate(profile)
+        } label: {
+          Label("Set as Current", systemImage: "checkmark.circle")
+        }
+        .controlSize(.small)
+        .help("Use this profile the next time the runtime starts, or restart now if it is running")
       }
     }
-    .frame(maxWidth: .infinity, alignment: .leading)
   }
 
-  private var expiresLabel: String {
-    guard let expireAt = profile.subscriptionMetadata?.traffic?.expireAt else { return "-" }
-    return expireAt.formatted(date: .abbreviated, time: .omitted)
+  private func facts(_ profile: Profile) -> some View {
+    VStack(alignment: .leading, spacing: 6) {
+      fact("Source", profile.source.displayName)
+      fact(profile.isSubscription ? "Host" : "Location", sourceSummary)
+      if let upstreamEndpointName {
+        fact("Upstream", upstreamEndpointName)
+      }
+
+      Divider()
+
+      fact(
+        "Status",
+        ProfileStatusSummary.text(for: profile, isUpdating: isUpdating),
+        tint: ProfileStatusSummary.isFailure(profile) ? .red : .primary
+      )
+      if profile.isSubscription {
+        if let nextUpdateAt = profile.subscriptionUpdateStatus.nextUpdateAt {
+          fact("Next Update", nextUpdateAt.formatted(date: .abbreviated, time: .shortened))
+        }
+        fact("Interval", intervalText(profile))
+        if let usage = profile.subscriptionMetadata?.trafficSummary {
+          fact("Usage", usage)
+        }
+        if let expireAt = profile.subscriptionMetadata?.traffic?.expireAt {
+          fact("Expires", expireAt.formatted(date: .abbreviated, time: .omitted))
+        }
+      }
+      fact("Updated", profile.updatedAt.formatted(date: .abbreviated, time: .shortened))
+    }
   }
 
-  private func updateIntervalLabel(_ minutes: Int?) -> String {
-    guard let minutes, minutes > 0 else { return "-" }
-    return SubscriptionFetchSettings.intervalDescription(minutes)
+  private func actions(_ profile: Profile) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Button {
+        onEdit(profile)
+      } label: {
+        Label("Edit…", systemImage: "pencil")
+      }
+      if profile.isSubscription {
+        Button {
+          onUpdate(profile)
+        } label: {
+          Label(isUpdating ? "Updating" : "Update Subscription", systemImage: "arrow.triangle.2.circlepath")
+        }
+        .disabled(isUpdating)
+      }
+      Button {
+        onProviderDetails(profile)
+      } label: {
+        Label("Provider Details…", systemImage: "shippingbox")
+      }
+    }
+    .controlSize(.small)
+    .buttonStyle(.bordered)
   }
 
-  private var nextUpdateLabel: String {
-    guard let nextUpdateAt = profile.subscriptionUpdateStatus.nextUpdateAt else { return "-" }
-    return nextUpdateAt.formatted(date: .abbreviated, time: .shortened)
+  private func fact(_ title: LocalizedStringKey, _ value: String, tint: Color = .primary) -> some View {
+    VStack(alignment: .leading, spacing: 2) {
+      Text(title)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      Text(value)
+        .font(.callout)
+        .foregroundStyle(tint)
+        .lineLimit(3)
+        .truncationMode(.middle)
+        .textSelection(.enabled)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+    .accessibilityElement(children: .combine)
+  }
+
+  private func intervalText(_ profile: Profile) -> String {
+    if !profile.subscriptionUpdatePolicy.automaticUpdatesEnabled {
+      return String(localized: "Automatic updates off")
+    }
+    if let minutes = profile.subscriptionUpdatePolicy.intervalOverrideMinutes, minutes > 0 {
+      return SubscriptionFetchSettings.intervalDescription(minutes)
+    }
+    if let minutes = profile.subscriptionMetadata?.updateIntervalMinutes, minutes > 0 {
+      return SubscriptionFetchSettings.intervalDescription(minutes)
+    }
+    return String(localized: "Default")
+  }
+}
+
+/// The add-subscription flow, presented on demand instead of living above the list.
+private struct AddSubscriptionSheet: View {
+  @Environment(AppModel.self) private var appModel
+  @Environment(ProfileCoordinator.self) private var profileCoordinator
+  let onCancel: () -> Void
+  let onAdded: () -> Void
+  @State private var subscriptionURL = ""
+  @State private var upstreamEndpointID: UUID?
+  @State private var attemptFailed = false
+  @FocusState private var isURLFocused: Bool
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      VStack(alignment: .leading, spacing: 4) {
+        Text("Add Subscription")
+          .font(.title3.weight(.semibold))
+        Text("ClashMax downloads the profile, validates it with the core, and keeps the original YAML unchanged.")
+          .font(.callout)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+
+      VStack(alignment: .leading, spacing: 10) {
+        TextField("Subscription URL", text: $subscriptionURL)
+          .textFieldStyle(.roundedBorder)
+          .focused($isURLFocused)
+          .disabled(profileCoordinator.isAddingSubscription)
+          .onSubmit(addIfPossible)
+
+        HStack(spacing: 10) {
+          Text("Download via")
+            .foregroundStyle(.secondary)
+          Picker("Download via", selection: $upstreamEndpointID) {
+            Text("No Upstream").tag(nil as UUID?)
+            ForEach(appModel.outboundProxyEndpoints) { endpoint in
+              Text(endpointLabel(endpoint))
+                .tag(Optional(endpoint.id))
+            }
+          }
+          .labelsHidden()
+          .frame(maxWidth: 260)
+        }
+      }
+
+      if profileCoordinator.isAddingSubscription {
+        HStack(spacing: 8) {
+          ProgressView()
+            .controlSize(.small)
+          Text("Fetching and validating subscription...")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .combine)
+      } else if attemptFailed, let error = appModel.lastError {
+        Label(error, systemImage: "exclamationmark.triangle.fill")
+          .font(.callout)
+          .foregroundStyle(.red)
+          .lineLimit(4)
+          .textSelection(.enabled)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+
+      Divider()
+
+      HStack {
+        Spacer()
+        Button("Cancel", action: onCancel)
+          .keyboardShortcut(.cancelAction)
+        Button(profileCoordinator.isAddingSubscription ? "Adding" : "Add", action: addIfPossible)
+          .keyboardShortcut(.defaultAction)
+          .disabled(!canAdd)
+      }
+    }
+    .padding(20)
+    .frame(width: 520)
+    .onAppear {
+      isURLFocused = true
+    }
+  }
+
+  private var canAdd: Bool {
+    !subscriptionURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      && !profileCoordinator.isAddingSubscription
+  }
+
+  private func addIfPossible() {
+    guard canAdd else { return }
+    let urlString = subscriptionURL
+    attemptFailed = false
+    Task { @MainActor in
+      let didAdd = await appModel.addSubscription(
+        urlString: urlString,
+        upstreamEndpointID: upstreamEndpointID
+      )
+      if didAdd {
+        onAdded()
+      } else {
+        attemptFailed = true
+      }
+    }
+  }
+
+  private func endpointLabel(_ endpoint: OutboundProxyEndpoint) -> String {
+    let type = endpoint.kind == .socks5 ? "SOCKS5" : "HTTP"
+    if appModel.outboundProxyEndpointSecretStates[endpoint.id] == .missingSecret {
+      return "\(endpoint.name) · \(type) · \(String(localized: "Missing Password"))"
+    }
+    return "\(endpoint.name) · \(type)"
   }
 }
 
@@ -1301,6 +1619,8 @@ private struct ProfileEditSheet: View {
   let onSave: () -> Void
   @FocusState private var isNameFocused: Bool
   @State private var providerOptionsValidationError: String?
+  @State private var showsUpdatePolicy = true
+  @State private var showsProviderOptions = false
 
   private var trimmedName: String {
     name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1334,6 +1654,34 @@ private struct ProfileEditSheet: View {
               }
           }
 
+          if profile.isSubscription {
+            ProfileEditRow("Subscription URL") {
+              TextField("Subscription URL", text: $subscriptionURL)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit {
+                  if canSave {
+                    onSave()
+                  }
+                }
+            }
+
+            ProfileEditContentRow {
+              Button {
+                onResetRemoteName()
+              } label: {
+                Label("Restore Remote Name", systemImage: "arrow.counterclockwise")
+              }
+              .disabled(!profile.nameIsUserCustomized)
+            }
+          } else {
+            ProfileEditRow("Source") {
+              Text(profile.source.displayName)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+          }
+
           ProfileEditRow("Upstream Proxy") {
             Picker("Upstream Proxy", selection: $upstreamEndpointID) {
               Text("Off").tag(nil as UUID?)
@@ -1360,27 +1708,26 @@ private struct ProfileEditSheet: View {
             }
           }
 
+          // The rarely-touched sections open on demand so the sheet reads top-down as name, source,
+          // upstream, and only then the update policy, provider options and diagnostics.
           if profile.isSubscription {
-            ProfileEditRow("Subscription URL") {
-              TextField("Subscription URL", text: $subscriptionURL)
-                .textFieldStyle(.roundedBorder)
-                .onSubmit {
-                  if canSave {
-                    onSave()
-                  }
-                }
+            Divider()
+
+            ProfileEditDisclosureRow("Subscription Updates", isExpanded: $showsUpdatePolicy) {
+              SubscriptionUpdatePolicyEditor(policy: $updatePolicy, showsHeader: false)
             }
 
-            ProfileEditContentRow {
-              Button {
-                onResetRemoteName()
-              } label: {
-                Label("Restore Remote Name", systemImage: "arrow.counterclockwise")
-              }
-              .disabled(!profile.nameIsUserCustomized)
+            ProfileEditDisclosureRow("Provider Options", isExpanded: $showsProviderOptions) {
+              SubscriptionProviderOptionsEditor(
+                profile: profile,
+                options: $providerOptions,
+                validationError: $providerOptionsValidationError,
+                rollbackOptions: rollbackProviderOptions,
+                developerMode: developerMode,
+                onRollback: onRollbackProviderOptions,
+                showsHeader: false
+              )
             }
-
-            SubscriptionUpdatePolicyEditor(policy: $updatePolicy)
 
             SubscriptionDiagnosticsView(
               profile: profile,
@@ -1388,20 +1735,13 @@ private struct ProfileEditSheet: View {
               defaultUpdateIntervalMinutes: subscriptionDefaultUpdateIntervalMinutes
             )
 
-            SubscriptionProviderOptionsEditor(
-              profile: profile,
-              options: $providerOptions,
-              validationError: $providerOptionsValidationError,
-              rollbackOptions: rollbackProviderOptions,
-              developerMode: developerMode,
-              onRollback: onRollbackProviderOptions
-            )
-          } else {
-            ProfileEditRow("Source") {
-              Text(profile.source.displayName)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if let providerOptionsValidationError, !showsProviderOptions {
+              ProfileEditContentRow {
+                Label(providerOptionsValidationError, systemImage: "exclamationmark.triangle.fill")
+                  .font(.caption)
+                  .foregroundStyle(.red)
+                  .lineLimit(2)
+              }
             }
           }
         }
@@ -1443,20 +1783,23 @@ private enum ProfileEditLayout {
 }
 
 private struct ProfileEditSection<Content: View>: View {
-  let title: LocalizedStringKey
+  /// `nil` when the enclosing disclosure already names the section.
+  let title: LocalizedStringKey?
   @ViewBuilder let content: Content
 
-  init(_ title: LocalizedStringKey, @ViewBuilder content: () -> Content) {
+  init(_ title: LocalizedStringKey?, @ViewBuilder content: () -> Content) {
     self.title = title
     self.content = content()
   }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
-      Text(title)
-        .font(.caption.weight(.semibold))
-        .foregroundStyle(.secondary)
-        .frame(maxWidth: .infinity, alignment: .leading)
+      if let title {
+        Text(title)
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.secondary)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      }
 
       VStack(alignment: .leading, spacing: 9) {
         content
@@ -1667,10 +2010,11 @@ private struct ProfileEditDisclosureRow<Content: View>: View {
 
 private struct SubscriptionUpdatePolicyEditor: View {
   @Binding var policy: SubscriptionUpdatePolicy
+  var showsHeader = true
   @State private var intervalDraft = ""
 
   var body: some View {
-    ProfileEditSection("Subscription Updates") {
+    ProfileEditSection(showsHeader ? "Subscription Updates" : nil) {
       ProfileEditToggleRow("Automatic Updates", isOn: $policy.automaticUpdatesEnabled)
 
       ProfileEditToggleRow(
@@ -1805,7 +2149,7 @@ private struct SubscriptionDiagnosticsView: View {
   let profile: Profile
   let subscriptionURL: String
   let defaultUpdateIntervalMinutes: Int
-  @State private var isExpanded = true
+  @State private var isExpanded = false
   @State private var isPreflightOutputExpanded = false
   @State private var preflightCopyConfirmation: Date?
 
@@ -2091,11 +2435,12 @@ private struct SubscriptionProviderOptionsEditor: View {
   let rollbackOptions: SubscriptionProviderOptions
   let developerMode: Bool
   let onRollback: () -> Void
+  var showsHeader = true
   @State private var isRuleOverlayPresented = false
   @State private var showsAdvancedOptions = false
 
   var body: some View {
-    ProfileEditSection("Provider Options") {
+    ProfileEditSection(showsHeader ? "Provider Options" : nil) {
       ProfileEditRow("Generated Template") {
         Picker("Generated Template", selection: $options.generatedTemplate) {
           ForEach(SubscriptionTemplateKind.allCases) { template in

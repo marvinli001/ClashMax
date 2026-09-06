@@ -1241,16 +1241,23 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(model.proxyGroups.first?.nodes.first?.delay, 73)
   }
 
-  func testProxyPageActionsAreDisabledWhileRuntimeIsStarting() {
-    XCTAssertFalse(
-      ProxiesPageActionState.canStart(
-        isRunning: false,
-        hasActiveProfile: true,
-        isStarting: true,
-        readinessIssue: nil
-      )
-    )
+  func testProxyPageRefreshIsDisabledWhileRuntimeIsStarting() {
     XCTAssertFalse(ProxiesPageActionState.canRefresh(isStarting: true))
+    XCTAssertTrue(ProxiesPageActionState.canRefresh(isStarting: false))
+  }
+
+  /// The node list's highlight only browses; it must close when the highlighted node leaves the
+  /// displayed group (search, sort, or a runtime reload) instead of describing a node that is gone.
+  func testProxyNodeSelectionPolicyDropsNodesThatLeftTheGroup() {
+    let nodes = [
+      ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true),
+      ProxyNode(name: "Korea", type: "vless", delay: nil, isSelectable: true),
+    ]
+
+    XCTAssertEqual(ProxyNodeSelectionPolicy.resolvedSelection(current: "Korea", nodes: nodes), "Korea")
+    XCTAssertNil(ProxyNodeSelectionPolicy.resolvedSelection(current: "Missing", nodes: nodes))
+    XCTAssertNil(ProxyNodeSelectionPolicy.resolvedSelection(current: "Korea", nodes: []))
+    XCTAssertNil(ProxyNodeSelectionPolicy.resolvedSelection(current: nil, nodes: nodes))
   }
 
   func testProxyPageLoadingSkeletonUsesUnfilteredGroups() {
@@ -4143,26 +4150,6 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(ProxyPageVisibilityPolicy.showsProviderSummary(developerMode: true, providerCount: 3))
   }
 
-  func testProxyGroupExpansionPolicyKeepsNormalRowsExpandable() {
-    let groups = [
-      ProxyGroup(
-        name: "Elite",
-        type: "select",
-        selected: "Japan",
-        nodes: [ProxyNode(name: "Japan", type: "vless", delay: nil, isSelectable: true)]
-      ),
-    ]
-
-    let initialExpansion = ProxyGroupExpansionPolicy.resolvedExpansion(
-      current: nil,
-      groups: groups,
-      searchQuery: ""
-    )
-    XCTAssertEqual(initialExpansion, Set(["Elite"]))
-
-    XCTAssertEqual(ProxyGroupExpansionPolicy.toggled(groupID: "Elite", in: initialExpansion), Set<String>())
-  }
-
   func testDeveloperOnlyLogsAreHiddenUntilDeveloperMode() {
     let entries = [
       LogEntry(level: "info", message: "Core ready"),
@@ -4301,54 +4288,6 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(lines.contains("- helper 100"))
     XCTAssertTrue(lines.contains("- helper 61"))
     XCTAssertFalse(lines.contains("- helper 60"))
-  }
-
-  func testProxyGroupExpansionDefaultsToSelectedGroup() {
-    let groups = [
-      ProxyGroup(name: "General", type: "select", selected: nil, nodes: []),
-      ProxyGroup(name: "Streaming", type: "select", selected: "Japan", nodes: []),
-    ]
-
-    XCTAssertEqual(
-      ProxyGroupExpansionPolicy.resolvedExpansion(current: nil, groups: groups, searchQuery: ""),
-      Set(["Streaming"])
-    )
-  }
-
-  func testProxyGroupExpansionDefaultsToFirstGroupWithoutSelection() {
-    let groups = [
-      ProxyGroup(name: "General", type: "select", selected: nil, nodes: []),
-      ProxyGroup(name: "Streaming", type: "select", selected: nil, nodes: []),
-    ]
-
-    XCTAssertEqual(
-      ProxyGroupExpansionPolicy.resolvedExpansion(current: nil, groups: groups, searchQuery: ""),
-      Set(["General"])
-    )
-  }
-
-  func testProxyGroupExpansionRetainsExistingGroupsAfterRefresh() {
-    let refreshedGroups = [
-      ProxyGroup(name: "General", type: "select", selected: nil, nodes: []),
-      ProxyGroup(name: "Auto", type: "url-test", selected: nil, nodes: []),
-    ]
-
-    XCTAssertEqual(
-      ProxyGroupExpansionPolicy.retainedExpansion(current: Set(["General", "Missing"]), groups: refreshedGroups),
-      Set(["General"])
-    )
-  }
-
-  func testProxyGroupExpansionOpensSearchResults() {
-    let groups = [
-      ProxyGroup(name: "General", type: "select", selected: nil, nodes: []),
-      ProxyGroup(name: "Streaming", type: "select", selected: nil, nodes: []),
-    ]
-
-    XCTAssertEqual(
-      ProxyGroupExpansionPolicy.resolvedExpansion(current: Set(["General"]), groups: groups, searchQuery: "jp"),
-      Set(["General", "Streaming"])
-    )
   }
 
   func testDashboardProxySelectionUsesPreferredGroupAndSelectedNode() throws {

@@ -1,6 +1,6 @@
 import SwiftUI
 
-private enum EffectiveConfigInspectorTab: String, CaseIterable, Identifiable {
+enum EffectiveConfigInspectorTab: String, CaseIterable, Identifiable {
   case layers
   case diff
   case finalYAML
@@ -19,27 +19,140 @@ private enum EffectiveConfigInspectorTab: String, CaseIterable, Identifiable {
   }
 }
 
-enum RoutingWorkspaceLayoutMode {
-  case singleColumn
-  case twoColumn
-  case threeColumn
+/// The on-demand tools of the Routing page. Exactly one is open at a time, or none.
+enum RoutingTool: String, CaseIterable, Identifiable {
+  case effectiveConfig
+  case diagnostics
+  case simulator
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .effectiveConfig:
+      return String(localized: "Effective Config")
+    case .diagnostics:
+      return String(localized: "Diagnostics")
+    case .simulator:
+      return String(localized: "Match Simulator")
+    }
+  }
+
+  var systemImage: String {
+    switch self {
+    case .effectiveConfig:
+      return "doc.text.magnifyingglass"
+    case .diagnostics:
+      return "stethoscope"
+    case .simulator:
+      return "scope"
+    }
+  }
+}
+
+/// The diagnostics the Routing page can show, one at a time, in a compact selection list.
+enum RoutingDiagnostic: String, CaseIterable, Identifiable {
+  case dnsOverride
+  case dnsResolution
+  case fakeIP
+  case listeners
+  case geoDatabases
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .dnsOverride:
+      return String(localized: "DNS Override")
+    case .dnsResolution:
+      return String(localized: "DNS Resolution")
+    case .fakeIP:
+      return String(localized: "Fake IP")
+    case .listeners:
+      return String(localized: "Inbound Listeners")
+    case .geoDatabases:
+      return String(localized: "Geo Databases")
+    }
+  }
+
+  var systemImage: String {
+    switch self {
+    case .dnsOverride:
+      return "shield.lefthalf.filled"
+    case .dnsResolution:
+      return "magnifyingglass.circle"
+    case .fakeIP:
+      return "arrow.triangle.2.circlepath"
+    case .listeners:
+      return "antenna.radiowaves.left.and.right"
+    case .geoDatabases:
+      return "globe.badge.chevron.backward"
+    }
+  }
 }
 
 enum RoutingWorkspaceLayout {
-  static let twoColumnBreakpoint: CGFloat = 820
-  static let threeColumnBreakpoint: CGFloat = 1_220
-  static let snippetListWidth: CGFloat = 292
-  static let inspectorMinWidth: CGFloat = 320
-  static let inspectorMaxWidth: CGFloat = 380
+  static let snippetListWidth: CGFloat = 248
+  static let toolPaneWidth: CGFloat = 344
+  /// Below this page width a tool opens as a sheet instead of a third column, so the editor never
+  /// shares the row with something it cannot fit beside. The editor and the snippet list are never
+  /// stacked: the window's minimum width always leaves room for both.
+  static let toolPaneBreakpoint: CGFloat = 1_120
 
-  static func mode(forWidth width: CGFloat) -> RoutingWorkspaceLayoutMode {
-    if width >= threeColumnBreakpoint {
-      return .threeColumn
+  static func showsToolPane(pageWidth: CGFloat) -> Bool {
+    pageWidth.isFinite && pageWidth >= toolPaneBreakpoint
+  }
+}
+
+/// Everything about the Routing editor a user would be upset to lose by switching pages: the
+/// selection, the draft being edited, which tool is open and what the simulator was asked.
+///
+/// Owned by `AppModel` (like the proxy search coordinators) because `RoutingView` is recreated on
+/// every page switch, and an unsaved draft parked in view `@State` used to vanish with it.
+@MainActor
+@Observable
+final class RoutingEditorState {
+  var selectedSnippetID: RuntimeSnippet.ID?
+  var draftSnippet = RuntimeSnippet.defaultRuleSnippet
+  var loadedSnippetSnapshot: RuntimeSnippet?
+  var isEditingDetachedDraft = false
+  var activeTool: RoutingTool?
+  var selectedDiagnostic: RoutingDiagnostic = .dnsOverride
+  var effectiveConfigTab: EffectiveConfigInspectorTab = .layers
+  var simulationInput = RuleMatchSimulationInput()
+  var explanationContext: RuleExplanation?
+  var domainVerdictContext: SnifferDiagnosticsSnapshot?
+
+  var draftHasUnsavedChanges: Bool {
+    if isEditingDetachedDraft {
+      return true
     }
-    if width >= twoColumnBreakpoint {
-      return .twoColumn
-    }
-    return .singleColumn
+    guard let loadedSnippetSnapshot else { return false }
+    return draftSnippet != loadedSnippetSnapshot
+  }
+
+  func beginDetachedDraft(_ snippet: RuntimeSnippet) {
+    selectedSnippetID = nil
+    draftSnippet = snippet
+    loadedSnippetSnapshot = nil
+    isEditingDetachedDraft = true
+  }
+
+  func load(_ snippet: RuntimeSnippet) {
+    selectedSnippetID = snippet.id
+    draftSnippet = snippet
+    loadedSnippetSnapshot = snippet
+    isEditingDetachedDraft = false
+  }
+
+  func clearSelection() {
+    selectedSnippetID = nil
+    loadedSnippetSnapshot = nil
+    isEditingDetachedDraft = false
+  }
+
+  func openTool(_ tool: RoutingTool) {
+    activeTool = tool
   }
 }
 
@@ -79,52 +192,121 @@ final class RuleMatchSimulationDebouncer {
   }
 }
 
+/// What the Routing page does when the user tries to leave a draft with unsaved changes.
+private enum RoutingPendingAction: Equatable {
+  case select(RuntimeSnippet.ID?)
+  case newSnippet(RuntimeSnippetPayloadKind)
+}
+
 struct RoutingView: View {
   @Environment(AppModel.self) private var appModel
   @Environment(ProfileStore.self) private var profileStore
   @Environment(RuntimeSnippetLibraryStore.self) private var snippetLibrary
   @Environment(RuntimeDataStore.self) private var runtimeData
-  @State private var selectedSnippetID: RuntimeSnippet.ID?
-  @State private var draftSnippet = RuntimeSnippet.defaultRuleSnippet
-  @State private var loadedSnippetSnapshot: RuntimeSnippet?
-  @State private var isEditingDetachedDraft = false
-  @State private var simulationDestination = ""
-  @State private var simulationSourceIP = ""
-  @State private var simulationDestinationPort = ""
-  @State private var simulationSourcePort = ""
-  @State private var simulationInboundPort = ""
-  @State private var simulationProcess = ""
   @State private var simulationTrace: RuleMatchSimulationTrace = .noMatch
-  @State private var explanationContext: RuleExplanation?
-  @State private var domainVerdictContext: SnifferDiagnosticsSnapshot?
-  @State private var effectiveConfigTab: EffectiveConfigInspectorTab = .layers
   @State private var simulationDebouncer = RuleMatchSimulationDebouncer()
   /// Toggling a snippet preflights the effective config and can reload the running core, so a switch
   /// bound straight to the store stays frozen on its old value for the whole round trip.
   @State private var pendingSnippetEnabled: [RuntimeSnippet.ID: Bool] = [:]
   @State private var snippetToggleTokens: [RuntimeSnippet.ID: Int] = [:]
+  @State private var pendingAction: RoutingPendingAction?
+  @State private var snippetPendingDeletion: RuntimeSnippet?
+  @State private var pageWidth: CGFloat = 0
+  @State private var attemptedSave = false
+
+  private var editor: RoutingEditorState { appModel.routingEditor }
 
   var body: some View {
+    @Bindable var editor = editor
+    let showsToolPane = RoutingWorkspaceLayout.showsToolPane(pageWidth: pageWidth)
+
     AdaptivePage(title: "Routing") {
-      routingPageActions
+      newSnippetMenu
+      saveButton
+      moreMenu(showsToolPane: showsToolPane)
     } content: {
-      routingWorkspace
+      VStack(alignment: .leading, spacing: 10) {
+        if let loadError = snippetLibrary.loadError {
+          RoutingWorkspaceNotice(
+            title: "Snippet Library Unavailable",
+            systemImage: "exclamationmark.triangle.fill",
+            message: loadError
+          )
+        }
+
+        if snippetLibrary.snippets.isEmpty, !editor.isEditingDetachedDraft {
+          emptyLibraryState
+        } else {
+          workspace(showsToolPane: showsToolPane)
+        }
+
+        if appModel.lastRuntimeApplyOutcome != nil {
+          RuntimeApplyOutcomeBanner()
+        }
+
+        if let error = appModel.lastError,
+           PageErrorPresentation.showsInlineError(readinessIssue: appModel.readinessIssue, hasDetails: false)
+        {
+          Label(error, systemImage: "exclamationmark.triangle.fill")
+            .font(.callout)
+            .foregroundStyle(.red)
+            .lineLimit(3)
+            .textSelection(.enabled)
+        }
+      }
+      .onGeometryChange(for: CGFloat.self) { proxy in
+        proxy.size.width
+      } action: { width in
+        pageWidth = width
+      }
+    }
+    .sheet(isPresented: toolSheetPresented(showsToolPane: showsToolPane)) {
+      RoutingToolSheet(simulationTrace: simulationTrace) {
+        editor.activeTool = nil
+      }
+      .environment(appModel)
+      .environment(profileStore)
+      .environment(runtimeData)
+    }
+    .confirmationDialog(
+      "Unsaved changes",
+      isPresented: unsavedChangesDialogPresented,
+      titleVisibility: .visible
+    ) {
+      if canSave {
+        Button("Save Changes") {
+          saveDraft(then: pendingAction)
+        }
+      }
+      Button("Discard Changes", role: .destructive) {
+        discardDraft(then: pendingAction)
+      }
+      Button("Cancel", role: .cancel) {
+        pendingAction = nil
+      }
+    } message: {
+      Text("The current snippet has changes that have not been saved.")
+    }
+    .alert("Delete Snippet?", isPresented: deleteConfirmationPresented) {
+      Button("Delete", role: .destructive) {
+        confirmDeleteSnippet()
+      }
+      Button("Cancel", role: .cancel) {
+        snippetPendingDeletion = nil
+      }
+    } message: {
+      Text("Remove \(snippetPendingDeletion?.normalizedName ?? "this snippet") from the snippet library. Saving the library reloads the running core when the snippet applied to it.")
     }
     .task {
       await snippetLibrary.waitForLoad()
       selectInitialSnippetIfNeeded()
       consumeRoutingSimulationRequest()
+      runSimulationImmediately()
     }
-    .onChange(of: selectedSnippetID) { _, _ in loadSelectedSnippet() }
     .onChange(of: snippetLibrary.snippets) { _, _ in reconcileDraftWithLibrary() }
     .onChange(of: profileStore.activeProfileID) { _, _ in scheduleSimulation() }
-    .onChange(of: draftSnippet) { _, _ in scheduleSimulation() }
-    .onChange(of: simulationDestination) { _, _ in scheduleSimulation() }
-    .onChange(of: simulationSourceIP) { _, _ in scheduleSimulation() }
-    .onChange(of: simulationDestinationPort) { _, _ in scheduleSimulation() }
-    .onChange(of: simulationSourcePort) { _, _ in scheduleSimulation() }
-    .onChange(of: simulationInboundPort) { _, _ in scheduleSimulation() }
-    .onChange(of: simulationProcess) { _, _ in scheduleSimulation() }
+    .onChange(of: editor.draftSnippet) { _, _ in scheduleSimulation() }
+    .onChange(of: editor.simulationInput) { _, _ in scheduleSimulation() }
     .onChange(of: runtimeData.rules) { _, _ in scheduleSimulation() }
     .onChange(of: appModel.routingSimulationRequest?.id) { _, _ in consumeRoutingSimulationRequest() }
     .onDisappear {
@@ -132,259 +314,535 @@ struct RoutingView: View {
     }
   }
 
-  private var routingPageActions: some View {
-    ViewThatFits(in: .horizontal) {
-      HStack(spacing: 6) {
-        newRuleSnippetButton
-        newDNSPatchSnippetButton
-        newSnifferSnippetButton
-        newRawYAMLSnippetButton
-        saveDraftButton
-        deleteSelectedSnippetButton
-      }
-      .labelStyle(.titleAndIcon)
+  // MARK: - Page actions
 
-      HStack(spacing: 4) {
-        newRuleSnippetButton
-        newDNSPatchSnippetButton
-        newSnifferSnippetButton
-        newRawYAMLSnippetButton
-        saveDraftButton
-        deleteSelectedSnippetButton
-      }
-      .labelStyle(.iconOnly)
-    }
-    .controlSize(.small)
-  }
-
-  private var newRuleSnippetButton: some View {
-    Button {
-      newRuleSnippet()
-    } label: {
-      Label("New Rule Snippet", systemImage: "plus.circle")
-    }
-    .help(String(localized: "New Rule Snippet"))
-  }
-
-  private var newDNSPatchSnippetButton: some View {
-    Button {
-      newDNSPatchSnippet()
-    } label: {
-      Label("New DNS Patch", systemImage: "network")
-    }
-    .help(String(localized: "New DNS Patch"))
-  }
-
-  private var newSnifferSnippetButton: some View {
-    Button {
-      newSnifferSnippet()
-    } label: {
-      Label("New Sniffer Patch", systemImage: "waveform.badge.magnifyingglass")
-    }
-    .help(String(localized: "New Sniffer Patch"))
-  }
-
-  private var newRawYAMLSnippetButton: some View {
-    Button {
-      newRawYAMLSnippet()
-    } label: {
-      Label("New Raw YAML Patch", systemImage: "curlybraces")
-    }
-    .help(String(localized: "New Raw YAML Patch"))
-  }
-
-  private var saveDraftButton: some View {
-    Button {
-      saveDraft()
-    } label: {
-      Label("Save", systemImage: "checkmark.circle")
-    }
-    .disabled(!canSave)
-    .help(String(localized: "Save"))
-  }
-
-  private var deleteSelectedSnippetButton: some View {
-    Button(role: .destructive) {
-      deleteSelectedSnippet()
-    } label: {
-      Label("Delete", systemImage: "trash")
-    }
-    .disabled(selectedSnippet == nil)
-    .help(String(localized: "Delete"))
-  }
-
-  private var routingWorkspace: some View {
-    RoutingWorkspaceSurface {
-      routingHeader
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-
-      if let loadError = snippetLibrary.loadError {
-        Divider()
-        RoutingWorkspaceNotice(
-          title: "Snippet Library Unavailable",
-          systemImage: "exclamationmark.triangle.fill",
-          message: loadError
-        )
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-      }
-
-      Divider()
-      routingWorkspaceBody
-
-      if appModel.lastRuntimeApplyOutcome != nil {
-        Divider()
-        RuntimeApplyOutcomeBanner()
-          .padding(.horizontal, 12)
-          .padding(.vertical, 10)
-      }
-
-      if let error = appModel.lastError {
-        Divider()
-        Label(error, systemImage: "exclamationmark.triangle.fill")
-          .font(.callout)
-          .foregroundStyle(.red)
-          .lineLimit(3)
-          .padding(.horizontal, 12)
-          .padding(.vertical, 10)
-      }
-    }
-  }
-
-  private var routingHeader: some View {
-    HStack(spacing: 12) {
-      Label("Snippet Library", systemImage: "square.stack.3d.up")
-        .font(.headline)
-      Text(librarySummary)
-        .font(.caption)
-        .foregroundStyle(.secondary)
-      Spacer()
-      if let activeProfile = profileStore.activeProfile {
-        Label(activeProfile.name, systemImage: "doc.text")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-      }
-    }
-  }
-
-  private var routingWorkspaceBody: some View {
-    GeometryReader { proxy in
-      switch RoutingWorkspaceLayout.mode(forWidth: proxy.size.width) {
-      case .threeColumn:
-        routingThreeColumnWorkspace(width: proxy.size.width)
-      case .twoColumn:
-        routingTwoColumnWorkspace
-      case .singleColumn:
-        routingSingleColumnWorkspace
-      }
-    }
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-  }
-
-  private func routingThreeColumnWorkspace(width: CGFloat) -> some View {
-    HStack(alignment: .top, spacing: 0) {
-      snippetListPane
-        .frame(width: RoutingWorkspaceLayout.snippetListWidth, alignment: .topLeading)
-        .frame(maxHeight: .infinity, alignment: .topLeading)
-
-      Divider()
-
-      routingEditorPane
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-
-      Divider()
-
-      routingInspectorPane
-        .frame(width: inspectorWidth(for: width), alignment: .topLeading)
-    }
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-  }
-
-  private var routingTwoColumnWorkspace: some View {
-    HStack(alignment: .top, spacing: 0) {
-      snippetListPane
-        .frame(width: RoutingWorkspaceLayout.snippetListWidth, alignment: .topLeading)
-        .frame(maxHeight: .infinity, alignment: .topLeading)
-
-      Divider()
-
-      ScrollView {
-        VStack(alignment: .leading, spacing: 12) {
-          routingEditorContent
-          routingInspectorContent
+  private var newSnippetMenu: some View {
+    Menu {
+      ForEach(RuntimeSnippetPayloadKind.allCases) { kind in
+        Button {
+          requestNewSnippet(kind)
+        } label: {
+          Label(newSnippetTitle(kind), systemImage: newSnippetSymbol(kind))
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    } label: {
+      Label("New Snippet", systemImage: "plus")
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    .help("Create a rule, DNS, sniffer, or raw YAML snippet")
   }
 
-  private var routingSingleColumnWorkspace: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 12) {
-        snippetListContent
-        routingEditorContent
-        routingInspectorContent
+  /// Prominent only while there is something valid to save, so the eye is drawn to it exactly when
+  /// it matters.
+  @ViewBuilder
+  private var saveButton: some View {
+    if canSave {
+      Button {
+        saveDraft(then: nil)
+      } label: {
+        Label("Save", systemImage: "checkmark.circle")
       }
-      .padding(12)
-      .frame(maxWidth: .infinity, alignment: .topLeading)
+      .buttonStyle(.borderedProminent)
+      .keyboardShortcut("s", modifiers: [.command])
+      .help("Save the snippet and apply it to the runtime")
+    } else {
+      Button {} label: {
+        Label("Save", systemImage: "checkmark.circle")
+      }
+      .disabled(true)
+      .help(saveHelp)
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
   }
 
-  private func inspectorWidth(for width: CGFloat) -> CGFloat {
-    min(
-      max(width * 0.34, RoutingWorkspaceLayout.inspectorMinWidth),
-      RoutingWorkspaceLayout.inspectorMaxWidth
+  private var saveHelp: String {
+    if !hasEditableDraft {
+      return String(localized: "Select or create a snippet to edit")
+    }
+    if let error = editor.draftSnippet.validationError {
+      return error
+    }
+    return String(localized: "No unsaved changes")
+  }
+
+  private func moreMenu(showsToolPane _: Bool) -> some View {
+    Menu {
+      ForEach(RoutingTool.allCases) { tool in
+        Toggle(isOn: toolBinding(tool)) {
+          Label(tool.title, systemImage: tool.systemImage)
+        }
+      }
+
+      Divider()
+
+      Button("Move Snippet Up") {
+        moveSelectedSnippet(by: -1)
+      }
+      .disabled(!canMoveSelectedSnippet(by: -1))
+      Button("Move Snippet Down") {
+        moveSelectedSnippet(by: 1)
+      }
+      .disabled(!canMoveSelectedSnippet(by: 1))
+
+      Divider()
+
+      Button("Delete Snippet…", role: .destructive) {
+        snippetPendingDeletion = selectedSnippet
+      }
+      .disabled(selectedSnippet == nil)
+    } label: {
+      Label("More", systemImage: "ellipsis.circle")
+    }
+    .help("Tools and snippet actions")
+  }
+
+  private func toolBinding(_ tool: RoutingTool) -> Binding<Bool> {
+    Binding(
+      get: { editor.activeTool == tool },
+      set: { isOn in editor.activeTool = isOn ? tool : nil }
     )
   }
 
-  private var snippetListPane: some View {
-    ScrollView {
-      snippetListContent
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
+  // MARK: - Content
+
+  private var emptyLibraryState: some View {
+    ContentUnavailableView {
+      Label("No Snippets", systemImage: "square.stack.3d.up.slash")
+    } description: {
+      Text("Create a typed rule or DNS patch snippet to apply runtime changes safely.")
+    } actions: {
+      Button(newSnippetTitle(.rules)) {
+        requestNewSnippet(.rules)
+      }
+      Button(newSnippetTitle(.dnsPatch)) {
+        requestNewSnippet(.dnsPatch)
+      }
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+  }
+
+  private func workspace(showsToolPane: Bool) -> some View {
+    let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+    return HStack(spacing: 0) {
+      snippetList
+        .frame(width: RoutingWorkspaceLayout.snippetListWidth)
+
+      Divider()
+
+      editorColumn
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+      if showsToolPane, editor.activeTool != nil {
+        Divider()
+        RoutingToolPane(simulationTrace: simulationTrace, showsCloseButton: true) {
+          editor.activeTool = nil
+        }
+        .frame(width: RoutingWorkspaceLayout.toolPaneWidth)
+      }
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    .background(.cardSurface, in: shape)
+    .clipShape(shape)
+    .overlay(shape.strokeBorder(.separator, lineWidth: 1))
+  }
+
+  private var snippetList: some View {
+    VStack(spacing: 0) {
+      List(selection: listSelectionBinding) {
+        if editor.isEditingDetachedDraft {
+          RuntimeSnippetRow(
+            name: editor.draftSnippet.normalizedName,
+            subtitle: "\(editor.draftSnippet.payload.displayName) - \(editor.draftSnippet.binding.displayName)",
+            isEnabled: editor.draftSnippet.enabled,
+            isUnsaved: true,
+            onToggle: nil
+          )
+          .tag(editor.draftSnippet.id)
+        }
+
+        ForEach(snippetLibrary.snippets) { snippet in
+          RuntimeSnippetRow(
+            name: snippet.normalizedName,
+            subtitle: "\(snippet.payload.displayName) - \(snippet.binding.displayName)",
+            isEnabled: pendingSnippetEnabled[snippet.id] ?? snippet.enabled,
+            isUnsaved: snippet.id == editor.selectedSnippetID && editor.draftHasUnsavedChanges,
+            onToggle: { enabled in setSnippetEnabled(snippet, enabled: enabled) }
+          )
+          .tag(snippet.id)
+          .contextMenu {
+            snippetMenu(for: snippet)
+          }
+        }
+        .onMove { source, destination in
+          Task { @MainActor in
+            _ = await appModel.moveRuntimeSnippet(fromOffsets: source, toOffset: destination)
+          }
+        }
+      }
+      .listStyle(.inset)
+      .scrollContentBackground(.hidden)
+      .onDeleteCommand {
+        snippetPendingDeletion = selectedSnippet
+      }
+      .accessibilityLabel("Snippets")
+
+      Divider()
+
+      Text(librarySummary)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity)
     }
   }
 
-  private var snippetListContent: some View {
-    LazyVStack(alignment: .leading, spacing: 10) {
-      if snippetLibrary.snippets.isEmpty {
-        RoutingWorkspaceNotice(
-          title: "No Snippets",
-          systemImage: "square.stack.3d.up.slash",
-          message: "Create a typed rule or DNS patch snippet to apply runtime changes safely."
-        )
+  @ViewBuilder
+  private func snippetMenu(for snippet: RuntimeSnippet) -> some View {
+    let index = snippetLibrary.snippets.firstIndex { $0.id == snippet.id }
+    Button("Move Up") {
+      if let index {
+        moveSnippet(at: index, by: -1)
+      }
+    }
+    .disabled(index.map { $0 == 0 } ?? true)
+    Button("Move Down") {
+      if let index {
+        moveSnippet(at: index, by: 1)
+      }
+    }
+    .disabled(index.map { $0 >= snippetLibrary.snippets.count - 1 } ?? true)
+    Divider()
+    Button("Delete…", role: .destructive) {
+      snippetPendingDeletion = snippet
+    }
+  }
+
+  /// The snippet editor: identity rows on top, the payload below. Nothing else shares this column.
+  private var editorColumn: some View {
+    @Bindable var editor = editor
+    return VStack(alignment: .leading, spacing: 0) {
+      if hasEditableDraft {
+        snippetIdentityForm
+          .padding(12)
+
+        Divider()
+
+        payloadEditor
+          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+        if let validationError = visibleValidationError {
+          Divider()
+          Label(validationError, systemImage: "exclamationmark.triangle.fill")
+            .font(.caption)
+            .foregroundStyle(.orange)
+            .lineLimit(3)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+        }
       } else {
-        ForEach(Array(snippetLibrary.snippets.enumerated()), id: \.element.id) { index, snippet in
-          RuntimeSnippetRow(
-            snippet: snippet,
-            isEnabled: pendingSnippetEnabled[snippet.id] ?? snippet.enabled,
-            isSelected: snippet.id == selectedSnippetID,
-            canMoveUp: index > 0,
-            canMoveDown: index < snippetLibrary.snippets.count - 1,
-            onSelect: {
-              selectedSnippetID = snippet.id
-            },
-            onToggle: { enabled in
-              setSnippetEnabled(snippet, enabled: enabled)
-            },
-            onMoveUp: {
-              Task { @MainActor in
-                _ = await appModel.moveRuntimeSnippet(fromOffsets: IndexSet(integer: index), toOffset: index - 1)
-              }
-            },
-            onMoveDown: {
-              Task { @MainActor in
-                _ = await appModel.moveRuntimeSnippet(fromOffsets: IndexSet(integer: index), toOffset: index + 2)
-              }
+        CenteredUnavailableState(
+          title: "No snippet selected",
+          systemImage: "square.stack.3d.up",
+          message: "Select a snippet to edit it, or create a new one."
+        )
+      }
+    }
+  }
+
+  private var snippetIdentityForm: some View {
+    @Bindable var editor = editor
+    return VStack(alignment: .leading, spacing: 10) {
+      RoutingEditRow("Name") {
+        TextField("Snippet Name", text: $editor.draftSnippet.name)
+          .textFieldStyle(.roundedBorder)
+      }
+
+      RoutingEditRow("Enabled") {
+        Toggle("Enabled", isOn: $editor.draftSnippet.enabled)
+          .toggleStyle(.switch)
+          .labelsHidden()
+      }
+
+      RoutingEditRow("Binding") {
+        Picker("Binding", selection: bindingMode) {
+          ForEach(RuntimeSnippetBindingMode.allCases) { mode in
+            Text(mode.displayName).tag(mode)
+          }
+        }
+        .labelsHidden()
+        .frame(maxWidth: 180)
+      }
+
+      if case .profiles = editor.draftSnippet.binding {
+        profileBindingEditor
+      }
+
+      RoutingEditContentRow {
+        Text(appliesSummary)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(2)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+
+      RoutingEditRow("Snippet Type") {
+        if editor.isEditingDetachedDraft {
+          Picker("Snippet Type", selection: payloadKind) {
+            ForEach(RuntimeSnippetPayloadKind.allCases) { kind in
+              Text(kind.displayName).tag(kind)
             }
-          )
+          }
+          .labelsHidden()
+          .frame(maxWidth: 180)
+        } else {
+          Text(editor.draftSnippet.payload.displayName)
+            .foregroundStyle(.secondary)
         }
       }
+    }
+  }
+
+  @ViewBuilder
+  private var payloadEditor: some View {
+    switch editor.draftSnippet.payload {
+    case .rules:
+      // The snippet's own "Enabled" row above is the only switch — a second overlay-level toggle
+      // just gives the same snippet two ways to be off.
+      RoutingRuleListEditor(settings: rulesPayloadBinding)
+    case .dnsPatch:
+      ScrollView {
+        RuntimeDNSPatchEditor(settings: dnsPayloadBinding)
+          .padding(12)
+      }
+    case .sniffer:
+      ScrollView {
+        RuntimeSnifferPatchEditor(settings: snifferPayloadBinding)
+          .padding(12)
+      }
+    case .rawYAML:
+      ScrollView {
+        RuntimeRawYAMLPatchEditor(settings: rawYAMLPayloadBinding)
+          .padding(12)
+      }
+    }
+  }
+
+  /// A brand-new snippet is valid until the user touches it, so a pristine draft never opens with a
+  /// warning; the moment it is edited (or a save is attempted) the real error is shown.
+  private var visibleValidationError: String? {
+    guard let error = editor.draftSnippet.validationError else { return nil }
+    if editor.isEditingDetachedDraft, !attemptedSave, editor.draftSnippet == pristineDraft(for: editor.draftSnippet.payload.kind, id: editor.draftSnippet.id) {
+      return nil
+    }
+    return error
+  }
+
+  private func pristineDraft(for kind: RuntimeSnippetPayloadKind, id: RuntimeSnippet.ID) -> RuntimeSnippet {
+    var snippet = Self.newSnippet(of: kind)
+    snippet.id = id
+    return snippet
+  }
+
+  // MARK: - Snippet lifecycle
+
+  private var hasEditableDraft: Bool {
+    editor.isEditingDetachedDraft || selectedSnippet != nil
+  }
+
+  private var canSave: Bool {
+    hasEditableDraft
+      && editor.draftSnippet.validationError == nil
+      && editor.draftHasUnsavedChanges
+  }
+
+  private var selectedSnippet: RuntimeSnippet? {
+    guard let selectedSnippetID = editor.selectedSnippetID else { return nil }
+    return snippetLibrary.snippets.first { $0.id == selectedSnippetID }
+  }
+
+  private var listSelectionBinding: Binding<RuntimeSnippet.ID?> {
+    Binding(
+      get: {
+        editor.isEditingDetachedDraft ? editor.draftSnippet.id : editor.selectedSnippetID
+      },
+      set: { newValue in
+        let current = editor.isEditingDetachedDraft ? editor.draftSnippet.id : editor.selectedSnippetID
+        guard newValue != current else { return }
+        if editor.draftHasUnsavedChanges {
+          pendingAction = .select(newValue)
+        } else {
+          select(newValue)
+        }
+      }
+    )
+  }
+
+  private func select(_ id: RuntimeSnippet.ID?) {
+    guard let id, let snippet = snippetLibrary.snippets.first(where: { $0.id == id }) else {
+      editor.clearSelection()
+      runSimulationImmediately()
+      return
+    }
+    attemptedSave = false
+    editor.load(snippet)
+    runSimulationImmediately()
+  }
+
+  private func requestNewSnippet(_ kind: RuntimeSnippetPayloadKind) {
+    if editor.draftHasUnsavedChanges {
+      pendingAction = .newSnippet(kind)
+    } else {
+      beginNewSnippet(kind)
+    }
+  }
+
+  private func beginNewSnippet(_ kind: RuntimeSnippetPayloadKind) {
+    attemptedSave = false
+    editor.beginDetachedDraft(Self.newSnippet(of: kind))
+    runSimulationImmediately()
+  }
+
+  static func newSnippet(of kind: RuntimeSnippetPayloadKind) -> RuntimeSnippet {
+    switch kind {
+    case .rules:
+      return RuntimeSnippet.defaultRuleSnippet
+    case .dnsPatch:
+      return RuntimeSnippet.defaultDNSPatchSnippet
+    case .sniffer:
+      return RuntimeSnippet.defaultSnifferSnippet
+    case .rawYAML:
+      return RuntimeSnippet.defaultRawYAMLSnippet
+    }
+  }
+
+  private func newSnippetTitle(_ kind: RuntimeSnippetPayloadKind) -> String {
+    switch kind {
+    case .rules:
+      return String(localized: "New Rule Snippet")
+    case .dnsPatch:
+      return String(localized: "New DNS Patch")
+    case .sniffer:
+      return String(localized: "New Sniffer Patch")
+    case .rawYAML:
+      return String(localized: "New Raw YAML Patch")
+    }
+  }
+
+  private func newSnippetSymbol(_ kind: RuntimeSnippetPayloadKind) -> String {
+    switch kind {
+    case .rules:
+      return "list.bullet.rectangle"
+    case .dnsPatch:
+      return "network"
+    case .sniffer:
+      return "waveform.badge.magnifyingglass"
+    case .rawYAML:
+      return "curlybraces"
+    }
+  }
+
+  private func saveDraft(then action: RoutingPendingAction?) {
+    attemptedSave = true
+    guard canSave else { return }
+    let nextDraft = editor.draftSnippet
+    pendingAction = nil
+    Task { @MainActor in
+      if await appModel.saveRuntimeSnippet(nextDraft) {
+        editor.load(nextDraft)
+        attemptedSave = false
+        perform(action)
+      }
+    }
+  }
+
+  private func discardDraft(then action: RoutingPendingAction?) {
+    pendingAction = nil
+    if let selectedSnippet {
+      editor.load(selectedSnippet)
+    } else {
+      editor.clearSelection()
+    }
+    perform(action)
+  }
+
+  private func perform(_ action: RoutingPendingAction?) {
+    switch action {
+    case let .select(id):
+      select(id)
+    case let .newSnippet(kind):
+      beginNewSnippet(kind)
+    case nil:
+      break
+    }
+  }
+
+  private var unsavedChangesDialogPresented: Binding<Bool> {
+    Binding(
+      get: { pendingAction != nil },
+      set: { isPresented in
+        if !isPresented {
+          pendingAction = nil
+        }
+      }
+    )
+  }
+
+  private var deleteConfirmationPresented: Binding<Bool> {
+    Binding(
+      get: { snippetPendingDeletion != nil },
+      set: { isPresented in
+        if !isPresented {
+          snippetPendingDeletion = nil
+        }
+      }
+    )
+  }
+
+  private func toolSheetPresented(showsToolPane: Bool) -> Binding<Bool> {
+    Binding(
+      get: { !showsToolPane && editor.activeTool != nil },
+      set: { isPresented in
+        if !isPresented {
+          editor.activeTool = nil
+        }
+      }
+    )
+  }
+
+  private func confirmDeleteSnippet() {
+    guard let snippet = snippetPendingDeletion else { return }
+    snippetPendingDeletion = nil
+    Task { @MainActor in
+      if await appModel.deleteRuntimeSnippet(snippet) {
+        if editor.selectedSnippetID == snippet.id {
+          editor.clearSelection()
+        }
+        reconcileDraftWithLibrary()
+      }
+    }
+  }
+
+  private func canMoveSelectedSnippet(by offset: Int) -> Bool {
+    guard let selectedSnippet,
+          let index = snippetLibrary.snippets.firstIndex(where: { $0.id == selectedSnippet.id })
+    else { return false }
+    return snippetLibrary.snippets.indices.contains(index + offset)
+  }
+
+  private func moveSelectedSnippet(by offset: Int) {
+    guard let selectedSnippet,
+          let index = snippetLibrary.snippets.firstIndex(where: { $0.id == selectedSnippet.id })
+    else { return }
+    moveSnippet(at: index, by: offset)
+  }
+
+  private func moveSnippet(at index: Int, by offset: Int) {
+    let destination = index + offset
+    guard snippetLibrary.snippets.indices.contains(destination) else { return }
+    Task { @MainActor in
+      _ = await appModel.moveRuntimeSnippet(
+        fromOffsets: IndexSet(integer: index),
+        toOffset: offset > 0 ? destination + 1 : destination
+      )
     }
   }
 
@@ -403,1013 +861,47 @@ struct RoutingView: View {
     }
   }
 
-  private var routingEditorPane: some View {
-    ScrollView {
-      routingEditorContent
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-    }
-  }
-
-  private var routingEditorContent: some View {
-    RoutingInspectorPanel(title: "Snippet Editor", systemImage: "slider.horizontal.3") {
-      RoutingEditRow("Name") {
-        TextField("Snippet Name", text: $draftSnippet.name)
-          .textFieldStyle(.roundedBorder)
-      }
-
-      RoutingEditRow("Enabled") {
-        Toggle("Enabled", isOn: $draftSnippet.enabled)
-          .toggleStyle(.switch)
-          .labelsHidden()
-      }
-
-      RoutingEditRow("Binding") {
-        Picker("Binding", selection: bindingMode) {
-          ForEach(RuntimeSnippetBindingMode.allCases) { mode in
-            Text(mode.displayName).tag(mode)
-          }
-        }
-        .labelsHidden()
-        .frame(maxWidth: 180)
-      }
-
-      if case .profiles = draftSnippet.binding {
-        profileBindingEditor
-      }
-
-      RoutingEditRow("Snippet Type") {
-        Picker("Snippet Type", selection: payloadKind) {
-          ForEach(RuntimeSnippetPayloadKind.allCases) { kind in
-            Text(kind.displayName).tag(kind)
-          }
-        }
-        .labelsHidden()
-        .frame(maxWidth: 180)
-      }
-
-      Divider()
-
-      switch draftSnippet.payload {
-      case .rules:
-        // The snippet's own "Enabled" row above is the only switch — a second overlay-level toggle
-        // just gives the same snippet two ways to be off.
-        RuleOverlaySettingsEditor(settings: rulesPayloadBinding, showsHeader: false, showsEnableToggle: false)
-      case .dnsPatch:
-        RuntimeDNSPatchEditor(settings: dnsPayloadBinding)
-      case .sniffer:
-        RuntimeSnifferPatchEditor(settings: snifferPayloadBinding)
-      case .rawYAML:
-        RuntimeRawYAMLPatchEditor(settings: rawYAMLPayloadBinding)
-      }
-
-      if let validationError = draftSnippet.validationError {
-        Label(validationError, systemImage: "exclamationmark.triangle.fill")
-          .font(.caption)
-          .foregroundStyle(.orange)
-          .lineLimit(3)
-      }
-    }
-  }
-
-  private var routingInspectorPane: some View {
-    ScrollView {
-      routingInspectorContent
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-    }
-  }
-
-  private var routingInspectorContent: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      snippetStatus
-      effectiveConfigPreview
-      dnsOverrideStatus
-      dnsResolutionStatus
-      fakeIPStatus
-      listenerExposureStatus
-      geoDatabaseStatus
-      runtimeDiffPreview
-      connectionExplanation
-      matchSimulator
-    }
-  }
-
-  /// Answers "is my DNS override on, what does it change, and does anything reach it?" — the three
-  /// questions issue #16 says the rule and DNS surfaces never connected.
-  private var dnsOverrideStatus: some View {
-    RoutingInspectorPanel(title: "DNS Override", systemImage: "shield.lefthalf.filled") {
-      if let snapshot = loadedEffectiveConfigSnapshot {
-        dnsOverrideContent(snapshot.dnsOverride)
-      } else {
-        RoutingWorkspaceNotice(
-          title: "Not Generated",
-          systemImage: "doc.badge.clock",
-          message: String(localized: "Refresh the effective config to see which DNS keys Mihomo really reads.")
-        )
-      }
-    }
-  }
-
-  @ViewBuilder
-  private func dnsOverrideContent(_ plan: DNSOverridePlan) -> some View {
-    RoutingDetailRow(title: "Status", value: plan.enablement.displayName, isProminent: true)
-    RoutingDetailRow(title: "Effect", value: plan.summary, lineLimit: 3)
-
-    if plan.hasOverride {
-      diffSection(title: "Overridden Keys", values: plan.overriddenFieldNames)
-    }
-    if !plan.contributors.isEmpty {
-      diffSection(title: "Contributors", values: plan.contributors)
-    }
-
-    ForEach(plan.issues) { issue in
-      Label(
-        issue.message,
-        systemImage: issue.isBlocking ? "exclamationmark.octagon.fill" : "info.circle"
-      )
-      .font(.caption)
-      .foregroundStyle(issue.isBlocking ? Color.red : Color.secondary)
-      .fixedSize(horizontal: false, vertical: true)
-    }
-
-    ForEach(dnsOverrideRelationshipHints, id: \.self) { hint in
-      Text(hint)
-        .font(.caption)
-        .foregroundStyle(.tertiary)
-        .fixedSize(horizontal: false, vertical: true)
-    }
-  }
-
-  /// Roadmap A2. `GET /dns/query` asks the **core's** resolver, which is a different question from
-  /// the one `dig` answers on this Mac and the only one that explains routing: the answer is carried
-  /// straight into the rule engine, so the panel reads name → address → the rule each would match.
-  private var dnsResolutionStatus: some View {
-    @Bindable var appModel = appModel
-    let diagnosis = appModel.dnsResolutionDiagnostics
-    return RoutingInspectorPanel(title: "DNS Resolution", systemImage: "magnifyingglass.circle") {
-      HStack(spacing: 8) {
-        TextField("Domain", text: $appModel.dnsResolutionQuery)
-          .textFieldStyle(.roundedBorder)
-          .controlSize(.small)
-          .onSubmit { appModel.resolveDNSQuery() }
-
-        Picker("Type", selection: $appModel.dnsResolutionQueryType) {
-          ForEach(DNSQueryType.allCases) { type in
-            Text(type.displayName).tag(type)
-          }
-        }
-        .labelsHidden()
-        .controlSize(.small)
-        .fixedSize()
-
-        Button {
-          appModel.resolveDNSQuery()
-        } label: {
-          if case .querying = appModel.dnsResolutionOutcome {
-            ProgressView()
-              .controlSize(.small)
-          } else {
-            Text("Resolve")
-          }
-        }
-        .controlSize(.small)
-        .disabled(!appModel.canResolveDNSQuery)
-        // Same rule as the fake-ip and geo actions: the control stays visible when it would do
-        // nothing, with the diagnosis as its tooltip.
-        .help(diagnosis.reason)
-      }
-
-      RoutingDiagnosisHeadline(headline: diagnosis.headline, status: diagnosis.status)
-      Text(diagnosis.reason)
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
-
-      ForEach(Array(diagnosis.facts.enumerated()), id: \.offset) { _, fact in
-        RoutingDiagnosisFactRow(title: fact.title, value: fact.value)
-      }
-
-      if !diagnosis.records.isEmpty {
-        VStack(alignment: .leading, spacing: 2) {
-          ForEach(Array(diagnosis.records.enumerated()), id: \.offset) { _, record in
-            // Wire data, not copy: rendered verbatim so it is neither extracted for translation
-            // nor reformatted by the locale.
-            Text(verbatim: "\(record.name) \(record.ttl) \(record.typeName) \(record.data)")
-              .font(.caption2.monospaced())
-              .foregroundStyle(.secondary)
-              .textSelection(.enabled)
-              .fixedSize(horizontal: false, vertical: true)
-          }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-      }
-
-      ForEach(diagnosis.recoveryActions, id: \.self) { action in
-        Label(action, systemImage: "arrow.right.circle")
-          .font(.caption)
-          .foregroundStyle(.tertiary)
-          .fixedSize(horizontal: false, vertical: true)
-      }
-    }
-  }
-
-  /// Roadmap C3. `listeners:` is supported at L3 through the Raw YAML snippet, on one condition:
-  /// exposure is never silent. `allow-lan` does not gate these inbounds, `GET /configs` does not
-  /// report them, and an entry with no `listen` key binds every interface — all three measured
-  /// against the bundled core — so without this panel an open port would be invisible.
-  private var listenerExposureStatus: some View {
-    let diagnosis = appModel.listenerExposureDiagnostics
-    return RoutingInspectorPanel(title: "Inbound Listeners", systemImage: "antenna.radiowaves.left.and.right") {
-      RoutingDiagnosisHeadline(headline: diagnosis.headline, status: diagnosis.status)
-      Text(diagnosis.reason)
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
-
-      ForEach(Array(diagnosis.facts.enumerated()), id: \.offset) { _, fact in
-        RoutingDiagnosisFactRow(title: fact.title, value: fact.value)
-      }
-
-      ForEach(diagnosis.recoveryActions, id: \.self) { action in
-        Label(action, systemImage: "arrow.right.circle")
-          .font(.caption)
-          .foregroundStyle(.tertiary)
-          .fixedSize(horizontal: false, vertical: true)
-      }
-    }
-  }
-
-  /// Roadmap A3. In fake-ip mode the address → domain table is what lets a domain rule fire on a
-  /// connection that only ever carried an IP, and it survives events that invalidate it — joining
-  /// another network, or a subscription update replacing the node list. The only remedy ClashMax
-  /// offered before this was restarting the core.
-  private var fakeIPStatus: some View {
-    let diagnosis = appModel.fakeIPDiagnostics
-    return RoutingInspectorPanel(title: "Fake IP", systemImage: "arrow.triangle.2.circlepath") {
-      RoutingDiagnosisHeadline(headline: diagnosis.headline, status: diagnosis.status)
-      Text(diagnosis.reason)
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
-
-      ForEach(Array(diagnosis.facts.enumerated()), id: \.offset) { _, fact in
-        RoutingDiagnosisFactRow(title: fact.title, value: fact.value)
-      }
-
-      HStack(spacing: 8) {
-        Button {
-          appModel.flushFakeIPCache()
-        } label: {
-          if appModel.fakeIPFlushInFlight {
-            ProgressView()
-              .controlSize(.small)
-          } else {
-            Text("Flush Fake IP Cache")
-          }
-        }
-        .controlSize(.small)
-        .disabled(!appModel.canFlushFakeIPCache)
-        // The action stays visible when it would do nothing, with the diagnosis as the tooltip: a
-        // control that is not there cannot explain why it is not there.
-        .help(diagnosis.reason)
-
-        if let lastFlushAt = appModel.lastFakeIPFlushAt {
-          Text(lastFlushAt, format: .relative(presentation: .named))
-            .font(.caption2)
-            .foregroundStyle(.tertiary)
-        }
-      }
-    }
-  }
-
-  /// Roadmap B5. Mihomo downloads the geo databases once, on the first rule that needs them, and
-  /// then never touches them again unless `geo-auto-update` is on — so `GEOIP,CN` and `GEOSITE`
-  /// rules quietly match against whatever snapshot happened to land on first launch.
-  private var geoDatabaseStatus: some View {
-    let diagnosis = appModel.geoDatabaseDiagnostics
-    return RoutingInspectorPanel(title: "Geo Databases", systemImage: "globe.badge.chevron.backward") {
-      RoutingDiagnosisHeadline(headline: diagnosis.headline, status: diagnosis.status)
-      Text(diagnosis.reason)
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
-
-      ForEach(Array(diagnosis.facts.enumerated()), id: \.offset) { _, fact in
-        RoutingDiagnosisFactRow(title: fact.title, value: fact.value)
-      }
-
-      HStack(spacing: 8) {
-        Button {
-          appModel.updateGeoDatabases()
-        } label: {
-          if appModel.geoDatabaseUpdateInFlight {
-            ProgressView()
-              .controlSize(.small)
-          } else {
-            Text("Update Now")
-          }
-        }
-        .controlSize(.small)
-        .disabled(!appModel.canUpdateGeoDatabases)
-        .help(diagnosis.reason)
-
-        if appModel.geoDatabaseUpdateInFlight {
-          Text("Downloading through the core; this can take a while.")
-            .font(.caption2)
-            .foregroundStyle(.tertiary)
-        }
-      }
-
-      // Reported from what changed on disk, not from the endpoint's status code: `POST /configs/geo`
-      // answers 204 for "downloaded four files" and for "did nothing at all".
-      if let message = appModel.geoDatabaseUpdateStatusMessage {
-        Text(message)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .fixedSize(horizontal: false, vertical: true)
-      }
-
-      ForEach(diagnosis.recoveryActions, id: \.self) { action in
-        Label(action, systemImage: "arrow.right.circle")
-          .font(.caption)
-          .foregroundStyle(.tertiary)
-          .fixedSize(horizontal: false, vertical: true)
-      }
-    }
-    .task(id: appModel.geoDatabaseSettings) {
-      appModel.refreshGeoDatabaseInventory()
-    }
-  }
-
-  /// How the override interacts with the capture modes: without TUN or the NE proxy, only traffic
-  /// that already goes through Mihomo ever asks Mihomo's resolver.
-  private var dnsOverrideRelationshipHints: [String] {
-    var hints: [String] = []
-    if appModel.tunEnabled {
-      hints.append(String(localized: "TUN is on, so its DNS hijack sends system queries to Mihomo's resolver."))
-    } else if appModel.networkExtensionEnabled {
-      hints.append(String(localized: "NE Proxy is on, so captured queries use Mihomo's resolver."))
-    } else if appModel.systemProxyEnabled {
-      hints.append(String(localized: "Only system proxy is on: proxied requests resolve inside Mihomo, while macOS keeps resolving everything else."))
-    } else {
-      hints.append(String(localized: "No traffic capture is active, so nothing reaches Mihomo's resolver yet."))
-    }
-    hints.append(
-      appModel.isRunning
-        ? String(localized: "Saving reloads the running config, so DNS changes apply immediately.")
-        : String(localized: "DNS changes apply the next time the core starts.")
-    )
-    return hints
-  }
-
-  private var loadedEffectiveConfigSnapshot: EffectiveRuntimeConfigSnapshot? {
-    guard case let .loaded(snapshot) = appModel.effectiveRuntimeConfigState,
-          snapshot.profileID == profileStore.activeProfile?.id
-    else { return nil }
-    return snapshot
-  }
-
-  private var snippetStatus: some View {
-    RoutingInspectorPanel(title: "Active Profile", systemImage: "doc.text.magnifyingglass") {
-      let facts = activeProfileFacts
-      ViewThatFits(in: .horizontal) {
-        HStack(alignment: .top, spacing: 10) {
-          ForEach(facts) { fact in
-            RoutingCompactDetailItem(fact: fact)
-          }
-        }
-
-        LazyVGrid(
-          columns: [
-            GridItem(.flexible(minimum: 96), spacing: 10, alignment: .leading),
-            GridItem(.flexible(minimum: 96), spacing: 10, alignment: .leading),
-          ],
-          alignment: .leading,
-          spacing: 8
-        ) {
-          ForEach(facts) { fact in
-            RoutingCompactDetailItem(fact: fact)
-          }
-        }
-      }
-    }
-  }
-
-  private var activeProfileFacts: [RoutingCompactFact] {
-    [
-      RoutingCompactFact(title: "Profile", value: profileStore.activeProfile?.name ?? String(localized: "No Profile")),
-      RoutingCompactFact(title: "Snippet Binding", value: draftSnippet.binding.displayName),
-      RoutingCompactFact(title: "Applies Here", value: draftAppliesToActiveProfile ? String(localized: "Yes") : String(localized: "No")),
-      RoutingCompactFact(title: "Active Snippets", value: "\(activePreviewSnippets.count)"),
-    ]
-  }
-
-  private var runtimeDiffPreview: some View {
-    RoutingInspectorPanel(title: "Runtime Diff", systemImage: "doc.on.doc") {
-      switch draftSnippet.payload {
-      case let .rules(settings):
-        runtimeRuleDiffSections(settings)
-      case let .dnsPatch(settings):
-        dnsDiffSection(settings)
-      case let .sniffer(settings):
-        snifferDiffSection(settings)
-      case let .rawYAML(settings):
-        rawYAMLDiffSection(settings)
-      }
-    }
-  }
-
-  private var effectiveConfigPreview: some View {
-    RoutingInspectorPanel(title: "Effective Config", systemImage: "doc.text.magnifyingglass") {
-      effectiveConfigToolbar
-      effectiveConfigStateContent
-    }
-  }
-
-  private var effectiveConfigToolbar: some View {
-    ViewThatFits(in: .horizontal) {
-      HStack(spacing: 8) {
-        effectiveConfigViewPicker
-          .frame(width: 256)
-        Spacer(minLength: 12)
-        HStack(spacing: 6) {
-          effectiveConfigActions
-        }
-        .labelStyle(.titleAndIcon)
-      }
-
-      HStack(spacing: 8) {
-        effectiveConfigViewPicker
-          .frame(width: 240)
-        Spacer(minLength: 8)
-        HStack(spacing: 4) {
-          effectiveConfigActions
-        }
-        .labelStyle(.iconOnly)
-      }
-
-      VStack(alignment: .leading, spacing: 8) {
-        effectiveConfigViewPicker
-        HStack(spacing: 6) {
-          effectiveConfigActions
-        }
-        .labelStyle(.titleAndIcon)
-      }
-    }
-    .controlSize(.small)
-  }
-
-  private var effectiveConfigViewPicker: some View {
-    Picker("Effective Config View", selection: $effectiveConfigTab) {
-      ForEach(EffectiveConfigInspectorTab.allCases) { tab in
-        Text(tab.title).tag(tab)
-      }
-    }
-    .labelsHidden()
-    .pickerStyle(.segmented)
-  }
-
-  private var effectiveConfigActions: some View {
-    Group {
-      Button {
-        refreshEffectiveConfigPreview()
-      } label: {
-        Label("Refresh", systemImage: "arrow.clockwise")
-      }
-      .help(String(localized: "Refresh"))
-
-      Button {
-        appModel.copyEffectiveRuntimeConfigRedacted()
-      } label: {
-        Label("Copy Redacted", systemImage: "doc.on.doc")
-      }
-      .disabled(!effectiveConfigIsLoaded)
-      .help(String(localized: "Copy Redacted"))
-
-      Button {
-        appModel.exportEffectiveRuntimeConfigRedacted()
-      } label: {
-        Label("Export Redacted", systemImage: "square.and.arrow.down")
-      }
-      .disabled(!effectiveConfigIsLoaded)
-      .help(String(localized: "Export Redacted"))
-    }
-  }
-
-  @ViewBuilder
-  private var effectiveConfigStateContent: some View {
-    switch appModel.effectiveRuntimeConfigState {
-    case .idle:
-      RoutingWorkspaceNotice(
-        title: "Not Generated",
-        systemImage: "doc.badge.clock",
-        message: "Refresh to preview the redacted final runtime YAML and its diff."
-      )
-    case .loading:
-      HStack(spacing: 8) {
-        ProgressView()
-          .controlSize(.small)
-        Text("Generating effective config")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-      }
-    case let .unavailable(message):
-      RoutingWorkspaceNotice(title: "Unavailable", systemImage: "exclamationmark.triangle.fill", message: message)
-    case let .failed(message):
-      RoutingWorkspaceNotice(title: "Generation Failed", systemImage: "exclamationmark.triangle.fill", message: message)
-    case let .loaded(snapshot) where snapshot.profileID == profileStore.activeProfile?.id:
-      effectiveConfigSnapshotContent(snapshot)
-    case .loaded:
-      RoutingWorkspaceNotice(
-        title: "Not Generated",
-        systemImage: "doc.badge.clock",
-        message: "Refresh to preview the redacted final runtime YAML and its diff."
-      )
-    }
-  }
-
-  @ViewBuilder
-  private func effectiveConfigSnapshotContent(_ snapshot: EffectiveRuntimeConfigSnapshot) -> some View {
-    RoutingDetailRow(title: "Preflight", value: effectiveConfigPreflightSummary(snapshot), isProminent: true, lineLimit: 3)
-    switch effectiveConfigTab {
-    case .layers:
-      VStack(alignment: .leading, spacing: 10) {
-        ForEach(snapshot.layers) { layer in
-          VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-              Image(systemName: layer.isActive ? "checkmark.circle.fill" : "circle")
-                .foregroundStyle(layer.isActive ? .green : .secondary)
-              Text(layer.title)
-                .font(.caption.weight(.semibold))
-              Spacer()
-            }
-            Text(layer.summary)
-              .font(.caption)
-              .foregroundStyle(.secondary)
-              .fixedSize(horizontal: false, vertical: true)
-            redactedCodeBlock(layer.redactedContent, maxHeight: 150)
-          }
-        }
-      }
-    case .diff:
-      diffRows(snapshot.diffRows)
-    case .finalYAML:
-      redactedCodeBlock(snapshot.redactedFinalYAML, maxHeight: 280)
-    }
-  }
-
-  private func diffRows(_ rows: [EffectiveRuntimeConfigDiffRow]) -> some View {
-    ScrollView {
-      LazyVStack(alignment: .leading, spacing: 2) {
-        ForEach(rows) { row in
-          Text(row.displayLine)
-            .font(.system(.caption2, design: .monospaced))
-            .foregroundStyle(diffColor(row.kind))
-            .textSelection(.enabled)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-      }
-      .frame(maxWidth: .infinity, alignment: .leading)
-    }
-    .frame(maxHeight: 280)
-  }
-
-  private func redactedCodeBlock(_ text: String, maxHeight: CGFloat) -> some View {
-    ScrollView {
-      Text(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? String(localized: "Empty") : text)
-        .font(.system(.caption2, design: .monospaced))
-        .foregroundStyle(.secondary)
-        .textSelection(.enabled)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-    .frame(maxHeight: maxHeight)
-  }
-
-  private func diffColor(_ kind: EffectiveRuntimeConfigDiffKind) -> Color {
-    switch kind {
-    case .unchanged:
-      return .secondary
-    case .removed:
-      return .red
-    case .added:
-      return .green
-    case .omitted:
-      return .secondary
-    }
-  }
-
-  private func effectiveConfigPreflightSummary(_ snapshot: EffectiveRuntimeConfigSnapshot) -> String {
-    if let message = snapshot.preflightStatus.message {
-      return "\(snapshot.preflightStatus.displayName): \(message)"
-    }
-    return snapshot.preflightStatus.displayName
-  }
-
-  private func runtimeRuleDiffSections(_ settings: RuleOverlaySettings) -> some View {
-    let disabledValues = settings.runtimeDisabledRuleMatchers.map { "\($0.mode.displayName): \($0.normalizedPattern)" }
-
-    return ViewThatFits(in: .horizontal) {
-      HStack(alignment: .top, spacing: 10) {
-        diffSection(title: "Before", values: settings.runtimePrependRules)
-          .frame(minWidth: 96, maxWidth: .infinity, alignment: .topLeading)
-        diffSection(title: "Disabled", values: disabledValues)
-          .frame(minWidth: 96, maxWidth: .infinity, alignment: .topLeading)
-        diffSection(title: "After", values: settings.runtimeAppendRules)
-          .frame(minWidth: 96, maxWidth: .infinity, alignment: .topLeading)
-      }
-
-      VStack(alignment: .leading, spacing: 10) {
-        diffSection(title: "Before", values: settings.runtimePrependRules)
-        diffSection(title: "Disabled", values: disabledValues)
-        diffSection(title: "After", values: settings.runtimeAppendRules)
-      }
-    }
-  }
-
-  private func diffSection(title: LocalizedStringResource, values: [String]) -> some View {
-    VStack(alignment: .leading, spacing: 6) {
-      Text(title)
-        .font(.caption)
-        .foregroundStyle(.secondary)
-      if values.isEmpty {
-        Text("No changes")
-          .font(.caption)
-          .foregroundStyle(.tertiary)
-      } else {
-        ForEach(values, id: \.self) { value in
-          Text(value)
-            .font(.system(.caption, design: .monospaced))
-            .lineLimit(1)
-            .truncationMode(.middle)
-            .textSelection(.enabled)
-        }
-      }
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
-  }
-
-  private func dnsDiffSection(_ settings: TunDNSSettings) -> some View {
-    diffSection(title: "DNS Patch", values: dnsPatchPreviewLines(settings))
-  }
-
-  private func snifferDiffSection(_ settings: SnifferSettings) -> some View {
-    diffSection(title: "Sniffer Patch", values: snifferPatchPreviewLines(settings))
-  }
-
-  private func rawYAMLDiffSection(_ settings: RawYAMLPatchSettings) -> some View {
-    diffSection(title: "Raw YAML Patch", values: rawYAMLPatchPreviewLines(settings))
-  }
-
-  /// Names the top-level keys the patch wins, not the YAML body: the body is already in the editor
-  /// right next to this panel, and it is the one payload that can be arbitrarily long.
-  private func rawYAMLPatchPreviewLines(_ settings: RawYAMLPatchSettings) -> [String] {
-    guard settings.hasRuntimeOverlay else { return [] }
-    if let validationError = settings.validationError {
-      return [validationError]
-    }
-    var lines = settings.topLevelKeys.map { "\($0): \(String(localized: "set by this snippet"))" }
-    for keyPath in settings.overriddenManagedKeyPaths {
-      lines.append("\(keyPath): \(String(localized: "taken over from ClashMax"))")
-    }
-    lines.append(settings.listStrategy.explanation)
-    return lines
-  }
-
-  private var matchSimulator: some View {
-    RoutingInspectorPanel(title: "Match Simulator", systemImage: "scope") {
-      TextField("Destination host or IP", text: $simulationDestination)
-        .textFieldStyle(.roundedBorder)
-
-      ViewThatFits(in: .horizontal) {
-        HStack(spacing: 8) {
-          TextField("Source IP", text: $simulationSourceIP)
-          TextField("Process name or path", text: $simulationProcess)
-        }
-        VStack(alignment: .leading, spacing: 8) {
-          TextField("Source IP", text: $simulationSourceIP)
-          TextField("Process name or path", text: $simulationProcess)
-        }
-      }
-      .textFieldStyle(.roundedBorder)
-
-      ViewThatFits(in: .horizontal) {
-        HStack(spacing: 8) {
-          TextField("Dst Port", text: $simulationDestinationPort)
-          TextField("Src Port", text: $simulationSourcePort)
-          TextField("In Port", text: $simulationInboundPort)
-        }
-        VStack(alignment: .leading, spacing: 8) {
-          TextField("Dst Port", text: $simulationDestinationPort)
-          TextField("Src Port", text: $simulationSourcePort)
-          TextField("In Port", text: $simulationInboundPort)
-        }
-      }
-      .textFieldStyle(.roundedBorder)
-
-      RoutingDetailRow(title: "Result", value: simulationTrace.title, isProminent: true)
-      RoutingDetailRow(title: "Source", value: simulationTrace.sourceSummary)
-      RoutingDetailRow(title: "Hit Rule", value: simulationTrace.ruleSummary, lineLimit: 3)
-      RoutingDetailRow(title: "Policy / Sub-rule", value: simulationTrace.policySummary)
-      RoutingDetailRow(title: "Provider", value: simulationTrace.providerSummary)
-      RoutingDetailRow(title: "Detail", value: simulationTrace.detail, lineLimit: 4)
-    }
-  }
-
-  @ViewBuilder
-  private var connectionExplanation: some View {
-    if let explanationContext {
-      RoutingInspectorPanel(title: "Connection Context", systemImage: "point.3.connected.trianglepath.dotted") {
-        RoutingDetailRow(
-          title: "Mihomo Reported",
-          value: explanationContext.reportedRuleSummary.isEmpty ? "-" : explanationContext.reportedRuleSummary
-        )
-        RoutingDetailRow(title: "Chosen Target", value: explanationContext.target.isEmpty ? "-" : explanationContext.target)
-        RoutingDetailRow(title: "Chosen Policy", value: explanationContext.chosenPolicySummary)
-        RoutingDetailRow(title: "Local Result", value: explanationContext.localSummary, lineLimit: 5)
-        // The simulator above answers "which rule wins for this destination". For a connection that
-        // never carried a domain, the destination in that field is an address, and no domain rule
-        // could ever have matched it — a fact the simulator alone leaves the user to infer.
-        if let verdict = domainVerdictContext {
-          RoutingDetailRow(title: "Domain Visibility", value: verdict.headline, isProminent: true)
-          RoutingDetailRow(title: "Reason", value: verdict.reason, lineLimit: 5)
-          ForEach(verdict.recoveryActions, id: \.self) { action in
-            RoutingDetailRow(title: "Suggested Fix", value: action, lineLimit: 3)
-          }
-        }
-      }
-    }
-  }
-
-  private var canSave: Bool {
-    draftSnippet.validationError == nil && draftSnippet != selectedSnippet
-  }
-
-  private var effectiveConfigIsLoaded: Bool {
-    appModel.hasLoadedEffectiveRuntimeConfigForActiveProfile
-  }
-
-  private var effectiveConfigDraftSnippet: RuntimeSnippet? {
-    draftHasUnsavedChanges || isEditingDetachedDraft ? draftSnippet : nil
-  }
-
-  private var selectedSnippet: RuntimeSnippet? {
-    guard let selectedSnippetID else { return nil }
-    return snippetLibrary.snippets.first { $0.id == selectedSnippetID }
-  }
-
-  private var activeSubscriptionProfile: Profile? {
-    guard let profile = profileStore.activeProfile, profile.isSubscription else { return nil }
-    return profile
-  }
-
-  private var librarySummary: String {
-    String(
-      format: String(localized: "%lld snippets, %lld enabled"),
-      Int64(snippetLibrary.snippets.count),
-      Int64(snippetLibrary.snippets.filter(\.enabled).count)
-    )
-  }
-
-  private var profileBindingEditor: some View {
-    RoutingEditContentRow {
-      VStack(alignment: .leading, spacing: 8) {
-        if profileStore.profiles.isEmpty {
-          Text("No profiles available")
-            .font(.caption)
-            .foregroundStyle(.tertiary)
-        } else {
-          ForEach(profileStore.profiles) { profile in
-            Toggle(isOn: profileBinding(profile.id)) {
-              Text(profile.name)
-                .lineLimit(1)
-            }
-          }
-        }
-      }
-    }
-  }
-
-  private var bindingMode: Binding<RuntimeSnippetBindingMode> {
-    Binding(
-      get: {
-        switch draftSnippet.binding {
-        case .allProfiles:
-          return .allProfiles
-        case .profiles:
-          return .selectedProfiles
-        }
-      },
-      set: { mode in
-        switch mode {
-        case .allProfiles:
-          draftSnippet.binding = .allProfiles
-        case .selectedProfiles:
-          draftSnippet.binding = .profiles(profileStore.activeProfileID.map { [$0] } ?? [])
-        }
-      }
-    )
-  }
-
-  private var payloadKind: Binding<RuntimeSnippetPayloadKind> {
-    Binding(
-      get: { draftSnippet.payload.kind },
-      set: { kind in
-        guard kind != draftSnippet.payload.kind else { return }
-        switch kind {
-        case .rules:
-          draftSnippet.payload = .rules(RuntimeSnippet.defaultRuleSnippet.rulesPayload)
-        case .dnsPatch:
-          draftSnippet.payload = .dnsPatch(RuntimeSnippet.defaultDNSPatchSnippet.dnsPayload)
-        case .sniffer:
-          draftSnippet.payload = .sniffer(RuntimeSnippet.defaultSnifferSnippet.snifferPayload)
-        case .rawYAML:
-          draftSnippet.payload = .rawYAML(RuntimeSnippet.defaultRawYAMLSnippet.rawYAMLPayload)
-        }
-      }
-    )
-  }
-
-  private var rulesPayloadBinding: Binding<RuleOverlaySettings> {
-    Binding(
-      get: { draftSnippet.rulesPayload },
-      set: { settings in
-        var settings = settings
-        settings.enabled = true
-        draftSnippet.payload = .rules(settings)
-      }
-    )
-  }
-
-  private var dnsPayloadBinding: Binding<TunDNSSettings> {
-    Binding(
-      get: { draftSnippet.dnsPayload },
-      set: { draftSnippet.payload = .dnsPatch($0) }
-    )
-  }
-
-  private var snifferPayloadBinding: Binding<SnifferSettings> {
-    Binding(
-      get: { draftSnippet.snifferPayload },
-      set: { draftSnippet.payload = .sniffer($0) }
-    )
-  }
-
-  private var rawYAMLPayloadBinding: Binding<RawYAMLPatchSettings> {
-    Binding(
-      get: { draftSnippet.rawYAMLPayload },
-      set: { draftSnippet.payload = .rawYAML($0) }
-    )
-  }
-
-  private var draftAppliesToActiveProfile: Bool {
-    guard let activeProfileID = profileStore.activeProfileID else { return false }
-    return draftSnippet.enabled && draftSnippet.applies(to: activeProfileID)
-  }
-
-  private var activePreviewSnippets: [RuntimeSnippet] {
-    guard let activeProfileID = profileStore.activeProfileID else { return [] }
-    var snippets = snippetLibrary.snippets
-    if let selectedSnippetID,
-       let index = snippets.firstIndex(where: { $0.id == selectedSnippetID })
-    {
-      snippets[index] = draftSnippet
-    } else if selectedSnippet == nil {
-      snippets.append(draftSnippet)
-    }
-    return snippets.filter { $0.enabled && $0.applies(to: activeProfileID) }
-  }
-
-  private func profileBinding(_ profileID: Profile.ID) -> Binding<Bool> {
-    Binding(
-      get: {
-        draftSnippet.binding.profileIDs.contains(profileID)
-      },
-      set: { isEnabled in
-        var profileIDs = draftSnippet.binding.profileIDs
-        if isEnabled {
-          if !profileIDs.contains(profileID) {
-            profileIDs.append(profileID)
-          }
-        } else {
-          profileIDs.removeAll { $0 == profileID }
-        }
-        draftSnippet.binding = .profiles(profileIDs)
-      }
-    )
-  }
-
-  private func newRuleSnippet() {
-    selectedSnippetID = nil
-    draftSnippet = RuntimeSnippet.defaultRuleSnippet
-    loadedSnippetSnapshot = nil
-    isEditingDetachedDraft = true
-    runSimulationImmediately()
-  }
-
-  private func newDNSPatchSnippet() {
-    selectedSnippetID = nil
-    draftSnippet = RuntimeSnippet.defaultDNSPatchSnippet
-    loadedSnippetSnapshot = nil
-    isEditingDetachedDraft = true
-    runSimulationImmediately()
-  }
-
-  private func newSnifferSnippet() {
-    selectedSnippetID = nil
-    draftSnippet = RuntimeSnippet.defaultSnifferSnippet
-    loadedSnippetSnapshot = nil
-    isEditingDetachedDraft = true
-    runSimulationImmediately()
-  }
-
-  private func newRawYAMLSnippet() {
-    selectedSnippetID = nil
-    draftSnippet = RuntimeSnippet.defaultRawYAMLSnippet
-    loadedSnippetSnapshot = nil
-    isEditingDetachedDraft = true
-    runSimulationImmediately()
-  }
-
-  private func saveDraft() {
-    guard canSave else { return }
-    let nextDraft = draftSnippet
-    Task { @MainActor in
-      if await appModel.saveRuntimeSnippet(nextDraft) {
-        selectedSnippetID = nextDraft.id
-        loadedSnippetSnapshot = nextDraft
-        isEditingDetachedDraft = false
-      }
-    }
-  }
-
-  private func refreshEffectiveConfigPreview() {
-    let draft = effectiveConfigDraftSnippet
-    Task { @MainActor in
-      await appModel.refreshEffectiveRuntimeConfigPreview(draftSnippet: draft)
-    }
-  }
-
-  private func deleteSelectedSnippet() {
-    guard let selectedSnippet else { return }
-    Task { @MainActor in
-      if await appModel.deleteRuntimeSnippet(selectedSnippet) {
-        selectedSnippetID = snippetLibrary.snippets.first?.id
-        loadedSnippetSnapshot = nil
-        isEditingDetachedDraft = false
-        reconcileDraftWithLibrary()
-      }
-    }
-  }
-
   private func selectInitialSnippetIfNeeded() {
-    guard !isEditingDetachedDraft else { return }
-    if selectedSnippetID == nil, let first = snippetLibrary.snippets.first {
-      selectedSnippetID = first.id
-      draftSnippet = first
-      loadedSnippetSnapshot = first
+    guard !editor.isEditingDetachedDraft else { return }
+    if let selectedSnippetID = editor.selectedSnippetID,
+       snippetLibrary.snippets.contains(where: { $0.id == selectedSnippetID })
+    {
+      return
     }
-  }
-
-  private func loadSelectedSnippet() {
-    guard let selectedSnippet else { return }
-    draftSnippet = selectedSnippet
-    loadedSnippetSnapshot = selectedSnippet
-    isEditingDetachedDraft = false
-    runSimulationImmediately()
+    if let first = snippetLibrary.snippets.first {
+      editor.load(first)
+    } else {
+      editor.clearSelection()
+    }
   }
 
   private func reconcileDraftWithLibrary() {
-    if let selectedSnippetID,
+    if let selectedSnippetID = editor.selectedSnippetID,
        let snippet = snippetLibrary.snippets.first(where: { $0.id == selectedSnippetID })
     {
-      if snippet == draftSnippet {
-        loadedSnippetSnapshot = snippet
-      } else if !draftHasUnsavedChanges {
-        draftSnippet = snippet
-        loadedSnippetSnapshot = snippet
+      if snippet == editor.draftSnippet {
+        editor.loadedSnippetSnapshot = snippet
+      } else if !editor.draftHasUnsavedChanges {
+        editor.load(snippet)
       }
-    } else if selectedSnippetID != nil, selectedSnippet == nil {
-      if draftHasUnsavedChanges {
-        selectedSnippetID = nil
-        loadedSnippetSnapshot = nil
-        isEditingDetachedDraft = true
+    } else if editor.selectedSnippetID != nil, selectedSnippet == nil {
+      // The selected snippet vanished from the library (deleted elsewhere or restored from backup).
+      if editor.draftHasUnsavedChanges {
+        editor.beginDetachedDraft(editor.draftSnippet)
+      } else if let first = snippetLibrary.snippets.first {
+        editor.load(first)
       } else {
-        selectedSnippetID = snippetLibrary.snippets.first?.id
-        if let selectedSnippet {
-          draftSnippet = selectedSnippet
-          loadedSnippetSnapshot = selectedSnippet
-        } else {
-          loadedSnippetSnapshot = nil
-        }
+        editor.clearSelection()
       }
-    } else if isEditingDetachedDraft {
-      loadedSnippetSnapshot = nil
+    } else if editor.isEditingDetachedDraft {
+      editor.loadedSnippetSnapshot = nil
     } else {
       selectInitialSnippetIfNeeded()
     }
     runSimulationImmediately()
   }
+
+  // MARK: - Simulation
 
   private func scheduleSimulation() {
     simulationDebouncer.schedule {
@@ -1425,31 +917,16 @@ struct RoutingView: View {
 
   private func simulate() {
     let simulator = RuleMatchSimulator()
-    simulationTrace = simulator.simulate(input: simulationInput, candidateProvider: effectiveRuleCandidates)
+    simulationTrace = simulator.simulate(input: editor.simulationInput, candidateProvider: effectiveRuleCandidates)
   }
 
   private func consumeRoutingSimulationRequest() {
     guard let request = appModel.routingSimulationRequest else { return }
-    explanationContext = request.explanation
-    domainVerdictContext = request.domainVerdict
-    simulationDestination = request.input.destination
-    simulationSourceIP = request.input.sourceIP
-    simulationDestinationPort = request.input.destinationPort
-    simulationSourcePort = request.input.sourcePort
-    simulationInboundPort = request.input.inboundPort
-    simulationProcess = request.input.process
+    editor.explanationContext = request.explanation
+    editor.domainVerdictContext = request.domainVerdict
+    editor.simulationInput = request.input
+    editor.activeTool = .simulator
     runSimulationImmediately()
-  }
-
-  private var simulationInput: RuleMatchSimulationInput {
-    RuleMatchSimulationInput(
-      destination: simulationDestination,
-      sourceIP: simulationSourceIP,
-      destinationPort: simulationDestinationPort,
-      sourcePort: simulationSourcePort,
-      inboundPort: simulationInboundPort,
-      process: simulationProcess
-    )
   }
 
   private func effectiveRuleCandidates() -> [RuntimeRuleCandidate] {
@@ -1465,74 +942,153 @@ struct RoutingView: View {
     )
   }
 
-  private var draftHasUnsavedChanges: Bool {
-    if isEditingDetachedDraft {
-      return true
-    }
-    guard let loadedSnippetSnapshot else {
-      return selectedSnippet.map { $0 != draftSnippet } ?? false
-    }
-    return draftSnippet != loadedSnippetSnapshot
+  private var activeSubscriptionProfile: Profile? {
+    guard let profile = profileStore.activeProfile, profile.isSubscription else { return nil }
+    return profile
   }
 
-  private func dnsPatchPreviewLines(_ settings: TunDNSSettings) -> [String] {
-    var lines: [String] = []
-    appendOptionalBool(settings.respectRules, title: "respect-rules", to: &lines)
-    appendOptionalBool(settings.useSystemHosts, title: "use-system-hosts", to: &lines)
-    appendOptionalBool(settings.useHosts, title: "use-hosts", to: &lines)
-    appendOptionalBool(settings.preferH3, title: "prefer-h3", to: &lines)
-    appendOptionalBool(settings.directNameserverFollowPolicy, title: "direct-nameserver-follow-policy", to: &lines)
-    appendList(settings.fakeIPFilter, title: "fake-ip-filter", to: &lines)
-    appendList(settings.defaultNameserver, title: "default-nameserver", to: &lines)
-    appendList(settings.nameserver, title: "nameserver", to: &lines)
-    appendList(settings.fallback, title: "fallback", to: &lines)
-    appendList(settings.proxyServerNameserver, title: "proxy-server-nameserver", to: &lines)
-    appendList(settings.directNameserver, title: "direct-nameserver", to: &lines)
-    appendMap(settings.nameserverPolicy, title: "nameserver-policy", to: &lines)
-    appendMap(settings.proxyServerNameserverPolicy, title: "proxy-server-nameserver-policy", to: &lines)
-    appendMap(settings.hosts, title: "hosts", to: &lines)
-    if let geoIP = settings.fallbackFilter.geoIP {
-      lines.append("fallback-filter.geoip = \(geoIP)")
+  private var activePreviewSnippets: [RuntimeSnippet] {
+    guard let activeProfileID = profileStore.activeProfileID else { return [] }
+    var snippets = snippetLibrary.snippets
+    if let selectedSnippetID = editor.selectedSnippetID,
+       let index = snippets.firstIndex(where: { $0.id == selectedSnippetID })
+    {
+      snippets[index] = editor.draftSnippet
+    } else if editor.isEditingDetachedDraft {
+      snippets.append(editor.draftSnippet)
     }
-    if let geoIPCode = settings.fallbackFilter.geoIPCode {
-      lines.append("fallback-filter.geoip-code = \(geoIPCode)")
-    }
-    appendList(settings.fallbackFilter.geoSite, title: "fallback-filter.geosite", to: &lines)
-    appendList(settings.fallbackFilter.ipCIDR, title: "fallback-filter.ipcidr", to: &lines)
-    appendList(settings.fallbackFilter.domain, title: "fallback-filter.domain", to: &lines)
-    return lines
+    return snippets.filter { $0.enabled && $0.applies(to: activeProfileID) }
   }
 
-  private func snifferPatchPreviewLines(_ settings: SnifferSettings) -> [String] {
-    var lines: [String] = []
-    appendOptionalBool(settings.enabled, title: "enable", to: &lines)
-    appendOptionalBool(settings.overrideDestination, title: "override-destination", to: &lines)
-    appendOptionalBool(settings.forceDNSMapping, title: "force-dns-mapping", to: &lines)
-    appendOptionalBool(settings.parsePureIP, title: "parse-pure-ip", to: &lines)
-    for entry in settings.protocols {
-      lines.append("sniff.\(entry.networkProtocol.rawValue): \(entry.summary)")
+  // MARK: - Facts
+
+  private var librarySummary: String {
+    String(
+      format: String(localized: "%lld snippets, %lld enabled"),
+      Int64(snippetLibrary.snippets.count),
+      Int64(snippetLibrary.snippets.filter(\.enabled).count)
+    )
+  }
+
+  /// One line in place of the old "Active Profile" panel: does this draft touch the profile that is
+  /// current right now, and how many snippets do.
+  private var appliesSummary: String {
+    guard let activeProfile = profileStore.activeProfile else {
+      return String(localized: "No Profile")
     }
-    appendList(settings.forceDomain, title: "force-domain", to: &lines)
-    appendList(settings.skipDomain, title: "skip-domain", to: &lines)
-    appendList(settings.skipSourceAddress, title: "skip-src-address", to: &lines)
-    appendList(settings.skipDestinationAddress, title: "skip-dst-address", to: &lines)
-    return lines
+    let applies = editor.draftSnippet.enabled && editor.draftSnippet.applies(to: activeProfile.id)
+    let appliesText = applies
+      ? String(format: String(localized: "Applies to %@"), activeProfile.name)
+      : String(format: String(localized: "Does not apply to %@"), activeProfile.name)
+    return "\(appliesText) · \(String.localizedStringWithFormat(NSLocalizedString("%lld active snippets", comment: ""), Int64(activePreviewSnippets.count)))"
   }
 
-  private func appendOptionalBool(_ value: Bool?, title: String, to lines: inout [String]) {
-    guard let value else { return }
-    lines.append("\(title) = \(value)")
-  }
+  // MARK: - Bindings
 
-  private func appendList(_ values: [String], title: String, to lines: inout [String]) {
-    guard !values.isEmpty else { return }
-    lines.append("\(title): \(values.joined(separator: ", "))")
-  }
-
-  private func appendMap(_ values: [String: String], title: String, to lines: inout [String]) {
-    for key in values.keys.sorted() {
-      lines.append("\(title).\(key) = \(values[key] ?? "")")
+  private var profileBindingEditor: some View {
+    RoutingEditContentRow {
+      VStack(alignment: .leading, spacing: 6) {
+        if profileStore.profiles.isEmpty {
+          Text("No profiles available")
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+        } else {
+          ForEach(profileStore.profiles) { profile in
+            Toggle(isOn: profileBinding(profile.id)) {
+              Text(profile.name)
+                .lineLimit(1)
+            }
+            .toggleStyle(.checkbox)
+          }
+        }
+      }
     }
+  }
+
+  private var bindingMode: Binding<RuntimeSnippetBindingMode> {
+    Binding(
+      get: {
+        switch editor.draftSnippet.binding {
+        case .allProfiles:
+          return .allProfiles
+        case .profiles:
+          return .selectedProfiles
+        }
+      },
+      set: { mode in
+        switch mode {
+        case .allProfiles:
+          editor.draftSnippet.binding = .allProfiles
+        case .selectedProfiles:
+          editor.draftSnippet.binding = .profiles(profileStore.activeProfileID.map { [$0] } ?? [])
+        }
+      }
+    )
+  }
+
+  private var payloadKind: Binding<RuntimeSnippetPayloadKind> {
+    Binding(
+      get: { editor.draftSnippet.payload.kind },
+      set: { kind in
+        guard kind != editor.draftSnippet.payload.kind else { return }
+        var replacement = Self.newSnippet(of: kind)
+        replacement.id = editor.draftSnippet.id
+        replacement.binding = editor.draftSnippet.binding
+        replacement.enabled = editor.draftSnippet.enabled
+        editor.draftSnippet = replacement
+      }
+    )
+  }
+
+  private var rulesPayloadBinding: Binding<RuleOverlaySettings> {
+    Binding(
+      get: { editor.draftSnippet.rulesPayload },
+      set: { settings in
+        var settings = settings
+        settings.enabled = true
+        editor.draftSnippet.payload = .rules(settings)
+      }
+    )
+  }
+
+  private var dnsPayloadBinding: Binding<TunDNSSettings> {
+    Binding(
+      get: { editor.draftSnippet.dnsPayload },
+      set: { editor.draftSnippet.payload = .dnsPatch($0) }
+    )
+  }
+
+  private var snifferPayloadBinding: Binding<SnifferSettings> {
+    Binding(
+      get: { editor.draftSnippet.snifferPayload },
+      set: { editor.draftSnippet.payload = .sniffer($0) }
+    )
+  }
+
+  private var rawYAMLPayloadBinding: Binding<RawYAMLPatchSettings> {
+    Binding(
+      get: { editor.draftSnippet.rawYAMLPayload },
+      set: { editor.draftSnippet.payload = .rawYAML($0) }
+    )
+  }
+
+  private func profileBinding(_ profileID: Profile.ID) -> Binding<Bool> {
+    Binding(
+      get: {
+        editor.draftSnippet.binding.profileIDs.contains(profileID)
+      },
+      set: { isEnabled in
+        var profileIDs = editor.draftSnippet.binding.profileIDs
+        if isEnabled {
+          if !profileIDs.contains(profileID) {
+            profileIDs.append(profileID)
+          }
+        } else {
+          profileIDs.removeAll { $0 == profileID }
+        }
+        editor.draftSnippet.binding = .profiles(profileIDs)
+      }
+    )
   }
 }
 
@@ -1552,7 +1108,7 @@ private enum RuntimeSnippetBindingMode: String, CaseIterable, Identifiable {
   }
 }
 
-private extension RuntimeSnippet {
+extension RuntimeSnippet {
   var rulesPayload: RuleOverlaySettings {
     if case let .rules(settings) = payload {
       return settings
@@ -1582,63 +1138,1435 @@ private extension RuntimeSnippet {
   }
 }
 
+/// One snippet in the library column: its switch, its name, and what kind of thing it is.
 private struct RuntimeSnippetRow: View {
-  let snippet: RuntimeSnippet
-  /// Not `snippet.enabled`: the owner shows the requested value while the write is in flight.
+  let name: String
+  let subtitle: String
+  /// Not the stored value: the owner shows the requested value while the write is in flight.
   let isEnabled: Bool
-  let isSelected: Bool
-  let canMoveUp: Bool
-  let canMoveDown: Bool
-  let onSelect: () -> Void
-  let onToggle: (Bool) -> Void
-  let onMoveUp: () -> Void
-  let onMoveDown: () -> Void
+  let isUnsaved: Bool
+  /// `nil` for a draft that has never been saved — there is nothing in the library to switch yet.
+  let onToggle: ((Bool) -> Void)?
 
   var body: some View {
-    let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
     HStack(alignment: .center, spacing: 8) {
-      Toggle("Enabled", isOn: Binding(get: { isEnabled }, set: { onToggle($0) }))
+      Toggle("Enabled", isOn: Binding(get: { isEnabled }, set: { onToggle?($0) }))
         .labelsHidden()
         .toggleStyle(.switch)
+        .controlSize(.mini)
+        .disabled(onToggle == nil)
+        .accessibilityLabel(String(format: String(localized: "%@ enabled"), displayName))
 
-      Button(action: onSelect) {
-        VStack(alignment: .leading, spacing: 3) {
-          Text(snippet.normalizedName.isEmpty ? String(localized: "Untitled Snippet") : snippet.normalizedName)
-            .font(.callout.weight(.medium))
+      VStack(alignment: .leading, spacing: 2) {
+        HStack(spacing: 6) {
+          Text(displayName)
             .lineLimit(1)
-          Text("\(snippet.payload.displayName) - \(snippet.binding.displayName)")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-          Text(snippet.payload.summary)
-            .font(.caption2)
-            .foregroundStyle(.tertiary)
-            .lineLimit(1)
+            .truncationMode(.tail)
+          if isUnsaved {
+            Text("Unsaved")
+              .font(.caption2.weight(.medium))
+              .foregroundStyle(.orange)
+          }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
+        Text(subtitle)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+          .truncationMode(.tail)
       }
-      .buttonStyle(.plain)
+    }
+    .padding(.vertical, 2)
+  }
 
-      VStack(spacing: 2) {
-        Button(action: onMoveUp) {
-          Image(systemName: "chevron.up")
-        }
-        .disabled(!canMoveUp)
-        .help("Move up")
+  private var displayName: String {
+    name.isEmpty ? String(localized: "Untitled Snippet") : name
+  }
+}
 
-        Button(action: onMoveDown) {
-          Image(systemName: "chevron.down")
+/// Which list a rule-snippet row belongs to. The order of the sections is the order Mihomo evaluates
+/// them: rules added before the profile, then the profile's own rules with the disabled ones
+/// removed, then rules added after.
+private enum RoutingRuleSection: Hashable, CaseIterable {
+  case before
+  case disabled
+  case after
+
+  var title: LocalizedStringKey {
+    switch self {
+    case .before: "Before profile rules"
+    case .disabled: "Disabled profile rules"
+    case .after: "After profile rules"
+    }
+  }
+
+  var explanation: LocalizedStringKey {
+    switch self {
+    case .before: "Evaluated first, so they win over every rule in the profile."
+    case .disabled: "Profile rules matching these patterns are removed from the runtime config."
+    case .after: "Evaluated after the profile's rules, before its final MATCH."
+    }
+  }
+
+  var emptyText: LocalizedStringKey {
+    switch self {
+    case .before, .after: "No rules"
+    case .disabled: "No disabled rules"
+    }
+  }
+}
+
+private enum RoutingRuleRowID: Hashable {
+  case rule(UUID)
+  case matcher(UUID)
+}
+
+private enum RoutingRuleSheet: Identifiable {
+  case addRule(RoutingRuleSection)
+  case editRule(ManagedRuleOverlayRule, RoutingRuleSection)
+  case addMatcher
+  case editMatcher(ManagedRuleDisableMatcher)
+
+  var id: String {
+    switch self {
+    case let .addRule(section): "add-\(section)"
+    case let .editRule(rule, _): "rule-\(rule.id)"
+    case .addMatcher: "add-matcher"
+    case let .editMatcher(matcher): "matcher-\(matcher.id)"
+    }
+  }
+}
+
+/// The rule snippet's content as one ordered list: three sections in evaluation order, every row a
+/// finished rule, and the forms for adding or editing a rule opened only when asked for.
+///
+/// This replaces the Settings page's `RuleOverlaySettingsEditor` on the Routing page only. Both write
+/// the same `RuleOverlaySettings`, so the model and its validation are shared; what differs is that
+/// nothing here is a permanent input field, and a pristine snippet shows no required-field error.
+struct RoutingRuleListEditor: View {
+  @Binding var settings: RuleOverlaySettings
+  @State private var selection: RoutingRuleRowID?
+  @State private var sheet: RoutingRuleSheet?
+
+  var body: some View {
+    List(selection: $selection) {
+      Section {
+        ruleRows(\.prependRules, section: .before)
+      } header: {
+        sectionHeader(.before, count: settings.prependRules.count) {
+          sheet = .addRule(.before)
         }
-        .disabled(!canMoveDown)
-        .help("Move down")
+      }
+
+      Section {
+        matcherRows
+      } header: {
+        sectionHeader(.disabled, count: settings.disabledRuleMatchers.count) {
+          sheet = .addMatcher
+        }
+      }
+
+      Section {
+        ruleRows(\.appendRules, section: .after)
+      } header: {
+        sectionHeader(.after, count: settings.appendRules.count) {
+          sheet = .addRule(.after)
+        }
+      }
+    }
+    .listStyle(.inset)
+    .scrollContentBackground(.hidden)
+    .onDeleteCommand(perform: removeSelection)
+    .sheet(item: $sheet) { sheet in
+      switch sheet {
+      case let .addRule(section):
+        RoutingRuleFormSheet(mode: .add, rule: ManagedRuleOverlayRule(kind: .domainSuffix, policy: "DIRECT")) { rule in
+          append(rule, to: section)
+        }
+      case let .editRule(rule, section):
+        RoutingRuleFormSheet(mode: .edit, rule: rule) { edited in
+          replace(edited, in: section)
+        }
+      case .addMatcher:
+        RoutingMatcherFormSheet(mode: .add, matcher: ManagedRuleDisableMatcher()) { matcher in
+          settings.disabledRuleMatchers.append(matcher)
+        }
+      case let .editMatcher(matcher):
+        RoutingMatcherFormSheet(mode: .edit, matcher: matcher) { edited in
+          if let index = settings.disabledRuleMatchers.firstIndex(where: { $0.id == edited.id }) {
+            settings.disabledRuleMatchers[index] = edited
+          }
+        }
+      }
+    }
+    .accessibilityLabel("Snippet rules")
+  }
+
+  private func sectionHeader(_ section: RoutingRuleSection, count: Int, onAdd: @escaping () -> Void) -> some View {
+    HStack(spacing: 8) {
+      Text(section.title)
+      Text(verbatim: "\(count)")
+        .foregroundStyle(.secondary)
+        .monospacedDigit()
+      Spacer(minLength: 8)
+      Button(action: onAdd) {
+        Image(systemName: "plus")
       }
       .buttonStyle(.borderless)
+      .help(section == .disabled ? String(localized: "Disable a profile rule…") : String(localized: "Add rule…"))
+      .accessibilityLabel(section == .disabled ? String(localized: "Disable a profile rule…") : String(localized: "Add rule…"))
     }
-    .padding(8)
-    .background(isSelected ? Color.accentColor.opacity(0.14) : Color.clear, in: shape)
-    .overlay {
-      shape.strokeBorder(isSelected ? Color.accentColor.opacity(0.45) : Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 1)
+    .help(Text(section.explanation))
+  }
+
+  @ViewBuilder
+  private func ruleRows(_ keyPath: WritableKeyPath<RuleOverlaySettings, [ManagedRuleOverlayRule]>, section: RoutingRuleSection) -> some View {
+    let rules = settings[keyPath: keyPath]
+    if rules.isEmpty {
+      Text(section.emptyText)
+        .font(.callout)
+        .foregroundStyle(.tertiary)
+        .selectionDisabled()
+    } else {
+      ForEach(rules) { rule in
+        RoutingRuleRowView(text: rule.runtimeRule, validationError: rule.validationError)
+          .tag(RoutingRuleRowID.rule(rule.id))
+          .contextMenu {
+            Button("Edit…") { sheet = .editRule(rule, section) }
+            Button("Duplicate") { duplicate(rule, in: keyPath) }
+            Divider()
+            Button("Move Up") { move(rule.id, in: keyPath, by: -1) }
+              .disabled(rules.first?.id == rule.id)
+            Button("Move Down") { move(rule.id, in: keyPath, by: 1) }
+              .disabled(rules.last?.id == rule.id)
+            Divider()
+            Button("Remove", role: .destructive) {
+              settings[keyPath: keyPath].removeAll { $0.id == rule.id }
+            }
+          }
+          .onTapGesture(count: 2) {
+            sheet = .editRule(rule, section)
+          }
+      }
+      .onMove { source, destination in
+        settings[keyPath: keyPath].move(fromOffsets: source, toOffset: destination)
+      }
+    }
+  }
+
+  @ViewBuilder
+  private var matcherRows: some View {
+    let matchers = settings.disabledRuleMatchers
+    if matchers.isEmpty {
+      Text(RoutingRuleSection.disabled.emptyText)
+        .font(.callout)
+        .foregroundStyle(.tertiary)
+        .selectionDisabled()
+    } else {
+      ForEach(matchers) { matcher in
+        RoutingRuleRowView(
+          text: "\(matcher.mode.displayName): \(matcher.normalizedPattern)",
+          validationError: matcher.validationError
+        )
+        .tag(RoutingRuleRowID.matcher(matcher.id))
+        .contextMenu {
+          Button("Edit…") { sheet = .editMatcher(matcher) }
+          Divider()
+          Button("Move Up") { moveMatcher(matcher.id, by: -1) }
+            .disabled(matchers.first?.id == matcher.id)
+          Button("Move Down") { moveMatcher(matcher.id, by: 1) }
+            .disabled(matchers.last?.id == matcher.id)
+          Divider()
+          Button("Remove", role: .destructive) {
+            settings.disabledRuleMatchers.removeAll { $0.id == matcher.id }
+          }
+        }
+        .onTapGesture(count: 2) {
+          sheet = .editMatcher(matcher)
+        }
+      }
+      .onMove { source, destination in
+        settings.disabledRuleMatchers.move(fromOffsets: source, toOffset: destination)
+      }
+    }
+  }
+
+  private func append(_ rule: ManagedRuleOverlayRule, to section: RoutingRuleSection) {
+    switch section {
+    case .before: settings.prependRules.append(rule)
+    case .after: settings.appendRules.append(rule)
+    case .disabled: break
+    }
+  }
+
+  private func replace(_ rule: ManagedRuleOverlayRule, in section: RoutingRuleSection) {
+    switch section {
+    case .before:
+      if let index = settings.prependRules.firstIndex(where: { $0.id == rule.id }) {
+        settings.prependRules[index] = rule
+      }
+    case .after:
+      if let index = settings.appendRules.firstIndex(where: { $0.id == rule.id }) {
+        settings.appendRules[index] = rule
+      }
+    case .disabled:
+      break
+    }
+  }
+
+  private func duplicate(_ rule: ManagedRuleOverlayRule, in keyPath: WritableKeyPath<RuleOverlaySettings, [ManagedRuleOverlayRule]>) {
+    guard let index = settings[keyPath: keyPath].firstIndex(where: { $0.id == rule.id }) else { return }
+    var copy = rule
+    copy.id = UUID()
+    settings[keyPath: keyPath].insert(copy, at: index + 1)
+  }
+
+  private func move(_ id: UUID, in keyPath: WritableKeyPath<RuleOverlaySettings, [ManagedRuleOverlayRule]>, by offset: Int) {
+    guard let index = settings[keyPath: keyPath].firstIndex(where: { $0.id == id }),
+          settings[keyPath: keyPath].indices.contains(index + offset)
+    else { return }
+    settings[keyPath: keyPath].swapAt(index, index + offset)
+  }
+
+  private func moveMatcher(_ id: UUID, by offset: Int) {
+    guard let index = settings.disabledRuleMatchers.firstIndex(where: { $0.id == id }),
+          settings.disabledRuleMatchers.indices.contains(index + offset)
+    else { return }
+    settings.disabledRuleMatchers.swapAt(index, index + offset)
+  }
+
+  private func removeSelection() {
+    switch selection {
+    case let .rule(id):
+      settings.prependRules.removeAll { $0.id == id }
+      settings.appendRules.removeAll { $0.id == id }
+    case let .matcher(id):
+      settings.disabledRuleMatchers.removeAll { $0.id == id }
+    case nil:
+      return
+    }
+    selection = nil
+  }
+}
+
+private struct RoutingRuleRowView: View {
+  let text: String
+  let validationError: String?
+
+  var body: some View {
+    HStack(spacing: 8) {
+      Text(text)
+        .font(.system(.callout, design: .monospaced))
+        .lineLimit(1)
+        .truncationMode(.middle)
+      Spacer(minLength: 8)
+      if let validationError {
+        Image(systemName: "exclamationmark.triangle.fill")
+          .foregroundStyle(.orange)
+          .help(validationError)
+          .accessibilityLabel(validationError)
+      }
+    }
+    .padding(.vertical, 1)
+    .help(text)
+  }
+}
+
+private enum RoutingFormMode {
+  case add
+  case edit
+}
+
+/// Add or edit one rule. Validation appears only once the user has typed something or tried to
+/// commit, so an empty form never opens with a warning.
+private struct RoutingRuleFormSheet: View {
+  let mode: RoutingFormMode
+  @State private var rule: ManagedRuleOverlayRule
+  let onCommit: (ManagedRuleOverlayRule) -> Void
+  @Environment(\.dismiss) private var dismiss
+  @State private var attemptedCommit = false
+  @FocusState private var isValueFocused: Bool
+
+  init(mode: RoutingFormMode, rule: ManagedRuleOverlayRule, onCommit: @escaping (ManagedRuleOverlayRule) -> Void) {
+    self.mode = mode
+    _rule = State(initialValue: rule)
+    self.onCommit = onCommit
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      Text(mode == .add ? "Add Rule" : "Edit Rule")
+        .font(.headline)
+
+      Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 10) {
+        GridRow {
+          Text("Rule Type")
+            .foregroundStyle(.secondary)
+          Picker("Rule Type", selection: kindBinding) {
+            ForEach(ManagedRuleOverlayRule.Kind.allCases) { kind in
+              Text(kind.displayName).tag(kind)
+            }
+          }
+          .labelsHidden()
+          .frame(maxWidth: 220, alignment: .leading)
+        }
+
+        if rule.kind == .subRule {
+          GridRow {
+            Text("Condition")
+              .foregroundStyle(.secondary)
+            Picker("Condition", selection: subRuleConditionBinding) {
+              ForEach(RoutingSubRuleCondition.allCases) { condition in
+                Text(condition.displayName).tag(condition)
+              }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: 220, alignment: .leading)
+          }
+        } else if rule.kind.requiresValue {
+          GridRow {
+            Text("Value")
+              .foregroundStyle(.secondary)
+            TextField(LocalizedStringKey(rule.kind.valuePlaceholder), text: $rule.value)
+              .textFieldStyle(.roundedBorder)
+              .focused($isValueFocused)
+              .onSubmit(commit)
+          }
+        }
+
+        GridRow {
+          Text(rule.kind == .subRule ? "Sub-rule" : "Policy")
+            .foregroundStyle(.secondary)
+          TextField(LocalizedStringKey(rule.kind.policyPlaceholder), text: $rule.policy)
+            .textFieldStyle(.roundedBorder)
+            .onSubmit(commit)
+        }
+
+        if rule.kind.allowsNoResolve {
+          GridRow {
+            Color.clear.frame(width: 1, height: 1)
+            Toggle("No Resolve", isOn: $rule.noResolve)
+              .toggleStyle(.checkbox)
+          }
+        }
+      }
+
+      VStack(alignment: .leading, spacing: 6) {
+        Text("Runtime: \(rule.runtimeRule)")
+          .font(.system(.caption, design: .monospaced))
+          .foregroundStyle(.secondary)
+          .lineLimit(2)
+          .textSelection(.enabled)
+
+        if showsValidation, let error = rule.validationError {
+          Label(error, systemImage: "exclamationmark.triangle.fill")
+            .font(.caption)
+            .foregroundStyle(.orange)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      }
+
+      Divider()
+
+      HStack {
+        Spacer()
+        Button("Cancel") { dismiss() }
+          .keyboardShortcut(.cancelAction)
+        Button(mode == .add ? "Add" : "Save", action: commit)
+          .keyboardShortcut(.defaultAction)
+          .disabled(rule.validationError != nil)
+      }
+    }
+    .padding(18)
+    .frame(width: 440)
+    .onAppear {
+      isValueFocused = rule.kind.requiresValue && rule.kind != .subRule
+    }
+  }
+
+  private var showsValidation: Bool {
+    attemptedCommit || !rule.value.isEmpty || mode == .edit
+  }
+
+  private func commit() {
+    attemptedCommit = true
+    guard rule.validationError == nil else { return }
+    onCommit(rule)
+    dismiss()
+  }
+
+  private var kindBinding: Binding<ManagedRuleOverlayRule.Kind> {
+    Binding(
+      get: { rule.kind },
+      set: { kind in
+        rule.kind = kind
+        if !kind.allowsNoResolve {
+          rule.noResolve = false
+        }
+        if kind == .subRule {
+          if RoutingSubRuleCondition(condition: rule.value) == nil {
+            rule.value = RoutingSubRuleCondition.tcp.ruleCondition
+          }
+        } else if rule.value.contains(",") {
+          rule.value = ""
+        }
+      }
+    )
+  }
+
+  private var subRuleConditionBinding: Binding<RoutingSubRuleCondition> {
+    Binding(
+      get: { RoutingSubRuleCondition(condition: rule.value) ?? .tcp },
+      set: { rule.value = $0.ruleCondition }
+    )
+  }
+}
+
+private enum RoutingSubRuleCondition: String, CaseIterable, Identifiable {
+  case tcp
+  case udp
+
+  var id: String { rawValue }
+
+  init?(condition: String) {
+    let parts = condition
+      .split(separator: ",", omittingEmptySubsequences: false)
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+    guard parts.count == 2,
+          parts[0].caseInsensitiveCompare("NETWORK") == .orderedSame
+    else {
+      return nil
+    }
+    self.init(rawValue: parts[1].lowercased())
+  }
+
+  var displayName: String {
+    switch self {
+    case .tcp:
+      return String(localized: "Network TCP")
+    case .udp:
+      return String(localized: "Network UDP")
+    }
+  }
+
+  var ruleCondition: String {
+    "NETWORK,\(rawValue)"
+  }
+}
+
+/// Add or edit one disabled-rule matcher.
+private struct RoutingMatcherFormSheet: View {
+  let mode: RoutingFormMode
+  @State private var matcher: ManagedRuleDisableMatcher
+  let onCommit: (ManagedRuleDisableMatcher) -> Void
+  @Environment(\.dismiss) private var dismiss
+  @State private var attemptedCommit = false
+  @FocusState private var isPatternFocused: Bool
+
+  init(mode: RoutingFormMode, matcher: ManagedRuleDisableMatcher, onCommit: @escaping (ManagedRuleDisableMatcher) -> Void) {
+    self.mode = mode
+    _matcher = State(initialValue: matcher)
+    self.onCommit = onCommit
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      Text(mode == .add ? "Disable Profile Rule" : "Edit Disabled Rule")
+        .font(.headline)
+
+      Text("Profile rules matching this pattern are removed from the runtime config. The profile file itself stays unchanged.")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+
+      Picker("Match", selection: $matcher.mode) {
+        ForEach(RuleDisableMatchMode.allCases) { mode in
+          Text(mode.displayName).tag(mode)
+        }
+      }
+      .pickerStyle(.segmented)
+      .labelsHidden()
+
+      TextField("Rule pattern", text: $matcher.pattern)
+        .textFieldStyle(.roundedBorder)
+        .focused($isPatternFocused)
+        .onSubmit(commit)
+
+      if showsValidation, let error = matcher.validationError {
+        Label(error, systemImage: "exclamationmark.triangle.fill")
+          .font(.caption)
+          .foregroundStyle(.orange)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+
+      Divider()
+
+      HStack {
+        Spacer()
+        Button("Cancel") { dismiss() }
+          .keyboardShortcut(.cancelAction)
+        Button(mode == .add ? "Add" : "Save", action: commit)
+          .keyboardShortcut(.defaultAction)
+          .disabled(matcher.validationError != nil)
+      }
+    }
+    .padding(18)
+    .frame(width: 420)
+    .onAppear {
+      isPatternFocused = true
+    }
+  }
+
+  private var showsValidation: Bool {
+    attemptedCommit || !matcher.pattern.isEmpty || mode == .edit
+  }
+
+  private func commit() {
+    attemptedCommit = true
+    guard matcher.validationError == nil else { return }
+    onCommit(matcher)
+    dismiss()
+  }
+}
+
+/// The tools column beside the editor: one tool at a time, chosen with a segmented control.
+private struct RoutingToolPane: View {
+  @Environment(AppModel.self) private var appModel
+  let simulationTrace: RuleMatchSimulationTrace
+  let showsCloseButton: Bool
+  let onClose: () -> Void
+
+  var body: some View {
+    @Bindable var editor = appModel.routingEditor
+    VStack(spacing: 0) {
+      HStack(spacing: 8) {
+        Picker("Tool", selection: Binding(
+          get: { editor.activeTool ?? .effectiveConfig },
+          set: { editor.activeTool = $0 }
+        )) {
+          ForEach(RoutingTool.allCases) { tool in
+            Text(tool.title).tag(tool)
+          }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+
+        if showsCloseButton {
+          Button(action: onClose) {
+            Image(systemName: "xmark")
+              .font(.caption.weight(.semibold))
+          }
+          .buttonStyle(.borderless)
+          .help("Close tools")
+          .accessibilityLabel("Close tools")
+        }
+      }
+      .padding(.horizontal, 12)
+      .padding(.vertical, 8)
+
+      Divider()
+
+      switch editor.activeTool ?? .effectiveConfig {
+      case .effectiveConfig:
+        RoutingEffectiveConfigTool()
+      case .diagnostics:
+        RoutingDiagnosticsTool()
+      case .simulator:
+        RoutingSimulatorTool(simulationTrace: simulationTrace)
+      }
+    }
+    .frame(maxHeight: .infinity, alignment: .top)
+  }
+}
+
+/// The same tools presented as a sheet when the window is too narrow for a third column.
+private struct RoutingToolSheet: View {
+  let simulationTrace: RuleMatchSimulationTrace
+  let onDone: () -> Void
+
+  var body: some View {
+    VStack(spacing: 0) {
+      RoutingToolPane(simulationTrace: simulationTrace, showsCloseButton: false, onClose: onDone)
+        .frame(maxHeight: .infinity)
+
+      Divider()
+
+      HStack {
+        Spacer()
+        Button("Done", action: onDone)
+          .keyboardShortcut(.defaultAction)
+      }
+      .padding(12)
+    }
+    .frame(width: 560, height: 560)
+  }
+}
+
+// MARK: - Effective Config
+
+private struct RoutingEffectiveConfigTool: View {
+  @Environment(AppModel.self) private var appModel
+  @Environment(ProfileStore.self) private var profileStore
+
+  var body: some View {
+    @Bindable var editor = appModel.routingEditor
+    VStack(alignment: .leading, spacing: 0) {
+      HStack(spacing: 8) {
+        Picker("Effective Config View", selection: $editor.effectiveConfigTab) {
+          ForEach(EffectiveConfigInspectorTab.allCases) { tab in
+            Text(tab.title).tag(tab)
+          }
+        }
+        .labelsHidden()
+        .pickerStyle(.segmented)
+
+        Spacer(minLength: 8)
+
+        Button {
+          refresh()
+        } label: {
+          Image(systemName: "arrow.clockwise")
+        }
+        .help("Refresh")
+        .accessibilityLabel("Refresh")
+
+        Button {
+          appModel.copyEffectiveRuntimeConfigRedacted()
+        } label: {
+          Image(systemName: "doc.on.doc")
+        }
+        .disabled(!appModel.hasLoadedEffectiveRuntimeConfigForActiveProfile)
+        .help("Copy Redacted")
+        .accessibilityLabel("Copy Redacted")
+
+        Button {
+          appModel.exportEffectiveRuntimeConfigRedacted()
+        } label: {
+          Image(systemName: "square.and.arrow.down")
+        }
+        .disabled(!appModel.hasLoadedEffectiveRuntimeConfigForActiveProfile)
+        .help("Export Redacted")
+        .accessibilityLabel("Export Redacted")
+      }
+      .controlSize(.small)
+      .padding(.horizontal, 12)
+      .padding(.vertical, 8)
+
+      Divider()
+
+      ScrollView {
+        VStack(alignment: .leading, spacing: 12) {
+          snippetEffect
+          Divider()
+          stateContent
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+      }
+    }
+  }
+
+  /// What the draft on the left contributes, so the runtime diff never has to be read twice.
+  private var snippetEffect: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text("This Snippet")
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+      let lines = RoutingSnippetEffectSummary.lines(for: appModel.routingEditor.draftSnippet.payload)
+      if lines.isEmpty {
+        Text("No changes")
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+      } else {
+        ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+          Text(line)
+            .font(.system(.caption, design: .monospaced))
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .textSelection(.enabled)
+        }
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  @ViewBuilder
+  private var stateContent: some View {
+    switch appModel.effectiveRuntimeConfigState {
+    case .idle:
+      RoutingWorkspaceNotice(
+        title: "Not Generated",
+        systemImage: "doc.badge.clock",
+        message: "Refresh to preview the redacted final runtime YAML and its diff."
+      )
+    case .loading:
+      HStack(spacing: 8) {
+        ProgressView()
+          .controlSize(.small)
+        Text("Generating effective config")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+    case let .unavailable(message):
+      RoutingWorkspaceNotice(title: "Unavailable", systemImage: "exclamationmark.triangle.fill", message: message)
+    case let .failed(message):
+      RoutingWorkspaceNotice(title: "Generation Failed", systemImage: "exclamationmark.triangle.fill", message: message)
+    case let .loaded(snapshot) where snapshot.profileID == profileStore.activeProfile?.id:
+      snapshotContent(snapshot)
+    case .loaded:
+      RoutingWorkspaceNotice(
+        title: "Not Generated",
+        systemImage: "doc.badge.clock",
+        message: "Refresh to preview the redacted final runtime YAML and its diff."
+      )
+    }
+  }
+
+  @ViewBuilder
+  private func snapshotContent(_ snapshot: EffectiveRuntimeConfigSnapshot) -> some View {
+    RoutingDetailRow(title: "Preflight", value: preflightSummary(snapshot), isProminent: true, lineLimit: 3)
+    switch appModel.routingEditor.effectiveConfigTab {
+    case .layers:
+      VStack(alignment: .leading, spacing: 10) {
+        ForEach(snapshot.layers) { layer in
+          VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+              Image(systemName: layer.isActive ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(layer.isActive ? .green : .secondary)
+              Text(layer.title)
+                .font(.caption.weight(.semibold))
+              Spacer()
+            }
+            Text(layer.summary)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .fixedSize(horizontal: false, vertical: true)
+            RoutingRedactedCodeBlock(text: layer.redactedContent, maxHeight: 150)
+          }
+        }
+      }
+    case .diff:
+      ScrollView {
+        LazyVStack(alignment: .leading, spacing: 2) {
+          ForEach(snapshot.diffRows) { row in
+            Text(row.displayLine)
+              .font(.system(.caption2, design: .monospaced))
+              .foregroundStyle(diffColor(row.kind))
+              .textSelection(.enabled)
+              .frame(maxWidth: .infinity, alignment: .leading)
+          }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+      }
+      .frame(maxHeight: 320)
+    case .finalYAML:
+      RoutingRedactedCodeBlock(text: snapshot.redactedFinalYAML, maxHeight: 360)
+    }
+  }
+
+  private func diffColor(_ kind: EffectiveRuntimeConfigDiffKind) -> Color {
+    switch kind {
+    case .unchanged:
+      return .secondary
+    case .removed:
+      return .red
+    case .added:
+      return .green
+    case .omitted:
+      return .secondary
+    }
+  }
+
+  private func preflightSummary(_ snapshot: EffectiveRuntimeConfigSnapshot) -> String {
+    if let message = snapshot.preflightStatus.message {
+      return "\(snapshot.preflightStatus.displayName): \(message)"
+    }
+    return snapshot.preflightStatus.displayName
+  }
+
+  private func refresh() {
+    let editor = appModel.routingEditor
+    let draft = editor.draftHasUnsavedChanges ? editor.draftSnippet : nil
+    Task { @MainActor in
+      await appModel.refreshEffectiveRuntimeConfigPreview(draftSnippet: draft)
+    }
+  }
+}
+
+private struct RoutingRedactedCodeBlock: View {
+  let text: String
+  let maxHeight: CGFloat
+
+  var body: some View {
+    ScrollView {
+      Text(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? String(localized: "Empty") : text)
+        .font(.system(.caption2, design: .monospaced))
+        .foregroundStyle(.secondary)
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    .frame(maxHeight: maxHeight)
+  }
+}
+
+// MARK: - Diagnostics
+
+/// A compact selection list on top, one diagnosis below. Warnings are visible in the list at a
+/// glance without every panel being open at once.
+private struct RoutingDiagnosticsTool: View {
+  @Environment(AppModel.self) private var appModel
+  @Environment(ProfileStore.self) private var profileStore
+
+  var body: some View {
+    @Bindable var editor = appModel.routingEditor
+    VStack(spacing: 0) {
+      List(RoutingDiagnostic.allCases, selection: Binding(
+        get: { Optional(editor.selectedDiagnostic) },
+        set: { if let value = $0 { editor.selectedDiagnostic = value } }
+      )) { diagnostic in
+        let status = status(for: diagnostic)
+        HStack(spacing: 8) {
+          Image(systemName: status.systemImage)
+            .foregroundStyle(status.tint)
+            .frame(width: 16)
+          VStack(alignment: .leading, spacing: 1) {
+            Text(diagnostic.title)
+            Text(headline(for: diagnostic))
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .lineLimit(1)
+          }
+        }
+        .tag(diagnostic)
+        .accessibilityElement(children: .combine)
+      }
+      .listStyle(.inset)
+      .scrollContentBackground(.hidden)
+      .frame(height: 5 * 40 + 12)
+      .accessibilityLabel("Diagnostics")
+
+      Divider()
+
+      ScrollView {
+        VStack(alignment: .leading, spacing: 10) {
+          switch editor.selectedDiagnostic {
+          case .dnsOverride:
+            dnsOverride
+          case .dnsResolution:
+            dnsResolution
+          case .fakeIP:
+            fakeIP
+          case .listeners:
+            listeners
+          case .geoDatabases:
+            geoDatabases
+          }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+      }
+    }
+  }
+
+  private func status(for diagnostic: RoutingDiagnostic) -> RoutingDiagnosisHeadline.DiagnosisStatus {
+    switch diagnostic {
+    case .dnsOverride:
+      guard let plan = loadedEffectiveConfigSnapshot?.dnsOverride else { return .info }
+      if plan.issues.contains(where: \.isBlocking) { return .fail }
+      if !plan.issues.isEmpty { return .warn }
+      return plan.hasOverride ? .pass : .info
+    case .dnsResolution:
+      return .init(appModel.dnsResolutionDiagnostics.status)
+    case .fakeIP:
+      return .init(appModel.fakeIPDiagnostics.status)
+    case .listeners:
+      return .init(appModel.listenerExposureDiagnostics.status)
+    case .geoDatabases:
+      return .init(appModel.geoDatabaseDiagnostics.status)
+    }
+  }
+
+  private func headline(for diagnostic: RoutingDiagnostic) -> String {
+    switch diagnostic {
+    case .dnsOverride:
+      guard let plan = loadedEffectiveConfigSnapshot?.dnsOverride else {
+        return String(localized: "Not Generated")
+      }
+      return plan.enablement.displayName
+    case .dnsResolution:
+      return appModel.dnsResolutionDiagnostics.headline
+    case .fakeIP:
+      return appModel.fakeIPDiagnostics.headline
+    case .listeners:
+      return appModel.listenerExposureDiagnostics.headline
+    case .geoDatabases:
+      return appModel.geoDatabaseDiagnostics.headline
+    }
+  }
+
+  private var loadedEffectiveConfigSnapshot: EffectiveRuntimeConfigSnapshot? {
+    guard case let .loaded(snapshot) = appModel.effectiveRuntimeConfigState,
+          snapshot.profileID == profileStore.activeProfile?.id
+    else { return nil }
+    return snapshot
+  }
+
+  /// Answers "is my DNS override on, what does it change, and does anything reach it?" — the three
+  /// questions issue #16 says the rule and DNS surfaces never connected.
+  @ViewBuilder
+  private var dnsOverride: some View {
+    if let plan = loadedEffectiveConfigSnapshot?.dnsOverride {
+      RoutingDetailRow(title: "Status", value: plan.enablement.displayName, isProminent: true)
+      RoutingDetailRow(title: "Effect", value: plan.summary, lineLimit: 3)
+
+      if plan.hasOverride {
+        RoutingSnippetEffectSummary.section(title: "Overridden Keys", values: plan.overriddenFieldNames)
+      }
+      if !plan.contributors.isEmpty {
+        RoutingSnippetEffectSummary.section(title: "Contributors", values: plan.contributors)
+      }
+
+      ForEach(plan.issues) { issue in
+        Label(
+          issue.message,
+          systemImage: issue.isBlocking ? "exclamationmark.octagon.fill" : "info.circle"
+        )
+        .font(.caption)
+        .foregroundStyle(issue.isBlocking ? Color.red : Color.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+      }
+
+      ForEach(dnsOverrideRelationshipHints, id: \.self) { hint in
+        Text(hint)
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    } else {
+      RoutingWorkspaceNotice(
+        title: "Not Generated",
+        systemImage: "doc.badge.clock",
+        message: String(localized: "Refresh the effective config to see which DNS keys Mihomo really reads.")
+      )
+      Button("Refresh Effective Config") {
+        let editor = appModel.routingEditor
+        let draft = editor.draftHasUnsavedChanges ? editor.draftSnippet : nil
+        Task { @MainActor in
+          await appModel.refreshEffectiveRuntimeConfigPreview(draftSnippet: draft)
+        }
+      }
+      .controlSize(.small)
+    }
+  }
+
+  /// How the override interacts with the capture modes: without TUN or the NE proxy, only traffic
+  /// that already goes through Mihomo ever asks Mihomo's resolver.
+  private var dnsOverrideRelationshipHints: [String] {
+    var hints: [String] = []
+    if appModel.tunEnabled {
+      hints.append(String(localized: "TUN is on, so its DNS hijack sends system queries to Mihomo's resolver."))
+    } else if appModel.networkExtensionEnabled {
+      hints.append(String(localized: "NE Proxy is on, so captured queries use Mihomo's resolver."))
+    } else if appModel.systemProxyEnabled {
+      hints.append(String(localized: "Only system proxy is on: proxied requests resolve inside Mihomo, while macOS keeps resolving everything else."))
+    } else {
+      hints.append(String(localized: "No traffic capture is active, so nothing reaches Mihomo's resolver yet."))
+    }
+    hints.append(
+      appModel.isRunning
+        ? String(localized: "Saving reloads the running config, so DNS changes apply immediately.")
+        : String(localized: "DNS changes apply the next time the core starts.")
+    )
+    return hints
+  }
+
+  /// Roadmap A2. `GET /dns/query` asks the **core's** resolver, which is a different question from
+  /// the one `dig` answers on this Mac and the only one that explains routing.
+  @ViewBuilder
+  private var dnsResolution: some View {
+    @Bindable var appModel = appModel
+    let diagnosis = appModel.dnsResolutionDiagnostics
+    HStack(spacing: 8) {
+      TextField("Domain", text: $appModel.dnsResolutionQuery)
+        .textFieldStyle(.roundedBorder)
+        .controlSize(.small)
+        .onSubmit { appModel.resolveDNSQuery() }
+
+      Picker("Type", selection: $appModel.dnsResolutionQueryType) {
+        ForEach(DNSQueryType.allCases) { type in
+          Text(type.displayName).tag(type)
+        }
+      }
+      .labelsHidden()
+      .controlSize(.small)
+      .fixedSize()
+
+      Button {
+        appModel.resolveDNSQuery()
+      } label: {
+        if case .querying = appModel.dnsResolutionOutcome {
+          ProgressView()
+            .controlSize(.small)
+        } else {
+          Text("Resolve")
+        }
+      }
+      .controlSize(.small)
+      .disabled(!appModel.canResolveDNSQuery)
+      .help(diagnosis.reason)
+    }
+
+    RoutingDiagnosisHeadline(headline: diagnosis.headline, status: diagnosis.status)
+    Text(diagnosis.reason)
+      .font(.caption)
+      .foregroundStyle(.secondary)
+      .fixedSize(horizontal: false, vertical: true)
+
+    ForEach(Array(diagnosis.facts.enumerated()), id: \.offset) { _, fact in
+      RoutingDiagnosisFactRow(title: fact.title, value: fact.value)
+    }
+
+    if !diagnosis.records.isEmpty {
+      VStack(alignment: .leading, spacing: 2) {
+        ForEach(Array(diagnosis.records.enumerated()), id: \.offset) { _, record in
+          // Wire data, not copy: rendered verbatim so it is neither extracted for translation
+          // nor reformatted by the locale.
+          Text(verbatim: "\(record.name) \(record.ttl) \(record.typeName) \(record.data)")
+            .font(.caption2.monospaced())
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    recoveryActions(diagnosis.recoveryActions)
+  }
+
+  /// Roadmap A3: the fake-ip table survives events that invalidate it; this is the remedy.
+  @ViewBuilder
+  private var fakeIP: some View {
+    let diagnosis = appModel.fakeIPDiagnostics
+    RoutingDiagnosisHeadline(headline: diagnosis.headline, status: diagnosis.status)
+    Text(diagnosis.reason)
+      .font(.caption)
+      .foregroundStyle(.secondary)
+      .fixedSize(horizontal: false, vertical: true)
+
+    ForEach(Array(diagnosis.facts.enumerated()), id: \.offset) { _, fact in
+      RoutingDiagnosisFactRow(title: fact.title, value: fact.value)
+    }
+
+    HStack(spacing: 8) {
+      Button {
+        appModel.flushFakeIPCache()
+      } label: {
+        if appModel.fakeIPFlushInFlight {
+          ProgressView()
+            .controlSize(.small)
+        } else {
+          Text("Flush Fake IP Cache")
+        }
+      }
+      .controlSize(.small)
+      .disabled(!appModel.canFlushFakeIPCache)
+      // The action stays visible when it would do nothing, with the diagnosis as the tooltip: a
+      // control that is not there cannot explain why it is not there.
+      .help(diagnosis.reason)
+
+      if let lastFlushAt = appModel.lastFakeIPFlushAt {
+        Text(lastFlushAt, format: .relative(presentation: .named))
+          .font(.caption2)
+          .foregroundStyle(.tertiary)
+      }
+    }
+  }
+
+  /// Roadmap C3: exposure is never silent.
+  @ViewBuilder
+  private var listeners: some View {
+    let diagnosis = appModel.listenerExposureDiagnostics
+    RoutingDiagnosisHeadline(headline: diagnosis.headline, status: diagnosis.status)
+    Text(diagnosis.reason)
+      .font(.caption)
+      .foregroundStyle(.secondary)
+      .fixedSize(horizontal: false, vertical: true)
+
+    ForEach(Array(diagnosis.facts.enumerated()), id: \.offset) { _, fact in
+      RoutingDiagnosisFactRow(title: fact.title, value: fact.value)
+    }
+
+    recoveryActions(diagnosis.recoveryActions)
+  }
+
+  /// Roadmap B5: geo databases download once and then go stale unless refreshed.
+  @ViewBuilder
+  private var geoDatabases: some View {
+    let diagnosis = appModel.geoDatabaseDiagnostics
+    RoutingDiagnosisHeadline(headline: diagnosis.headline, status: diagnosis.status)
+    Text(diagnosis.reason)
+      .font(.caption)
+      .foregroundStyle(.secondary)
+      .fixedSize(horizontal: false, vertical: true)
+
+    ForEach(Array(diagnosis.facts.enumerated()), id: \.offset) { _, fact in
+      RoutingDiagnosisFactRow(title: fact.title, value: fact.value)
+    }
+
+    HStack(spacing: 8) {
+      Button {
+        appModel.updateGeoDatabases()
+      } label: {
+        if appModel.geoDatabaseUpdateInFlight {
+          ProgressView()
+            .controlSize(.small)
+        } else {
+          Text("Update Now")
+        }
+      }
+      .controlSize(.small)
+      .disabled(!appModel.canUpdateGeoDatabases)
+      .help(diagnosis.reason)
+
+      if appModel.geoDatabaseUpdateInFlight {
+        Text("Downloading through the core; this can take a while.")
+          .font(.caption2)
+          .foregroundStyle(.tertiary)
+      }
+    }
+
+    // Reported from what changed on disk, not from the endpoint's status code: `POST /configs/geo`
+    // answers 204 for "downloaded four files" and for "did nothing at all".
+    if let message = appModel.geoDatabaseUpdateStatusMessage {
+      Text(message)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    recoveryActions(diagnosis.recoveryActions)
+      .task(id: appModel.geoDatabaseSettings) {
+        appModel.refreshGeoDatabaseInventory()
+      }
+  }
+
+  private func recoveryActions(_ actions: [String]) -> some View {
+    ForEach(actions, id: \.self) { action in
+      Label(action, systemImage: "arrow.right.circle")
+        .font(.caption)
+        .foregroundStyle(.tertiary)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+  }
+}
+
+// MARK: - Match Simulator
+
+private struct RoutingSimulatorTool: View {
+  @Environment(AppModel.self) private var appModel
+  let simulationTrace: RuleMatchSimulationTrace
+  @State private var showsAdvancedConditions = false
+
+  var body: some View {
+    @Bindable var editor = appModel.routingEditor
+    ScrollView {
+      VStack(alignment: .leading, spacing: 12) {
+        if let explanation = editor.explanationContext {
+          connectionContext(explanation, verdict: editor.domainVerdictContext)
+          Divider()
+        }
+
+        TextField("Destination host or IP", text: $editor.simulationInput.destination)
+          .textFieldStyle(.roundedBorder)
+
+        DisclosureGroup("Advanced Conditions", isExpanded: $showsAdvancedConditions) {
+          VStack(alignment: .leading, spacing: 8) {
+            TextField("Source IP", text: $editor.simulationInput.sourceIP)
+            TextField("Process name or path", text: $editor.simulationInput.process)
+            HStack(spacing: 8) {
+              TextField("Dst Port", text: $editor.simulationInput.destinationPort)
+              TextField("Src Port", text: $editor.simulationInput.sourcePort)
+              TextField("In Port", text: $editor.simulationInput.inboundPort)
+            }
+          }
+          .textFieldStyle(.roundedBorder)
+          .padding(.top, 6)
+        }
+        .font(.callout)
+
+        Divider()
+
+        RoutingDetailRow(title: "Result", value: simulationTrace.title, isProminent: true)
+        RoutingDetailRow(title: "Source", value: simulationTrace.sourceSummary)
+        RoutingDetailRow(title: "Hit Rule", value: simulationTrace.ruleSummary, lineLimit: 3)
+        RoutingDetailRow(title: "Policy / Sub-rule", value: simulationTrace.policySummary)
+        RoutingDetailRow(title: "Provider", value: simulationTrace.providerSummary)
+        RoutingDetailRow(title: "Detail", value: simulationTrace.detail, lineLimit: 4)
+      }
+      .padding(12)
+      .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+    .onAppear {
+      // Conditions carried over from a connection are worth seeing; an empty set stays folded.
+      let input = editor.simulationInput
+      if !input.sourceIP.isEmpty || !input.process.isEmpty || !input.destinationPort.isEmpty
+        || !input.sourcePort.isEmpty || !input.inboundPort.isEmpty
+      {
+        showsAdvancedConditions = true
+      }
+    }
+  }
+
+  /// The connection this simulation was opened from. The simulator answers "which rule wins for this
+  /// destination"; for a connection that never carried a domain the verdict says why no domain rule
+  /// could ever have matched it.
+  private func connectionContext(_ explanation: RuleExplanation, verdict: SnifferDiagnosticsSnapshot?) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack {
+        Label("Connection Context", systemImage: "point.3.connected.trianglepath.dotted")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.secondary)
+        Spacer()
+        Button("Clear") {
+          appModel.routingEditor.explanationContext = nil
+          appModel.routingEditor.domainVerdictContext = nil
+        }
+        .buttonStyle(.borderless)
+        .controlSize(.small)
+      }
+      RoutingDetailRow(
+        title: "Mihomo Reported",
+        value: explanation.reportedRuleSummary.isEmpty ? "-" : explanation.reportedRuleSummary
+      )
+      RoutingDetailRow(title: "Chosen Target", value: explanation.target.isEmpty ? "-" : explanation.target)
+      RoutingDetailRow(title: "Chosen Policy", value: explanation.chosenPolicySummary)
+      RoutingDetailRow(title: "Local Result", value: explanation.localSummary, lineLimit: 5)
+      if let verdict {
+        RoutingDetailRow(title: "Domain Visibility", value: verdict.headline, isProminent: true)
+        RoutingDetailRow(title: "Reason", value: verdict.reason, lineLimit: 5)
+        ForEach(verdict.recoveryActions, id: \.self) { action in
+          RoutingDetailRow(title: "Suggested Fix", value: action, lineLimit: 3)
+        }
+      }
+    }
+  }
+}
+
+// MARK: - Snippet effect summary
+
+/// The lines a snippet contributes to the runtime, as text. Pure so the tools and tests share it.
+enum RoutingSnippetEffectSummary {
+  static func lines(for payload: RuntimeSnippetPayload) -> [String] {
+    switch payload {
+    case let .rules(settings):
+      var lines = settings.runtimePrependRules.map { "\(String(localized: "Before")): \($0)" }
+      lines += settings.runtimeDisabledRuleMatchers.map { "\(String(localized: "Disabled")): \($0.mode.displayName) \($0.normalizedPattern)" }
+      lines += settings.runtimeAppendRules.map { "\(String(localized: "After")): \($0)" }
+      return lines
+    case let .dnsPatch(settings):
+      return dnsPatchPreviewLines(settings)
+    case let .sniffer(settings):
+      return snifferPatchPreviewLines(settings)
+    case let .rawYAML(settings):
+      return rawYAMLPatchPreviewLines(settings)
+    }
+  }
+
+  static func section(title: LocalizedStringResource, values: [String]) -> some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text(title)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      if values.isEmpty {
+        Text("No changes")
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+      } else {
+        ForEach(values, id: \.self) { value in
+          Text(value)
+            .font(.system(.caption, design: .monospaced))
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .textSelection(.enabled)
+        }
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  /// Names the top-level keys the patch wins, not the YAML body: the body is already in the editor
+  /// right next to this panel, and it is the one payload that can be arbitrarily long.
+  static func rawYAMLPatchPreviewLines(_ settings: RawYAMLPatchSettings) -> [String] {
+    guard settings.hasRuntimeOverlay else { return [] }
+    if let validationError = settings.validationError {
+      return [validationError]
+    }
+    var lines = settings.topLevelKeys.map { "\($0): \(String(localized: "set by this snippet"))" }
+    for keyPath in settings.overriddenManagedKeyPaths {
+      lines.append("\(keyPath): \(String(localized: "taken over from ClashMax"))")
+    }
+    lines.append(settings.listStrategy.explanation)
+    return lines
+  }
+
+  static func dnsPatchPreviewLines(_ settings: TunDNSSettings) -> [String] {
+    var lines: [String] = []
+    appendOptionalBool(settings.respectRules, title: "respect-rules", to: &lines)
+    appendOptionalBool(settings.useSystemHosts, title: "use-system-hosts", to: &lines)
+    appendOptionalBool(settings.useHosts, title: "use-hosts", to: &lines)
+    appendOptionalBool(settings.preferH3, title: "prefer-h3", to: &lines)
+    appendOptionalBool(settings.directNameserverFollowPolicy, title: "direct-nameserver-follow-policy", to: &lines)
+    appendList(settings.fakeIPFilter, title: "fake-ip-filter", to: &lines)
+    appendList(settings.defaultNameserver, title: "default-nameserver", to: &lines)
+    appendList(settings.nameserver, title: "nameserver", to: &lines)
+    appendList(settings.fallback, title: "fallback", to: &lines)
+    appendList(settings.proxyServerNameserver, title: "proxy-server-nameserver", to: &lines)
+    appendList(settings.directNameserver, title: "direct-nameserver", to: &lines)
+    appendMap(settings.nameserverPolicy, title: "nameserver-policy", to: &lines)
+    appendMap(settings.proxyServerNameserverPolicy, title: "proxy-server-nameserver-policy", to: &lines)
+    appendMap(settings.hosts, title: "hosts", to: &lines)
+    if let geoIP = settings.fallbackFilter.geoIP {
+      lines.append("fallback-filter.geoip = \(geoIP)")
+    }
+    if let geoIPCode = settings.fallbackFilter.geoIPCode {
+      lines.append("fallback-filter.geoip-code = \(geoIPCode)")
+    }
+    appendList(settings.fallbackFilter.geoSite, title: "fallback-filter.geosite", to: &lines)
+    appendList(settings.fallbackFilter.ipCIDR, title: "fallback-filter.ipcidr", to: &lines)
+    appendList(settings.fallbackFilter.domain, title: "fallback-filter.domain", to: &lines)
+    return lines
+  }
+
+  static func snifferPatchPreviewLines(_ settings: SnifferSettings) -> [String] {
+    var lines: [String] = []
+    appendOptionalBool(settings.enabled, title: "enable", to: &lines)
+    appendOptionalBool(settings.overrideDestination, title: "override-destination", to: &lines)
+    appendOptionalBool(settings.forceDNSMapping, title: "force-dns-mapping", to: &lines)
+    appendOptionalBool(settings.parsePureIP, title: "parse-pure-ip", to: &lines)
+    for entry in settings.protocols {
+      lines.append("sniff.\(entry.networkProtocol.rawValue): \(entry.summary)")
+    }
+    appendList(settings.forceDomain, title: "force-domain", to: &lines)
+    appendList(settings.skipDomain, title: "skip-domain", to: &lines)
+    appendList(settings.skipSourceAddress, title: "skip-src-address", to: &lines)
+    appendList(settings.skipDestinationAddress, title: "skip-dst-address", to: &lines)
+    return lines
+  }
+
+  private static func appendOptionalBool(_ value: Bool?, title: String, to lines: inout [String]) {
+    guard let value else { return }
+    lines.append("\(title) = \(value)")
+  }
+
+  private static func appendList(_ values: [String], title: String, to lines: inout [String]) {
+    guard !values.isEmpty else { return }
+    lines.append("\(title): \(values.joined(separator: ", "))")
+  }
+
+  private static func appendMap(_ values: [String: String], title: String, to lines: inout [String]) {
+    for key in values.keys.sorted() {
+      lines.append("\(title).\(key) = \(values[key] ?? "")")
     }
   }
 }
@@ -1885,6 +2813,9 @@ private struct RoutingSnippetTextArea: View {
 
 /// Sniffing is what turns a domainless connection back into a `DOMAIN-SUFFIX`-matchable one, so the
 /// editor names the consequence of each switch rather than the YAML key (roadmap A1).
+
+/// Sniffing is what turns a domainless connection back into a `DOMAIN-SUFFIX`-matchable one, so the
+/// editor names the consequence of each switch rather than the YAML key (roadmap A1).
 private struct RuntimeSnifferPatchEditor: View {
   @Binding var settings: SnifferSettings
 
@@ -2086,6 +3017,12 @@ private enum RuntimeOptionalBoolChoice: String, CaseIterable, Identifiable {
 /// keys ClashMax has no UI for — `tcp-concurrent`, `ntp`, `keep-alive-interval` — are reachable
 /// through the same save, preflight and rollback path as every other snippet, so the app does not
 /// have to grow a switch per key (§2.4).
+
+/// The generic escape hatch (ROADMAP INV-2), as an ordinary snippet editor rather than a legacy
+/// field in Developer Mode. It is deliberately the plainest editor on this page: the point is that
+/// keys ClashMax has no UI for — `tcp-concurrent`, `ntp`, `keep-alive-interval` — are reachable
+/// through the same save, preflight and rollback path as every other snippet, so the app does not
+/// have to grow a switch per key (§2.4).
 private struct RuntimeRawYAMLPatchEditor: View {
   @Binding var settings: RawYAMLPatchSettings
 
@@ -2153,25 +3090,6 @@ private struct RuntimeRawYAMLPatchEditor: View {
   }
 }
 
-private struct RoutingWorkspaceSurface<Content: View>: View {
-  let content: Content
-
-  init(@ViewBuilder content: () -> Content) {
-    self.content = content()
-  }
-
-  var body: some View {
-    let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
-    VStack(alignment: .leading, spacing: 0) {
-      content
-    }
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    .background(.cardSurface, in: shape)
-    .clipShape(shape)
-    .overlay(shape.strokeBorder(.separator, lineWidth: 1))
-  }
-}
-
 private struct RoutingWorkspaceNotice: View {
   let title: LocalizedStringResource
   let systemImage: String
@@ -2193,37 +3111,6 @@ private struct RoutingWorkspaceNotice: View {
       }
     }
     .accessibilityElement(children: .combine)
-  }
-}
-
-private struct RoutingInspectorPanel<Content: View>: View {
-  let title: LocalizedStringResource
-  let systemImage: String
-  let content: Content
-
-  init(title: LocalizedStringResource, systemImage: String, @ViewBuilder content: () -> Content) {
-    self.title = title
-    self.systemImage = systemImage
-    self.content = content()
-  }
-
-  var body: some View {
-    let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
-    VStack(alignment: .leading, spacing: 10) {
-      Label {
-        Text(title)
-      } icon: {
-        Image(systemName: systemImage)
-      }
-      .font(.headline)
-      .lineLimit(1)
-
-      content
-    }
-    .padding(12)
-    .frame(maxWidth: .infinity, alignment: .topLeading)
-    .background(.insetSurface, in: shape)
-    .overlay(shape.strokeBorder(.separator.opacity(0.82), lineWidth: 1))
   }
 }
 
@@ -2328,6 +3215,9 @@ private struct RoutingDiagnosisHeadline: View {
 
 /// `RoutingDetailRow` takes a `LocalizedStringResource`; diagnostics facts carry titles composed at
 /// runtime, so they need a row that takes a plain `String`.
+
+/// `RoutingDetailRow` takes a `LocalizedStringResource`; diagnostics facts carry titles composed at
+/// runtime, so they need a row that takes a plain `String`.
 private struct RoutingDiagnosisFactRow: View {
   let title: String
   let value: String
@@ -2344,41 +3234,6 @@ private struct RoutingDiagnosisFactRow: View {
         .textSelection(.enabled)
     }
     .frame(maxWidth: .infinity, alignment: .leading)
-  }
-}
-
-private struct RoutingCompactFact: Identifiable {
-  let id: String
-  let title: LocalizedStringResource
-  let value: String
-
-  init(title: LocalizedStringResource, value: String) {
-    id = String(localized: title)
-    self.title = title
-    self.value = value
-  }
-}
-
-private struct RoutingCompactDetailItem: View {
-  let fact: RoutingCompactFact
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 3) {
-      Text(fact.title)
-        .font(.caption2)
-        .foregroundStyle(.tertiary)
-        .lineLimit(1)
-        .truncationMode(.tail)
-
-      Text(fact.value)
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .lineLimit(1)
-        .truncationMode(.middle)
-        .textSelection(.enabled)
-    }
-    .frame(minWidth: 58, maxWidth: .infinity, alignment: .leading)
-    .accessibilityElement(children: .combine)
   }
 }
 
