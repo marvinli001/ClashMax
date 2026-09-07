@@ -26,7 +26,6 @@ final class LocalizationTests: XCTestCase {
     "Runtime config accepted by Mihomo preflight.",
     "Skipped",
     "Snippet Binding",
-    "Snippet Library",
     "Source IP",
     "Start",
     "Start / Stop Core",
@@ -106,7 +105,6 @@ final class LocalizationTests: XCTestCase {
     XCTAssertEqual(zhBundle.localizedString(forKey: "Profile Rule Overlay", value: nil, table: nil), "配置规则覆盖")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Runtime Merge YAML", value: nil, table: nil), "运行时合并 YAML")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Legacy Runtime Merge YAML", value: nil, table: nil), "旧版运行时合并 YAML")
-    XCTAssertEqual(zhBundle.localizedString(forKey: "Snippet Library", value: nil, table: nil), "片段库")
     XCTAssertEqual(zhBundle.localizedString(forKey: "New Rule Snippet", value: nil, table: nil), "新建规则片段")
     XCTAssertEqual(zhBundle.localizedString(forKey: "New DNS Patch", value: nil, table: nil), "新建 DNS 补丁")
     XCTAssertEqual(zhBundle.localizedString(forKey: "All Profiles", value: nil, table: nil), "全部配置")
