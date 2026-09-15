@@ -161,13 +161,14 @@ final class MihomoAPIClientTests: XCTestCase {
           "type": "Selector",
           "now": "Japan",
           "all": ["Japan", "PASS-RULE", "COMPATIBLE", "DIRECT"],
-          "history": [
-            { "name": "Japan", "delay": 157 }
-          ]
+          "history": []
         },
         "Japan": {
           "type": "Hysteria2",
-          "history": []
+          "history": [
+            { "time": "2026-09-15T10:00:00Z", "delay": 0 },
+            { "time": "2026-09-15T11:00:00Z", "delay": 157 }
+          ]
         },
         "DIRECT": {
           "type": "Direct",

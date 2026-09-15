@@ -16,10 +16,7 @@ struct LogsView: View {
   }
 
   var body: some View {
-    let retainedLogs = runtimeData.visibleLogs(
-      developerMode: appModel.developerMode,
-      logLevel: appModel.selectedLogLevel
-    )
+    let retainedLogs = runtimeData.visibleLogs(logLevel: appModel.selectedLogLevel)
     let visibleLogs = filteredLogs(from: retainedLogs)
 
     AdaptivePage(title: "Logs") {

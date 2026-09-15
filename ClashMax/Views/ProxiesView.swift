@@ -177,7 +177,6 @@ struct ProxiesView: View {
       }
 
       if let notice = ProxyPreviewNoticeKind.resolve(
-        developerMode: appModel.developerMode,
         previewRuntimeActive: appModel.previewRuntimeActive,
         isShowingProxyPreview: appModel.isShowingProxyPreview
       ) {
@@ -310,10 +309,7 @@ struct ProxiesView: View {
       }
       .disabled(selectedGroup == nil)
 
-      if ProxyPageVisibilityPolicy.showsProviderSummary(
-        developerMode: appModel.developerMode,
-        providerCount: runtimeData.proxyProviders.count
-      ) {
+      if ProxyPageVisibilityPolicy.showsProviderSummary(providerCount: runtimeData.proxyProviders.count) {
         Button {
           providersPopoverPresented = true
         } label: {
@@ -816,8 +812,8 @@ private struct CustomDelayURLPopover: View {
 }
 
 enum ProxyPageVisibilityPolicy {
-  static func showsProviderSummary(developerMode: Bool, providerCount: Int) -> Bool {
-    developerMode && providerCount > 0
+  static func showsProviderSummary(providerCount: Int) -> Bool {
+    providerCount > 0
   }
 
   static func showsLoadingSkeleton(
@@ -1479,7 +1475,6 @@ enum ProxyPreviewNoticeKind: Equatable {
   case offlinePreview
 
   static func resolve(
-    developerMode _: Bool,
     previewRuntimeActive: Bool,
     isShowingProxyPreview: Bool
   ) -> ProxyPreviewNoticeKind? {

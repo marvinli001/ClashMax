@@ -27,6 +27,11 @@ struct RunningDashboardView: View {
     self.availableWidth = availableWidth
   }
 
+  // Four things, in the order a person checks them after pressing Start: is it running and
+  // carrying traffic (header), which node am I on and what does the world see (node + public
+  // IP), how busy is it (traffic + groups), and only then — and only for the modes that have
+  // one — the routing diagnostics. Everything else the old dashboard repeated here (controller
+  // address, rule counts, memory, the last six log lines) has a page of its own.
   var body: some View {
     let selection = resolvedCurrentSelection
     return VStack(spacing: 12) {
@@ -57,71 +62,25 @@ struct RunningDashboardView: View {
       }
       .staggeredArrival(index: 0, reduceMotion: reduceMotion, trigger: state)
 
-      LazyVGrid(columns: metricColumns, spacing: DashboardLayoutMetrics.dashboardGridSpacing) {
-        DashboardMetricTile(
-          title: "Download",
-          value: TrafficSample.format(runtimeData.trafficSample.download),
-          footnote: trafficFootnote,
-          symbolName: "arrow.down",
-          tint: .cyan,
+      DashboardResponsivePair(availableWidth: availableWidth) {
+        TrafficRuntimeCard(
+          samples: runtimeData.trafficHistory,
+          sampleCount: runtimeData.trafficSampleCount,
           isLoading: showsInitialRuntimeSkeletons
         )
-        DashboardMetricTile(
-          title: "Upload",
-          value: TrafficSample.format(runtimeData.trafficSample.upload),
-          footnote: trafficFootnote,
-          symbolName: "arrow.up",
-          tint: .indigo,
-          isLoading: showsInitialRuntimeSkeletons
-        )
-        DashboardMetricTile(
-          title: "Connections",
-          value: "\(runtimeData.connections.count)",
-          footnote: runtimeData.connections.isEmpty ? "Waiting for runtime data" : "Live stream",
-          symbolName: "network",
-          tint: .orange,
-          isLoading: (appModel.runtimeDataLoading || state.isStarting) && runtimeData.connections.isEmpty
-        )
-        DashboardMetricTile(
-          title: "Rules",
-          value: "\(runtimeData.rules.count)",
-          footnote: runtimeData.rules.isEmpty ? "Waiting for runtime data" : "Loaded rules",
-          symbolName: "list.bullet.rectangle",
-          tint: .green,
-          isLoading: (appModel.runtimeDataLoading || state.isStarting) && runtimeData.rules.isEmpty
-        )
-      }
-      .staggeredArrival(index: 2, reduceMotion: reduceMotion, trigger: state)
-
-      DashboardResponsivePair(availableWidth: availableWidth) {
-        RunningStatusCard()
-      } trailing: {
-        NetworkStatusCard()
-      }
-      .staggeredArrival(index: 3, reduceMotion: reduceMotion, trigger: state)
-
-      if appModel.proxyRoutingMode == .neProxy {
-        NetworkExtensionDiagnosticsRuntimeCard()
-          .staggeredArrival(index: 4, reduceMotion: reduceMotion, trigger: state)
-      }
-      if appModel.proxyRoutingMode == .tun {
-        TunDiagnosticsRuntimeCard()
-          .staggeredArrival(index: 4, reduceMotion: reduceMotion, trigger: state)
-      }
-
-      DashboardResponsivePair(availableWidth: availableWidth) {
-        TrafficRuntimeCard(samples: chartSamples, isLoading: showsInitialRuntimeSkeletons)
       } trailing: {
         ProxyGroupsRuntimeCard()
       }
-      .staggeredArrival(index: 5, reduceMotion: reduceMotion, trigger: state)
+      .staggeredArrival(index: 1, reduceMotion: reduceMotion, trigger: state)
 
-      DashboardResponsivePair(availableWidth: availableWidth) {
-        ConnectionsRulesRuntimeCard()
-      } trailing: {
-        RecentLogsRuntimeCard()
+      if appModel.proxyRoutingMode == .neProxy {
+        NetworkExtensionDiagnosticsRuntimeCard()
+          .staggeredArrival(index: 2, reduceMotion: reduceMotion, trigger: state)
       }
-      .staggeredArrival(index: 6, reduceMotion: reduceMotion, trigger: state)
+      if appModel.proxyRoutingMode == .tun {
+        TunDiagnosticsRuntimeCard()
+          .staggeredArrival(index: 2, reduceMotion: reduceMotion, trigger: state)
+      }
     }
     .task {
       // First population: resolve providers off-main so the dashboard never expands a large config
@@ -163,36 +122,11 @@ struct RunningDashboardView: View {
     return false
   }
 
-  private var metricColumns: [GridItem] {
-    let count = if availableWidth < DashboardLayoutMetrics.metricTileTwoColumnBreakpoint {
-      1
-    } else if availableWidth < DashboardLayoutMetrics.metricTileSingleRowBreakpoint {
-      2
-    } else {
-      4
-    }
-    return Array(
-      repeating: GridItem(
-        .flexible(minimum: DashboardLayoutMetrics.metricTileMinimumColumnWidth),
-        spacing: DashboardLayoutMetrics.dashboardGridSpacing
-      ),
-      count: count
-    )
-  }
-
-  private var trafficFootnote: String {
-    runtimeData.trafficHistory.isEmpty ? "Waiting for runtime data" : "Live traffic"
-  }
-
   private var runtimeInfoCardWidth: CGFloat {
     if availableWidth >= DashboardLayoutMetrics.runningPairColumnsBreakpoint {
       return max(0, (availableWidth - DashboardLayoutMetrics.dashboardGridSpacing) / 2)
     }
     return availableWidth
-  }
-
-  private var chartSamples: [TrafficSample] {
-    runtimeData.trafficHistory.isEmpty ? [.zero, .zero, .zero, .zero, .zero, .zero] : runtimeData.trafficHistory
   }
 
   private var showsInitialRuntimeSkeletons: Bool {
@@ -278,7 +212,7 @@ private struct RunningHeaderCard: View {
   private var statusPills: some View {
     DashboardStatusPill(
       title: "Profile",
-      value: appModel.profileStore.activeProfile?.name ?? "None",
+      value: appModel.profileStore.activeProfile?.name ?? String(localized: "None"),
       symbolName: "doc.text",
       tint: .cyan
     )
@@ -291,13 +225,6 @@ private struct RunningHeaderCard: View {
       tint: .purple
     )
     .matchedGeometryEffect(id: "mode-control", in: namespace)
-
-    DashboardStatusPill(
-      title: "Controller",
-      value: "\(appModel.currentRuntimeOverrides.externalControllerHost):\(appModel.currentRuntimeOverrides.externalControllerPort)",
-      symbolName: "lock.shield",
-      tint: .green
-    )
   }
 
   private var runControls: some View {
@@ -315,32 +242,34 @@ private struct RunningHeaderCard: View {
       .help(state.isStarting ? "Stop starting runtime" : "Stop ClashMax")
       .matchedGeometryEffect(id: "primary-run-control", in: namespace)
 
-      HStack(spacing: 8) {
-        DashboardStatusPill(
-          title: "Proxy",
-          value: appModel.proxyRoutingMode.displayName,
-          symbolName: appModel.proxyRoutingMode.symbolName,
-          tint: appModel.systemProxyEnabled || appModel.tunEnabled || appModel.networkExtensionEnabled ? .green : .secondary
-        )
-      }
+      DashboardStatusPill(
+        title: "Proxy",
+        value: appModel.proxyRoutingMode.displayName,
+        symbolName: appModel.proxyRoutingMode.symbolName,
+        tint: appModel.systemProxyEnabled || appModel.tunEnabled || appModel.networkExtensionEnabled ? .green : .secondary
+      )
     }
   }
 
+  /// The live numbers: how long it has been up, what is moving right now, and how many
+  /// connections are open. One panel, refreshed once a second with the traffic stream.
   private var runtimeInfoPanel: some View {
-    ViewThatFits(in: .horizontal) {
-      HStack(spacing: 10) {
-        runtimeInfoItems
-      }
+    TimelineView(.periodic(from: Date(), by: 1)) { context in
+      ViewThatFits(in: .horizontal) {
+        HStack(spacing: 10) {
+          runtimeInfoItems(now: context.date)
+        }
 
-      LazyVGrid(
-        columns: [
-          GridItem(.flexible(minimum: 120), spacing: 8),
-          GridItem(.flexible(minimum: 120), spacing: 8),
-        ],
-        alignment: .leading,
-        spacing: 8
-      ) {
-        runtimeInfoItems
+        LazyVGrid(
+          columns: [
+            GridItem(.flexible(minimum: 120), spacing: 8),
+            GridItem(.flexible(minimum: 120), spacing: 8),
+          ],
+          alignment: .leading,
+          spacing: 8
+        ) {
+          runtimeInfoItems(now: context.date)
+        }
       }
     }
     .padding(10)
@@ -349,12 +278,24 @@ private struct RunningHeaderCard: View {
   }
 
   @ViewBuilder
-  private var runtimeInfoItems: some View {
+  private func runtimeInfoItems(now: Date) -> some View {
     DashboardMiniInfoItem(
-      title: "Groups",
-      value: "\(runtimeData.proxyGroups.count)",
-      symbolName: "point.3.connected.trianglepath.dotted",
+      title: "Uptime",
+      value: dashboardDurationString(from: appModel.sessionStartedAt, now: now),
+      symbolName: "clock",
       tint: .cyan
+    )
+    DashboardMiniInfoItem(
+      title: "Download",
+      value: TrafficSample.format(runtimeData.trafficSample.download),
+      symbolName: "arrow.down",
+      tint: .cyan
+    )
+    DashboardMiniInfoItem(
+      title: "Upload",
+      value: TrafficSample.format(runtimeData.trafficSample.upload),
+      symbolName: "arrow.up",
+      tint: .indigo
     )
     DashboardMiniInfoItem(
       title: "Connections",
@@ -362,27 +303,15 @@ private struct RunningHeaderCard: View {
       symbolName: "network",
       tint: .orange
     )
-    DashboardMiniInfoItem(
-      title: "Rules",
-      value: "\(runtimeData.rules.count)",
-      symbolName: "list.bullet.rectangle",
-      tint: .green
-    )
-    DashboardMiniInfoItem(
-      title: "Controller",
-      value: "\(appModel.currentRuntimeOverrides.externalControllerHost):\(appModel.currentRuntimeOverrides.externalControllerPort)",
-      symbolName: "lock.shield",
-      tint: .purple
-    )
   }
 
   private var statusTitle: String {
-    state.isStarting ? "Starting Runtime" : appModel.statusSummary
+    state.isStarting ? String(localized: "Starting Runtime") : NSLocalizedString(appModel.statusSummary, comment: "")
   }
 }
 
 private struct DashboardMiniInfoItem: View {
-  let title: String
+  let title: LocalizedStringResource
   let value: String
   let symbolName: String
   let tint: Color
@@ -401,7 +330,7 @@ private struct DashboardMiniInfoItem: View {
           .foregroundStyle(.secondary)
           .lineLimit(1)
         Text(value)
-          .font(.caption.weight(.semibold))
+          .font(.caption.weight(.semibold).monospacedDigit())
           .lineLimit(1)
           .minimumScaleFactor(0.7)
       }
@@ -467,9 +396,23 @@ enum DashboardProxySelectionState {
     return !group.nodes.contains(where: { $0.name == selected })
   }
 
-  static func delayLabel(for node: ProxyNode?) -> String {
-    guard let delay = node?.delay else { return "No delay" }
-    return "\(delay) ms"
+  /// The key the dashboard probes the current node's delay under: once per runtime session and
+  /// per group/node, and only while the runtime can actually answer. `nil` means "nothing to do",
+  /// so a `task(id:)` keyed on it stays idle rather than firing on every unrelated repaint.
+  static func automaticDelayProbeKey(
+    sessionStartedAt: Date?,
+    isRunning: Bool,
+    canControlRuntimeProxies: Bool,
+    group: ProxyGroup?,
+    node: ProxyNode?
+  ) -> String? {
+    guard isRunning, canControlRuntimeProxies,
+          let sessionStartedAt,
+          let group,
+          let node,
+          node.supportsDelayTesting
+    else { return nil }
+    return "\(sessionStartedAt.timeIntervalSinceReferenceDate)|\(group.name)|\(node.id)"
   }
 
   static func typeLabel(for node: ProxyNode?) -> String {
@@ -507,11 +450,7 @@ private struct CurrentProxyRuntimeCard: View {
 
     VStack(alignment: .leading, spacing: 14) {
       HStack(spacing: 10) {
-        DashboardSectionHeader(
-          title: "Current Node",
-          symbolName: "location.circle",
-          trailing: appModel.canControlRuntimeProxies ? "Runtime" : nil
-        )
+        DashboardSectionHeader(title: "Current Node", symbolName: "location.circle")
 
         Button {
           appModel.reloadRuntimeData()
@@ -530,7 +469,7 @@ private struct CurrentProxyRuntimeCard: View {
           groupControl(groups: groups)
             .frame(minWidth: 112, idealWidth: 150, maxWidth: 180)
             .layoutPriority(1)
-          nodeControl(group: group)
+          nodeControl(group: group, node: node)
             .frame(minWidth: 0, maxWidth: .infinity)
             .layoutPriority(2)
         }
@@ -545,13 +484,33 @@ private struct CurrentProxyRuntimeCard: View {
         DashboardEmptyRuntimeView(
           title: "No selectable proxy groups",
           symbolName: "point.3.connected.trianglepath.dotted",
-          message: "Refresh runtime data or check the active profile's proxy-groups."
+          message: String(localized: "Refresh runtime data or check the active profile's proxy-groups.")
         )
       }
     }
     .padding(14)
     .frame(maxWidth: .infinity, minHeight: availableWidth < 460 ? 190 : 210, alignment: .topLeading)
     .dashboardCard(interactive: true)
+    // Measure the node the selector actually uses as soon as the runtime is up (and again when the
+    // user picks another one), so the card shows a delay without anyone pressing the button. The
+    // key only changes per session and per node, so a finished probe is never re-run by a repaint.
+    .task(id: automaticDelayProbeKey(group: group, node: node)) {
+      guard automaticDelayProbeKey(group: group, node: node) != nil,
+            let group, let node,
+            node.resolvedDelayState != .testing
+      else { return }
+      appModel.testDelay(in: group, for: node)
+    }
+  }
+
+  private func automaticDelayProbeKey(group: ProxyGroup?, node: ProxyNode?) -> String? {
+    DashboardProxySelectionState.automaticDelayProbeKey(
+      sessionStartedAt: appModel.sessionStartedAt,
+      isRunning: state.isRunning,
+      canControlRuntimeProxies: appModel.canControlRuntimeProxies,
+      group: group,
+      node: node
+    )
   }
 
   private func selectionUnavailableView(group: ProxyGroup) -> some View {
@@ -564,9 +523,13 @@ private struct CurrentProxyRuntimeCard: View {
 
   private func selectionUnavailableMessage(group: ProxyGroup) -> String {
     guard let selected = group.selected, !selected.isEmpty else {
-      return "Refresh runtime data or check the active profile's proxy-groups."
+      return String(localized: "Refresh runtime data or check the active profile's proxy-groups.")
     }
-    return "\"\(selected)\" isn't in the current runtime data for \(group.name). Refresh runtime data, or check the profile/provider for a mismatch."
+    return String(
+      format: String(localized: "\"%@\" isn't in the current runtime data for %@. Refresh runtime data, or check the profile/provider for a mismatch."),
+      selected,
+      group.name
+    )
   }
 
   private func currentNodeSummary(group: ProxyGroup, node: ProxyNode) -> some View {
@@ -598,16 +561,30 @@ private struct CurrentProxyRuntimeCard: View {
 
       Spacer(minLength: 12)
 
-      Text(DashboardProxySelectionState.delayLabel(for: node))
-        .font(.system(.callout, design: .rounded).weight(.semibold))
-        .foregroundStyle(node.delay == nil ? Color.secondary : Color.green)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .background((node.delay == nil ? Color.secondary : Color.green).opacity(0.13), in: Capsule())
+      delayPill(for: node)
     }
     .padding(12)
     .frame(maxWidth: .infinity, alignment: .leading)
     .dashboardInsetSurface()
+  }
+
+  /// The same verdict and colour the Proxies list uses, so "142 ms" here and there agree.
+  private func delayPill(for node: ProxyNode) -> some View {
+    let display = ProxyDelayDisplay(state: node.resolvedDelayState)
+    return HStack(spacing: 6) {
+      if node.resolvedDelayState == .testing {
+        ProgressView()
+          .controlSize(.mini)
+      }
+      Text(display.localizedLabel)
+        .contentTransition(.numericText())
+    }
+    .font(.system(.callout, design: .rounded).weight(.semibold))
+    .foregroundStyle(display.tone.color)
+    .padding(.horizontal, 12)
+    .padding(.vertical, 7)
+    .background(display.tone.color.opacity(0.13), in: Capsule())
+    .animation(.easeInOut(duration: 0.2), value: display)
   }
 
   private func groupControl(groups: [ProxyGroup]) -> some View {
@@ -623,7 +600,7 @@ private struct CurrentProxyRuntimeCard: View {
     }
   }
 
-  private func nodeControl(group: ProxyGroup) -> some View {
+  private func nodeControl(group: ProxyGroup, node: ProxyNode) -> some View {
     DashboardLabeledControl(title: "Node") {
       HStack(spacing: 8) {
         Picker("Node", selection: nodeSelection(group: group)) {
@@ -635,32 +612,29 @@ private struct CurrentProxyRuntimeCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .controlSize(.small)
 
+        // Probe under the group the card shows. Looking the node up by name used to find it in
+        // whichever group listed it first, and the result was filed under that group's key, so the
+        // node in *this* group never updated — the button that "never did anything".
         Button {
-          guard let node = DashboardProxySelectionState.currentNode(in: group) else { return }
-          appModel.testDelay(for: node)
+          appModel.testDelay(in: group, for: node)
         } label: {
           Image(systemName: "speedometer")
             .frame(width: 18, height: 18)
         }
         .buttonStyle(.borderless)
         .controlSize(.small)
-        .disabled(!appModel.canControlRuntimeProxies || !currentNodeSupportsDelayTesting(in: group))
-        .help(nodeDelayTestHelp(group: group))
+        .disabled(!appModel.canControlRuntimeProxies || !node.supportsDelayTesting || node.resolvedDelayState == .testing)
+        .help(nodeDelayTestHelp(node: node))
       }
     }
     .disabled(!appModel.canControlRuntimeProxies)
   }
 
-  /// Reserved outbounds (REJECT / PASS …) can be *selected* as a group's node but never answer a
-  /// delay probe, so the button is disabled instead of firing a request that always fails.
-  private func currentNodeSupportsDelayTesting(in group: ProxyGroup) -> Bool {
-    guard let node = DashboardProxySelectionState.currentNode(in: group) else { return false }
-    return node.supportsDelayTesting
-  }
-
-  private func nodeDelayTestHelp(group: ProxyGroup) -> String {
+  private func nodeDelayTestHelp(node: ProxyNode) -> String {
     guard appModel.canControlRuntimeProxies else { return appModel.proxyRuntimeActionMessage }
-    guard currentNodeSupportsDelayTesting(in: group) else {
+    // Reserved outbounds (REJECT / PASS …) can be *selected* as a group's node but never answer a
+    // delay probe, so the button is disabled instead of firing a request that always fails.
+    guard node.supportsDelayTesting else {
       return String(localized: "Built-in outbounds have no connection to measure.")
     }
     return String(localized: "Test current node delay")
@@ -687,7 +661,7 @@ private struct CurrentProxyRuntimeCard: View {
 }
 
 private struct DashboardLabeledControl<Content: View>: View {
-  let title: String
+  let title: LocalizedStringResource
   @ViewBuilder var content: Content
 
   var body: some View {
@@ -701,87 +675,15 @@ private struct DashboardLabeledControl<Content: View>: View {
   }
 }
 
-private struct RunningStatusCard: View {
-  @Environment(AppModel.self) private var appModel
-  @Environment(RuntimeDataStore.self) private var runtimeData
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      DashboardSectionHeader(title: "Running Status", symbolName: "desktopcomputer")
-
-      TimelineView(.periodic(from: Date(), by: 1)) { context in
-        HStack(spacing: 10) {
-          RuntimeStat(title: "Uptime", value: dashboardDurationString(from: appModel.sessionStartedAt, now: context.date), tint: .cyan)
-          RuntimeStat(title: "Connections", value: "\(runtimeData.connections.count)", tint: .orange)
-          RuntimeStat(title: "Memory", value: memoryValue, tint: .green)
-        }
-      }
-
-      Divider()
-        .opacity(0.24)
-
-      RuntimeLine(title: "Core", value: appModel.statusSummary)
-      RuntimeLine(title: "Profile", value: appModel.profileStore.activeProfile?.name ?? "None")
-      RuntimeLine(title: "Mixed Port", value: "\(appModel.currentRuntimeOverrides.mixedPort)")
-    }
-    .padding(14)
-    .frame(maxWidth: .infinity, minHeight: 210, alignment: .topLeading)
-    .dashboardCard()
-  }
-
-  /// The core's own `/memory` reading. Until the first real frame arrives there is nothing to
-  /// report, and an em dash says that honestly where "0 B" would have claimed a measurement.
-  private var memoryValue: String {
-    runtimeData.memorySample.hasReading ? runtimeData.memorySample.formattedInUse : "—"
-  }
-}
-
-private struct NetworkStatusCard: View {
-  @Environment(AppModel.self) private var appModel
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      DashboardSectionHeader(title: "Network Status", symbolName: "globe")
-
-      HStack(spacing: 10) {
-        RuntimeStat(title: "API", value: "Bearer", tint: .green)
-        RuntimeStat(title: "Mode", value: appModel.currentRuntimeOverrides.mode.displayName, tint: .purple)
-        RuntimeStat(title: "LAN", value: appModel.currentRuntimeOverrides.allowLan ? "On" : "Off", tint: .orange)
-        RuntimeStat(title: "IPv6", value: appModel.currentRuntimeOverrides.ipv6Enabled ? "On" : "Off", tint: .cyan)
-      }
-
-      Divider()
-        .opacity(0.24)
-
-      RuntimeLine(
-        title: "Controller",
-        value: "\(appModel.currentRuntimeOverrides.externalControllerHost):\(appModel.currentRuntimeOverrides.externalControllerPort)"
-      )
-      RuntimeLine(title: "Proxy", value: proxyRoutingDetail)
-    }
-    .padding(14)
-    .frame(maxWidth: .infinity, minHeight: 210, alignment: .topLeading)
-    .dashboardCard()
-  }
-
-  private var proxyRoutingDetail: String {
-    switch appModel.proxyRoutingMode {
-    case .systemProxy:
-      appModel.systemProxyEnabled ? "System Proxy 127.0.0.1:\(appModel.currentRuntimeOverrides.mixedPort)" : "System Proxy ready"
-    case .tun:
-      appModel.tunEnabled ? "TUN helper controlled" : "TUN ready"
-    case .neProxy:
-      appModel.networkExtensionEnabled
-        ? "NE transparent proxy controlled - System Proxy off - TUN helper untouched"
-        : "NE transparent proxy ready - System Proxy off - TUN helper untouched"
-    }
-  }
-}
-
+/// TUN health at a glance: the counters, then only the checks that are not passing. The full list
+/// with every passing row lives on the Status page; here a healthy tunnel is one green line.
 private struct TunDiagnosticsRuntimeCard: View {
   @Environment(AppModel.self) private var appModel
 
   var body: some View {
+    let diagnostics = appModel.tunDiagnostics
+    let issues = diagnostics.checks.filter { $0.status == .warn || $0.status == .fail }
+
     VStack(alignment: .leading, spacing: 14) {
       HStack(spacing: 10) {
         DashboardSectionHeader(title: "TUN Diagnostics", symbolName: "point.topleft.down.curvedto.point.bottomright.up")
@@ -834,31 +736,26 @@ private struct TunDiagnosticsRuntimeCard: View {
       Divider()
         .opacity(0.24)
 
-      RuntimeLine(title: "Controller", value: "\(appModel.currentRuntimeOverrides.externalControllerHost):\(appModel.currentRuntimeOverrides.externalControllerPort)")
-      RuntimeLine(title: "Device", value: appModel.currentRuntimeOverrides.tunSettings.normalizedDevice)
-      RuntimeLine(title: "DNS Hijack", value: appModel.currentRuntimeOverrides.tunSettings.normalizedDNSHijack.joined(separator: ", "))
-      RuntimeLine(
-        title: "Fake IP Range",
-        value: appModel.currentRuntimeOverrides.tunSettings.dnsFakeIPEnabled
-          ? appModel.currentRuntimeOverrides.tunSettings.normalizedFakeIPRange
-          : "Off"
-      )
-      RuntimeLine(
-        title: "System DNS",
-        value: appModel.currentRuntimeOverrides.tunSettings.systemDNSOverrideEnabled ? appModel.tunSystemDNSState.displayName : "Off"
-      )
-      if let dnsError = appModel.tunSystemDNSState.errorMessage {
-        RuntimeLine(title: "DNS Repair", value: dnsError)
-      }
-      RuntimeLine(title: "Last Check", value: lastUpdateText)
-      if let issue = appModel.tunDiagnostics.primaryIssue {
-        RuntimeLine(title: "Primary Issue", value: issue.message)
-      }
-      ForEach(Array(appModel.tunDiagnostics.checks.prefix(appModel.developerMode ? 8 : 4))) { check in
-        TunDiagnosticCheckRow(check: check)
-      }
-      if appModel.developerMode, let helperLog = appModel.helperLogs.last {
-        RuntimeLine(title: "Helper Log", value: helperLog)
+      if diagnostics.checks.isEmpty {
+        RuntimeLine(title: "Last Check", value: "Waiting")
+      } else {
+        if issues.isEmpty {
+          Label {
+            Text("All checks passed")
+          } icon: {
+            Image(systemName: "checkmark.circle.fill")
+              .foregroundStyle(.green)
+          }
+          .font(.callout)
+        } else {
+          ForEach(issues) { check in
+            TunDiagnosticCheckRow(check: check)
+          }
+        }
+        if let dnsError = appModel.tunSystemDNSState.errorMessage {
+          RuntimeLine(title: "DNS Repair", value: dnsError)
+        }
+        RuntimeLine(title: "Last Check", value: lastUpdateText)
       }
     }
     .padding(14)
@@ -1609,15 +1506,7 @@ struct StatusView: View {
     LabeledContent("Last Check", value: diagnostics.updatedAt == Date.distantPast
       ? String(localized: "Waiting")
       : diagnostics.updatedAt.formatted(date: .omitted, time: .standard))
-    if appModel.developerMode, let helperLog = appModel.helperLogs.last {
-      LabeledContent("Helper Log") {
-        Text(helperLog)
-          .font(.system(.callout, design: .monospaced))
-          .lineLimit(2)
-          .truncationMode(.middle)
-      }
-    }
-    ForEach(Array(diagnostics.checks.prefix(appModel.developerMode ? 8 : 4))) { check in
+    ForEach(diagnostics.checks) { check in
       StatusTunDiagnosticCheckRow(check: check)
     }
     HStack(spacing: 8) {
@@ -1877,6 +1766,9 @@ private extension View {
 
 private struct TrafficRuntimeCard: View {
   let samples: [TrafficSample]
+  /// Total samples the store has ever appended this session; the chart anchors each sample to its
+  /// sequence number so a new one slides in from the right instead of every slot morphing in place.
+  let sampleCount: Int
   let isLoading: Bool
 
   var body: some View {
@@ -1887,7 +1779,7 @@ private struct TrafficRuntimeCard: View {
         ClashMaxChartSkeleton()
           .frame(height: 178)
       } else {
-        DashboardTrafficSparkline(samples: samples)
+        DashboardTrafficSparkline(samples: samples, sampleCount: sampleCount)
           .frame(height: 178)
       }
 
@@ -1951,89 +1843,6 @@ private struct ProxyGroupsRuntimeCard: View {
     }
     .padding(14)
     .frame(maxWidth: .infinity, minHeight: 260, alignment: .topLeading)
-    .dashboardCard()
-  }
-}
-
-private struct ConnectionsRulesRuntimeCard: View {
-  @Environment(AppModel.self) private var appModel
-  @Environment(RuntimeDataStore.self) private var runtimeData
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      DashboardSectionHeader(title: "Connections", symbolName: "network", trailing: "\(runtimeData.rules.count) rules")
-
-      if runtimeData.connections.isEmpty, appModel.runtimeDataLoading || appModel.dashboardRuntimeState.isStarting {
-        ClashMaxSkeletonList(rows: 4, showsLeadingIcon: false, trailingWidth: 52)
-      } else if runtimeData.connections.isEmpty {
-        DashboardEmptyRuntimeView(title: "Waiting for runtime data", symbolName: "network.slash")
-      } else {
-        VStack(spacing: 8) {
-          ForEach(Array(runtimeData.connections.prefix(6))) { connection in
-            HStack(spacing: 10) {
-              VStack(alignment: .leading, spacing: 2) {
-                Text(connection.host)
-                  .lineLimit(1)
-                Text(connection.rule ?? connection.network)
-                  .font(.caption)
-                  .foregroundStyle(.secondary)
-                  .lineLimit(1)
-              }
-              Spacer()
-              Text(TrafficSample.format(connection.download + connection.upload))
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.cyan)
-            }
-            .padding(.vertical, 4)
-          }
-        }
-      }
-    }
-    .padding(14)
-    .frame(maxWidth: .infinity, minHeight: 230, alignment: .topLeading)
-    .dashboardCard()
-  }
-}
-
-private struct RecentLogsRuntimeCard: View {
-  @Environment(AppModel.self) private var appModel
-  @Environment(RuntimeDataStore.self) private var runtimeData
-
-  var body: some View {
-    let visibleLogs = runtimeData.visibleLogs(
-      developerMode: appModel.developerMode,
-      logLevel: appModel.selectedLogLevel
-    )
-
-    VStack(alignment: .leading, spacing: 12) {
-      DashboardSectionHeader(title: "Recent Logs", symbolName: "terminal", trailing: "\(visibleLogs.count)")
-
-      if visibleLogs.isEmpty, appModel.runtimeDataLoading || appModel.dashboardRuntimeState.isStarting {
-        ClashMaxSkeletonList(rows: 4, showsLeadingIcon: false, trailingWidth: nil)
-      } else if visibleLogs.isEmpty {
-        DashboardEmptyRuntimeView(title: "Waiting for runtime data", symbolName: "text.alignleft")
-      } else {
-        VStack(spacing: 8) {
-          ForEach(Array(visibleLogs.suffix(6))) { entry in
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-              Text(entry.level.uppercased())
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(LogLevelStyle.color(for: entry.level))
-                .frame(width: 56, alignment: .leading)
-              Text(entry.message)
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-                .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .help(entry.message)
-            }
-          }
-        }
-      }
-    }
-    .padding(14)
-    .frame(maxWidth: .infinity, minHeight: 230, alignment: .topLeading)
     .dashboardCard()
   }
 }

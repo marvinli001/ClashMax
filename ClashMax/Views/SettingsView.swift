@@ -15,6 +15,8 @@ struct SettingsView: View {
   @State private var isNetworkPoliciesPresented = false
   @State private var isBackupExportPresented = false
   @State private var isBackupRestorePresented = false
+  /// Fourteen bindings most people never touch; folded until asked for, so the page stays short.
+  @State private var isShortcutsExpanded = false
 
   init(bundledCoreInfo: BundledCoreInfo = BundledCoreInfo()) {
     self.bundledCoreInfo = bundledCoreInfo
@@ -38,13 +40,6 @@ struct SettingsView: View {
     }
   }
 
-  private var latestHelperExitSummary: String? {
-    appModel.helperLogs.reversed().first { line in
-      line.localizedCaseInsensitiveContains("mihomo exited with code")
-        || line.localizedCaseInsensitiveContains("last exit code")
-    }
-  }
-
   var body: some View {
     // @Environment does not vend bindings; @Bindable wraps the tracked reference so the
     // `$settings.*` bindings below still resolve.
@@ -54,14 +49,6 @@ struct SettingsView: View {
     } content: {
       Form {
         Section("General") {
-          SettingsToggleRow(
-            "Developer Mode",
-            description: "Show helper diagnostics and advanced recovery details.",
-            isOn: Binding(
-              get: { appModel.developerMode },
-              set: { appModel.setDeveloperMode($0) }
-            )
-          )
           SettingsToggleRow(
             "Menu Bar Traffic Speed",
             description: "Show live upload and download speeds next to the menu bar icon.",
@@ -163,13 +150,13 @@ struct SettingsView: View {
           }
         }
 
-        if appModel.developerMode {
-          Section("Shortcuts") {
-            GlobalShortcutSettingsView(
-              settings: $settings.globalShortcutSettings,
-              registrationStatus: appModel.shortcutRegistrationStatus
-            )
-          }
+        Section(isExpanded: $isShortcutsExpanded) {
+          GlobalShortcutSettingsView(
+            settings: $settings.globalShortcutSettings,
+            registrationStatus: appModel.shortcutRegistrationStatus
+          )
+        } header: {
+          Text("Shortcuts")
         }
 
         Section("Runtime") {
@@ -249,9 +236,7 @@ struct SettingsView: View {
               }
             )
           )
-          if appModel.developerMode {
-            ExternalControlSettingsRow()
-          }
+          ExternalControlSettingsRow()
           SettingsControlRow("Log Level", description: "Runtime logging verbosity.") {
             Picker("Log Level", selection: Binding(
               get: { settings.overrides.logLevel },
@@ -486,28 +471,6 @@ struct SettingsView: View {
             .onAppear {
               appModel.refreshHelperRegistrationStatus()
             }
-
-            HelperStatusDetailView(
-              detail: appModel.tunHelperStatusDetail,
-              logCount: appModel.helperLogs.count,
-              latestExitSummary: latestHelperExitSummary
-            )
-
-            if settings.developerMode {
-              Text("LaunchDaemon approval is managed by macOS. Registering may open System Settings instead of showing an app permission sheet.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-              if !appModel.helperLogs.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                  ForEach(appModel.helperLogs.suffix(6), id: \.self) { line in
-                    Text(line)
-                      .font(.system(.caption, design: .monospaced))
-                      .lineLimit(2)
-                  }
-                }
-              }
-            }
           } else if settings.proxyRoutingMode == .neProxy {
             SettingsControlRow(
               "TUN Helper",
@@ -627,10 +590,6 @@ struct SettingsView: View {
     appModel.tunHelperPreparationState == .checking
   }
 
-  private var isTunnelActive: Bool {
-    appModel.tunEnabled || appModel.tunnelCoreRunning
-  }
-
   private var helperBusyIndicator: some View {
     Group {
       if isHelperBusy {
@@ -647,12 +606,6 @@ struct SettingsView: View {
       helperRegisterButton
       helperOpenSettingsButton
       helperRepairButton
-      helperStatusButton
-      if settings.developerMode {
-        helperLogsButton
-        helperUnregisterButton
-        helperResetStateButton
-      }
     }
   }
 
@@ -661,20 +614,10 @@ struct SettingsView: View {
       HStack(spacing: 8) {
         helperRegisterButton
         helperOpenSettingsButton
-        helperRepairButton
       }
       HStack(spacing: 8) {
         helperBusyIndicator
-        helperStatusButton
-        if settings.developerMode {
-          helperLogsButton
-        }
-      }
-      if settings.developerMode {
-        HStack(spacing: 8) {
-          helperUnregisterButton
-          helperResetStateButton
-        }
+        helperRepairButton
       }
     }
   }
@@ -704,43 +647,6 @@ struct SettingsView: View {
       Label("Repair", systemImage: "wrench.and.screwdriver")
     }
     .disabled(isHelperBusy)
-  }
-
-  private var helperStatusButton: some View {
-    Button {
-      appModel.refreshHelperStatus()
-    } label: {
-      Label("Status", systemImage: "waveform.path.ecg")
-    }
-    .disabled(isHelperBusy)
-  }
-
-  private var helperLogsButton: some View {
-    Button {
-      appModel.refreshHelperLogs()
-    } label: {
-      Label("Logs", systemImage: "text.alignleft")
-    }
-  }
-
-  private var helperUnregisterButton: some View {
-    Button {
-      appModel.unregisterHelper()
-    } label: {
-      Label("Unregister", systemImage: "xmark.shield")
-    }
-    .disabled(isHelperBusy || isTunnelActive)
-    .help("Unregister the privileged TUN helper.")
-  }
-
-  private var helperResetStateButton: some View {
-    Button {
-      appModel.resetHelperState()
-    } label: {
-      Label("Reset State", systemImage: "arrow.counterclockwise")
-    }
-    .disabled(isHelperBusy || isTunnelActive)
-    .help("Forget the recorded helper fingerprint without unregistering the LaunchDaemon.")
   }
 
   private var networkExtensionActionButtons: some View {
@@ -2455,99 +2361,6 @@ private enum RuleOverlaySurface {
 
   static func border(for colorScheme: ColorScheme) -> Color {
     Color(nsColor: .separatorColor).opacity(colorScheme == .dark ? 0.32 : 0.50)
-  }
-}
-
-private struct HelperStatusDetailView: View {
-  let detail: TunnelHelperStatusDetail
-  let logCount: Int
-  let latestExitSummary: String?
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      helperStatusRow("Registered", value: yesNo(detail.registered), positive: detail.registered)
-      helperStatusRow("Enabled", value: yesNo(detail.enabled), positive: detail.enabled)
-      helperStatusRow(
-        "Approval",
-        value: detail.requiresApproval ? String(localized: "Required") : String(localized: "Clear"),
-        positive: !detail.requiresApproval
-      )
-      helperStatusRow("Bootstrapped", value: yesNo(detail.bootstrapped), positive: detail.bootstrapped)
-      helperStatusRow("Fingerprint", value: fingerprintText, positive: detail.fingerprintMatches == true)
-      helperStatusRow(
-        "XPC",
-        value: detail.xpcReachable ? String(localized: "Reachable") : String(localized: "Unreachable"),
-        positive: detail.xpcReachable
-      )
-      helperStatusRow("Protocol", value: protocolText, positive: detail.protocolCompatible)
-      if let helperBuildVersion = detail.helperBuildVersion {
-        helperStatusRow("Helper Build", value: helperBuildVersion, positive: detail.protocolCompatible)
-      }
-      helperStatusRow("Running", value: runningText, positive: detail.running)
-      helperStatusRow(
-        "Recent Logs",
-        value: logCount > 0 ? "\(logCount)" : String(localized: "Empty"),
-        positive: logCount > 0
-      )
-      if let latestExitSummary {
-        helperStatusRow("Last Exit", value: latestExitSummary, positive: false)
-      }
-      Text(detail.message)
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .lineLimit(3)
-    }
-    .padding(.horizontal, 10)
-    .padding(.vertical, 9)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-  }
-
-  private func yesNo(_ value: Bool) -> String {
-    value ? String(localized: "Yes") : String(localized: "No")
-  }
-
-  private var fingerprintText: String {
-    guard detail.fingerprintRecorded else {
-      return String(localized: "Not Recorded")
-    }
-    switch detail.fingerprintMatches {
-    case true:
-      return String(localized: "Match")
-    case false:
-      return String(localized: "Mismatch")
-    case nil:
-      return String(localized: "Unknown")
-    }
-  }
-
-  private var protocolText: String {
-    if let protocolVersion = detail.protocolVersion {
-      if detail.migrationRequired {
-        return String(format: String(localized: "v%lld Needs Repair"), Int64(protocolVersion))
-      }
-      return "v\(protocolVersion)"
-    }
-    return detail.migrationRequired ? String(localized: "Missing") : String(localized: "Unknown")
-  }
-
-  private var runningText: String {
-    if let pid = detail.pid {
-      return String(format: String(localized: "PID %lld"), Int64(pid))
-    }
-    return yesNo(detail.running)
-  }
-
-  private func helperStatusRow(_ title: LocalizedStringResource, value: String, positive: Bool) -> some View {
-    HStack(alignment: .firstTextBaseline, spacing: 12) {
-      Text(title)
-        .foregroundStyle(.secondary)
-      Spacer()
-      Text(value)
-        .foregroundStyle(positive ? Color.green : Color.secondary)
-        .multilineTextAlignment(.trailing)
-    }
-    .font(.callout)
   }
 }
 

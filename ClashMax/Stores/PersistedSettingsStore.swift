@@ -128,11 +128,6 @@ final class PersistedSettingsStore {
   private(set) var appliedRuntimeSettingsSnapshot: AppliedRuntimeSettingsSnapshot?
   private(set) var launchSettings = LaunchSettings.default
   private(set) var initialTunHelperPromptHandled: Bool
-  var developerMode = false {
-    didSet {
-      defaults.set(developerMode, forKey: Self.developerModeDefaultsKey)
-    }
-  }
 
   @ObservationIgnored private let defaults: UserDefaults
   @ObservationIgnored private let loginItemService: any LoginItemManaging
@@ -148,7 +143,6 @@ final class PersistedSettingsStore {
   static let launchAtLoginDesiredDefaultsKey = "io.github.clashmax.launchAtLoginDesired"
   static let initialTunHelperPromptHandledDefaultsKey = "io.github.clashmax.initialTunHelperPromptHandled"
   private static let proxyRoutingModeDefaultsKey = "io.github.clashmax.proxyRoutingMode"
-  private static let developerModeDefaultsKey = "io.github.clashmax.developerMode"
   private static let systemProxySettingsDefaultsKey = "io.github.clashmax.systemProxySettings"
   private static let runtimeSettingsDefaultsKey = "io.github.clashmax.runtimeSettings"
   private static let ipv6EnabledDefaultsKey = "io.github.clashmax.ipv6Enabled"
@@ -187,7 +181,6 @@ final class PersistedSettingsStore {
       runtimeSettings.apply(to: &launchOverrides)
     }
     overrides = launchOverrides
-    developerMode = defaults.bool(forKey: Self.developerModeDefaultsKey)
     initialTunHelperPromptHandled = defaults.bool(forKey: Self.initialTunHelperPromptHandledDefaultsKey)
     let storedProxyRoutingMode = Self.loadCodable(
       ProxyRoutingMode.self,

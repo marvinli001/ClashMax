@@ -229,16 +229,12 @@ final class PageSimplificationTests: XCTestCase {
 
   // MARK: - Errors
 
-  func testPagesRepeatTheLastErrorOnlyWhenTheStripCannotShowItOrThereIsMoreToShow() {
+  func testPagesRepeatTheLastErrorOnlyWhenThereIsMoreToShowThanTheAlert() {
     XCTAssertFalse(
-      PageErrorPresentation.showsInlineError(readinessIssue: nil, hasDetails: false),
-      "The status strip already shows the one-line error; a second copy on the page says nothing new"
+      PageErrorPresentation.showsInlineError(hasDetails: false),
+      "The alert already shows the one-line error; a second copy on the page says nothing new"
     )
-    XCTAssertTrue(
-      PageErrorPresentation.showsInlineError(readinessIssue: "No active profile selected.", hasDetails: false),
-      "The strip prefers the readiness issue, so the page is the only place left for the error"
-    )
-    XCTAssertTrue(PageErrorPresentation.showsInlineError(readinessIssue: nil, hasDetails: true), "Expandable details are more than the strip offers")
+    XCTAssertTrue(PageErrorPresentation.showsInlineError(hasDetails: true), "Expandable details are more than the alert offers")
   }
 
   // MARK: - Rules

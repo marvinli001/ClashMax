@@ -6382,29 +6382,26 @@ enum LogVisibility {
   /// Log levels at which the user has explicitly asked for verbose output, so
   /// nothing may be hidden from them.
   ///
-  /// Debug entries used to be visible only under Developer Mode, which silently
+  /// Debug entries used to be visible only under a developer switch, which silently
   /// defeated the Log Level setting: picking Debug reconfigured the core and
   /// resubscribed the `/logs` socket at `level=debug`, and then every arriving
   /// entry was filtered out again before it reached the Logs page (discussion
   /// #25 — "打开了 Debug 级的日志，但是这个等级完全没有输出"). The selected log
-  /// level is now the authority; Developer Mode only widens what a *quiet* level
-  /// shows.
+  /// level is the authority.
   static func isVerbose(logLevel: String?) -> Bool {
     guard let logLevel else { return false }
     let normalized = logLevel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     return normalized == "debug" || normalized == "trace"
   }
 
-  static func visibleEntries(
-    in entries: [LogEntry],
-    developerMode: Bool,
-    logLevel: String? = nil
-  ) -> [LogEntry] {
-    guard !developerMode, !isVerbose(logLevel: logLevel) else { return entries }
-    return entries.filter { !isDeveloperOnly($0) }
+  static func visibleEntries(in entries: [LogEntry], logLevel: String? = nil) -> [LogEntry] {
+    guard !isVerbose(logLevel: logLevel) else { return entries }
+    return entries.filter { !isVerboseOnly($0) }
   }
 
-  static func isDeveloperOnly(_ entry: LogEntry) -> Bool {
+  /// Entries that only belong on the page when the user asked for verbose output: debug/trace
+  /// lines and the core's own delay-probe chatter.
+  static func isVerboseOnly(_ entry: LogEntry) -> Bool {
     let level = entry.level.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     if level == "debug" || level == "trace" {
       return true

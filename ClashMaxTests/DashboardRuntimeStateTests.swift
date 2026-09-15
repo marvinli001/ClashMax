@@ -17,7 +17,6 @@ final class DashboardRuntimeStateTests: XCTestCase {
   private static let delayTestSettingsDefaultsKey = "io.github.clashmax.delayTestSettings"
   private static let proxyPageSettingsDefaultsKey = "io.github.clashmax.proxyPageSettings"
   private static let externalControllerSettingsDefaultsKey = "io.github.clashmax.externalControllerSettings"
-  private static let developerModeDefaultsKey = "io.github.clashmax.developerMode"
 
   override func setUp() {
     super.setUp()
@@ -1285,30 +1284,6 @@ final class DashboardRuntimeStateTests: XCTestCase {
         isStarting: false
       )
     )
-  }
-
-  func testDeveloperModeDefaultsOffAndPersists() throws {
-    let paths = try Self.makeRuntimePaths()
-    let suiteName = "ClashMaxDeveloperModeTests-\(UUID().uuidString)"
-    let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-    defaults.removePersistentDomain(forName: suiteName)
-    let firstModel = AppModel(
-      paths: paths,
-      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
-      defaults: defaults
-    )
-
-    XCTAssertFalse(firstModel.developerMode)
-
-    firstModel.developerMode = true
-
-    let secondModel = AppModel(
-      paths: paths,
-      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
-      defaults: defaults
-    )
-
-    XCTAssertTrue(secondModel.developerMode)
   }
 
   func testAppThemeDefaultsToSystemAndPersists() throws {
@@ -4109,48 +4084,24 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(ProxyNodeSorter.sorted(nodes, by: .name).map(\.name), ["a", "z"])
   }
 
-  func testProxyPreviewNoticeShowsOutsideDeveloperMode() {
+  func testProxyPreviewNoticeNamesThePreviewSource() {
     XCTAssertEqual(
-      ProxyPreviewNoticeKind.resolve(
-        developerMode: false,
-        previewRuntimeActive: true,
-        isShowingProxyPreview: false
-      ),
+      ProxyPreviewNoticeKind.resolve(previewRuntimeActive: true, isShowingProxyPreview: false),
       .previewRuntime
     )
     XCTAssertEqual(
-      ProxyPreviewNoticeKind.resolve(
-        developerMode: false,
-        previewRuntimeActive: false,
-        isShowingProxyPreview: true
-      ),
+      ProxyPreviewNoticeKind.resolve(previewRuntimeActive: false, isShowingProxyPreview: true),
       .offlinePreview
     )
-    XCTAssertEqual(
-      ProxyPreviewNoticeKind.resolve(
-        developerMode: true,
-        previewRuntimeActive: true,
-        isShowingProxyPreview: false
-      ),
-      .previewRuntime
-    )
-    XCTAssertEqual(
-      ProxyPreviewNoticeKind.resolve(
-        developerMode: true,
-        previewRuntimeActive: false,
-        isShowingProxyPreview: true
-      ),
-      .offlinePreview
-    )
+    XCTAssertNil(ProxyPreviewNoticeKind.resolve(previewRuntimeActive: false, isShowingProxyPreview: false))
   }
 
-  func testProviderSummaryRequiresDeveloperModeAndProviders() {
-    XCTAssertFalse(ProxyPageVisibilityPolicy.showsProviderSummary(developerMode: false, providerCount: 3))
-    XCTAssertFalse(ProxyPageVisibilityPolicy.showsProviderSummary(developerMode: true, providerCount: 0))
-    XCTAssertTrue(ProxyPageVisibilityPolicy.showsProviderSummary(developerMode: true, providerCount: 3))
+  func testProviderSummaryRequiresProviders() {
+    XCTAssertFalse(ProxyPageVisibilityPolicy.showsProviderSummary(providerCount: 0))
+    XCTAssertTrue(ProxyPageVisibilityPolicy.showsProviderSummary(providerCount: 3))
   }
 
-  func testDeveloperOnlyLogsAreHiddenUntilDeveloperMode() {
+  func testVerboseOnlyLogsAreHiddenAtQuietLevels() {
     let entries = [
       LogEntry(level: "info", message: "Core ready"),
       LogEntry(level: "debug", message: "controller request body"),
@@ -4158,18 +4109,14 @@ final class DashboardRuntimeStateTests: XCTestCase {
       LogEntry(level: "trace", message: "raw stream frame"),
     ]
 
-    let normalMessages = LogVisibility.visibleEntries(in: entries, developerMode: false).map(\.message)
-    XCTAssertEqual(normalMessages, ["Core ready"])
-
-    let developerMessages = LogVisibility.visibleEntries(in: entries, developerMode: true).map(\.message)
-    XCTAssertEqual(developerMessages, entries.map(\.message))
+    XCTAssertEqual(LogVisibility.visibleEntries(in: entries, logLevel: "info").map(\.message), ["Core ready"])
+    XCTAssertEqual(LogVisibility.visibleEntries(in: entries, logLevel: "debug").map(\.message), entries.map(\.message))
   }
 
   /// Discussion #25: picking Debug reconfigured the core and resubscribed the
   /// `/logs` socket at `level=debug`, then filtered every arriving debug entry
-  /// back out unless Developer Mode happened to be on. The selected level is now
-  /// the authority.
-  func testVerboseLogLevelShowsDebugEntriesWithoutDeveloperMode() {
+  /// back out at quiet levels. The selected level is the authority.
+  func testVerboseLogLevelShowsDebugEntries() {
     let entries = [
       LogEntry(level: "info", message: "Core ready"),
       LogEntry(level: "debug", message: "controller request body"),
@@ -4177,17 +4124,17 @@ final class DashboardRuntimeStateTests: XCTestCase {
     ]
 
     let quietMessages = LogVisibility
-      .visibleEntries(in: entries, developerMode: false, logLevel: "info")
+      .visibleEntries(in: entries, logLevel: "info")
       .map(\.message)
     XCTAssertEqual(quietMessages, ["Core ready"])
 
     let debugMessages = LogVisibility
-      .visibleEntries(in: entries, developerMode: false, logLevel: "debug")
+      .visibleEntries(in: entries, logLevel: "debug")
       .map(\.message)
     XCTAssertEqual(debugMessages, entries.map(\.message))
 
     let traceMessages = LogVisibility
-      .visibleEntries(in: entries, developerMode: false, logLevel: " TRACE ")
+      .visibleEntries(in: entries, logLevel: " TRACE ")
       .map(\.message)
     XCTAssertEqual(traceMessages, entries.map(\.message))
   }
@@ -4317,7 +4264,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     XCTAssertEqual(group.name, "Streaming")
     XCTAssertEqual(node.name, "Japan")
-    XCTAssertEqual(DashboardProxySelectionState.delayLabel(for: node), "157 ms")
+    XCTAssertEqual(ProxyDelayDisplay(state: node.resolvedDelayState).label, "157 ms")
   }
 
   func testDashboardProxySelectionFallsBackToFirstSelectableGroup() throws {
@@ -4343,7 +4290,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     XCTAssertEqual(group.name, "Elite")
     XCTAssertEqual(node.name, "Tokyo")
-    XCTAssertEqual(DashboardProxySelectionState.delayLabel(for: node), "No delay")
+    XCTAssertEqual(ProxyDelayDisplay(state: node.resolvedDelayState).label, "Unknown")
   }
 
   func testDashboardProxySelectionIgnoresAutomaticGroups() throws {
@@ -8883,20 +8830,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(proxyManager.stopIdentifiers, [NetworkExtensionController.providerBundleIdentifier])
   }
 
-  func testProxyRoutingModesIncludeNEProxyWhenDeveloperModeIsOff() throws {
-    let paths = try Self.makeRuntimePaths()
-    let model = try AppModel(
-      paths: paths,
-      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
-      defaults: Self.makeIsolatedDefaults()
-    )
-
-    XCTAssertFalse(model.developerMode)
+  func testProxyRoutingModesIncludeNEProxy() {
     XCTAssertTrue(ProxyRoutingMode.allCases.contains(.neProxy))
     XCTAssertEqual(ProxyRoutingMode.neProxy.displayName, String(localized: "NE Proxy"))
   }
 
-  func testNetworkExtensionLegacyPersistedModeLoadsWhenDeveloperModeIsOff() throws {
+  func testNetworkExtensionLegacyPersistedModeLoads() throws {
     let defaults = try Self.makeIsolatedDefaults()
     try defaults.set(
       XCTUnwrap("\"networkExtensionExperimental\"".data(using: .utf8)),
@@ -8910,7 +8849,6 @@ final class DashboardRuntimeStateTests: XCTestCase {
       defaults: defaults
     )
 
-    XCTAssertFalse(model.developerMode)
     XCTAssertEqual(model.proxyRoutingMode, .neProxy)
     XCTAssertNil(model.lastError)
     XCTAssertNil(model.appNotice)
@@ -8920,7 +8858,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(persistedMode.rawValue, "networkExtensionExperimental")
   }
 
-  func testNetworkExtensionCanBeSelectedWhenDeveloperModeIsOff() throws {
+  func testNetworkExtensionCanBeSelected() throws {
     let paths = try Self.makeRuntimePaths()
     let model = try AppModel(
       paths: paths,
@@ -8928,7 +8866,6 @@ final class DashboardRuntimeStateTests: XCTestCase {
       defaults: Self.makeIsolatedDefaults()
     )
 
-    XCTAssertFalse(model.developerMode)
     model.setProxyRoutingMode(.neProxy)
 
     XCTAssertEqual(model.proxyRoutingMode, .neProxy)
@@ -8936,24 +8873,9 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertNil(model.appNotice)
   }
 
-  func testDisablingDeveloperModeKeepsNetworkExtensionSelected() throws {
-    let paths = try Self.makeRuntimePaths()
-    let model = try AppModel(
-      paths: paths,
-      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
-      defaults: Self.makeIsolatedDefaults()
-    )
-
-    model.developerMode = true
-    model.setProxyRoutingMode(.neProxy)
-    model.developerMode = false
-
-    XCTAssertEqual(model.proxyRoutingMode, .neProxy)
-    XCTAssertNil(model.lastError)
-    XCTAssertNil(model.appNotice)
-  }
-
-  func testDeveloperModeOffPreventsGlobalShortcutRegistration() throws {
+  /// Global shortcuts used to sit behind a developer switch and were silently dead without it.
+  /// Configuring a binding is now enough for it to register.
+  func testGlobalShortcutsRegisterAsSoonAsTheyAreConfigured() throws {
     let paths = try Self.makeRuntimePaths()
     let registrar = RecordingAppGlobalShortcutRegistrar()
     let model = try AppModel(
@@ -8967,37 +8889,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
     model.globalShortcutSettings = GlobalShortcutSettings(bindings: [
       GlobalShortcutBinding(action: .startStop, shortcut: shortcut, enabled: true),
     ])
-
-    XCTAssertFalse(model.developerMode)
-    XCTAssertTrue(registrar.registrations.isEmpty)
-    XCTAssertGreaterThanOrEqual(registrar.unregisterCount, 1)
-    XCTAssertNil(model.shortcutRegistrationStatus)
-  }
-
-  func testDeveloperModeToggleRegistersAndUnregistersGlobalShortcuts() throws {
-    let paths = try Self.makeRuntimePaths()
-    let registrar = RecordingAppGlobalShortcutRegistrar()
-    let model = try AppModel(
-      paths: paths,
-      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
-      defaults: Self.makeIsolatedDefaults(),
-      globalShortcutRegistrar: registrar
-    )
-    let shortcut = try XCTUnwrap(KeyboardShortcutDescriptor(string: "cmd+shift+p"))
-
-    model.globalShortcutSettings = GlobalShortcutSettings(bindings: [
-      GlobalShortcutBinding(action: .startStop, shortcut: shortcut, enabled: true),
-    ])
-    model.setDeveloperMode(true)
 
     XCTAssertEqual(registrar.registrations.map(\.action), [.startStop])
     XCTAssertEqual(model.shortcutRegistrationStatus?.registeredCount, 1)
     XCTAssertTrue(model.shortcutRegistrationStatus?.failures.isEmpty == true)
-
-    model.setDeveloperMode(false)
-
-    XCTAssertTrue(registrar.registrations.isEmpty)
-    XCTAssertNil(model.shortcutRegistrationStatus)
   }
 
   func testGlobalShortcutRegistrationFailureUpdatesPublishedStatus() throws {
@@ -9016,7 +8911,6 @@ final class DashboardRuntimeStateTests: XCTestCase {
       globalShortcutRegistrar: registrar
     )
 
-    model.setDeveloperMode(true)
     model.globalShortcutSettings = GlobalShortcutSettings(bindings: [
       GlobalShortcutBinding(action: .startStop, shortcut: shortcut, enabled: true),
     ])
@@ -9033,7 +8927,6 @@ final class DashboardRuntimeStateTests: XCTestCase {
     // Seed the suite the way a previous launch would have left it. Assigning through a throwaway
     // store persists via its didSet, so this needs no knowledge of the defaults keys or encoding.
     let seed = PersistedSettingsStore(defaults: defaults)
-    seed.developerMode = true
     seed.globalShortcutSettings = GlobalShortcutSettings(bindings: [
       GlobalShortcutBinding(action: .startStop, shortcut: shortcut, enabled: true),
     ])
@@ -10077,7 +9970,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertFalse(model.tunnelCoreRunning)
     XCTAssertFalse(model.tunEnabled)
     XCTAssertTrue(model.lastError?.contains("stopped TUN safely") == true)
-    XCTAssertTrue(model.lastError?.contains("Default Route: still stale") == true)
+    XCTAssertTrue(model.lastError?.contains("Default Route — still stale") == true)
   }
 
   func testRunningTunSettingsSaveSurfacesDNSApplyFailureWithoutHelperRestart() async throws {
@@ -10282,7 +10175,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertFalse(model.tunnelCoreRunning)
     XCTAssertFalse(model.tunEnabled)
     XCTAssertTrue(model.lastError?.contains("stopped TUN safely") == true)
-    XCTAssertTrue(model.lastError?.contains("Default Route: still stale") == true)
+    XCTAssertTrue(model.lastError?.contains("Default Route — still stale") == true)
   }
 
   func testRepairTunRoutingStopsTunnelWhenReloadFallbackRestartStillHasRouteIssue() async throws {
@@ -10329,7 +10222,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertFalse(model.tunnelCoreRunning)
     XCTAssertFalse(model.tunEnabled)
     XCTAssertTrue(model.lastError?.contains("stopped TUN safely") == true)
-    XCTAssertTrue(model.lastError?.contains("Default Route: stale") == true)
+    XCTAssertTrue(model.lastError?.contains("Default Route — stale") == true)
   }
 
   func testRepairTunRoutingStopsTunnelWhenRestartFails() async throws {
@@ -11814,13 +11707,6 @@ final class DashboardRuntimeStateTests: XCTestCase {
       providerSideLoadPreflightRunner: MihomoProviderSideLoadPreflightRunner(runtimeConfigValidator: validator)
     )
 
-    let blocked = await model.preflightSideLoadedProviderContent(for: profile, providerFileURL: localProviderURL)
-
-    XCTAssertFalse(blocked)
-    XCTAssertFalse(validator.didValidate)
-    XCTAssertTrue(model.lastError?.contains("Developer Mode") == true)
-
-    model.setDeveloperMode(true)
     model.overrides.tunEnabled = true
     let succeeded = await model.preflightSideLoadedProviderContent(for: profile, providerFileURL: localProviderURL)
 
@@ -11876,7 +11762,6 @@ final class DashboardRuntimeStateTests: XCTestCase {
       bundledCoreURLProvider: { URL(fileURLWithPath: "/tmp/mihomo") },
       providerSideLoadPreflightRunner: MihomoProviderSideLoadPreflightRunner(runtimeConfigValidator: validator)
     )
-    model.setDeveloperMode(true)
 
     let didPreflight = await model.preflightSideLoadedProviderContent(
       for: profile,
@@ -11918,7 +11803,6 @@ final class DashboardRuntimeStateTests: XCTestCase {
       bundledCoreURLProvider: { URL(fileURLWithPath: "/tmp/mihomo") },
       providerSideLoadPreflightRunner: MihomoProviderSideLoadPreflightRunner(runtimeConfigValidator: validator)
     )
-    model.setDeveloperMode(true)
 
     let didPreflight = await model.preflightSideLoadedProviderContent(for: profile, providerFileURL: localProviderURL)
 
@@ -11954,7 +11838,6 @@ final class DashboardRuntimeStateTests: XCTestCase {
       bundledCoreURLProvider: { URL(fileURLWithPath: "/tmp/mihomo") },
       providerSideLoadPreflightRunner: MihomoProviderSideLoadPreflightRunner(runtimeConfigValidator: validator)
     )
-    model.setDeveloperMode(true)
 
     let didPreflight = await model.preflightSideLoadedProviderContent(for: profile, providerFileURL: localProviderURL)
 
@@ -12112,7 +11995,6 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
   private static func clearSharedRoutingDefaults() {
     UserDefaults.standard.removeObject(forKey: proxyRoutingModeDefaultsKey)
-    UserDefaults.standard.removeObject(forKey: developerModeDefaultsKey)
     UserDefaults.standard.removeObject(forKey: tunDNSDefaultsVersionKey)
   }
 

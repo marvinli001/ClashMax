@@ -146,7 +146,7 @@ struct ProfilesView: View {
         }
 
         if let error = appModel.lastError,
-           PageErrorPresentation.showsInlineError(readinessIssue: appModel.readinessIssue, hasDetails: appModel.lastErrorDetails != nil)
+           PageErrorPresentation.showsInlineError(hasDetails: appModel.lastErrorDetails != nil)
         {
           GlobalErrorBanner(
             message: error,
@@ -184,7 +184,6 @@ struct ProfilesView: View {
         upstreamEndpointID: $editUpstreamEndpointID,
         outboundProxyEndpoints: selectableUpstreamEndpoints(for: profile),
         subscriptionDefaultUpdateIntervalMinutes: appModel.settings.subscriptionFetchSettings.defaultUpdateIntervalMinutes,
-        developerMode: appModel.developerMode,
         onCancel: closeEditSheet,
         onResetRemoteName: {
           resetRemoteName(profile)
@@ -242,7 +241,6 @@ struct ProfilesView: View {
       if let migrationReport {
         ClientMigrationReportSheet(
           report: migrationReport,
-          developerMode: appModel.developerMode,
           onCancel: { self.migrationReport = nil },
           onApply: { options in applyMigrationReport(migrationReport, options: options) }
         )
@@ -725,7 +723,7 @@ struct ProfilesView: View {
       }
 
       applyMigrationRuntimeSettings(report, enableSystemProxy: options.enableSystemProxy)
-      if options.importShortcuts, appModel.developerMode {
+      if options.importShortcuts {
         applyMigrationShortcutSettings(report.shortcutBindings)
       }
       if options.enableSilentStart {
@@ -772,7 +770,6 @@ struct ProfilesView: View {
   }
 
   private func applyMigrationShortcutSettings(_ bindings: [MigratedShortcutBinding]) {
-    guard appModel.developerMode else { return }
     guard !bindings.isEmpty else { return }
     var settings = appModel.globalShortcutSettings
     for binding in bindings {
@@ -840,7 +837,6 @@ private struct ClientMigrationApplyOptions {
 
 private struct ClientMigrationReportSheet: View {
   let report: ClientMigrationReport
-  let developerMode: Bool
   let onCancel: () -> Void
   let onApply: (ClientMigrationApplyOptions) -> Void
   @State private var importLocalProfiles = true
@@ -895,7 +891,7 @@ private struct ClientMigrationReportSheet: View {
 
       Toggle("Import global shortcuts", isOn: $importShortcuts)
         .toggleStyle(.checkbox)
-        .disabled(!developerMode || report.shortcutBindings.isEmpty)
+        .disabled(report.shortcutBindings.isEmpty)
         .help("Map ClashX shortcut and hotkey settings to ClashMax global shortcuts.")
 
       Toggle("Enable Silent Start for menu bar workflow", isOn: $enableSilentStart)
@@ -916,7 +912,7 @@ private struct ClientMigrationReportSheet: View {
               importRemoteSubscriptions: importRemoteSubscriptions && !report.subscriptions.isEmpty,
               importRuleSnippets: importRuleSnippets && !report.ruleSnippets.isEmpty,
               enableSystemProxy: enableSystemProxy,
-              importShortcuts: developerMode && importShortcuts,
+              importShortcuts: importShortcuts,
               enableSilentStart: enableSilentStart
             )
           )
@@ -1612,7 +1608,6 @@ private struct ProfileEditSheet: View {
   @Binding var upstreamEndpointID: UUID?
   let outboundProxyEndpoints: [OutboundProxyEndpoint]
   let subscriptionDefaultUpdateIntervalMinutes: Int
-  let developerMode: Bool
   let onCancel: () -> Void
   let onResetRemoteName: () -> Void
   let onRollbackProviderOptions: () -> Void
@@ -1723,7 +1718,6 @@ private struct ProfileEditSheet: View {
                 options: $providerOptions,
                 validationError: $providerOptionsValidationError,
                 rollbackOptions: rollbackProviderOptions,
-                developerMode: developerMode,
                 onRollback: onRollbackProviderOptions,
                 showsHeader: false
               )
@@ -2063,6 +2057,7 @@ private struct SubscriptionUpdatePolicyEditor: View {
 }
 
 private struct GlobalErrorBanner: View {
+  @Environment(AppModel.self) private var appModel
   let message: String
   let details: String?
   @State private var isDetailsExpanded = false
@@ -2127,6 +2122,14 @@ private struct GlobalErrorBanner: View {
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
+    // This banner sits next to the form that failed, which is the better place for the error; the
+    // window-level alert for the same message would only repeat it once the sheet closes.
+    .onAppear {
+      appModel.acknowledgeErrorAlert(matching: message)
+    }
+    .onChange(of: message) { _, message in
+      appModel.acknowledgeErrorAlert(matching: message)
+    }
   }
 
   private func copyDetails() {
@@ -2433,11 +2436,9 @@ private struct SubscriptionProviderOptionsEditor: View {
   @Binding var options: SubscriptionProviderOptions
   @Binding var validationError: String?
   let rollbackOptions: SubscriptionProviderOptions
-  let developerMode: Bool
   let onRollback: () -> Void
   var showsHeader = true
   @State private var isRuleOverlayPresented = false
-  @State private var showsAdvancedOptions = false
 
   var body: some View {
     ProfileEditSection(showsHeader ? "Provider Options" : nil) {
@@ -2544,105 +2545,10 @@ private struct SubscriptionProviderOptionsEditor: View {
           }
         }
       }
-
-      if developerMode {
-        providerSideLoadPreflightRow
-
-        ProfileEditDisclosureRow("Legacy Advanced YAML and Filters", isExpanded: $showsAdvancedOptions) {
-          ProfileEditRow("Filter") {
-            TextField("Filter", text: $options.filter)
-              .textFieldStyle(.roundedBorder)
-          }
-          ProfileEditRow("Exclude Filter") {
-            TextField("Exclude Filter", text: $options.excludeFilter)
-              .textFieldStyle(.roundedBorder)
-          }
-          ProfileEditRow("Exclude Type") {
-            TextField("Exclude Type", text: $options.excludeType)
-              .textFieldStyle(.roundedBorder)
-          }
-          ProfileEditRow("Final MATCH Policy") {
-            TextField("Final MATCH Policy", text: $options.finalRulePolicy)
-              .textFieldStyle(.roundedBorder)
-          }
-
-          ProfileEditTextEditorRow("Provider Override YAML", text: $options.overrideYAML, minHeight: 72)
-          ProfileEditTextEditorRow("Legacy Runtime Merge YAML", text: $options.runtimeMergeYAML, minHeight: 88)
-            .help("Merged into this one profile before ClashMax writes its own keys, so mode, tun, dns.enable and the geo keys still win over it. For an override that actually has the last word, use a Raw YAML snippet on the Routing page.")
-
-          customHeadersEditor
-        }
-      } else {
-        ProfileEditFootnote(verbatim: String(localized: "Developer Mode is required for legacy raw provider filters, YAML merge fields, and custom request headers. Nothing here is needed to override a Mihomo key: a Raw YAML snippet on the Routing page reaches every key, with the same preflight and rollback as any other snippet."))
-      }
     }
     .onAppear(perform: validateAdvancedYAML)
     .onChange(of: options.overrideYAML) { _, _ in validateAdvancedYAML() }
     .onChange(of: options.runtimeMergeYAML) { _, _ in validateAdvancedYAML() }
-  }
-
-  private var providerSideLoadPreflightRow: some View {
-    let unsupportedReason = appModel.providerSideLoadPreflightUnsupportedReason(for: profile)
-    let isRunning = appModel.providerSideLoadPreflightStatus.isRunning(for: profile.id)
-    return ProfileEditRow("Provider Side-load Preflight") {
-      VStack(alignment: .leading, spacing: 6) {
-        HStack(spacing: 8) {
-          Button {
-            appModel.chooseProviderSideLoadPreflightFile(for: profile)
-          } label: {
-            Label("Choose Provider File...", systemImage: "doc.badge.gearshape")
-          }
-          .disabled(unsupportedReason != nil || isRunning)
-
-          if isRunning {
-            ProgressView()
-              .controlSize(.small)
-          }
-        }
-
-        if let statusMessage = appModel.providerSideLoadPreflightStatus.message(for: profile.id) {
-          Label(statusMessage, systemImage: providerSideLoadStatusIcon)
-            .font(.caption)
-            .foregroundStyle(providerSideLoadStatusColor)
-            .lineLimit(3)
-        } else if let unsupportedReason {
-          Label(unsupportedReason, systemImage: "info.circle")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .lineLimit(3)
-        } else {
-          Text("Temporarily validates a local provider file against this profile's generated runtime YAML.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .lineLimit(2)
-        }
-      }
-      .frame(maxWidth: .infinity, alignment: .leading)
-    }
-  }
-
-  private var providerSideLoadStatusIcon: String {
-    switch appModel.providerSideLoadPreflightStatus {
-    case .idle:
-      return "info.circle"
-    case .running:
-      return "hourglass"
-    case .succeeded:
-      return "checkmark.circle.fill"
-    case .failed:
-      return "exclamationmark.triangle.fill"
-    }
-  }
-
-  private var providerSideLoadStatusColor: Color {
-    switch appModel.providerSideLoadPreflightStatus {
-    case .succeeded:
-      return .green
-    case .failed:
-      return .red
-    default:
-      return .secondary
-    }
   }
 
   private var guardrailReport: SubscriptionProviderOptionsGuardrailReport {
@@ -2698,9 +2604,7 @@ private struct SubscriptionProviderOptionsEditor: View {
 
   @ViewBuilder
   private var runtimeDiff: some View {
-    let visibleDiff = developerMode
-      ? guardrailReport.runtimeDiff
-      : guardrailReport.runtimeDiff.filter { !$0.isAdvanced }
+    let visibleDiff = guardrailReport.runtimeDiff.filter { !$0.isAdvanced }
     if visibleDiff.isEmpty {
       ProfileEditFootnote(verbatim: String(localized: "Runtime diff: no generated-template changes from the last working provider options."))
     } else {
@@ -2738,44 +2642,6 @@ private struct SubscriptionProviderOptionsEditor: View {
         SubscriptionProviderOptions.maximumIntervalSeconds
       ) }
     )
-  }
-
-  private var customHeadersEditor: some View {
-    ProfileEditRow("Custom Headers", alignment: .top) {
-      VStack(alignment: .leading, spacing: ProfileEditLayout.rowInnerSpacing) {
-        HStack {
-          if options.requestHeaders.isEmpty {
-            Text("Empty")
-              .font(.caption)
-              .foregroundStyle(.tertiary)
-          }
-          Spacer()
-          Button {
-            options.requestHeaders.append(SubscriptionRequestHeader())
-          } label: {
-            Image(systemName: "plus")
-          }
-          .buttonStyle(.borderless)
-          .help("Add custom header")
-        }
-
-        ForEach($options.requestHeaders) { $header in
-          HStack(spacing: ProfileEditLayout.rowInnerSpacing) {
-            TextField("Header", text: $header.name)
-              .textFieldStyle(.roundedBorder)
-            SecureField("Value", text: $header.value)
-              .textFieldStyle(.roundedBorder)
-            Button {
-              options.requestHeaders.removeAll { $0.id == header.id }
-            } label: {
-              Image(systemName: "trash")
-            }
-            .buttonStyle(.borderless)
-            .help("Remove header")
-          }
-        }
-      }
-    }
   }
 
   private func validateAdvancedYAML() {

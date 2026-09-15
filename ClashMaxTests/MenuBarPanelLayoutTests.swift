@@ -109,7 +109,7 @@ final class MenuBarPanelLayoutTests: XCTestCase {
   }
 
   func testTrafficSectionWithEmptySamplesFitsCompactLayout() {
-    let view = MenuBarTrafficSection(sample: .zero, history: [])
+    let view = MenuBarTrafficSection(sample: .zero, history: [], sampleCount: 0)
       .padding(MenuBarPanelLayout.padding)
       .frame(width: MenuBarPanelLayout.width)
       .environment(\.locale, Locale(identifier: "en"))
@@ -516,9 +516,7 @@ final class MainWindowLayoutTests: XCTestCase {
       statusStyle: .red,
       profileName: "Long Subscription Profile Name - 香港 日本 美国 自动选择",
       proxyRoutingStatus: "Network Extension Ready",
-      supplemental: .error(
-        "Could not repair TUN routing because the helper still reports a stale default route after reload and restart."
-      )
+      readinessIssue: "TUN helper is registered but macOS has not approved it yet. Allow ClashMax under Login Items & Extensions, then try again."
     )
     .frame(width: 520)
 

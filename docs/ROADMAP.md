@@ -119,8 +119,9 @@ Routing page, alongside rules, DNS and sniffer, using the same save, preflight, 
 path as any other snippet. It is applied **after** every app-managed key
 ([`ConfigNormalizer.swift`](../ClashMax/Services/ConfigNormalizer.swift)), which is what the legacy
 per-profile "Runtime Merge YAML" field never did: that one merges *before* those writes, so `mode`,
-`tun.*`, `dns.enable` and the geo keys always won over it, and it was reachable only from a
-Developer Mode disclosure on subscription profiles. Only `mixed-port`, `external-controller` (and
+`tun.*`, `dns.enable` and the geo keys always won over it, and its editor has since been removed
+from the profile sheet along with the developer-mode switch that gated it (the field is still
+honoured for profiles that carry it). Only `mixed-port`, `external-controller` (and
 its variants) and `secret` are refused, and refusing them **serves** INV-2 rather than capping it:
 they are the channel the app applies, verifies and rolls back through, each already has an owning
 control in Settings, and a patch that moved one would leave the app unable to roll back that very

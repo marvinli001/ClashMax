@@ -403,16 +403,6 @@ private struct RuleProviderList: View {
           .font(.caption)
           .foregroundStyle(.secondary)
       }
-
-      if let error = appModel.lastError,
-         PageErrorPresentation.showsInlineError(readinessIssue: appModel.readinessIssue, hasDetails: false)
-      {
-        Label(error, systemImage: "exclamationmark.triangle.fill")
-          .font(.caption)
-          .foregroundStyle(.red)
-          .lineLimit(3)
-          .textSelection(.enabled)
-      }
     }
     .padding(14)
     .frame(width: 480)

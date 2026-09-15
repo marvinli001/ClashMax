@@ -143,7 +143,24 @@ enum ProxyEffectDiagnosticsBuilder {
   static func build(_ input: ProxyEffectDiagnosticsInput) -> ProxyEffectDiagnosticsSnapshot {
     let probeHost = input.probeHost.trimmingCharacters(in: .whitespacesAndNewlines)
     let trace = ruleProbe(host: probeHost, rules: input.runtimeRules)
-    let probePolicy = trace.policy?.trimmingCharacters(in: .whitespacesAndNewlines).normalizedNonEmpty
+    // Only a rule the local simulator actually matched yields a policy. When the walk stops at a
+    // provider/geodata rule it cannot evaluate, the trace carries that rule's policy as a hint —
+    // and a `GEOIP,CN,DIRECT` hint used to be read as "the IP check goes DIRECT" while the probe
+    // was demonstrably answered through the proxy. Undetermined is undetermined.
+    let probePolicy: String? = {
+      guard case .matched = trace.outcome else { return nil }
+      return trace.policy?.trimmingCharacters(in: .whitespacesAndNewlines).normalizedNonEmpty
+    }()
+    let rulePolicyLabel: String = {
+      switch trace.outcome {
+      case .matched:
+        return probePolicy ?? "—"
+      case .mihomoOnly:
+        return String(localized: "Decided by Mihomo")
+      case .noMatch:
+        return "—"
+      }
+    }()
     let ruleSummary = ruleProbeSummary(trace: trace)
     let region = regionLabel(for: input.publicIPInfo)
     let nodeSummary = currentNodeSummary(input: input)
@@ -163,7 +180,7 @@ enum ProxyEffectDiagnosticsBuilder {
         reason: reason,
         facts: facts(
           input: input,
-          probePolicy: probePolicy,
+          rulePolicyLabel: rulePolicyLabel,
           region: region,
           nodeSummary: nodeSummary,
           extra: extraFacts
@@ -323,7 +340,7 @@ enum ProxyEffectDiagnosticsBuilder {
 
   private static func facts(
     input: ProxyEffectDiagnosticsInput,
-    probePolicy: String?,
+    rulePolicyLabel: String,
     region: String,
     nodeSummary: String,
     extra: [ProxyEffectDiagnosticsSnapshot.Fact]
@@ -332,7 +349,7 @@ enum ProxyEffectDiagnosticsBuilder {
       .init(title: String(localized: "Routing"), value: input.routingMode.displayName),
       .init(title: String(localized: "Run Mode"), value: input.runMode.displayName),
       .init(title: String(localized: "Current Node"), value: nodeSummary),
-      .init(title: String(localized: "Rule Policy"), value: probePolicy ?? "—"),
+      .init(title: String(localized: "Rule Policy"), value: rulePolicyLabel),
     ]
     facts.append(contentsOf: extra)
     return facts

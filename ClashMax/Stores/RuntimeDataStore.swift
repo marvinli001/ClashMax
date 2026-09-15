@@ -15,6 +15,10 @@ final class RuntimeDataStore {
   private(set) var logs: [LogEntry] = []
   var trafficSample: TrafficSample = .zero
   var trafficHistory: [TrafficSample] = []
+  /// Every sample ever appended this session, including the ones `trafficHistory` has since
+  /// dropped. The chart anchors each retained sample to its sequence number, which is what lets
+  /// a new sample slide in from the right instead of every slot re-fitting in place.
+  private(set) var trafficSampleCount = 0
   /// The core's own resident-memory reading, or `.zero` while nothing has been reported yet.
   /// Only frames the core actually measured land here — see `appendMemorySample(_:)`.
   var memorySample: CoreMemorySample = .zero
@@ -42,9 +46,9 @@ final class RuntimeDataStore {
 
   /// `logLevel` is the runtime log level the user selected. At `debug`/`trace`
   /// it suppresses every visibility filter, so the Log Level setting actually
-  /// governs what the Logs page shows instead of Developer Mode overriding it.
-  func visibleLogs(developerMode: Bool, logLevel: String? = nil) -> [LogEntry] {
-    LogVisibility.visibleEntries(in: logs, developerMode: developerMode, logLevel: logLevel)
+  /// governs what the Logs page shows.
+  func visibleLogs(logLevel: String? = nil) -> [LogEntry] {
+    LogVisibility.visibleEntries(in: logs, logLevel: logLevel)
   }
 
   func setProvider(_ id: ProxyProvider.ID, healthCheckInFlight isRunning: Bool) {
@@ -226,6 +230,7 @@ final class RuntimeDataStore {
 
   func appendTrafficSample(_ sample: TrafficSample) {
     trafficSample = sample
+    trafficSampleCount += 1
     trafficHistory.append(sample)
     if trafficHistory.count > 72 {
       trafficHistory.removeFirst(trafficHistory.count - 72)
@@ -276,6 +281,7 @@ final class RuntimeDataStore {
     ruleProviderUpdatesInFlight = []
     trafficSample = .zero
     trafficHistory = []
+    trafficSampleCount = 0
     memorySample = .zero
   }
 

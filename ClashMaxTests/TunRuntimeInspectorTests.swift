@@ -8,7 +8,7 @@ final class TunRuntimeInspectorTests: XCTestCase {
       "/sbin/ifconfig": "utun1024: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500\n",
       "/sbin/route -n get 1.1.1.1": "route to: 1.1.1.1\ninterface: utun1024\n",
       "/usr/sbin/netstat -rn": "Destination Gateway Flags Netif\n10/8 link#1 UCS en0\n",
-      "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n",
+      "/usr/bin/dig +time=2 +tries=1 +short clashmax-dns-hijack-probe.invalid A": "198.18.0.42\n",
       "/usr/bin/curl -sS -o /dev/null -w %{http_code} --max-time 5 https://www.gstatic.com/generate_204": "204",
       "/usr/bin/dig @1.1.1.1 +time=2 +tries=1 +short example.com A": "93.184.216.34\n",
     ])
@@ -33,11 +33,11 @@ final class TunRuntimeInspectorTests: XCTestCase {
       "/sbin/ifconfig": "en0: flags=8863<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> mtu 1500\n",
       "/sbin/route -n get 1.1.1.1": "route to: 1.1.1.1\ninterface: en0\n",
       "/usr/sbin/netstat -rn": "Destination Gateway Flags Netif\n",
-      "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "142.250.191.68\n",
+      "/usr/bin/dig +time=2 +tries=1 +short clashmax-dns-hijack-probe.invalid A": "142.250.191.68\n",
       "/usr/bin/curl -sS -o /dev/null -w %{http_code} --max-time 5 https://www.gstatic.com/generate_204": "000",
       "/usr/bin/dig @1.1.1.1 +time=2 +tries=1 +short example.com A": "",
     ])
-    let inspector = TunRuntimeInspector(commandRunner: runner)
+    let inspector = TunRuntimeInspector(commandRunner: runner, dnsProbeRetryDelay: 0)
     let snapshot = await inspector.inspect(configuration(
       helperPID: nil,
       routeExcludes: ["10.0.0.0/8"],
@@ -55,12 +55,80 @@ final class TunRuntimeInspectorTests: XCTestCase {
     XCTAssertEqual(snapshot.overallStatus, .fail)
   }
 
+  /// The probe name is one nobody lists under `fake-ip-filter`. `www.gstatic.com` — the old probe —
+  /// is in `geosite:connectivity-check`, which profiles filter routinely, so a working hijack still
+  /// answered with Google's real address and the check (a repairable-routing check) sent the repair
+  /// path off to restart the helper and then stop TUN.
+  func testDNSHijackProbeUsesANameNoFakeIPFilterLists() async {
+    let runner = RecordingCommandRunner(outputs: [
+      "/usr/bin/curl -fsS --max-time 2 -H Authorization: Bearer secret http://127.0.0.1:9097/version": #"{"version":"v1.19.24"}"#,
+      "/sbin/ifconfig": "utun1024: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500\n",
+      "/sbin/route -n get 1.1.1.1": "route to: 1.1.1.1\ninterface: utun1024\n",
+      "/usr/bin/dig +time=2 +tries=1 +short clashmax-dns-hijack-probe.invalid A": "198.18.0.42\n",
+    ])
+    let inspector = TunRuntimeInspector(commandRunner: runner, dnsProbeRetryDelay: 0)
+
+    let snapshot = await inspector.inspect(configuration(includeExternal: false))
+
+    XCTAssertEqual(TunRuntimeInspector.dnsHijackProbeHost, "clashmax-dns-hijack-probe.invalid")
+    XCTAssertFalse(runner.commands.contains { $0.contains("www.gstatic.com A") })
+    XCTAssertEqual(snapshot.check(id: "dns-hijack")?.status, .pass)
+    XCTAssertEqual(snapshot.check(id: "dns-hijack")?.detail, "clashmax-dns-hijack-probe.invalid → 198.18.0.42")
+  }
+
+  /// A real resolver has no record for the probe name, so "no answer" is the un-hijacked shape,
+  /// not a broken command. Both shapes are one warning that names what was expected.
+  func testDNSHijackWarnsWithTheProbeEvidenceWhenARealResolverAnswers() async {
+    for (output, expectedDetail) in [
+      ("", "clashmax-dns-hijack-probe.invalid → no answer (expected a fake IP in 198.18.0.1/16)"),
+      ("142.250.191.68\n", "clashmax-dns-hijack-probe.invalid → 142.250.191.68 (expected a fake IP in 198.18.0.1/16)"),
+    ] {
+      let runner = RecordingCommandRunner(outputs: [
+        "/usr/bin/curl -fsS --max-time 2 -H Authorization: Bearer secret http://127.0.0.1:9097/version": #"{"version":"v1.19.24"}"#,
+        "/sbin/ifconfig": "utun1024: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500\n",
+        "/sbin/route -n get 1.1.1.1": "route to: 1.1.1.1\ninterface: utun1024\n",
+        "/usr/bin/dig +time=2 +tries=1 +short clashmax-dns-hijack-probe.invalid A": output,
+      ])
+      let inspector = TunRuntimeInspector(commandRunner: runner, dnsProbeRetryDelay: 0)
+
+      let snapshot = await inspector.inspect(configuration(includeExternal: false))
+
+      let check = snapshot.check(id: "dns-hijack")
+      XCTAssertEqual(check?.status, .warn)
+      XCTAssertEqual(
+        check?.message,
+        "DNS queries are not being hijacked: the probe was answered by a real resolver instead of Mihomo."
+      )
+      XCTAssertEqual(check?.detail, expectedDetail)
+    }
+  }
+
+  /// The first probe runs the instant the helper reports the tunnel up, before the route and DNS
+  /// override are always live; a second look after a pause absorbs that window.
+  func testDNSHijackProbeRetriesOnceBeforeReportingAWarning() async {
+    let runner = SequencedRecordingCommandRunner(outputs: [
+      "/usr/bin/curl -fsS --max-time 2 -H Authorization: Bearer secret http://127.0.0.1:9097/version": [#"{"version":"v1.19.24"}"#],
+      "/sbin/ifconfig": ["utun1024: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500\n"],
+      "/sbin/route -n get 1.1.1.1": ["route to: 1.1.1.1\ninterface: utun1024\n"],
+      "/usr/bin/dig +time=2 +tries=1 +short clashmax-dns-hijack-probe.invalid A": ["", "198.18.0.7\n"],
+    ])
+    let inspector = TunRuntimeInspector(commandRunner: runner, dnsProbeRetryDelay: 0.01)
+
+    let snapshot = await inspector.inspect(configuration(includeExternal: false))
+
+    XCTAssertEqual(snapshot.check(id: "dns-hijack")?.status, .pass)
+    XCTAssertEqual(
+      runner.commands.filter { $0.contains("clashmax-dns-hijack-probe.invalid") }.count,
+      2
+    )
+  }
+
   func testInspectorSkipsExternalProbesWhenDisabled() async {
     let runner = RecordingCommandRunner(outputs: [
       "/usr/bin/curl -fsS --max-time 2 -H Authorization: Bearer secret http://127.0.0.1:9097/version": #"{"version":"v1.19.24"}"#,
       "/sbin/ifconfig": "utun1024: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500\n",
       "/sbin/route -n get 1.1.1.1": "route to: 1.1.1.1\ninterface: utun1024\n",
-      "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n",
+      "/usr/bin/dig +time=2 +tries=1 +short clashmax-dns-hijack-probe.invalid A": "198.18.0.42\n",
     ])
     let inspector = TunRuntimeInspector(commandRunner: runner)
     let snapshot = await inspector.inspect(configuration(includeExternal: false))
@@ -77,7 +145,7 @@ final class TunRuntimeInspectorTests: XCTestCase {
         "/usr/bin/curl -fsS --max-time 2 -H Authorization: Bearer secret http://127.0.0.1:9097/version": #"{"version":"v1.19.24"}"#,
         "/sbin/ifconfig": "utun1024: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500\n",
         "/sbin/route -n get 1.1.1.1": "route to: 1.1.1.1\ninterface: utun1024\n",
-        "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n",
+        "/usr/bin/dig +time=2 +tries=1 +short clashmax-dns-hijack-probe.invalid A": "198.18.0.42\n",
         "/usr/bin/curl -sS -o /dev/null -w %{http_code} --max-time 5 https://www.gstatic.com/generate_204": "\(status)",
         "/usr/bin/dig @1.1.1.1 +time=2 +tries=1 +short example.com A": "93.184.216.34\n",
       ])
@@ -99,7 +167,7 @@ final class TunRuntimeInspectorTests: XCTestCase {
     let runner = RecordingCommandRunner(outputs: [
       "/sbin/ifconfig": "utun1024: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500\n",
       "/sbin/route -n get 1.1.1.1": "route to: 1.1.1.1\ninterface: utun1024\n",
-      "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n",
+      "/usr/bin/dig +time=2 +tries=1 +short clashmax-dns-hijack-probe.invalid A": "198.18.0.42\n",
     ])
     let inspector = TunRuntimeInspector(commandRunner: runner)
 
@@ -139,7 +207,7 @@ final class TunRuntimeInspectorTests: XCTestCase {
       default            10.0.0.1           UGScg        utun1024
       192.168.0/24       link#10            UCS          en0
       """,
-      "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n",
+      "/usr/bin/dig +time=2 +tries=1 +short clashmax-dns-hijack-probe.invalid A": "198.18.0.42\n",
     ])
     let inspector = TunRuntimeInspector(commandRunner: runner)
 
@@ -153,7 +221,7 @@ final class TunRuntimeInspectorTests: XCTestCase {
       "/usr/bin/curl -fsS --max-time 2 -H Authorization: Bearer secret http://127.0.0.1:9097/version": #"{"version":"v1.19.24"}"#,
       "/sbin/ifconfig": "utun1024: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500\n",
       "/sbin/route -n get 1.1.1.1": "route to: 1.1.1.1\ninterface: utun999\n",
-      "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n",
+      "/usr/bin/dig +time=2 +tries=1 +short clashmax-dns-hijack-probe.invalid A": "198.18.0.42\n",
     ])
     let inspector = TunRuntimeInspector(commandRunner: runner)
 
@@ -172,7 +240,7 @@ final class TunRuntimeInspectorTests: XCTestCase {
       "/usr/bin/curl -fsS --max-time 2 -H Authorization: Bearer secret http://127.0.0.1:9097/version": #"{"version":"v1.19.24"}"#,
       "/sbin/ifconfig": "utun1024: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500\n",
       "/usr/sbin/netstat -rn": "Destination Gateway Flags Netif\n0/0 link#1 UCS en0\n",
-      "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n",
+      "/usr/bin/dig +time=2 +tries=1 +short clashmax-dns-hijack-probe.invalid A": "198.18.0.42\n",
     ])
     let inspector = TunRuntimeInspector(commandRunner: runner)
 
@@ -314,7 +382,7 @@ final class TunRuntimeInspectorTests: XCTestCase {
       "/usr/bin/curl -fsS --max-time 2 -H Authorization: Bearer secret http://127.0.0.1:9097/version": #"{"version":"v1.19.24"}"#,
       "/sbin/ifconfig": "utun1024: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500\n",
       "/sbin/route -n get 1.1.1.1": "route to: 1.1.1.1\ninterface: \(routeInterface)\n",
-      "/usr/bin/dig +time=2 +tries=1 +short www.gstatic.com A": "198.18.0.42\n",
+      "/usr/bin/dig +time=2 +tries=1 +short clashmax-dns-hijack-probe.invalid A": "198.18.0.42\n",
       "/usr/bin/curl -sS -o /dev/null -w %{http_code} --max-time 5 https://www.gstatic.com/generate_204": externalTCPOutput,
       "/usr/bin/dig @1.1.1.1 +time=2 +tries=1 +short example.com A": externalUDPOutput,
     ])

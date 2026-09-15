@@ -34,12 +34,17 @@ struct PublicIPInfoClient: PublicIPInfoFetching, Sendable {
   var userAgent: String
   var shuffleProviders: Bool
 
+  /// `shuffleProviders` is off by default on purpose. The providers live on different domains, and
+  /// in Rule mode a profile routes some of them through the proxy and others DIRECT (a whitelist
+  /// profile sends anything outside its lists DIRECT). Rotating the first provider on every refresh
+  /// made the card flip between the proxy's egress and the user's own address from one refresh to
+  /// the next; a fixed order keeps the answer comparable, and the list is still walked on failure.
   init(
     providers: [Provider] = Provider.defaultProviders,
     session: URLSession? = nil,
     timeout: TimeInterval = 5,
     userAgent: String = PublicIPInfoClient.defaultUserAgent(),
-    shuffleProviders: Bool = true
+    shuffleProviders: Bool = false
   ) {
     self.providers = providers
     self.session = session ?? Self.makeSession(timeout: timeout)

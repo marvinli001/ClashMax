@@ -163,13 +163,12 @@ struct MihomoAPIClient: Sendable {
       let type = item["type"] as? String ?? "Unknown"
       let all = item["all"] as? [String] ?? []
       guard !all.isEmpty else { return nil }
-      let history = item["history"] as? [[String: Any]] ?? []
       let nodes = all.map { proxyName in
         let proxyDetail = proxyDetails[proxyName] ?? [:]
         return ProxyNode(
           name: proxyName,
           type: proxyTypes[proxyName] ?? MihomoBuiltInProxy.type(for: proxyName) ?? "proxy",
-          delay: Self.delay(for: proxyName, history: history),
+          delay: Self.latestDelay(in: proxyDetail),
           isSelectable: true,
           serverHost: proxyEndpoints[proxyName]?.host,
           serverPort: proxyEndpoints[proxyName]?.port,
@@ -201,7 +200,7 @@ struct MihomoAPIClient: Sendable {
         return ProxyNode(
           name: name,
           type: proxy["type"] as? String ?? MihomoBuiltInProxy.type(for: name) ?? "proxy",
-          delay: nil,
+          delay: Self.latestDelay(in: proxy),
           isSelectable: true,
           serverHost: proxy["server"] as? String,
           serverPort: Self.int(from: proxy["port"]),
@@ -648,9 +647,17 @@ struct MihomoAPIClient: Sendable {
     }
   }
 
-  private static func delay(for proxyName: String, history: [[String: Any]]) -> Int? {
-    history
-      .first { $0["name"] as? String == proxyName }?["delay"] as? Int
+  /// A node's most recent probe from its own `history`. Mihomo appends one `{time, delay}` entry
+  /// per URL test, newest last, and records a failed probe as `delay: 0`. The old lookup searched
+  /// the *group's* history for an entry carrying the node's name — a shape the API never produces —
+  /// so no runtime delay ever reached a group row and the dashboard sat on "No delay" for good.
+  private static func latestDelay(in proxy: [String: Any]) -> Int? {
+    guard let history = proxy["history"] as? [[String: Any]],
+          let latest = history.last,
+          let delay = int(from: latest["delay"]),
+          delay > 0
+    else { return nil }
+    return delay
   }
 
   private static func int(from value: Any?) -> Int? {

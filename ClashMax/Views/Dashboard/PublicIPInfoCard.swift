@@ -22,6 +22,18 @@ struct PublicIPInfoCard: View {
     .task {
       appModel.refreshPublicIPInfo()
     }
+    // A probe made before the capture path was live measured the direct route. The moment System
+    // Proxy / TUN / NE takes over, that answer is stale, so it is replaced rather than left to sit
+    // for the whole refresh interval.
+    .onChange(of: captureActive) { _, isActive in
+      if isActive {
+        appModel.refreshPublicIPInfo(force: true)
+      }
+    }
+  }
+
+  private var captureActive: Bool {
+    appModel.systemProxyEnabled || appModel.tunEnabled || appModel.networkExtensionEnabled
   }
 
   private func content(now: Date) -> some View {
@@ -32,7 +44,9 @@ struct PublicIPInfoCard: View {
         DashboardSectionHeader(
           title: "Public IP",
           symbolName: "globe",
-          trailing: isCompact ? nil : state.info.map { "Updated \($0.fetchedAt.formatted(date: .omitted, time: .standard))" }
+          trailing: isCompact ? nil : state.info.map {
+            String(format: String(localized: "Updated %@"), $0.fetchedAt.formatted(date: .omitted, time: .standard))
+          }
         )
 
         if state.isLoading {
@@ -64,9 +78,9 @@ struct PublicIPInfoCard: View {
         publicIPSkeletonBody
       } else {
         placeholderBody(
-          title: "Public IP unavailable",
+          title: String(localized: "Public IP unavailable"),
           symbolName: "network.slash",
-          message: state.errorMessage ?? "Refresh after the runtime is ready."
+          message: state.errorMessage ?? String(localized: "Refresh after the runtime is ready.")
         )
       }
 
@@ -103,13 +117,11 @@ struct PublicIPInfoCard: View {
         }
       }
 
+      // Who is serving the address and where it sits. The organisation repeated the ISP, the
+      // time zone and coordinates repeated the location, and the source is already the subtitle.
       LazyVGrid(columns: detailColumns, alignment: .leading, spacing: isCompact ? 6 : 8) {
-        PublicIPInfoDetail(title: "ASN / ISP", value: asnISPSummary(for: info))
-        PublicIPInfoDetail(title: "Organization", value: info.organization ?? "--")
-        PublicIPInfoDetail(title: "Location", value: locationSummary(for: info))
-        PublicIPInfoDetail(title: "Timezone", value: info.timezone ?? "--")
-        PublicIPInfoDetail(title: "Coordinates", value: coordinateSummary(for: info))
-        PublicIPInfoDetail(title: "Source", value: info.sourceName)
+        PublicIPInfoDetail(title: String(localized: "ASN / ISP"), value: asnISPSummary(for: info))
+        PublicIPInfoDetail(title: String(localized: "Location"), value: locationSummary(for: info))
       }
     }
   }
@@ -198,7 +210,7 @@ struct PublicIPInfoCard: View {
         .font(.caption.weight(.semibold))
         .foregroundStyle(.secondary)
       Spacer(minLength: 6)
-      Text(diagnostics.statusLabel)
+      Text(localizedStatusLabel(diagnostics.status))
         .font(.caption2.weight(.semibold))
         .foregroundStyle(proxyEffectTint(diagnostics.status))
         .padding(.horizontal, 7)
@@ -212,6 +224,15 @@ struct PublicIPInfoCard: View {
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private func localizedStatusLabel(_ status: ProxyEffectDiagnosticsSnapshot.Status) -> String {
+    switch status {
+    case .pass: return String(localized: "Pass")
+    case .warn: return String(localized: "Warn")
+    case .fail: return String(localized: "Fail")
+    case .waiting: return String(localized: "Waiting")
+    }
   }
 
   private func proxyEffectSymbol(_ status: ProxyEffectDiagnosticsSnapshot.Status) -> String {
@@ -247,7 +268,7 @@ struct PublicIPInfoCard: View {
       }
 
       LazyVGrid(columns: detailColumns, alignment: .leading, spacing: isCompact ? 6 : 8) {
-        ForEach(0..<6, id: \.self) { index in
+        ForEach(0..<2, id: \.self) { index in
           VStack(alignment: .leading, spacing: 5) {
             ClashMaxSkeletonBar(width: 62, height: 8)
             ClashMaxSkeletonBar(width: index.isMultiple(of: 2) ? 128 : 96, height: 11)
@@ -350,7 +371,7 @@ struct PublicIPInfoCard: View {
 
   private func countryTitle(for info: PublicIPInfo) -> String {
     let country = info.countryName ?? info.countryCode
-    return country ?? "Unknown Region"
+    return country ?? String(localized: "Unknown Region")
   }
 
   private func asnISPSummary(for info: PublicIPInfo) -> String {
@@ -367,13 +388,6 @@ struct PublicIPInfoCard: View {
       .filter { !$0.isEmpty }
       .joined(separator: ", ")
       .nonEmpty ?? "--"
-  }
-
-  private func coordinateSummary(for info: PublicIPInfo) -> String {
-    guard let latitude = info.latitude, let longitude = info.longitude else {
-      return "--"
-    }
-    return String(format: "%.2f, %.2f", latitude, longitude)
   }
 }
 

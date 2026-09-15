@@ -110,9 +110,9 @@ private extension TunDiagnosticsSnapshot {
 
   var repairableRoutingIssueMessage: String {
     guard let issue = repairableRoutingIssue else {
-      return "TUN routing diagnostics still report a repairable issue."
+      return "a repairable routing issue"
     }
-    return "\(issue.title): \(issue.message)"
+    return "\(issue.title) — \(issue.message)"
   }
 
   /// True when the only thing between this snapshot and a clean bill of health is a route
@@ -199,15 +199,25 @@ private extension SystemDNSOverrideState {
   }
 }
 
-struct AppNotice: Equatable {
+struct AppNotice: Equatable, Identifiable {
   enum Tone: Equatable {
     case info
     case success
     case warning
   }
 
+  let id: UUID
   var message: String
   var tone: Tone
+  /// When the notice was posted; the in-window toast keys its auto-dismiss off this.
+  var postedAt: Date
+
+  init(id: UUID = UUID(), message: String, tone: Tone, postedAt: Date = Date()) {
+    self.id = id
+    self.message = message
+    self.tone = tone
+    self.postedAt = postedAt
+  }
 
   var symbolName: String {
     switch tone {
@@ -218,6 +228,23 @@ struct AppNotice: Equatable {
     case .warning:
       return "exclamationmark.triangle.fill"
     }
+  }
+}
+
+/// One error waiting for the user's acknowledgement.
+///
+/// Errors used to sit as a red line in the status strip, where they were easy to miss and
+/// impossible to act on. Every published `lastError` now raises a native alert exactly once and
+/// lands in the Logs page as the permanent record; the strip is left to the runtime state.
+struct AppErrorAlert: Equatable, Identifiable {
+  let id: UUID
+  var message: String
+  var details: String?
+
+  init(id: UUID = UUID(), message: String, details: String? = nil) {
+    self.id = id
+    self.message = message
+    self.details = details
   }
 }
 
@@ -670,14 +697,10 @@ final class AppModel {
   }
 
   var launchSettings: LaunchSettings { settings.launchSettings }
-  var developerMode: Bool {
-    get { settings.developerMode }
-    set { setDeveloperMode(newValue) }
-  }
 
   /// Log level the user currently has selected in Settings. Log views and the
   /// diagnostics report key their visibility off this so that choosing Debug
-  /// actually surfaces debug entries instead of requiring Developer Mode too.
+  /// actually surfaces debug entries.
   var selectedLogLevel: String { overrides.logLevel }
   /// True while the selected log level asks for verbose output. Views use it to
   /// explain an empty Debug filter rather than showing a bare "no logs".
@@ -811,10 +834,40 @@ final class AppModel {
       if !isPublishingLastErrorWithDetails {
         lastErrorDetails = nil
       }
+      // Every error reaches the Logs page and raises the alert once. Gated on an actual change so a
+      // periodic check that keeps reporting the same failure neither floods the log nor re-opens
+      // the alert the user just dismissed; flows that retry clear `lastError` first anyway.
+      guard oldValue != lastError,
+            let message = lastError?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !message.isEmpty
+      else { return }
+      appendAppLog(level: "error", message: message)
+      pendingErrorAlert = AppErrorAlert(message: message)
     }
   }
 
   private(set) var lastErrorDetails: String?
+  /// The error alert the user has not acknowledged yet. Raised by `lastError`; cleared when the
+  /// alert is dismissed, or by a sheet that already shows the same error inline.
+  private(set) var pendingErrorAlert: AppErrorAlert?
+
+  func acknowledgeErrorAlert() {
+    pendingErrorAlert = nil
+  }
+
+  /// A view that presents `message` inline (the add-endpoint sheets keep their own banner next to
+  /// the form) calls this so the same error is not raised a second time as an alert.
+  func acknowledgeErrorAlert(matching message: String) {
+    guard pendingErrorAlert?.message == message else { return }
+    pendingErrorAlert = nil
+  }
+
+  /// Dismisses the transient notice, or only the one with `id` so a toast that timed out never
+  /// takes a newer notice down with it.
+  func dismissAppNotice(id: UUID? = nil) {
+    if let id, appNotice?.id != id { return }
+    appNotice = nil
+  }
 
   func publishSubscriptionFailure(_ error: Error) {
     let preflightError = error as? SubscriptionPreflightValidationError
@@ -831,6 +884,9 @@ final class AppModel {
     lastError = message
     isPublishingLastErrorWithDetails = false
     lastErrorDetails = details
+    if pendingErrorAlert?.message == message {
+      pendingErrorAlert?.details = details
+    }
   }
 
   private func publishWarningNotice(_ message: String, logMessage: String? = nil) {
@@ -1037,6 +1093,7 @@ final class AppModel {
   @ObservationIgnored private var runtimeStreamToken: UUID?
   @ObservationIgnored private var networkExtensionDiagnosticsTask: Task<Void, Never>?
   @ObservationIgnored private var tunDiagnosticsTask: Task<Void, Never>?
+  @ObservationIgnored private var tunDiagnosticsSettleTask: Task<Void, Never>?
   @ObservationIgnored private var residualSystemProxyDisableTask: Task<Void, Never>?
   @ObservationIgnored private var publishedNetworkExtensionDiagnosticEventIDs: Set<String> = []
   private let externalDashboardSecretStore: any SecretStoring
@@ -1804,14 +1861,9 @@ final class AppModel {
     !isCoreRunning && profileStore.activeProfile != nil && !profilePreviewGroups.isEmpty
   }
 
-  /// Retained log entries the user can actually see, under both the Developer
-  /// Mode switch and the selected runtime log level.
+  /// Retained log entries the user can actually see under the selected runtime log level.
   var userVisibleLogs: [LogEntry] {
-    LogVisibility.visibleEntries(
-      in: logs,
-      developerMode: developerMode,
-      logLevel: selectedLogLevel
-    )
+    LogVisibility.visibleEntries(in: logs, logLevel: selectedLogLevel)
   }
 
   /// The GeoIP host whose routing is simulated to detect an IP-check target that is sent to DIRECT.
@@ -1892,10 +1944,9 @@ final class AppModel {
       networkExtensionDiagnostics: networkExtensionController.diagnostics,
       readinessIssue: readinessIssue,
       lastError: lastError,
-      // Now level-aware: debug entries used to be dropped from the report unless
-      // Developer Mode happened to be on, so the diagnostics people attach to
-      // bug reports never contained the output they had turned on (discussion
-      // #25).
+      // Level-aware: debug entries used to be dropped from the report at quiet levels, so the
+      // diagnostics people attach to bug reports never contained the output they had turned on
+      // (discussion #25).
       recentLogs: userVisibleLogs.map { entry in
         "\(entry.date.formatted(date: .omitted, time: .standard)) [\(entry.level)] \(entry.message)"
       },
@@ -1913,10 +1964,8 @@ final class AppModel {
   func copyRuntimeDiagnostics() {
     Task { @MainActor [weak self] in
       guard let self else { return }
-      // The helper holds the core's own stdout/stderr in TUN mode, and until now
-      // it only reached the report if someone had pressed the Developer Mode
-      // "Logs" button first. Refresh it here so a copied report is complete for
-      // the people who actually file the issue (discussion #25).
+      // The helper holds the core's own stdout/stderr in TUN mode. Refresh it here so a copied
+      // report is complete for the people who actually file the issue (discussion #25).
       await refreshHelperLogsForDiagnostics()
       let report = runtimeDiagnosticsReport()
       NSPasteboard.general.clearContents()
@@ -2103,9 +2152,6 @@ final class AppModel {
   }
 
   func providerSideLoadPreflightUnsupportedReason(for profile: Profile) -> String? {
-    guard developerMode else {
-      return String(localized: "Provider side-load preflight requires Developer Mode.")
-    }
     guard profile.isSubscription else {
       return String(localized: "Provider side-load preflight requires a subscription profile.")
     }
@@ -2470,11 +2516,6 @@ final class AppModel {
   }
 
   private func installGlobalShortcuts(_ settings: GlobalShortcutSettings) {
-    guard developerMode else {
-      globalShortcutManager.stop()
-      shortcutRegistrationStatus = nil
-      return
-    }
     guard settings.validationError == nil else {
       globalShortcutManager.stop()
       shortcutRegistrationStatus = nil
@@ -3724,6 +3765,7 @@ final class AppModel {
       tunLaunchInFlight = false
       activateRuntimeArtifacts(materialization)
       refreshTunDiagnostics(includeExternal: true, runtimeOverrides: startSnapshot.overrides)
+      scheduleTunDiagnosticsSettlePass(runtimeOverrides: startSnapshot.overrides)
       let coreStopResult = await coreController.stop()
       if let error = coreStopResult.error {
         throw error
@@ -3776,7 +3818,8 @@ final class AppModel {
     runtimeSettingsApplyState = .idle
     startStreams(client: client, logLevel: startSnapshot.overrides.logLevel)
     reloadRuntimeData(clearAfterConfirmation: !previewSelections.isEmpty)
-    refreshPublicIPInfo()
+    // Forced: whatever the card showed before this start was measured through a different path.
+    refreshPublicIPInfo(force: true)
   }
 
   @discardableResult
@@ -3957,17 +4000,6 @@ final class AppModel {
     }
     if mode != .tun, shouldRestart {
       restart(preserveNetworkPolicyRestoreSnapshot: preserveNetworkPolicyRestoreSnapshotOnRestart)
-    }
-  }
-
-  func setDeveloperMode(_ enabled: Bool) {
-    settings.developerMode = enabled
-    if enabled {
-      appNotice = nil
-      installGlobalShortcuts(settings.globalShortcutSettings)
-    } else {
-      globalShortcutManager.stop()
-      shortcutRegistrationStatus = nil
     }
   }
 
@@ -5477,11 +5509,15 @@ final class AppModel {
   }
 
   func publicIPInfoNeedsRefresh(now: Date = Date()) -> Bool {
-    publicIP.needsRefresh(isCoreRunning: isCoreRunning, now: now)
+    publicIP.needsRefresh(isCoreRunning: isRunning, now: now)
   }
 
+  /// Keyed on `isRunning`, not `isCoreRunning`: the loopback-only preview core also counts as a
+  /// running core, and a probe made through it reports the un-proxied local address. That result
+  /// then sat in the card for the whole refresh interval after the real start — the "public IP
+  /// shows my own IP" report.
   func refreshPublicIPInfo(force: Bool = false, now: Date = Date()) {
-    publicIP.refresh(isCoreRunning: isCoreRunning, force: force, now: now)
+    publicIP.refresh(isCoreRunning: isRunning, force: force, now: now)
   }
 
   func refreshTunDiagnostics(
@@ -5526,6 +5562,24 @@ final class AppModel {
     }
   }
 
+  /// Re-inspects once the freshly started TUN has had a few seconds to settle. The first pass runs
+  /// the instant the helper reports the tunnel up, which is before the route and the system DNS
+  /// override are always live; a probe that lands in that window reports a DNS hijack or route
+  /// warning that is already stale by the time anyone reads it, and nothing re-ran the checks until
+  /// the user pressed refresh. Only a snapshot that reported an issue is worth the second pass.
+  private func scheduleTunDiagnosticsSettlePass(runtimeOverrides: RuntimeOverrides) {
+    tunDiagnosticsSettleTask?.cancel()
+    tunDiagnosticsSettleTask = Task { @MainActor [weak self] in
+      try? await Task.sleep(nanoseconds: 6_000_000_000)
+      guard !Task.isCancelled, let self else { return }
+      tunDiagnosticsSettleTask = nil
+      guard runtimeOwner == .tunnel || tunEnabled || tunnelCoreRunning else { return }
+      guard tunDiagnosticsTask == nil else { return }
+      guard tunDiagnostics.overallStatus == .warn || tunDiagnostics.overallStatus == .fail else { return }
+      refreshTunDiagnostics(includeExternal: false, runtimeOverrides: runtimeOverrides)
+    }
+  }
+
   private func liveTunHelperStatus(using helperClient: TunnelHelperClient) async -> (pid: Int?, message: String?) {
     do {
       let response = try await withTimeout(seconds: 2.5) { @Sendable [helperClient] in
@@ -5564,6 +5618,8 @@ final class AppModel {
   private func stopTunDiagnostics(clear: Bool) {
     tunDiagnosticsTask?.cancel()
     tunDiagnosticsTask = nil
+    tunDiagnosticsSettleTask?.cancel()
+    tunDiagnosticsSettleTask = nil
     if clear {
       clearTunDiagnostics()
     }
@@ -5589,9 +5645,7 @@ final class AppModel {
         publishWarningNotice(message)
         lastError = nil
         await updateTunHelperStatusDetail()
-        if developerMode {
-          helperLogs = await helperLaunchdDiagnostics()
-        }
+        helperLogs = await helperLaunchdDiagnostics()
       } catch {
         let message = UserFacingError.message(for: error)
         helperClient.statusMessage = message
@@ -5599,9 +5653,7 @@ final class AppModel {
         publishWarningNotice(message)
         lastError = nil
         await updateTunHelperStatusDetail()
-        if developerMode {
-          helperLogs = await helperLaunchdDiagnostics()
-        }
+        helperLogs = await helperLaunchdDiagnostics()
       }
     }
   }
@@ -5625,9 +5677,7 @@ final class AppModel {
       } catch {
         let message = UserFacingError.message(for: error)
         helperClient.statusMessage = message
-        if developerMode {
-          helperLogs = await helperLaunchdDiagnostics()
-        }
+        helperLogs = await helperLaunchdDiagnostics()
         publishWarningNotice(message)
         lastError = nil
         await updateTunHelperStatusDetail()
@@ -6954,7 +7004,7 @@ final class AppModel {
     if !didRestartHelper {
       appendAppLog(
         level: "warn",
-        message: "\(reason): runtime diagnostics still report \(postReloadSnapshot.repairableRoutingIssueMessage), restarting helper instead."
+        message: "\(reason): runtime diagnostics still report \(postReloadSnapshot.repairableRoutingIssueMessage); restarting the helper instead."
       )
       try await restartRunningTunHelper(
         runtimeConfig: runtimeConfig,
@@ -6973,7 +7023,7 @@ final class AppModel {
       if postRestartSnapshot.hasRepairableRoutingIssue {
         tunHelperStopUnconfirmed = true
         throw AppError.helperResponse(
-          "\(reason): TUN runtime diagnostics still report \(postRestartSnapshot.repairableRoutingIssueMessage) after helper restart."
+          "\(reason): after restarting the helper, TUN diagnostics still report \(postRestartSnapshot.repairableRoutingIssueMessage)"
         )
       }
       return didRestartHelper
@@ -6981,7 +7031,7 @@ final class AppModel {
 
     tunHelperStopUnconfirmed = true
     throw AppError.helperResponse(
-      "\(reason): TUN runtime diagnostics still report \(postReloadSnapshot.repairableRoutingIssueMessage) after helper restart."
+      "\(reason): after restarting the helper, TUN diagnostics still report \(postReloadSnapshot.repairableRoutingIssueMessage)"
     )
   }
 
@@ -7198,9 +7248,9 @@ final class AppModel {
         let result = await stopRuntimeCoordinated(.safetyShutdown)
         handleStopResult(result)
         if result.succeeded {
-          lastError = "TUN routing repair could not complete, so ClashMax stopped TUN safely: \(repairMessage)"
+          lastError = "ClashMax stopped TUN safely because the routing repair could not complete. \(repairMessage)"
         } else {
-          lastError = "Could not repair TUN routing: \(repairMessage)"
+          lastError = "Could not repair TUN routing. \(repairMessage)"
         }
       }
     }
@@ -7276,12 +7326,12 @@ final class AppModel {
         )
         if postRestartSnapshot.hasRepairableRoutingIssue {
           throw AppError.helperResponse(
-            "TUN routing repair still reports \(postRestartSnapshot.repairableRoutingIssueMessage) after helper restart."
+            "After restarting the helper, TUN diagnostics still report \(postRestartSnapshot.repairableRoutingIssueMessage)"
           )
         }
       } else if didRestartHelper, postReloadSnapshot.hasRepairableRoutingIssue {
         throw AppError.helperResponse(
-          "TUN routing repair still reports \(postReloadSnapshot.repairableRoutingIssueMessage) after helper restart."
+          "After restarting the helper, TUN diagnostics still report \(postReloadSnapshot.repairableRoutingIssueMessage)"
         )
       }
       reloadRuntimeData()

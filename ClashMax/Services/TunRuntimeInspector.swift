@@ -133,10 +133,26 @@ struct TunRuntimeInspector: TunRuntimeInspecting {
     static let curl = "/usr/bin/curl"
   }
 
-  private let commandRunner: any CommandRunning
+  /// The name the fake-IP probe resolves. Deliberately not the delay-test host: `www.gstatic.com`
+  /// is in `geosite:connectivity-check`, which profiles routinely list under `fake-ip-filter`, so
+  /// a perfectly hijacked query still came back with Google's real address and the check reported
+  /// a broken hijack on a working TUN — and, because that check is on the repairable-routing list,
+  /// a routing repair went on to restart the helper and then stop TUN over it. Fake-IP answers
+  /// any name that is not filtered, so a name nobody filters is the honest probe; a real resolver
+  /// answers it with NXDOMAIN, which is just as telling.
+  static let dnsHijackProbeHost = "clashmax-dns-hijack-probe.invalid"
 
-  init(commandRunner: any CommandRunning = ProcessCommandRunner(timeout: 6)) {
+  private let commandRunner: any CommandRunning
+  /// Pause before the fake-IP probe's second attempt. The first attempt runs the moment the helper
+  /// reports the tunnel up, which can be before the route and the system DNS override are live.
+  private let dnsProbeRetryDelay: TimeInterval
+
+  init(
+    commandRunner: any CommandRunning = ProcessCommandRunner(timeout: 6),
+    dnsProbeRetryDelay: TimeInterval = 1.5
+  ) {
     self.commandRunner = commandRunner
+    self.dnsProbeRetryDelay = dnsProbeRetryDelay
   }
 
   func inspect(_ configuration: TunRuntimeInspectionConfiguration) async -> TunDiagnosticsSnapshot {
@@ -545,33 +561,42 @@ struct TunRuntimeInspector: TunRuntimeInspecting {
     }
 
     do {
-      let output = try await commandRunner.run(
-        Command.dig,
-        ["+time=2", "+tries=1", "+short", "www.gstatic.com", "A"]
-      )
-      let ips = ipv4Addresses(in: output)
       if configuration.tunSettings.dnsFakeIPEnabled {
         let range = configuration.tunSettings.normalizedFakeIPRange
+        var ips = try await fakeIPProbe()
+        if !ips.contains(where: { ipv4($0, isInCIDR: range) }), dnsProbeRetryDelay > 0 {
+          // One more try after the tunnel has had a moment: a probe that ran before the route or
+          // the DNS override settled is not evidence of anything.
+          try await Task.sleep(nanoseconds: UInt64(dnsProbeRetryDelay * 1_000_000_000))
+          ips = try await fakeIPProbe()
+        }
         if ips.contains(where: { ipv4($0, isInCIDR: range) }) {
           return TunDiagnosticCheck(
             id: "dns-hijack",
             title: "DNS Hijack",
             status: .pass,
             message: "DNS hijack returned a fake IP in \(range).",
-            detail: ips.joined(separator: ", ")
+            detail: "\(Self.dnsHijackProbeHost) → \(ips.joined(separator: ", "))"
           )
         }
+        // Either way the query was answered by a real resolver rather than Mihomo: with a real
+        // address if that resolver invents one for unknown names, with nothing otherwise.
         return TunDiagnosticCheck(
           id: "dns-hijack",
           title: "DNS Hijack",
-          status: ips.isEmpty ? .fail : .warn,
-          message: ips.isEmpty
-            ? "DNS hijack did not return an A record."
-            : "DNS hijack did not return the configured fake IP range.",
-          detail: outputSnippet(output)
+          status: .warn,
+          message: "DNS queries are not being hijacked: the probe was answered by a real resolver instead of Mihomo.",
+          detail: ips.isEmpty
+            ? "\(Self.dnsHijackProbeHost) → no answer (expected a fake IP in \(range))"
+            : "\(Self.dnsHijackProbeHost) → \(ips.joined(separator: ", ")) (expected a fake IP in \(range))"
         )
       }
 
+      let output = try await commandRunner.run(
+        Command.dig,
+        ["+time=2", "+tries=1", "+short", "www.gstatic.com", "A"]
+      )
+      let ips = ipv4Addresses(in: output)
       return TunDiagnosticCheck(
         id: "dns-hijack",
         title: "DNS Hijack",
@@ -582,6 +607,14 @@ struct TunRuntimeInspector: TunRuntimeInspecting {
     } catch {
       return commandFailureCheck(id: "dns-hijack", title: "DNS Hijack", error: error)
     }
+  }
+
+  private func fakeIPProbe() async throws -> [String] {
+    let output = try await commandRunner.run(
+      Command.dig,
+      ["+time=2", "+tries=1", "+short", Self.dnsHijackProbeHost, "A"]
+    )
+    return ipv4Addresses(in: output)
   }
 
   private func externalTCPCheck() async -> TunDiagnosticCheck {

@@ -268,6 +268,38 @@ final class ProxyEffectDiagnosticsTests: XCTestCase {
     XCTAssertTrue(snapshot.facts.contains { $0.value == "DIRECT" })
   }
 
+  /// The local simulator cannot evaluate GEOIP / GEOSITE / RULE-SET. It used to hand back that
+  /// rule's policy anyway, so a profile whose first unevaluable rule was `GEOIP,CN,DIRECT` reported
+  /// "IP check target matched a DIRECT rule" while the probe was demonstrably answered from Japan.
+  func testProbeHostStoppingAtAMihomoOnlyRuleIsNotReportedAsDirect() {
+    let rules = [
+      RuntimeRule(index: 1, type: "GEOIP", payload: "CN", policy: "DIRECT"),
+      RuntimeRule(index: 2, type: "MATCH", payload: "", policy: "Proxies"),
+    ]
+
+    let snapshot = ProxyEffectDiagnosticsBuilder.build(
+      ProxyEffectDiagnosticsInput(
+        publicIPInfo: makeInfo(countryCode: "JP"),
+        routingMode: .systemProxy,
+        runMode: .rule,
+        systemProxyEnabled: true,
+        currentGroupName: "Proxies",
+        currentNodeName: "JP-01",
+        currentNodeType: "vless",
+        runtimeRules: rules,
+        probeHost: "api.ip.sb"
+      )
+    )
+
+    XCTAssertEqual(snapshot.status, .pass)
+    XCTAssertEqual(snapshot.cause, .proxyConfirmed)
+    XCTAssertNil(snapshot.probePolicy)
+    XCTAssertEqual(
+      snapshot.facts.first { $0.title == String(localized: "Rule Policy") }?.value,
+      String(localized: "Decided by Mihomo")
+    )
+  }
+
   // MARK: Public IP outcome
 
   func testStillChinaWhenPathLooksProxiedReturnsWarn() {

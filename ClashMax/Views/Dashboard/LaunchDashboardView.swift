@@ -106,7 +106,7 @@ struct LaunchDashboardView: View {
   }
 
   private var launchTitle: String {
-    state.launchTitle
+    NSLocalizedString(state.launchTitle, comment: "")
   }
 
   private var stateSymbol: String {
@@ -334,42 +334,17 @@ private struct LaunchStatusMessage: View {
     }
   }
 
+  /// Only the standing conditions that block a start (setup needed, core crashed) live under the
+  /// controls. A failed action is an alert and a passing remark is a toast; neither is repeated here.
   private var presentation: LaunchStatusPresentation? {
-    if let message = state.detailMessage {
-      if appModel.tunHelperPreparationState.isFailure {
-        return LaunchStatusPresentation(message: message, symbolName: "xmark.octagon.fill", color: .red, shakesOnChange: true)
-      }
-      if case .blocked = state {
-        return LaunchStatusPresentation(message: message, symbolName: "exclamationmark.triangle.fill", color: .secondary, shakesOnChange: false)
-      }
+    guard let message = state.detailMessage else { return nil }
+    if appModel.tunHelperPreparationState.isFailure {
       return LaunchStatusPresentation(message: message, symbolName: "xmark.octagon.fill", color: .red, shakesOnChange: true)
     }
-
-    if let error = appModel.lastError {
-      return LaunchStatusPresentation(message: error, symbolName: "xmark.octagon.fill", color: .red, shakesOnChange: true)
+    if case .blocked = state {
+      return LaunchStatusPresentation(message: message, symbolName: "exclamationmark.triangle.fill", color: .secondary, shakesOnChange: false)
     }
-
-    if let notice = appModel.appNotice {
-      return LaunchStatusPresentation(
-        message: notice.message,
-        symbolName: notice.symbolName,
-        color: noticeColor(for: notice.tone),
-        shakesOnChange: false
-      )
-    }
-
-    return nil
-  }
-
-  private func noticeColor(for tone: AppNotice.Tone) -> Color {
-    switch tone {
-    case .info:
-      return .blue
-    case .success:
-      return .green
-    case .warning:
-      return .orange
-    }
+    return LaunchStatusPresentation(message: message, symbolName: "xmark.octagon.fill", color: .red, shakesOnChange: true)
   }
 }
 

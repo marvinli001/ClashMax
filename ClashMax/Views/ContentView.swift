@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct ContentView: View {
@@ -24,6 +25,19 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .clipped()
+        // Transient notices (a copied report, a delay test that failed, a helper that answered
+        // late) float over the page and go away by themselves. Errors are the alert below.
+        .overlay(alignment: .top) {
+          // A readiness issue already stands in the strip (and on the Home page); a toast repeating
+          // the same words on top of it would be a third copy of one fact.
+          if let notice = appModel.appNotice, notice.message != appModel.readinessIssue {
+            AppNoticeToast(notice: notice)
+              .padding(.top, 12)
+              .padding(.horizontal, 16)
+              .transition(.move(edge: .top).combined(with: .opacity))
+          }
+        }
+        .animation(.spring(response: 0.36, dampingFraction: 0.86), value: appModel.appNotice?.id)
       }
       .toolbar {
         // Deliberately the default placement, not `.navigation`: `.navigation` sits
@@ -52,6 +66,21 @@ struct ContentView: View {
         }
       }
     }
+    .alert(
+      Text("Error"),
+      isPresented: errorAlertPresented,
+      presenting: appModel.pendingErrorAlert
+    ) { alert in
+      Button("Copy") {
+        copyErrorAlert(alert)
+      }
+      Button("Show Logs") {
+        appModel.selectedSection = .logs
+      }
+      Button("OK", role: .cancel) {}
+    } message: { alert in
+      Text(alert.message)
+    }
     .sheet(isPresented: initialTunHelperPromptPresented) {
       if let prompt = appModel.initialTunHelperPrompt {
         InitialTunHelperPromptSheet(
@@ -69,6 +98,27 @@ struct ContentView: View {
     .onAppear {
       appModel.evaluateInitialTunHelperPromptOnLaunch()
     }
+  }
+
+  /// Every published error raises this native alert once; dismissing it acknowledges the error
+  /// without forgetting it (the Status page and the Logs page still carry it).
+  private var errorAlertPresented: Binding<Bool> {
+    Binding(
+      get: { appModel.pendingErrorAlert != nil },
+      set: { isPresented in
+        if !isPresented {
+          appModel.acknowledgeErrorAlert()
+        }
+      }
+    )
+  }
+
+  private func copyErrorAlert(_ alert: AppErrorAlert) {
+    let text = [alert.message, alert.details]
+      .compactMap(\.self)
+      .joined(separator: "\n\n")
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(text, forType: .string)
   }
 
   private var initialTunHelperPromptPresented: Binding<Bool> {
@@ -281,31 +331,22 @@ private struct InitialTunHelperPromptSheet: View {
   }
 }
 
+/// The one-line runtime summary above every page: state, profile, routing. Errors and notices no
+/// longer land here — an error raises the alert in `ContentView` and a notice floats as a toast —
+/// so the only supplement left is a readiness issue, which is a standing condition rather than an
+/// event and stays until it is fixed.
 struct StatusStrip: View {
   @Environment(AppModel.self) private var appModel
 
   var body: some View {
     StatusStripContent(
-      statusSummary: appModel.statusSummary,
+      statusSummary: NSLocalizedString(appModel.statusSummary, comment: ""),
       statusSymbol: statusSymbol,
       statusStyle: statusStyle,
       profileName: appModel.profileStore.activeProfile?.name ?? String(localized: "No Profile"),
       proxyRoutingStatus: proxyRoutingStatus,
-      supplemental: supplemental
+      readinessIssue: appModel.readinessIssue
     )
-  }
-
-  private var supplemental: StatusStripSupplemental? {
-    if let issue = appModel.readinessIssue {
-      return .issue(issue)
-    }
-    if let error = appModel.lastError {
-      return .error(error)
-    }
-    if let notice = appModel.appNotice {
-      return .notice(message: notice.message, symbolName: notice.symbolName, tone: notice.tone)
-    }
-    return nil
   }
 
   private var statusSymbol: String {
@@ -342,51 +383,8 @@ struct StatusStrip: View {
 
   private var proxyRoutingStatus: String {
     let isActive = appModel.systemProxyEnabled || appModel.tunEnabled || appModel.networkExtensionEnabled
-    return "\(appModel.proxyRoutingMode.displayName) \(isActive ? "On" : "Ready")"
-  }
-}
-
-enum StatusStripSupplemental {
-  case issue(String)
-  case error(String)
-  case notice(message: String, symbolName: String, tone: AppNotice.Tone)
-
-  var message: String {
-    switch self {
-    case let .issue(message), let .error(message):
-      return message
-    case let .notice(message, _, _):
-      return message
-    }
-  }
-
-  var symbolName: String {
-    switch self {
-    case .issue:
-      return "exclamationmark.triangle.fill"
-    case .error:
-      return "xmark.octagon.fill"
-    case let .notice(_, symbolName, _):
-      return symbolName
-    }
-  }
-
-  var color: Color {
-    switch self {
-    case .issue:
-      return .secondary
-    case .error:
-      return .red
-    case let .notice(_, _, tone):
-      switch tone {
-      case .info:
-        return .blue
-      case .success:
-        return .green
-      case .warning:
-        return .orange
-      }
-    }
+    let format = isActive ? String(localized: "%@ On") : String(localized: "%@ Ready")
+    return String(format: format, appModel.proxyRoutingMode.displayName)
   }
 }
 
@@ -396,7 +394,7 @@ struct StatusStripContent: View {
   let statusStyle: Color
   let profileName: String
   let proxyRoutingStatus: String
-  let supplemental: StatusStripSupplemental?
+  let readinessIssue: String?
 
   var body: some View {
     ViewThatFits(in: .horizontal) {
@@ -433,8 +431,8 @@ struct StatusStripContent: View {
 
       Spacer()
 
-      if let supplemental {
-        supplementalLabel(supplemental, lineLimit: 1)
+      if let readinessIssue {
+        readinessLabel(readinessIssue, lineLimit: 1)
           .fixedSize(horizontal: true, vertical: false)
       }
     }
@@ -461,18 +459,85 @@ struct StatusStripContent: View {
           .fixedSize(horizontal: true, vertical: false)
       }
 
-      if let supplemental {
-        supplementalLabel(supplemental, lineLimit: 2)
+      if let readinessIssue {
+        readinessLabel(readinessIssue, lineLimit: 2)
           .fixedSize(horizontal: false, vertical: true)
       }
     }
   }
 
-  private func supplementalLabel(_ supplemental: StatusStripSupplemental, lineLimit: Int) -> some View {
-    Label(supplemental.message, systemImage: supplemental.symbolName)
-      .foregroundStyle(supplemental.color)
+  private func readinessLabel(_ issue: String, lineLimit: Int) -> some View {
+    Label(issue, systemImage: "exclamationmark.triangle.fill")
+      .foregroundStyle(.secondary)
       .lineLimit(lineLimit)
       .truncationMode(.tail)
       .frame(maxWidth: .infinity, alignment: .leading)
+  }
+}
+
+/// A notice that floats over the page and leaves on its own. Warnings stay a little longer than
+/// confirmations; any of them can be clicked away.
+private struct AppNoticeToast: View {
+  @Environment(AppModel.self) private var appModel
+  let notice: AppNotice
+
+  var body: some View {
+    HStack(spacing: 10) {
+      Image(systemName: notice.symbolName)
+        .font(.system(size: 14, weight: .semibold))
+        .foregroundStyle(tint)
+      Text(notice.message)
+        .font(.callout)
+        .lineLimit(3)
+        .fixedSize(horizontal: false, vertical: true)
+      Button {
+        appModel.dismissAppNotice(id: notice.id)
+      } label: {
+        Image(systemName: "xmark")
+          .font(.caption.weight(.semibold))
+      }
+      .buttonStyle(.borderless)
+      .accessibilityLabel("Dismiss")
+    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 10)
+    .frame(maxWidth: 560)
+    .toastSurface()
+    .accessibilityElement(children: .combine)
+    .task(id: notice.id) {
+      try? await Task.sleep(for: .seconds(displayDuration))
+      guard !Task.isCancelled else { return }
+      appModel.dismissAppNotice(id: notice.id)
+    }
+  }
+
+  private var displayDuration: Double {
+    notice.tone == .warning ? 8 : 4
+  }
+
+  private var tint: Color {
+    switch notice.tone {
+    case .info:
+      return .blue
+    case .success:
+      return .green
+    case .warning:
+      return .orange
+    }
+  }
+}
+
+private extension View {
+  /// Liquid Glass on macOS 26; the same rounded material surface the system uses below it.
+  @ViewBuilder
+  func toastSurface() -> some View {
+    let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+    if #available(macOS 26, *) {
+      glassEffect(.regular, in: shape)
+    } else {
+      background(.regularMaterial, in: shape)
+        .overlay(shape.strokeBorder(.separator, lineWidth: 1))
+        .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
+    }
   }
 }

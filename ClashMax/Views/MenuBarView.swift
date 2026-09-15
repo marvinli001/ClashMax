@@ -70,7 +70,8 @@ struct MenuBarView: View {
       if runtime.showsTraffic {
         MenuBarTrafficSection(
           sample: runtimeData.trafficSample,
-          history: runtimeData.trafficHistory
+          history: runtimeData.trafficHistory,
+          sampleCount: runtimeData.trafficSampleCount
         )
 
         Divider()
@@ -692,6 +693,7 @@ struct MenuBarInfoRow: View {
 struct MenuBarTrafficSection: View {
   let sample: TrafficSample
   let history: [TrafficSample]
+  let sampleCount: Int
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
@@ -703,6 +705,7 @@ struct MenuBarTrafficSection: View {
 
       TrafficSparkline(
         samples: chartSamples,
+        sampleCount: sampleCount,
         inset: 4,
         downloadLineWidth: 1.8,
         uploadLineWidth: 1.6,

@@ -1,27 +1,25 @@
 import SwiftUI
 
-/// The traffic chart's geometry, resolved away from SwiftUI so the parts that
-/// decide how the chart *moves* can be tested without rendering a view.
+/// The traffic chart's data, resolved away from SwiftUI so the parts that decide how the chart
+/// *moves* can be tested without rendering a view.
 ///
-/// Three things made the old chart read as a redraw instead of a scroll, and all
-/// three live here:
+/// Every retained sample keeps its sequence number, and the shape places a sample by that number
+/// rather than by its position in the array. That is the whole trick behind a chart that scrolls:
+/// the old chart interpolated each *slot* from its previous height to its next one, so on every
+/// tick all 72 points morphed towards their right-hand neighbour at once. With steady traffic that
+/// reads as a slide; with real, spiky traffic every point is busy going somewhere else and the
+/// whole line shivers for the full second. Here nothing morphs. A sample's height is fixed the
+/// moment it arrives, only the view's window (`head`) moves, and a new sample enters from the
+/// right edge at the height it will keep.
 ///
-/// - **The window used to grow.** Points were spread across `samples.count`, so
-///   for the first 72 seconds of a session every new sample re-spaced the whole
-///   path and the shape visibly compressed horizontally. A fixed slot count with
-///   zero padding on the left keeps the spacing constant: samples enter at the
-///   right edge and leave at the left, one slot per tick.
-/// - **The scale used to snap.** The plot was normalised against the raw maximum
-///   of the visible window, so the entire chart jumped vertically whenever a
-///   spike entered or fell out. Rounding the ceiling up to a 1/2/5 × 10ⁿ step
-///   means small fluctuations don't rescale anything at all.
-/// - **Idle noise filled the plot.** With a raw maximum, a single 40 B/s
-///   keepalive on an otherwise idle link normalised to full height and looked
-///   like saturation. A floor on the ceiling keeps idle traffic flat.
+/// The vertical scale is the other thing kept still: the ceiling snaps up to a 1/2/5-style rung
+/// so ordinary fluctuation never rescales the plot, and a floor keeps an idle trickle flat.
 struct TrafficChartGeometry: Equatable {
-  /// Normalised 0...1 heights, oldest first, always exactly `slotCount` entries.
+  /// Bytes per second, oldest first, one entry per retained sample.
   var download: [Double]
   var upload: [Double]
+  /// Sequence number of the last entry; entry `i` is sample `newestSequence - (count - 1 - i)`.
+  var newestSequence: Int
   /// Bytes per second represented by the top of the plot.
   var ceiling: Int
 
@@ -29,20 +27,14 @@ struct TrafficChartGeometry: Equatable {
   /// less than 1 KB/s, so that trickle stays visually flat.
   static let minimumCeiling = 1024
 
-  init(samples: [TrafficSample], slotCount: Int) {
-    let slots = max(slotCount, 2)
-    let window = Self.window(samples, slots: slots)
-    let peak = window.reduce(0) { max($0, max($1.upload, $1.download)) }
-    let ceiling = Self.niceCeiling(atLeast: max(peak, Self.minimumCeiling))
-    let divisor = Double(ceiling)
-    self.ceiling = ceiling
-    download = window.map { min(Double($0.download) / divisor, 1) }
-    upload = window.map { min(Double($0.upload) / divisor, 1) }
-  }
-
-  private static func window(_ samples: [TrafficSample], slots: Int) -> [TrafficSample] {
-    guard samples.count < slots else { return Array(samples.suffix(slots)) }
-    return Array(repeating: .zero, count: slots - samples.count) + samples
+  /// - Parameter sampleCount: how many samples the store has appended in total; the retained
+  ///   `samples` are the newest of them, so the last one carries sequence `sampleCount - 1`.
+  init(samples: [TrafficSample], sampleCount: Int) {
+    let peak = samples.reduce(0) { max($0, max($1.upload, $1.download)) }
+    ceiling = Self.niceCeiling(atLeast: max(peak, Self.minimumCeiling))
+    download = samples.map { Double($0.download) }
+    upload = samples.map { Double($0.upload) }
+    newestSequence = max(sampleCount, samples.count) - 1
   }
 
   /// The ladder the ceiling snaps to, in quarters of a power of ten: 1, 1.25,
@@ -51,8 +43,8 @@ struct TrafficChartGeometry: Equatable {
   /// A coarse 1/2/5 ladder holds the scale still for longer, but it can park the
   /// ceiling at twice the peak and leave the curve crawling along the bottom half
   /// of the plot. No two rungs here are more than 25% apart, so the peak always
-  /// reaches at least 80% of the plot height, and a rescale — now that it eases
-  /// in with everything else — is a small nudge rather than a jump.
+  /// reaches at least 80% of the plot height, and a rescale — eased in over half a
+  /// second — is a small nudge rather than a jump.
   private static let ceilingSteps = [4, 5, 6, 7, 8, 10, 12, 14, 16, 20, 24, 28, 32, 40]
 
   /// Rounds up to the next rung so the vertical scale only changes on a real
@@ -75,89 +67,47 @@ struct TrafficChartGeometry: Equatable {
   }
 }
 
-/// `VectorArithmetic` over an array, so a whole series can be `animatableData`.
+/// One traffic series as a smoothed curve anchored to sample sequence numbers.
 ///
-/// This is what turns the 1 Hz sample into motion: interpolating every slot at
-/// once means a new sample doesn't pop in at the right edge, it slides in while
-/// the rest of the series slides left.
-struct AnimatableVector: VectorArithmetic {
-  var values: [Double]
-
-  init(_ values: [Double] = []) {
-    self.values = values
-  }
-
-  static var zero: AnimatableVector { AnimatableVector() }
-
-  static func + (lhs: AnimatableVector, rhs: AnimatableVector) -> AnimatableVector {
-    combine(lhs, rhs, +)
-  }
-
-  static func - (lhs: AnimatableVector, rhs: AnimatableVector) -> AnimatableVector {
-    combine(lhs, rhs, -)
-  }
-
-  mutating func scale(by rhs: Double) {
-    for index in values.indices {
-      values[index] *= rhs
-    }
-  }
-
-  var magnitudeSquared: Double {
-    values.reduce(0) { $0 + $1 * $1 }
-  }
-
-  /// The two sides always have the same length in practice (the geometry pads to
-  /// a fixed slot count), but `.zero` is empty and SwiftUI subtracts against it,
-  /// so the shorter side reads as zeros rather than truncating the result.
-  private static func combine(
-    _ lhs: AnimatableVector,
-    _ rhs: AnimatableVector,
-    _ operation: (Double, Double) -> Double
-  ) -> AnimatableVector {
-    let count = max(lhs.values.count, rhs.values.count)
-    var result = [Double]()
-    result.reserveCapacity(count)
-    for index in 0..<count {
-      let left = index < lhs.values.count ? lhs.values[index] : 0
-      let right = index < rhs.values.count ? rhs.values[index] : 0
-      result.append(operation(left, right))
-    }
-    return AnimatableVector(result)
-  }
-}
-
-/// One traffic series as a smoothed curve.
+/// `head` is the sequence number currently sitting at the right edge and `scale` is `1 / ceiling`;
+/// both are the animatable data. The sample values themselves never animate — see
+/// `TrafficChartGeometry` for why that is the point. Points to the right of `head` (the sample
+/// that is still sliding in) and left of the window are drawn and left to the view's clip.
 ///
 /// Catmull-Rom through the samples rather than straight segments: the samples are
 /// a 1 Hz reconstruction of a continuous signal, so a curve is not decoration,
 /// it is closer to the thing being measured than the polyline was.
 struct TrafficSeriesShape: Shape {
-  var values: AnimatableVector
+  var values: [Double]
+  var newestSequence: Int
+  /// Samples visible between the left and right edge of the plot.
+  var slotCount: Int
+  var head: Double
+  var scale: Double
   var smoothing: CGFloat
   var isClosed: Bool
+  /// Keeps the newest point's round cap inside the clip instead of cutting it in half.
+  var edgeInset: CGFloat = 2
 
-  init(values: [Double], smoothing: CGFloat, isClosed: Bool = false) {
-    self.values = AnimatableVector(values)
-    self.smoothing = smoothing
-    self.isClosed = isClosed
-  }
-
-  var animatableData: AnimatableVector {
-    get { values }
-    set { values = newValue }
+  var animatableData: AnimatablePair<Double, Double> {
+    get { AnimatablePair(head, scale) }
+    set {
+      head = newValue.first
+      scale = newValue.second
+    }
   }
 
   func path(in rect: CGRect) -> Path {
-    let heights = values.values
     var path = Path()
-    guard heights.count >= 2, rect.width > 0, rect.height > 0 else { return path }
+    guard values.count >= 2, slotCount >= 2, rect.width > 0, rect.height > 0 else { return path }
 
-    let step = rect.width / CGFloat(heights.count - 1)
-    let points = heights.enumerated().map { index, value in
-      CGPoint(
-        x: rect.minX + CGFloat(index) * step,
-        y: rect.maxY - rect.height * CGFloat(min(max(value, 0), 1))
+    let plotRight = rect.maxX - edgeInset
+    let step = (rect.width - edgeInset * 2) / CGFloat(slotCount - 1)
+    let points = values.enumerated().map { index, value in
+      let sequence = Double(newestSequence - (values.count - 1 - index))
+      return CGPoint(
+        x: plotRight - CGFloat(head - sequence) * step,
+        y: rect.maxY - rect.height * CGFloat(min(max(value * scale, 0), 1))
       )
     }
 
@@ -196,23 +146,28 @@ struct TrafficSeriesShape: Shape {
 
 struct TrafficSparkline: View {
   let samples: [TrafficSample]
+  /// Total samples appended this session (`RuntimeDataStore.trafficSampleCount`).
+  let sampleCount: Int
   var inset: CGFloat = 8
   var downloadLineWidth: CGFloat = 2.4
   var uploadLineWidth: CGFloat = 2
   var baselineOpacity = 0.18
-  /// Matches `RuntimeDataStore`'s retained history, so a full buffer fills the
-  /// plot exactly and nothing is dropped on the floor.
-  var slotCount = 72
+  /// Two fewer than `RuntimeDataStore` retains (72): the sample sliding in on the right and the one
+  /// sliding out on the left are both still needed while they are half visible, so the window shows
+  /// slightly less than the buffer and the curve never starts short of the left edge.
+  var slotCount = 70
   var smoothing: CGFloat = 0.2
-  /// mihomo's `/traffic` websocket emits one sample per second. Easing each
-  /// update across that same second is what makes the chart scroll instead of
-  /// step; a spring would overshoot and wobble on every tick, so this is linear.
+  /// mihomo's `/traffic` websocket emits one sample per second. Easing the window across that
+  /// same second is what makes the chart scroll instead of step; linear, because a spring would
+  /// overshoot and wobble on every tick.
   var sampleInterval: Double = 1
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var head: Double = 0
+  @State private var scale: Double = 1 / Double(TrafficChartGeometry.minimumCeiling)
 
   var body: some View {
-    let geometry = TrafficChartGeometry(samples: samples, slotCount: slotCount)
+    let geometry = TrafficChartGeometry(samples: samples, sampleCount: sampleCount)
 
     ZStack {
       Rectangle()
@@ -220,7 +175,7 @@ struct TrafficSparkline: View {
         .frame(height: 1)
         .frame(maxHeight: .infinity, alignment: .bottom)
 
-      TrafficSeriesShape(values: geometry.download, smoothing: smoothing, isClosed: true)
+      series(geometry.download, in: geometry, isClosed: true)
         .fill(
           LinearGradient(
             colors: [.cyan.opacity(0.26), .cyan.opacity(0.02)],
@@ -229,21 +184,56 @@ struct TrafficSparkline: View {
           )
         )
 
-      TrafficSeriesShape(values: geometry.download, smoothing: smoothing)
+      series(geometry.download, in: geometry)
         .stroke(.cyan, style: StrokeStyle(lineWidth: downloadLineWidth, lineCap: .round, lineJoin: .round))
 
-      TrafficSeriesShape(values: geometry.upload, smoothing: smoothing)
+      series(geometry.upload, in: geometry)
         .stroke(.indigo, style: StrokeStyle(lineWidth: uploadLineWidth, lineCap: .round, lineJoin: .round))
     }
+    .clipped()
     .padding(inset)
-    .animation(reduceMotion ? nil : .linear(duration: sampleInterval), value: geometry)
+    // Explicit animations rather than `.animation(value:)`: the window must never animate
+    // *backwards*. A restart resets the sequence to zero, and easing the head from 500 back to 0
+    // would sweep the whole plot sideways for a second.
+    .onChange(of: geometry.newestSequence, initial: true) { previous, next in
+      guard next > previous, !reduceMotion else {
+        head = Double(next)
+        return
+      }
+      withAnimation(.linear(duration: sampleInterval)) {
+        head = Double(next)
+      }
+    }
+    .onChange(of: geometry.ceiling, initial: true) { previous, next in
+      let target = 1 / Double(next)
+      guard previous != next, !reduceMotion else {
+        scale = target
+        return
+      }
+      withAnimation(.easeInOut(duration: 0.5)) {
+        scale = target
+      }
+    }
+  }
+
+  private func series(_ values: [Double], in geometry: TrafficChartGeometry, isClosed: Bool = false) -> TrafficSeriesShape {
+    TrafficSeriesShape(
+      values: values,
+      newestSequence: geometry.newestSequence,
+      slotCount: slotCount,
+      head: head,
+      scale: scale,
+      smoothing: smoothing,
+      isClosed: isClosed
+    )
   }
 }
 
 struct DashboardTrafficSparkline: View {
   let samples: [TrafficSample]
+  let sampleCount: Int
 
   var body: some View {
-    TrafficSparkline(samples: samples)
+    TrafficSparkline(samples: samples, sampleCount: sampleCount)
   }
 }

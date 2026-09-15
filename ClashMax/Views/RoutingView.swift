@@ -243,16 +243,6 @@ struct RoutingView: View {
         if appModel.lastRuntimeApplyOutcome != nil {
           RuntimeApplyOutcomeBanner()
         }
-
-        if let error = appModel.lastError,
-           PageErrorPresentation.showsInlineError(readinessIssue: appModel.readinessIssue, hasDetails: false)
-        {
-          Label(error, systemImage: "exclamationmark.triangle.fill")
-            .font(.callout)
-            .foregroundStyle(.red)
-            .lineLimit(3)
-            .textSelection(.enabled)
-        }
       }
       .onGeometryChange(for: CGFloat.self) { proxy in
         proxy.size.width

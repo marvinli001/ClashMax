@@ -1101,7 +1101,7 @@ private func popoverActions(onCancel: @escaping () -> Void, onSave: @escaping ()
 }
 
 struct DashboardStatusPill: View {
-  let title: String
+  let title: LocalizedStringResource
   let value: String
   let symbolName: String
   let tint: Color
@@ -1133,61 +1133,6 @@ struct DashboardStatusPill: View {
   }
 }
 
-struct DashboardMetricTile: View {
-  let title: String
-  let value: String
-  let footnote: String?
-  let symbolName: String
-  let tint: Color
-  var isLoading = false
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      HStack {
-        Image(systemName: symbolName)
-          .font(.system(size: 15, weight: .semibold))
-          .foregroundStyle(tint)
-          .frame(width: 28, height: 28)
-          .background(tint.opacity(0.13), in: SurfaceRadius.shape(SurfaceRadius.tile))
-
-        Spacer()
-      }
-
-      if isLoading {
-        VStack(alignment: .leading, spacing: 7) {
-          ClashMaxSkeletonBar(width: 74, height: 9)
-          ClashMaxSkeletonBar(width: 104, height: 18)
-          ClashMaxSkeletonBar(width: 86, height: 7)
-        }
-        .accessibilityHidden(true)
-      } else {
-        VStack(alignment: .leading, spacing: 3) {
-          Text(title)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-          Text(value)
-            .font(.system(.title3, design: .rounded).weight(.semibold))
-            .foregroundStyle(.primary)
-            .lineLimit(1)
-            .minimumScaleFactor(0.62)
-            .contentTransition(.numericText())
-            .changeEffect(.pulse(shape: SurfaceRadius.shape(SurfaceRadius.tile), style: tint.opacity(0.18), count: 1), value: value)
-
-          if let footnote {
-            Text(footnote)
-              .font(.caption2)
-              .foregroundStyle(.tertiary)
-              .lineLimit(1)
-          }
-        }
-      }
-    }
-    .padding(12)
-    .frame(maxWidth: .infinity, minHeight: 104, alignment: .topLeading)
-    .dashboardCard()
-  }
-}
-
 struct DashboardSectionHeader: View {
   let title: LocalizedStringResource
   let symbolName: String
@@ -1213,7 +1158,7 @@ struct DashboardSectionHeader: View {
 }
 
 struct DashboardEmptyRuntimeView: View {
-  let title: String
+  let title: LocalizedStringResource
   let symbolName: String
   var message: String?
 
