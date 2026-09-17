@@ -1296,6 +1296,69 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(try posixPermissions(at: URL(fileURLWithPath: firstProviderPath)), SecureFileIO.privateFilePermissions)
   }
 
+  func testRuntimeConfigMaterializerCarriesTheNormalizationNotes() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxRuntimeNotesTests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let sourceURL = root.appendingPathComponent("source.yaml")
+    try "port: 7890\nsocks-port: 7891\n\(Self.minimalProfileSource)\n".write(to: sourceURL, atomically: true, encoding: .utf8)
+
+    let result = try await RuntimeConfigMaterializer().materializeResult(
+      RuntimeConfigMaterializationRequest(
+        profileName: "Ports",
+        sourcePath: sourceURL.path,
+        runtimeConfigURL: root.appendingPathComponent("profile.runtime.yaml"),
+        providerContentURL: root.appendingPathComponent("profile.provider.txt"),
+        overrides: RuntimeOverrides.defaultForLaunch(secret: "notes-secret"),
+        selectionOverrides: [:]
+      )
+    )
+
+    XCTAssertEqual(
+      result.normalizationNotes,
+      ["Ignored the profile's own inbound listener ports (port: 7890, socks-port: 7891); ClashMax only exposes mixed-port."]
+    )
+    let runtimeYAML = try XCTUnwrap(Yams.load(yaml: String(contentsOf: result.runtimeConfigURL, encoding: .utf8)) as? [String: Any])
+    XCTAssertNil(runtimeYAML["port"])
+    XCTAssertEqual(runtimeYAML["mixed-port"] as? Int, 7890)
+  }
+
+  func testProfileListenerOnAnAppPortIsRefusedBeforeLaunch() throws {
+    // Measured against the bundled core: a typed `listeners:` inbound on the mixed port takes it
+    // before the mixed listener the same way a root `port:` did. It is not edited; it is refused.
+    let source = """
+    listeners:
+      - name: profile-http
+        type: http
+        port: 7890
+        listen: 127.0.0.1
+    \(Self.minimalProfileSource)
+    """
+
+    XCTAssertThrowsError(
+      try ConfigNormalizer().runtimeConfig(from: source, overrides: .defaultForLaunch(secret: "secret-token"))
+    ) { error in
+      let message = String(describing: error)
+      XCTAssertTrue(message.contains("Profile listener \"profile-http\" uses port 7890, which is ClashMax's mixed-port"), message)
+    }
+
+    // A listener on any other port is passed through untouched.
+    let harmless = source.replacingOccurrences(of: "port: 7890", with: "port: 7899")
+    let output = try ConfigNormalizer().runtimeConfig(from: harmless, overrides: .defaultForLaunch(secret: "secret-token"))
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let listeners = try XCTUnwrap(yaml["listeners"] as? [[String: Any]])
+    XCTAssertEqual(listeners.first?["port"] as? Int, 7899)
+
+    // The controller port is ClashMax's too.
+    let controller = source.replacingOccurrences(of: "port: 7890", with: "port: 9097")
+    XCTAssertThrowsError(
+      try ConfigNormalizer().runtimeConfig(from: controller, overrides: .defaultForLaunch(secret: "secret-token"))
+    ) { error in
+      XCTAssertTrue(String(describing: error).contains("ClashMax's controller port"), String(describing: error))
+    }
+  }
+
   func testRuntimeConfigMaterializerSideLoadsProviderContentForPreflight() async throws {
     let root = FileManager.default.temporaryDirectory
       .appendingPathComponent("ClashMaxRuntimeSideLoadTests-\(UUID().uuidString)", isDirectory: true)
@@ -1685,6 +1748,132 @@ final class ConfigNormalizerTests: XCTestCase {
 
     XCTAssertEqual(dns["enable"] as? Bool, false)
     XCTAssertEqual(dns["ipv6"] as? Bool, true)
+  }
+
+  // MARK: - Issue #33: the profile's own inbound ports must not collide with mixed-port
+
+  func testProfileInboundPortsAreDroppedSoOnlyMixedPortRemains() throws {
+    // czw63's subscription shipped `port: 7890` + `socks-port: 7891`. Mihomo opens HTTP before
+    // Mixed, so the plain HTTP listener took 7890 and the mixed listener never started.
+    let source = """
+    port: 7890
+    socks-port: 7891
+    redir-port: 7892
+    tproxy-port: 7893
+    \(Self.minimalProfileSource)
+    """
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.mixedPort = 7890
+
+    let generation = try ConfigNormalizer().generateRuntimeConfig(from: source, overrides: overrides)
+    let yaml = try XCTUnwrap(Yams.load(yaml: generation.yaml) as? [String: Any])
+
+    XCTAssertEqual(yaml["mixed-port"] as? Int, 7890)
+    for key in ConfigNormalizer.profileInboundPortKeys {
+      XCTAssertNil(yaml[key], "\(key) must not survive normalization")
+    }
+    XCTAssertFalse(generation.yaml.contains("socks-port"), generation.yaml)
+    XCTAssertEqual(generation.notes.count, 1)
+    let note = try XCTUnwrap(generation.notes.first)
+    XCTAssertTrue(note.contains("port: 7890"), note)
+    XCTAssertTrue(note.contains("socks-port: 7891"), note)
+    XCTAssertTrue(note.contains("redir-port: 7892"), note)
+    XCTAssertTrue(note.contains("tproxy-port: 7893"), note)
+    XCTAssertTrue(note.contains("mixed-port"), note)
+
+    // The String-returning entry point is the same generation.
+    XCTAssertEqual(
+      try ConfigNormalizer().runtimeConfig(from: source, overrides: overrides),
+      generation.yaml
+    )
+  }
+
+  func testProfileWithoutInboundPortsProducesNoNormalizationNote() throws {
+    let generation = try ConfigNormalizer().generateRuntimeConfig(
+      from: Self.minimalProfileSource,
+      overrides: .defaultForLaunch(secret: "secret-token")
+    )
+
+    XCTAssertEqual(generation.notes, [])
+    let yaml = try XCTUnwrap(Yams.load(yaml: generation.yaml) as? [String: Any])
+    XCTAssertEqual(yaml["mixed-port"] as? Int, 7890)
+  }
+
+  func testRuntimeMergeYAMLCannotReintroduceProfileInboundPorts() throws {
+    // The legacy per-profile merge runs before the app-managed keys are written, so it is the
+    // other way a subscription's `port:` used to reach the core.
+    var options = RuntimeConfigOptions.default
+    options.subscriptionProviderOptions = SubscriptionProviderOptions(
+      runtimeMergeYAML: """
+      port: 7890
+      socks-port: 7891
+      """
+    )
+
+    let generation = try ConfigNormalizer().generateRuntimeConfig(
+      from: Self.minimalProfileSource,
+      overrides: .defaultForLaunch(secret: "secret-token"),
+      options: options
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: generation.yaml) as? [String: Any])
+
+    XCTAssertEqual(yaml["mixed-port"] as? Int, 7890)
+    XCTAssertNil(yaml["port"])
+    XCTAssertNil(yaml["socks-port"])
+    XCTAssertEqual(generation.notes.count, 1)
+    XCTAssertTrue(generation.notes[0].contains("port: 7890"), generation.notes[0])
+  }
+
+  func testProviderBackedProfileWithInboundPortOverrideStillOnlyExposesMixedPort() throws {
+    // URI subscriptions go through the generated provider template rather than the profile
+    // mapping; a merge that injects `port:` into that template must be stripped the same way.
+    let source = "trojan://password@example.com:443#Trojan\n"
+    var options = RuntimeConfigOptions.default
+    options.subscriptionProviderOptions = SubscriptionProviderOptions(
+      runtimeMergeYAML: """
+      port: 7890
+      redir-port: 7892
+      """
+    )
+
+    let generation = try ConfigNormalizer().generateRuntimeConfig(
+      from: source,
+      providerContentPath: "/tmp/provider.txt",
+      overrides: .defaultForLaunch(secret: "secret-token"),
+      options: options
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: generation.yaml) as? [String: Any])
+
+    XCTAssertEqual(yaml["mixed-port"] as? Int, 7890)
+    for key in ConfigNormalizer.profileInboundPortKeys {
+      XCTAssertNil(yaml[key], key)
+    }
+    XCTAssertNotNil(yaml["proxy-providers"], "the provider template itself must survive")
+    XCTAssertEqual(generation.notes.count, 1)
+  }
+
+  func testRawYAMLSnippetCannotReintroduceProfileInboundPorts() throws {
+    // `mixed-port` is reserved in a raw patch; `port:` is not, but it is applied after every
+    // app-managed write and would recreate the collision, so it is dropped with a note too.
+    var options = RuntimeConfigOptions.default
+    options.runtimeSnippets = [
+      RuntimeSnippet(name: "Inbound", payload: .rawYAML(RawYAMLPatchSettings(yaml: "port: 7890\nsocks-port: 7891\n"))),
+    ]
+
+    let generation = try ConfigNormalizer().generateRuntimeConfig(
+      from: Self.minimalProfileSource,
+      overrides: .defaultForLaunch(secret: "secret-token"),
+      options: options
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: generation.yaml) as? [String: Any])
+
+    XCTAssertEqual(yaml["mixed-port"] as? Int, 7890)
+    XCTAssertNil(yaml["port"])
+    XCTAssertNil(yaml["socks-port"])
+    XCTAssertEqual(
+      generation.notes,
+      ["Ignored the raw YAML snippet's own inbound listener ports (port: 7890, socks-port: 7891); ClashMax only exposes mixed-port."]
+    )
   }
 
   func testProviderOptionsGuardrailMarksDangerousYAMLKeys() throws {

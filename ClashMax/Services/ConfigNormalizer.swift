@@ -12,6 +12,14 @@ struct RuntimeConfigOptions: Equatable, Sendable {
   static let `default` = RuntimeConfigOptions()
 }
 
+/// The generated runtime YAML and what the normalizer changed on the way there.
+struct RuntimeConfigGeneration: Equatable, Sendable {
+  var yaml: String
+  /// Human-readable, one per decision, meant for the app log. Empty when the profile was passed
+  /// through as authored apart from the app-managed keys.
+  var notes: [String]
+}
+
 struct ConfigNormalizer {
   private static let appManagedProviderName = "clashmax-subscription-provider"
   private static let outboundProxyNamePrefix = "__clashmax_outbound_"
@@ -61,6 +69,28 @@ struct ConfigNormalizer {
     options: RuntimeConfigOptions = .default,
     selectionOverrides: [String: String] = [:]
   ) throws -> String {
+    try generateRuntimeConfig(
+      from: source,
+      providerContentPath: providerContentPath,
+      profileName: profileName,
+      overrides: overrides,
+      options: options,
+      selectionOverrides: selectionOverrides
+    ).yaml
+  }
+
+  /// `runtimeConfig(from:...)` plus the decisions worth a line in the app log: things the
+  /// normalizer silently changed about the profile that a user debugging a start failure would
+  /// otherwise have to diff the generated YAML to discover.
+  func generateRuntimeConfig(
+    from source: String,
+    providerContentPath: String? = nil,
+    profileName: String = "Subscription",
+    overrides: RuntimeOverrides,
+    options: RuntimeConfigOptions = .default,
+    selectionOverrides: [String: String] = [:]
+  ) throws -> RuntimeConfigGeneration {
+    var notes: [String] = []
     try validateOutboundProxyOptions(options, mixedPort: overrides.mixedPort)
 
     var root: [String: Any]
@@ -102,6 +132,15 @@ struct ConfigNormalizer {
       }
     }
 
+    // Issue #33. ClashMax exposes exactly one inbound listener, `mixed-port`, and the system proxy,
+    // NE Proxy and the readiness probe all dial it. A subscription that also ships `port: 7890` /
+    // `socks-port: 7891` used to be passed through untouched, and Mihomo opens listeners in the
+    // order HTTP -> SOCKS -> ... -> Mixed, so the profile's plain HTTP listener took 7890 first and
+    // the mixed listener never started ("Start Mixed(http+socks) server error: ... address
+    // already in use"). The SOCKS5 probe then connected fine (to the HTTP listener) and timed out
+    // waiting for a greeting reply. Dropping the profile's inbound ports is what makes
+    // `mixed-port` actually ours.
+    Self.removeProfileInboundPortKeys(from: &root, source: "profile", notes: &notes)
     root["mixed-port"] = overrides.mixedPort
     let controllerHost = RuntimeOverrides.normalizedExternalControllerHost(overrides.externalControllerHost)
     root["external-controller"] = "\(controllerHost):\(overrides.externalControllerPort)"
@@ -276,6 +315,14 @@ struct ConfigNormalizer {
     for rawYAMLPatch in snippetApplication.rawYAMLPatches {
       root = try rawYAMLPatchedRoot(base: root, patch: rawYAMLPatch)
     }
+    // A raw patch cannot set `mixed-port` (reserved), but it can still add `port:`; the inbound
+    // port promise has to hold after the last write, not only after the profile.
+    Self.removeProfileInboundPortKeys(from: &root, source: "raw YAML snippet", notes: &notes)
+    // `listeners:` is passed through as authored, but a typed inbound on one of ClashMax's own
+    // ports fails exactly like a root `port:` did (measured: Mihomo patches listeners before it
+    // creates the mixed listener), so that collision is refused with the reason rather than
+    // started into a core whose mixed-port never opens.
+    try validateListenersAvoidAppPorts(root["listeners"], mixedPort: overrides.mixedPort, controllerPort: overrides.externalControllerPort)
 
     if options.manualProxyEndpoint != nil || options.upstreamProxyEndpoint != nil {
       try validateReservedOutboundProxyNames(
@@ -301,7 +348,54 @@ struct ConfigNormalizer {
     // supply `proxy-server-nameserver`, so only the final map knows whether Mihomo will accept it.
     try validateDNSCompatibility(root["dns"])
 
-    return try Yams.dump(object: root, sortKeys: false)
+    return try RuntimeConfigGeneration(yaml: Yams.dump(object: root, sortKeys: false), notes: notes)
+  }
+
+  /// Root-level Mihomo inbound listener keys a profile may carry that ClashMax never passes
+  /// through. `listeners:` is deliberately not here: it is an array of typed inbounds the guardrail
+  /// already flags as dangerous, and silently editing it would hide more than it fixes.
+  static let profileInboundPortKeys = ["port", "socks-port", "redir-port", "tproxy-port"]
+
+  private static func removeProfileInboundPortKeys(from root: inout [String: Any], source: String, notes: inout [String]) {
+    var dropped: [String] = []
+    for key in profileInboundPortKeys {
+      guard let value = root.removeValue(forKey: key) else { continue }
+      dropped.append("\(key): \(value)")
+    }
+    guard !dropped.isEmpty else { return }
+    notes.append(
+      "Ignored the \(source)'s own inbound listener ports (\(dropped.joined(separator: ", "))); ClashMax only exposes mixed-port."
+    )
+  }
+
+  private static func listenerPort(_ value: Any?) -> Int? {
+    switch value {
+    case let value as Int:
+      return value
+    case let value as String:
+      return Int(value.trimmingCharacters(in: .whitespacesAndNewlines))
+    default:
+      return nil
+    }
+  }
+
+  private func validateListenersAvoidAppPorts(_ listeners: Any?, mixedPort: Int, controllerPort: Int) throws {
+    guard let entries = listeners as? [Any] else { return }
+    for entry in entries.compactMap({ $0 as? [String: Any] }) {
+      guard let port = Self.listenerPort(entry["port"]) else { continue }
+      let owner: String
+      if port == mixedPort {
+        owner = "ClashMax's mixed-port"
+      } else if port == controllerPort {
+        owner = "ClashMax's controller port"
+      } else {
+        continue
+      }
+      let name = Self.trimmedString(entry["name"]) ?? "<unnamed>"
+      throw NormalizerError.invalidProfile(
+        "Profile listener \"\(name)\" uses port \(port), which is \(owner). Mihomo opens listeners before the mixed listener, so the app's port would never come up (issue #33). Change the listener's port or ClashMax's port setting."
+      )
+    }
   }
 
   /// Rejects DNS combinations Mihomo refuses at startup, with the reason instead of a core crash.

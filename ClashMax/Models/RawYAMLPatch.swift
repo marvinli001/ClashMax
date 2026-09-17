@@ -176,6 +176,13 @@ enum RawYAMLPatchPolicy {
 
   static let reservedInboundPortKey = "mixed-port"
 
+  /// Not reserved here, but never reaching the core either: `ConfigNormalizer` drops a root
+  /// `port` / `socks-port` / `redir-port` / `tproxy-port` from every layer, raw patches included,
+  /// and writes a "Runtime config: Ignored the raw YAML snippet's own inbound listener ports" line
+  /// to the app log (issue #33). Mihomo opens those listeners before the mixed one, so letting a
+  /// patch add them would hand ClashMax's own port to a plain HTTP or SOCKS listener.
+  static var droppedInboundPortKeys: Set<String> { Set(ConfigNormalizer.profileInboundPortKeys) }
+
   static var reservedKeys: Set<String> {
     reservedControlChannelKeys.union([reservedInboundPortKey])
   }

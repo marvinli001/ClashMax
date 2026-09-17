@@ -125,7 +125,10 @@ honoured for profiles that carry it). Only `mixed-port`, `external-controller` (
 its variants) and `secret` are refused, and refusing them **serves** INV-2 rather than capping it:
 they are the channel the app applies, verifies and rolls back through, each already has an owning
 control in Settings, and a patch that moved one would leave the app unable to roll back that very
-patch.
+patch. The profile's own inbound listener keys (`port`, `socks-port`, `redir-port`, `tproxy-port`)
+are not refused but dropped from every layer, raw patches included, and the drop is written to the
+app log (issue #33): Mihomo opens those listeners before the mixed one, so a subscription that also
+declared `port: 7890` took the app's port first and `mixed-port` never came up.
 
 With INV-2 satisfied, **ClashMax's ceiling equals Mihomo's ceiling** and the UI does not
 grow. When Mihomo ships a new key tomorrow, advanced users have it the same day and we ship

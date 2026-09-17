@@ -9109,7 +9109,7 @@ final class AppModel {
       for: profile,
       baseOptions: effectiveOptions
     )
-    return try await runtimeConfigMaterializer.materializeResult(
+    let materialization = try await runtimeConfigMaterializer.materializeResult(
       RuntimeConfigMaterializationRequest(
         profileName: profile.name,
         sourcePath: profile.originalConfigPath,
@@ -9121,6 +9121,10 @@ final class AppModel {
         protectedArtifactURLs: protectedRuntimeArtifactURLs
       )
     )
+    for note in materialization.normalizationNotes {
+      appendAppLog(level: "info", message: "Runtime config: \(note)")
+    }
+    return materialization
   }
 
   private func resolvedRuntimeConfigOptions(

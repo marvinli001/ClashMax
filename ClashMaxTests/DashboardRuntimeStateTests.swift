@@ -8351,6 +8351,56 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(events.values, ["coreStop"])
   }
 
+  func testStartLogsWhenTheProfileDeclaresItsOwnInboundPorts() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try """
+    port: 7890
+    socks-port: 7891
+    proxies:
+      - { name: Japan, type: direct }
+    proxy-groups:
+      - { name: Proxy, type: select, proxies: [Japan, DIRECT] }
+    rules:
+      - MATCH,Proxy
+    """.write(to: configURL, atomically: true, encoding: .utf8)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let launcher = CountingProcessLauncher()
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let model = try AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      proxyPortReadinessProbe: RecordingProxyPortReadinessProbe(),
+      defaults: Self.makeIsolatedDefaults()
+    )
+
+    model.start()
+    await waitUntil { model.isRunning || model.lastError != nil }
+
+    XCTAssertNil(model.lastError)
+    XCTAssertTrue(model.isRunning)
+    let runtimeConfigPath = try XCTUnwrap(launcher.launchedConfigPaths.last)
+    let yaml = try XCTUnwrap(Yams.load(yaml: String(contentsOfFile: runtimeConfigPath, encoding: .utf8)) as? [String: Any])
+    XCTAssertEqual(yaml["mixed-port"] as? Int, 7890)
+    XCTAssertNil(yaml["port"])
+    XCTAssertNil(yaml["socks-port"])
+    model.runtimeData.flushPendingLogs()
+    let infoLogs = model.logs.filter { $0.level == "info" }.map(\.message)
+    XCTAssertTrue(
+      infoLogs.contains("Runtime config: Ignored the profile's own inbound listener ports (port: 7890, socks-port: 7891); ClashMax only exposes mixed-port."),
+      infoLogs.joined(separator: "\n")
+    )
+  }
+
   func testStoppingNetworkExtensionStopsTunnelBeforeMihomoCore() async throws {
     let paths = try Self.makeRuntimePaths()
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")

@@ -16,6 +16,9 @@ struct RuntimeConfigMaterializationRequest: Sendable {
 struct RuntimeConfigMaterializationResult: Sendable, Equatable {
   var runtimeConfigURL: URL
   var providerContentURL: URL?
+  /// What `ConfigNormalizer` changed about the profile on the way to `runtimeConfigURL`, for
+  /// the app log. See `RuntimeConfigGeneration.notes`.
+  var normalizationNotes: [String] = []
 
   var artifactURLs: [URL] {
     [runtimeConfigURL] + [providerContentURL].compactMap(\.self)
@@ -79,7 +82,7 @@ struct RuntimeConfigMaterializer: Sendable {
       }
       try Task.checkCancellation()
 
-      let output = try ConfigNormalizer().runtimeConfig(
+      let generation = try ConfigNormalizer().generateRuntimeConfig(
         from: normalizerSource,
         providerContentPath: providerContentPath,
         profileName: request.profileName,
@@ -88,12 +91,13 @@ struct RuntimeConfigMaterializer: Sendable {
         selectionOverrides: request.selectionOverrides
       )
       try Task.checkCancellation()
-      try SecureFileIO.writePrivateString(output, to: runtimeConfigURL)
+      try SecureFileIO.writePrivateString(generation.yaml, to: runtimeConfigURL)
       writtenURLs.append(runtimeConfigURL)
       try Task.checkCancellation()
       let result = RuntimeConfigMaterializationResult(
         runtimeConfigURL: runtimeConfigURL,
-        providerContentURL: materializedProviderContentURL
+        providerContentURL: materializedProviderContentURL,
+        normalizationNotes: generation.notes
       )
       cleanUpRetainedArtifacts(
         for: request,
