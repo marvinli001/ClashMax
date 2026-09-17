@@ -119,8 +119,62 @@ struct ProcessSignalResult: Equatable, Sendable {
   }
 }
 
+/// What the port preflight learned about the ports a user-mode core is about to bind.
+struct RuntimePortPreflight: Equatable, Sendable {
+  /// Something is serving the port: `lsof` named it, or a connect succeeded (root-owned).
+  var listeners: [PortListener]
+  /// Nothing accepts a connection, yet a `bind` still fails: the previous owner is mid-release.
+  var releasingPorts: [Int]
+
+  static let clear = RuntimePortPreflight(listeners: [], releasingPorts: [])
+}
+
 protocol RuntimePortChecking: Sendable {
   func listeners(on ports: [Int]) async -> [PortListener]
+  func preflight(ports: [Int]) async -> RuntimePortPreflight
+}
+
+extension RuntimePortChecking {
+  /// Checkers that only know how to find listeners — the test doubles — never see a releasing port.
+  func preflight(ports: [Int]) async -> RuntimePortPreflight {
+    await RuntimePortPreflight(listeners: listeners(on: ports), releasingPorts: [])
+  }
+}
+
+/// How hard `CoreProcessController.startUserMode` tries to get past a port that is still being
+/// released by the process that owned it a moment ago (issue #33). Every value is bounded so a
+/// port that is genuinely taken still fails within a few seconds.
+struct RuntimeStartRetryPolicy: Equatable, Sendable {
+  /// Relaunches after the core reports `External controller listen error: ... address already in use`.
+  var controllerBindRetryLimit = 3
+  /// Pause before retry N (1-based); the last entry repeats.
+  var controllerBindRetryDelaysNanoseconds: [UInt64] = [500_000_000, 1_000_000_000]
+  /// No relaunch starts once this much wall-clock time has passed since the first launch of this
+  /// start: `AppModel` gives the whole start 22s, and a slow config parse plus three relaunches
+  /// must still leave room for the readiness probe of the last one.
+  var controllerBindRetryBudget: TimeInterval = 8
+  /// Total time the preflight waits for a port that refuses a bind while nothing accepts on it.
+  var releasingPortWaitLimit: TimeInterval = 3
+  var releasingPortPollNanoseconds: UInt64 = 200_000_000
+  /// How often the core's output is re-read for a bind failure while the controller probe runs.
+  var outputPollNanoseconds: UInt64 = 100_000_000
+
+  static let `default` = RuntimeStartRetryPolicy()
+
+  /// No pauses at all, for tests that exercise the retry path itself.
+  static let immediate = RuntimeStartRetryPolicy(
+    controllerBindRetryDelaysNanoseconds: [0],
+    controllerBindRetryBudget: 60,
+    releasingPortWaitLimit: 0.2,
+    releasingPortPollNanoseconds: 10_000_000,
+    outputPollNanoseconds: 1_000_000
+  )
+
+  func retryDelayNanoseconds(forRetry retry: Int) -> UInt64 {
+    guard let last = controllerBindRetryDelaysNanoseconds.last else { return 0 }
+    let index = max(0, retry - 1)
+    return index < controllerBindRetryDelaysNanoseconds.count ? controllerBindRetryDelaysNanoseconds[index] : last
+  }
 }
 
 @MainActor
@@ -142,6 +196,7 @@ final class CoreProcessController {
   private let readinessProbe: CoreReadinessProbing
   private let reaper: CoreProcessReaping
   private let portChecker: RuntimePortChecking
+  private let retryPolicy: RuntimeStartRetryPolicy
   /// How much of the core's retained output is scanned for a diagnostic line. The whole retention
   /// budget: Mihomo logs a bind failure once, early, and then one info line per proxy group and
   /// provider, so on a real subscription the line the app needs is thousands of bytes back.
@@ -150,6 +205,8 @@ final class CoreProcessController {
   static let coreOutputExcerptBytes = 4096
   /// Process handle, not view state.
   @ObservationIgnored private var runningProcess: RunningCoreProcess?
+  /// Startup bookkeeping for `runningProcess`; keeps the termination handler's state alive.
+  @ObservationIgnored private var currentAttempt: LaunchAttempt?
   /// Stop-request latch consumed by the termination handler, not view state.
   @ObservationIgnored private var stopWasRequested = false
 
@@ -158,13 +215,15 @@ final class CoreProcessController {
     validator: RuntimeConfigValidating = MihomoRuntimeConfigValidator(),
     readinessProbe: CoreReadinessProbing = MihomoCoreReadinessProbe(),
     reaper: CoreProcessReaping = MihomoOrphanProcessReaper(),
-    portChecker: RuntimePortChecking = MihomoRuntimePortChecker()
+    portChecker: RuntimePortChecking = MihomoRuntimePortChecker(),
+    retryPolicy: RuntimeStartRetryPolicy = .default
   ) {
     self.launcher = launcher
     self.validator = validator
     self.readinessProbe = readinessProbe
     self.reaper = reaper
     self.portChecker = portChecker
+    self.retryPolicy = retryPolicy
   }
 
   func startUserMode(
@@ -195,89 +254,55 @@ final class CoreProcessController {
       try Task.checkCancellation()
 
       let portsToCheck = Array(Set([api.port] + [proxyPort].compactMap(\.self))).sorted()
-      recordStartup("Checking runtime ports: \(portsToCheck.map(String.init).joined(separator: ", "))")
-      let listeners = await portChecker.listeners(on: portsToCheck)
-      if !listeners.isEmpty {
-        for listener in listeners {
-          if let pid = listener.pid {
-            recordStartup("Port \(listener.port) is occupied by pid \(pid): \(listener.command)")
-          } else {
-            recordStartup("Port \(listener.port) accepts TCP connections but lsof lists no owner: \(listener.command)")
-          }
-        }
-        throw AppError.portUnavailable(Self.portConflictMessage(for: listeners))
-      }
-
-      recordStartup("Launching Mihomo with config: \(configURL.path)")
-      let process = try launcher.launch(
-        executable: coreURL,
-        arguments: ["-f", configURL.path, "-d", workDirectory.path],
-        environment: [
-          "SAFE_PATHS": workDirectory.path,
-          "CLASHMAX_API_HOST": api.host,
-          "CLASHMAX_API_PORT": String(api.port),
-        ],
-        workDirectory: workDirectory
-      )
-
-      let launchedProcessID = process.processIdentifier
-      var startupCompleted = false
-      var startupTerminationMessage: String?
-      recordStartup("Mihomo launch pid: \(launchedProcessID)")
-      runningProcess = process
-      process.onTermination = { [weak self, weak process] exitCode in
-        guard let self else { return }
-        guard runningProcess?.processIdentifier == launchedProcessID else { return }
-        if stopWasRequested || (startupCompleted && exitCode == 0) {
-          status = .stopped
-        } else {
-          let tail = process?.recentOutputTail(maxBytes: 4096) ?? ""
-          let message = Self.processExitMessage(exitCode: exitCode, outputTail: tail)
-          if !startupCompleted {
-            startupTerminationMessage = message
-            recentCoreLog = tail
-          }
-          status = .crashed(message: message)
-        }
-        runningProcess = nil
-      }
-      if let startupTerminationMessage {
-        recordStartup("Mihomo exited before controller readiness: \(startupTerminationMessage)")
-        throw AppError.coreNotReady(startupTerminationMessage)
-      }
-
-      try Task.checkCancellation()
-      do {
-        let version = try await readinessProbe.waitUntilReady(api: api)
+      var retriesUsed = 0
+      var firstLaunchAt: Date?
+      while true {
+        try await waitForRuntimePorts(portsToCheck)
         try Task.checkCancellation()
-        if let startupTerminationMessage {
-          recordStartup("Mihomo exited before controller readiness: \(startupTerminationMessage)")
-          throw AppError.coreNotReady(startupTerminationMessage)
+
+        let attempt = try launchCore(coreURL: coreURL, configURL: configURL, workDirectory: workDirectory, api: api)
+        if firstLaunchAt == nil {
+          firstLaunchAt = Date()
         }
-        guard !stopWasRequested, runningProcess?.processIdentifier == launchedProcessID else {
-          throw CancellationError()
-        }
-        recordStartup("Mihomo controller ready: \(api.host):\(api.port), version \(version)")
-        startupCompleted = true
-        status = .running(version: version)
-      } catch let appError as AppError {
-        if case let .coreNotReady(message) = appError {
-          let tail = process.recentOutputTail(maxBytes: 4096)
-          recentCoreLog = tail
-          var summary = message
-          var detailSections: [String] = []
-          if process.isRunning, let bindFailure = Self.controllerBindFailure(api: api, outputTail: tail) {
-            summary = bindFailure.summary
-            detailSections.append(bindFailure.advice)
+        switch try await awaitControllerReadiness(attempt, api: api) {
+        case let .ready(version):
+          recordStartup("Mihomo controller ready: \(api.host):\(api.port), version \(version)")
+          attempt.startupCompleted = true
+          status = .running(version: version)
+          return
+
+        case let .controllerBindFailure(failure, tail):
+          // Issue #33, TUN -> NE Proxy: the preflight above found every port free, yet the core
+          // could not bind its controller. The root Mihomo the helper just stopped was still
+          // letting go of 9097. That state clears itself within moments, so a few bounded
+          // relaunches beat telling the user to go hunting for a process that is already gone.
+          guard !stopWasRequested else { throw CancellationError() }
+          let limit = retryPolicy.controllerBindRetryLimit
+          let delay = retryPolicy.retryDelayNanoseconds(forRetry: retriesUsed + 1)
+          let spent = Date().timeIntervalSince(firstLaunchAt ?? Date())
+          let budgetAllowsRetry = spent + Double(delay) / 1_000_000_000 <= retryPolicy.controllerBindRetryBudget
+          guard failure.isAddressInUse, retriesUsed < limit, budgetAllowsRetry else {
+            var advice = failure.advice
+            if retriesUsed > 0 {
+              advice += "\n\(Self.retriesExhaustedNote(retriesUsed: retriesUsed, policy: retryPolicy))"
+            } else if failure.isAddressInUse, !budgetAllowsRetry {
+              advice += "\nClashMax did not relaunch Mihomo: the start had already taken \(String(format: "%.1f", spent))s."
+            }
+            throw readinessFailure(summary: failure.summary, advice: advice, tail: tail)
           }
-          if !tail.isEmpty {
-            detailSections.append("Core output:\n\(tail)")
-          }
-          let combined = UserFacingError.attachDetails(detailSections, to: summary)
-          recordStartup("Readiness failed: \(combined)")
-          throw AppError.coreNotReady(combined)
+          retriesUsed += 1
+          recordStartup(
+            "Mihomo pid \(attempt.processIdentifier) could not bind controller port \(api.host):\(api.port) (address already in use) although the port preflight passed; stopping it and retrying (\(retriesUsed) of \(limit)) after \(delay / 1_000_000)ms."
+          )
+          try await retire(attempt)
+          try await Task.sleep(nanoseconds: delay)
+          try Task.checkCancellation()
+          // A stop() that arrived during the pause must win over the relaunch.
+          guard !stopWasRequested else { throw CancellationError() }
+
+        case let .failed(message, tail):
+          throw readinessFailure(summary: message, advice: nil, tail: tail)
         }
-        throw appError
       }
     } catch is CancellationError {
       stopWasRequested = true
@@ -306,6 +331,270 @@ final class CoreProcessController {
       }
       throw error
     }
+  }
+
+  /// One launched core and the startup-time state its termination handler consults. A class so the
+  /// handler can observe `startupCompleted` / `isRetired` as they change after installation.
+  @MainActor
+  private final class LaunchAttempt {
+    let process: RunningCoreProcess
+    let processIdentifier: Int32
+    var startupCompleted = false
+    /// Set when a retry stops this attempt on purpose: its exit is neither a stop nor a crash.
+    var isRetired = false
+    var terminationMessage: String?
+
+    init(process: RunningCoreProcess) {
+      self.process = process
+      processIdentifier = process.processIdentifier
+    }
+  }
+
+  private func launchCore(coreURL: URL, configURL: URL, workDirectory: URL, api: CoreAPIEndpoint) throws -> LaunchAttempt {
+    recordStartup("Launching Mihomo with config: \(configURL.path)")
+    let process = try launcher.launch(
+      executable: coreURL,
+      arguments: ["-f", configURL.path, "-d", workDirectory.path],
+      environment: [
+        "SAFE_PATHS": workDirectory.path,
+        "CLASHMAX_API_HOST": api.host,
+        "CLASHMAX_API_PORT": String(api.port),
+      ],
+      workDirectory: workDirectory
+    )
+
+    let attempt = LaunchAttempt(process: process)
+    recordStartup("Mihomo launch pid: \(attempt.processIdentifier)")
+    runningProcess = process
+    currentAttempt = attempt
+    process.onTermination = { [weak self, weak process, weak attempt] exitCode in
+      guard let self, let attempt else { return }
+      guard runningProcess?.processIdentifier == attempt.processIdentifier else { return }
+      if attempt.isRetired {
+        // A retry is replacing this core; the loop owns the status now.
+      } else if stopWasRequested || (attempt.startupCompleted && exitCode == 0) {
+        status = .stopped
+      } else {
+        let tail = process?.recentOutputTail(maxBytes: 4096) ?? ""
+        let message = Self.processExitMessage(exitCode: exitCode, outputTail: tail)
+        if !attempt.startupCompleted {
+          attempt.terminationMessage = message
+          recentCoreLog = tail
+        }
+        status = .crashed(message: message)
+      }
+      runningProcess = nil
+      if currentAttempt === attempt {
+        currentAttempt = nil
+      }
+    }
+    return attempt
+  }
+
+  private enum ReadinessOutcome {
+    case ready(String)
+    case controllerBindFailure(ControllerBindFailure, tail: String)
+    case failed(message: String, tail: String)
+  }
+
+  private enum ReadinessRace {
+    case version(String)
+    case controllerBindFailure(ControllerBindFailure)
+    case exited(String)
+  }
+
+  /// Where the controller probe parks its result while the output poll runs alongside it. The poll
+  /// sleeps in short steps but is woken the moment the probe settles, so a healthy start pays no
+  /// polling latency.
+  @MainActor
+  private final class ReadinessProbeBox {
+    private(set) var result: Result<String, Error>?
+    private var waiter: CheckedContinuation<Void, Never>?
+    private var timeoutTask: Task<Void, Never>?
+
+    func settle(_ result: Result<String, Error>) {
+      guard self.result == nil else { return }
+      self.result = result
+      resumeWaiter()
+    }
+
+    func waitForSettle(orAfter nanoseconds: UInt64) async throws {
+      guard result == nil else { return }
+      try Task.checkCancellation()
+      await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+        waiter = continuation
+        timeoutTask = Task { @MainActor [weak self] in
+          try? await Task.sleep(nanoseconds: nanoseconds)
+          self?.resumeWaiter()
+        }
+      }
+      try Task.checkCancellation()
+    }
+
+    private func resumeWaiter() {
+      timeoutTask?.cancel()
+      timeoutTask = nil
+      waiter?.resume()
+      waiter = nil
+    }
+  }
+
+  /// Races the controller probe against the core's own output. Mihomo reports a controller bind
+  /// failure within milliseconds of launch and then keeps running, so waiting out the whole
+  /// readiness budget (up to 30s) before reading the log would make every retry unaffordable.
+  private func awaitControllerReadiness(_ attempt: LaunchAttempt, api: CoreAPIEndpoint) async throws -> ReadinessOutcome {
+    if let message = attempt.terminationMessage {
+      recordStartup("Mihomo exited before controller readiness: \(message)")
+      throw AppError.coreNotReady(message)
+    }
+    try Task.checkCancellation()
+
+    let box = ReadinessProbeBox()
+    let probeTask = Task { @MainActor [readinessProbe] in
+      let result: Result<String, Error>
+      do {
+        result = try await .success(readinessProbe.waitUntilReady(api: api))
+      } catch {
+        result = .failure(error)
+      }
+      box.settle(result)
+    }
+    defer { probeTask.cancel() }
+
+    let raced: ReadinessRace
+    while true {
+      if let result = box.result {
+        switch result {
+        case let .success(version):
+          raced = .version(version)
+        case let .failure(error):
+          guard let appError = error as? AppError, case let .coreNotReady(message) = appError else { throw error }
+          if let terminationMessage = attempt.terminationMessage {
+            recordStartup("Mihomo exited before controller readiness: \(terminationMessage)")
+            throw AppError.coreNotReady(terminationMessage)
+          }
+          let tail = attempt.process.recentOutputTail(maxBytes: Self.coreOutputExcerptBytes)
+          if attempt.process.isRunning,
+             let bindFailure = Self.controllerBindFailure(
+               api: api,
+               outputTail: attempt.process.recentOutputTail(maxBytes: Self.diagnosticScanBytes)
+             )
+          {
+            return .controllerBindFailure(bindFailure, tail: tail)
+          }
+          return .failed(message: message, tail: tail)
+        }
+        break
+      }
+      if let message = attempt.terminationMessage {
+        raced = .exited(message)
+        break
+      }
+      if attempt.process.isRunning,
+         let failure = Self.controllerBindFailure(
+           api: api,
+           outputTail: attempt.process.recentOutputTail(maxBytes: Self.diagnosticScanBytes)
+         )
+      {
+        raced = .controllerBindFailure(failure)
+        break
+      }
+      try await box.waitForSettle(orAfter: retryPolicy.outputPollNanoseconds)
+    }
+
+    try Task.checkCancellation()
+    switch raced {
+    case let .exited(message):
+      recordStartup("Mihomo exited before controller readiness: \(message)")
+      throw AppError.coreNotReady(message)
+    case let .controllerBindFailure(failure):
+      return .controllerBindFailure(failure, tail: attempt.process.recentOutputTail(maxBytes: Self.coreOutputExcerptBytes))
+    case let .version(version):
+      if let message = attempt.terminationMessage {
+        recordStartup("Mihomo exited before controller readiness: \(message)")
+        throw AppError.coreNotReady(message)
+      }
+      guard !stopWasRequested, runningProcess?.processIdentifier == attempt.processIdentifier else {
+        throw CancellationError()
+      }
+      return .ready(version)
+    }
+  }
+
+  private func readinessFailure(summary: String, advice: String?, tail: String) -> AppError {
+    recentCoreLog = tail
+    var detailSections: [String] = []
+    if let advice {
+      detailSections.append(advice)
+    }
+    if !tail.isEmpty {
+      detailSections.append("Core output:\n\(tail)")
+    }
+    let combined = UserFacingError.attachDetails(detailSections, to: summary)
+    recordStartup("Readiness failed: \(combined)")
+    return AppError.coreNotReady(combined)
+  }
+
+  /// Stops a core a retry is about to replace, without recording the exit as a stop or a crash.
+  /// A core that will not die is not replaced: launching next to it would only lose the same
+  /// ports again, so the stop failure becomes the start failure.
+  private func retire(_ attempt: LaunchAttempt) async throws {
+    attempt.isRetired = true
+    let stopResult = await stopRunningProcess()
+    guard stopResult.succeeded else {
+      let message = stopResult.message ?? "Could not stop the previous Mihomo process."
+      recordStartup("Retry could not stop the previous core: \(message)")
+      throw stopResult.error ?? AppError.coreStopFailed(message)
+    }
+    guard !stopWasRequested else { throw CancellationError() }
+    status = .starting
+  }
+
+  /// The port preflight, with a bounded wait for ports that are mid-release (issue #33).
+  ///
+  /// Three outcomes per port: something identifiable (or a root-owned listener the connect probe
+  /// can see) holds it — fail now with the existing advice; nothing accepts but a bind still
+  /// fails — the previous owner is letting go, so wait a little and look again; everything
+  /// passes — launch.
+  private func waitForRuntimePorts(_ ports: [Int]) async throws {
+    recordStartup("Checking runtime ports: \(ports.map(String.init).joined(separator: ", "))")
+    let started = Date()
+    var waitedForRelease = false
+    while true {
+      let preflight = await portChecker.preflight(ports: ports)
+      if !preflight.listeners.isEmpty {
+        for listener in preflight.listeners {
+          if let pid = listener.pid {
+            recordStartup("Port \(listener.port) is occupied by pid \(pid): \(listener.command)")
+          } else {
+            recordStartup("Port \(listener.port) accepts TCP connections but lsof lists no owner: \(listener.command)")
+          }
+        }
+        throw AppError.portUnavailable(Self.portConflictMessage(for: preflight.listeners))
+      }
+      if preflight.releasingPorts.isEmpty {
+        if waitedForRelease {
+          recordStartup("Runtime ports released after \(Self.milliseconds(since: started))ms.")
+        }
+        return
+      }
+      let elapsed = Date().timeIntervalSince(started)
+      let list = preflight.releasingPorts.map(String.init).joined(separator: ", ")
+      guard elapsed < retryPolicy.releasingPortWaitLimit else {
+        recordStartup("Port \(list) still refused a bind after \(Self.milliseconds(since: started))ms with nothing accepting connections.")
+        throw AppError.portUnavailable(Self.releasingPortTimeoutMessage(ports: preflight.releasingPorts, waited: elapsed))
+      }
+      if !waitedForRelease {
+        recordStartup("Port \(list) refuses a bind but nothing accepts connections on it; waiting up to \(Int(retryPolicy.releasingPortWaitLimit * 1000))ms for the previous owner to release it.")
+        waitedForRelease = true
+      }
+      try await Task.sleep(nanoseconds: retryPolicy.releasingPortPollNanoseconds)
+      try Task.checkCancellation()
+    }
+  }
+
+  private static func milliseconds(since date: Date) -> Int {
+    Int((Date().timeIntervalSince(date) * 1000).rounded())
   }
 
   func restart(coreURL: URL, configURL: URL, workDirectory: URL, api: CoreAPIEndpoint) async throws {
@@ -384,6 +673,7 @@ final class CoreProcessController {
   private func clearStoppedProcess(processIdentifier: Int32) {
     guard runningProcess?.processIdentifier == processIdentifier else { return }
     runningProcess = nil
+    currentAttempt = nil
   }
 
   /// The live core's recent output, for callers that probe the core from outside this controller
@@ -471,6 +761,29 @@ final class CoreProcessController {
     """
   }
 
+  struct ControllerBindFailure: Equatable {
+    var summary: String
+    var advice: String
+    /// True for `bind: address already in use`, the only controller failure worth a relaunch.
+    var isAddressInUse = false
+  }
+
+  static func retriesExhaustedNote(retriesUsed: Int, policy: RuntimeStartRetryPolicy) -> String {
+    let pauses = (1...max(1, retriesUsed))
+      .map { "\(policy.retryDelayNanoseconds(forRetry: $0) / 1_000_000)ms" }
+      .joined(separator: ", ")
+    return "ClashMax relaunched Mihomo \(retriesUsed) more time\(retriesUsed == 1 ? "" : "s") (pausing \(pauses)) in case the port was only mid-release; it stayed busy."
+  }
+
+  static func releasingPortTimeoutMessage(ports: [Int], waited: TimeInterval) -> String {
+    let list = ports.map(String.init).joined(separator: ", ")
+    let seconds = String(format: "%.1f", waited)
+    return UserFacingError.attachDetails(
+      [Self.privilegedListenerAdvice(ports: ports)],
+      to: "Cannot start Mihomo: port \(list) still refused to bind after \(seconds)s, although nothing accepts connections on it. The previous owner has not released it yet. Open Details for how to release it."
+    )
+  }
+
   struct MixedPortBindFailure: Equatable {
     var summary: String
     var advice: String
@@ -552,11 +865,6 @@ final class CoreProcessController {
     return AppError.coreNotReady(combined)
   }
 
-  struct ControllerBindFailure: Equatable {
-    var summary: String
-    var advice: String
-  }
-
   /// Mihomo keeps running when its external controller cannot bind (it only
   /// logs `External controller listen error: ... bind: address already in use`),
   /// so a readiness timeout with a live process is almost always this. Turn the
@@ -581,7 +889,8 @@ final class CoreProcessController {
     }
     return ControllerBindFailure(
       summary: "Mihomo started but could not open its controller port \(endpoint): address already in use. Another process, probably a root-owned Mihomo left behind by TUN mode, is holding it. Open Details for how to release it.",
-      advice: "Mihomo reported: \(reported)\n\(Self.privilegedListenerAdvice(ports: [api.port]))"
+      advice: "Mihomo reported: \(reported)\n\(Self.privilegedListenerAdvice(ports: [api.port]))",
+      isAddressInUse: true
     )
   }
 
@@ -599,6 +908,8 @@ struct MihomoRuntimePortChecker: RuntimePortChecking {
   private let lookupListeners: @Sendable (Int) async -> [PortListener]
   /// Bind-independent check: does anything at all accept TCP on 127.0.0.1:port?
   private let acceptsConnections: @Sendable (Int) async -> Bool
+  /// The check Mihomo itself will make: can a fresh socket bind 127.0.0.1:port right now?
+  private let canBind: @Sendable (Int) async -> Bool
 
   init() {
     self.init(
@@ -611,20 +922,32 @@ struct MihomoRuntimePortChecker: RuntimePortChecking {
             timeout: MihomoRuntimePortChecker.connectProbeTimeoutSeconds
           )
         }.value
+      },
+      canBind: { port in
+        await Task.detached(priority: .utility) {
+          MihomoRuntimePortChecker.canBindLoopback(port: port)
+        }.value
       }
     )
   }
 
   init(
     lookupListeners: @escaping @Sendable (Int) async -> [PortListener],
-    acceptsConnections: @escaping @Sendable (Int) async -> Bool
+    acceptsConnections: @escaping @Sendable (Int) async -> Bool,
+    canBind: @escaping @Sendable (Int) async -> Bool = { _ in true }
   ) {
     self.lookupListeners = lookupListeners
     self.acceptsConnections = acceptsConnections
+    self.canBind = canBind
   }
 
   func listeners(on ports: [Int]) async -> [PortListener] {
+    await preflight(ports: ports).listeners
+  }
+
+  func preflight(ports: [Int]) async -> RuntimePortPreflight {
     var listeners: [PortListener] = []
+    var releasingPorts: [Int] = []
     for port in ports {
       let found = await lookupListeners(port)
       if !found.isEmpty {
@@ -634,9 +957,38 @@ struct MihomoRuntimePortChecker: RuntimePortChecking {
         // cannot enumerate (root-owned). Report it instead of launching a core
         // that will silently fail to bind its controller (issue #33).
         listeners.append(.unidentified(port: port))
+      } else if await !canBind(port) {
+        // Nobody answers, but the kernel still refuses the address: the previous
+        // owner is between closing its listener and being fully torn down. A
+        // connect probe alone called this "free" and the core then failed to
+        // bind (issue #33, TUN -> NE Proxy). Bind is what Mihomo will do, so
+        // bind is what the preflight has to try.
+        releasingPorts.append(port)
       }
     }
-    return listeners
+    return RuntimePortPreflight(listeners: listeners, releasingPorts: releasingPorts)
+  }
+
+  /// Mirrors a Go `net.Listen("tcp", "127.0.0.1:port")`: SO_REUSEADDR on, SO_REUSEPORT off, so a
+  /// socket in TIME_WAIT does not count and a live listener does.
+  nonisolated static func canBindLoopback(port: Int) -> Bool {
+    let descriptor = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
+    guard descriptor >= 0 else { return true }
+    defer { close(descriptor) }
+
+    var reuseAddress: Int32 = 1
+    setsockopt(descriptor, SOL_SOCKET, SO_REUSEADDR, &reuseAddress, socklen_t(MemoryLayout<Int32>.size))
+
+    var address = sockaddr_in()
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_port = in_port_t(UInt16(clamping: port)).bigEndian
+    address.sin_addr.s_addr = inet_addr("127.0.0.1")
+    let result = withUnsafePointer(to: &address) {
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+        Darwin.bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+      }
+    }
+    return result == 0
   }
 
   private static func lsofListeners(on port: Int) async -> [PortListener] {

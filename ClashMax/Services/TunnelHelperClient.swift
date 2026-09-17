@@ -172,6 +172,10 @@ struct HelperClientResponse: Sendable {
       return "TUN helper rejected the app or core signature. Reinstall a signed ClashMax build, then click Repair Helper."
     case HelperResponseCode.launchFailed:
       return "TUN helper could not launch Mihomo: \(fallback)"
+    case HelperResponseCode.stopTimedOut:
+      return pid > 0
+        ? "TUN helper could not stop Mihomo (PID \(pid)) in time; it is still shutting down. Wait a moment, then click Stop again before switching modes."
+        : "TUN helper could not stop Mihomo in time; it is still shutting down. Wait a moment, then click Stop again before switching modes."
     case HelperResponseCode.incompatibleProtocol:
       return fallback
     default:

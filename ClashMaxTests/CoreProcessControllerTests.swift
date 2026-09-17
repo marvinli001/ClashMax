@@ -331,7 +331,10 @@ final class CoreProcessControllerTests: XCTestCase {
         message: "Could not connect to the Mihomo controller at 127.0.0.1:9097. The core may still be starting or failed to open its controller port."
       ),
       reaper: RecordingCoreProcessReaper(),
-      portChecker: FakePortChecker(listeners: [])
+      portChecker: FakePortChecker(listeners: []),
+      // FakeProcessLauncher hands back one process object; a relaunch would find it already
+      // terminated. The retry path has its own tests below.
+      retryPolicy: RuntimeStartRetryPolicy(controllerBindRetryLimit: 0)
     )
 
     do {
@@ -363,10 +366,451 @@ final class CoreProcessControllerTests: XCTestCase {
       XCTAssertTrue(details.contains("Core output:"), details)
       XCTAssertTrue(details.contains("Mixed(http+socks) proxy listening at: 127.0.0.1:7890"), details)
       XCTAssertFalse(details.contains("---"), details)
+      XCTAssertFalse(details.contains("relaunched Mihomo"), details)
     }
 
     XCTAssertTrue(launcher.process.didTerminate)
     XCTAssertTrue(controller.startupDiagnostics.contains { $0.hasPrefix("Readiness failed: Mihomo started but could not open its controller port") })
+  }
+
+  // MARK: - Issue #33: TUN -> NE Proxy port hand-off
+
+  func testControllerBindFailureAfterACleanPreflightIsRetriedAndTheRelaunchSucceeds() async throws {
+    // The preflight found 9097 free, the first core still could not bind it (the root Mihomo the
+    // helper had just stopped was mid-release), and a moment later the same launch works.
+    let firstProcess = FakeRunningProcess(processIdentifier: 100)
+    firstProcess.stubbedOutputTail = """
+    level=info msg="Start initial configuration in progress"
+    level=error msg="External controller listen error: listen tcp 127.0.0.1:9097: bind: address already in use"
+    level=info msg="Mixed(http+socks) proxy listening at: 127.0.0.1:7890"
+    """
+    let secondProcess = FakeRunningProcess(processIdentifier: 200)
+    let launcher = SequencedProcessLauncher(processes: [firstProcess, secondProcess])
+    // The first core's probe never answers (the output poll is what detects the bind failure);
+    // only the relaunched core's controller comes up. Keyed on the launch count so the outcome
+    // does not depend on which probe task the main actor schedules first.
+    let readiness = LaunchCountReadinessProbe(launcher: launcher, readyFromLaunch: 2, version: "v-retry")
+    let portChecker = RecordingRuntimePortChecker()
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: readiness,
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: portChecker,
+      retryPolicy: .immediate
+    )
+
+    try await controller.startUserMode(
+      coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+      configURL: URL(fileURLWithPath: "/tmp/config.yaml"),
+      workDirectory: URL(fileURLWithPath: "/tmp"),
+      api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc"),
+      proxyPort: 7890
+    )
+
+    XCTAssertEqual(controller.status, .running(version: "v-retry"))
+    XCTAssertEqual(launcher.launchCount, 2)
+    XCTAssertTrue(firstProcess.didTerminate, "the core that lost the bind race must be stopped before relaunching")
+    XCTAssertFalse(secondProcess.didTerminate)
+    let portChecks = await portChecker.currentCallCount()
+    XCTAssertEqual(portChecks, 2, "every relaunch re-runs the port preflight")
+    XCTAssertTrue(
+      controller.startupDiagnostics.contains { $0.contains("could not bind controller port 127.0.0.1:9097") && $0.contains("retrying (1 of 3)") },
+      controller.startupDiagnostics.joined(separator: "\n")
+    )
+    XCTAssertTrue(controller.startupDiagnostics.contains { $0.contains("controller ready: 127.0.0.1:9097, version v-retry") })
+
+    // The retired core's late exit must not flip the new run's status.
+    firstProcess.finish(exitCode: 0)
+    XCTAssertEqual(controller.status, .running(version: "v-retry"))
+    secondProcess.finish(exitCode: 3)
+    XCTAssertEqual(controller.status, .crashed(message: "mihomo exited with code 3"))
+  }
+
+  func testControllerBindFailureRetriesAreBoundedAndEndWithTheReleaseAdvice() async throws {
+    let launcher = FactoryProcessLauncher { index in
+      let process = FakeRunningProcess(processIdentifier: Int32(1000 + index))
+      process.stubbedOutputTail = """
+      level=error msg="External controller listen error: listen tcp 127.0.0.1:9097: bind: address already in use"
+      """
+      return process
+    }
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: CancellableCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: FakePortChecker(listeners: []),
+      retryPolicy: .immediate
+    )
+
+    do {
+      try await controller.startUserMode(
+        coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+        configURL: URL(fileURLWithPath: "/tmp/config.yaml"),
+        workDirectory: URL(fileURLWithPath: "/tmp"),
+        api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+      )
+      XCTFail("Expected the bind failure to be reported once retries are exhausted")
+    } catch let error as AppError {
+      guard case .coreNotReady = error else {
+        XCTFail("Expected coreNotReady, got \(error)")
+        return
+      }
+      XCTAssertEqual(
+        UserFacingError.message(for: error),
+        "Mihomo controller did not become ready. Mihomo started but could not open its controller port 127.0.0.1:9097: address already in use. Another process, probably a root-owned Mihomo left behind by TUN mode, is holding it. Open Details for how to release it."
+      )
+      let details = try XCTUnwrap(UserFacingError.details(for: error))
+      XCTAssertTrue(details.contains("relaunched Mihomo 3 more times"), details)
+      XCTAssertTrue(details.contains("sudo lsof -nP -iTCP:9097 -sTCP:LISTEN"), details)
+    }
+
+    let retryLines = controller.startupDiagnostics.filter { $0.contains("retrying (") }
+    XCTAssertEqual(retryLines.count, 3, controller.startupDiagnostics.joined(separator: "\n"))
+    XCTAssertTrue(retryLines.last?.contains("retrying (3 of 3)") ?? false)
+    XCTAssertEqual(controller.startupDiagnostics.filter { $0.hasPrefix("Launching Mihomo") }.count, 4)
+    XCTAssertEqual(launcher.processes.count, 4)
+    XCTAssertTrue(launcher.processes.allSatisfy(\.didTerminate), "every core that lost the bind race must be stopped")
+    guard case .crashed = controller.status else {
+      return XCTFail("expected crashed, got \(controller.status)")
+    }
+  }
+
+  func testControllerBindFailureThatIsNotAddressInUseIsNotRetried() async throws {
+    let launcher = FakeProcessLauncher()
+    launcher.process.stubbedOutputTail = """
+    level=error msg="External controller listen error: listen tcp 127.0.0.1:9097: bind: permission denied"
+    """
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: CancellableCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: FakePortChecker(listeners: []),
+      retryPolicy: .immediate
+    )
+
+    await XCTAssertThrowsErrorAsync({
+      try await controller.startUserMode(
+        coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+        configURL: URL(fileURLWithPath: "/tmp/config.yaml"),
+        workDirectory: URL(fileURLWithPath: "/tmp"),
+        api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+      )
+    }) { error in
+      XCTAssertTrue(UserFacingError.message(for: error).contains("could not open its controller port 127.0.0.1:9097. Open Details"), "\(error)")
+    }
+
+    XCTAssertFalse(controller.startupDiagnostics.contains { $0.contains("retrying (") })
+    XCTAssertEqual(controller.startupDiagnostics.filter { $0.hasPrefix("Launching Mihomo") }.count, 1)
+  }
+
+  func testRetiredCoreExitingDuringItsStopNeverPublishesCrashed() async throws {
+    // With a real process SIGTERM is asynchronous: the retired core's termination handler fires
+    // while it is still `runningProcess`. Only `LaunchAttempt.isRetired` keeps that exit from
+    // being published as a crash in the middle of a start that goes on to succeed.
+    let firstProcess = DeferredTerminationRunningProcess(
+      processIdentifier: 100,
+      outputTail: "level=error msg=\"External controller listen error: listen tcp 127.0.0.1:9097: bind: address already in use\""
+    )
+    let secondProcess = DeferredTerminationRunningProcess(processIdentifier: 200)
+    let launcher = SequencedProcessLauncher(processes: [firstProcess, secondProcess])
+    let readiness = LaunchCountReadinessProbe(launcher: launcher, readyFromLaunch: 2, version: "v-retry")
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: readiness,
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: FakePortChecker(listeners: []),
+      retryPolicy: .immediate
+    )
+    let observedStatuses = StatusRecorder()
+    controller.onStatusChange = { observedStatuses.record($0) }
+
+    let startTask = Task { @MainActor in
+      try await controller.startUserMode(
+        coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+        configURL: URL(fileURLWithPath: "/tmp/config.yaml"),
+        workDirectory: URL(fileURLWithPath: "/tmp"),
+        api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+      )
+    }
+    // The retry's stop is parked in waitForExit; the exit lands while the core is still tracked.
+    await waitUntil { firstProcess.didTerminate }
+    XCTAssertEqual(launcher.launchCount, 1)
+    firstProcess.finish(exitCode: 0)
+    try await startTask.value
+
+    XCTAssertEqual(controller.status, .running(version: "v-retry"))
+    XCTAssertEqual(launcher.launchCount, 2)
+    // startUserMode publishes .stopped once, for the stop of any previous core, before .starting;
+    // from there on the retry must look like one uninterrupted start.
+    let afterStarting = observedStatuses.statuses.drop { $0 != .starting }
+    XCTAssertFalse(afterStarting.isEmpty, "\(observedStatuses.statuses)")
+    XCTAssertFalse(
+      afterStarting.contains { if case .crashed = $0 { return true } else { return false } },
+      "\(observedStatuses.statuses)"
+    )
+    XCTAssertFalse(afterStarting.contains(.stopped), "\(observedStatuses.statuses)")
+  }
+
+  func testCancellingStartDuringTheReleasingPortWaitStopsWithoutLaunching() async throws {
+    let launcher = FakeProcessLauncher()
+    let checker = MihomoRuntimePortChecker(
+      lookupListeners: { _ in [] },
+      acceptsConnections: { _ in false },
+      canBind: { _ in false }
+    )
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: checker,
+      retryPolicy: RuntimeStartRetryPolicy(releasingPortWaitLimit: 30, releasingPortPollNanoseconds: 10_000_000)
+    )
+
+    let startTask = Task { @MainActor in
+      try await controller.startUserMode(
+        coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+        configURL: URL(fileURLWithPath: "/tmp/config.yaml"),
+        workDirectory: URL(fileURLWithPath: "/tmp"),
+        api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+      )
+    }
+    await waitUntil { controller.startupDiagnostics.contains { $0.contains("refuses a bind") } }
+    startTask.cancel()
+    await XCTAssertThrowsCancellationErrorAsync { try await startTask.value }
+
+    XCTAssertEqual(controller.status, .stopped)
+    XCTAssertEqual(launcher.lastArguments, [], "no core may be launched after Stop")
+  }
+
+  func testCancellingStartDuringTheRetryPauseStopsTheRetiredCore() async throws {
+    let launcher = FactoryProcessLauncher { index in
+      let process = FakeRunningProcess(processIdentifier: Int32(1000 + index))
+      process.stubbedOutputTail = "level=error msg=\"External controller listen error: listen tcp 127.0.0.1:9097: bind: address already in use\""
+      return process
+    }
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: CancellableCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: FakePortChecker(listeners: []),
+      retryPolicy: RuntimeStartRetryPolicy(controllerBindRetryDelaysNanoseconds: [30_000_000_000], controllerBindRetryBudget: 120, outputPollNanoseconds: 1_000_000)
+    )
+
+    let startTask = Task { @MainActor in
+      try await controller.startUserMode(
+        coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+        configURL: URL(fileURLWithPath: "/tmp/config.yaml"),
+        workDirectory: URL(fileURLWithPath: "/tmp"),
+        api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+      )
+    }
+    await waitUntil { controller.startupDiagnostics.contains { $0.contains("retrying (1 of 3)") } }
+    startTask.cancel()
+    await XCTAssertThrowsCancellationErrorAsync { try await startTask.value }
+
+    XCTAssertEqual(controller.status, .stopped)
+    XCTAssertEqual(launcher.processes.count, 1)
+    XCTAssertTrue(launcher.processes[0].didTerminate)
+  }
+
+  func testStopDuringTheRetryPauseWinsOverTheRelaunch() async throws {
+    let launcher = FactoryProcessLauncher { index in
+      let process = FakeRunningProcess(processIdentifier: Int32(1000 + index))
+      process.stubbedOutputTail = "level=error msg=\"External controller listen error: listen tcp 127.0.0.1:9097: bind: address already in use\""
+      return process
+    }
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: CancellableCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: FakePortChecker(listeners: []),
+      retryPolicy: RuntimeStartRetryPolicy(controllerBindRetryDelaysNanoseconds: [300_000_000], outputPollNanoseconds: 1_000_000)
+    )
+
+    let startTask = Task { @MainActor in
+      try await controller.startUserMode(
+        coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+        configURL: URL(fileURLWithPath: "/tmp/config.yaml"),
+        workDirectory: URL(fileURLWithPath: "/tmp"),
+        api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+      )
+    }
+    await waitUntil { controller.startupDiagnostics.contains { $0.contains("retrying (1 of 3)") } }
+    await controller.stop()
+    await XCTAssertThrowsCancellationErrorAsync { try await startTask.value }
+
+    XCTAssertEqual(controller.status, .stopped)
+    XCTAssertEqual(launcher.processes.count, 1, "stop() must cancel the pending relaunch")
+  }
+
+  func testRetryIsSkippedWhenTheStartHasAlreadyUsedItsBudget() async throws {
+    let launcher = FactoryProcessLauncher { index in
+      let process = FakeRunningProcess(processIdentifier: Int32(1000 + index))
+      process.stubbedOutputTail = "level=error msg=\"External controller listen error: listen tcp 127.0.0.1:9097: bind: address already in use\""
+      return process
+    }
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: CancellableCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: FakePortChecker(listeners: []),
+      retryPolicy: RuntimeStartRetryPolicy(controllerBindRetryDelaysNanoseconds: [1_000_000_000], controllerBindRetryBudget: 0.5, outputPollNanoseconds: 1_000_000)
+    )
+
+    await XCTAssertThrowsErrorAsync({
+      try await controller.startUserMode(
+        coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+        configURL: URL(fileURLWithPath: "/tmp/config.yaml"),
+        workDirectory: URL(fileURLWithPath: "/tmp"),
+        api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+      )
+    }) { error in
+      let details = UserFacingError.details(for: error) ?? ""
+      XCTAssertTrue(details.contains("did not relaunch Mihomo: the start had already taken"), details)
+    }
+
+    XCTAssertEqual(launcher.processes.count, 1)
+    XCTAssertFalse(controller.startupDiagnostics.contains { $0.contains("retrying (") })
+  }
+
+  func testDefaultRetryPolicyMatchesTheDocumentedNumbers() {
+    let policy = RuntimeStartRetryPolicy.default
+
+    XCTAssertEqual(policy.controllerBindRetryLimit, 3)
+    XCTAssertEqual((1...4).map(policy.retryDelayNanoseconds(forRetry:)), [500_000_000, 1_000_000_000, 1_000_000_000, 1_000_000_000])
+    XCTAssertEqual(policy.controllerBindRetryBudget, 8)
+    XCTAssertEqual(policy.releasingPortWaitLimit, 3)
+    XCTAssertEqual(policy.releasingPortPollNanoseconds, 200_000_000)
+    XCTAssertLessThan(
+      policy.controllerBindRetryBudget + policy.releasingPortWaitLimit,
+      AppModel.startWallClockSeconds,
+      "the relaunch budget must leave the start's wall clock room for the last readiness probe"
+    )
+    XCTAssertEqual(
+      CoreProcessController.retriesExhaustedNote(retriesUsed: 3, policy: policy),
+      "ClashMax relaunched Mihomo 3 more times (pausing 500ms, 1000ms, 1000ms) in case the port was only mid-release; it stayed busy."
+    )
+  }
+
+  func testPortPreflightWaitsForAReleasingPortAndThenLaunches() async throws {
+    // Nothing accepts on 9097, yet bind fails twice before the kernel lets go: the shape of a
+    // listener whose owner exited a moment ago.
+    let bindAttempts = BindAttemptCounter(failuresBeforeSuccess: 2)
+    let checker = MihomoRuntimePortChecker(
+      lookupListeners: { _ in [] },
+      acceptsConnections: { _ in false },
+      canBind: { port in await bindAttempts.attempt(port: port) }
+    )
+    let launcher = FakeProcessLauncher()
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: checker,
+      retryPolicy: RuntimeStartRetryPolicy(releasingPortWaitLimit: 2, releasingPortPollNanoseconds: 10_000_000)
+    )
+
+    try await controller.startUserMode(
+      coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+      configURL: URL(fileURLWithPath: "/tmp/config.yaml"),
+      workDirectory: URL(fileURLWithPath: "/tmp"),
+      api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc"),
+      proxyPort: 7890
+    )
+
+    XCTAssertEqual(controller.status, .running(version: "v-test"))
+    let attemptsOn9097 = await bindAttempts.count(for: 9097)
+    XCTAssertEqual(attemptsOn9097, 3)
+    let diagnostics = controller.startupDiagnostics.joined(separator: "\n")
+    XCTAssertTrue(diagnostics.contains("Port 7890, 9097 refuses a bind but nothing accepts connections on it; waiting up to 2000ms"), diagnostics)
+    XCTAssertTrue(controller.startupDiagnostics.contains { $0.hasPrefix("Runtime ports released after ") && $0.hasSuffix("ms.") }, diagnostics)
+    XCTAssertEqual(launcher.lastArguments, ["-f", "/tmp/config.yaml", "-d", "/tmp"])
+  }
+
+  func testPortPreflightGivesUpOnAPortThatNeverReleases() async throws {
+    let checker = MihomoRuntimePortChecker(
+      lookupListeners: { _ in [] },
+      acceptsConnections: { _ in false },
+      canBind: { port in port != 9097 }
+    )
+    let launcher = FakeProcessLauncher()
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: checker,
+      retryPolicy: RuntimeStartRetryPolicy(releasingPortWaitLimit: 0.1, releasingPortPollNanoseconds: 10_000_000)
+    )
+
+    do {
+      try await controller.startUserMode(
+        coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+        configURL: URL(fileURLWithPath: "/tmp/config.yaml"),
+        workDirectory: URL(fileURLWithPath: "/tmp"),
+        api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc"),
+        proxyPort: 7890
+      )
+      XCTFail("Expected the releasing port to time out")
+    } catch let error as AppError {
+      guard case .portUnavailable = error else {
+        XCTFail("Expected portUnavailable, got \(error)")
+        return
+      }
+      XCTAssertTrue(UserFacingError.message(for: error).hasPrefix("Cannot start Mihomo: port 9097 still refused to bind after"), "\(error)")
+      XCTAssertTrue(UserFacingError.message(for: error).contains("nothing accepts connections on it"), "\(error)")
+      let details = try XCTUnwrap(UserFacingError.details(for: error))
+      XCTAssertTrue(details.hasPrefix("To release port 9097:"), details)
+    }
+
+    XCTAssertEqual(launcher.lastArguments, [])
+    XCTAssertTrue(controller.startupDiagnostics.contains { $0.hasPrefix("Port 9097 still refused a bind after") })
+  }
+
+  func testRuntimePortCheckerClassifiesListeningReleasingAndFreePorts() async {
+    let checker = MihomoRuntimePortChecker(
+      lookupListeners: { port in
+        port == 7890 ? [PortListener(port: 7890, pid: 4321, command: "/usr/local/bin/proxy")] : []
+      },
+      acceptsConnections: { port in port == 9097 },
+      canBind: { port in port != 1053 }
+    )
+
+    let preflight = await checker.preflight(ports: [9097, 7890, 1053, 2053])
+
+    XCTAssertEqual(preflight.listeners, [
+      .unidentified(port: 9097),
+      PortListener(port: 7890, pid: 4321, command: "/usr/local/bin/proxy"),
+    ])
+    XCTAssertEqual(preflight.releasingPorts, [1053])
+    // A port something accepts on is a listener, never "releasing", even though it cannot be bound.
+    XCTAssertFalse(preflight.releasingPorts.contains(9097))
+  }
+
+  func testCanBindLoopbackSeesARealListenerAndAFreedPort() throws {
+    let (descriptor, port) = try Self.openLoopbackListener()
+    XCTAssertFalse(MihomoRuntimePortChecker.canBindLoopback(port: port), "a live listener must refuse the bind")
+    close(descriptor)
+    XCTAssertTrue(MihomoRuntimePortChecker.canBindLoopback(port: port), "a closed listener must free the port")
+  }
+
+  func testRealRuntimePortCheckerDoesNotCallAFreePortReleasing() async throws {
+    let (descriptor, port) = try Self.openLoopbackListener()
+    close(descriptor)
+    let checker = MihomoRuntimePortChecker()
+
+    let preflight = await checker.preflight(ports: [port])
+
+    XCTAssertEqual(preflight, .clear)
   }
 
   // MARK: - Issue #33: the mixed-port SOCKS5 probe must say what it found
@@ -1052,6 +1496,22 @@ private actor ReaperSleepSpy {
 }
 
 @MainActor
+private final class FactoryProcessLauncher: CoreProcessLaunching {
+  private let makeProcess: (Int) -> FakeRunningProcess
+  private(set) var processes: [FakeRunningProcess] = []
+
+  init(makeProcess: @escaping (Int) -> FakeRunningProcess) {
+    self.makeProcess = makeProcess
+  }
+
+  func launch(executable: URL, arguments: [String], environment: [String: String], workDirectory: URL) throws -> RunningCoreProcess {
+    let process = makeProcess(processes.count)
+    processes.append(process)
+    return process
+  }
+}
+
+@MainActor
 private final class SequencedProcessLauncher: CoreProcessLaunching {
   private var processes: [RunningCoreProcess]
   private(set) var launchCount = 0
@@ -1087,6 +1547,57 @@ private final class CancellableCoreReadinessProbe: CoreReadinessProbing {
     didStart = true
     try await Task.sleep(nanoseconds: 10_000_000_000)
     return "v-test"
+  }
+}
+
+/// Ready only once the launcher has produced `readyFromLaunch` cores; earlier probes park until
+/// cancelled, the way a real probe against a controller that never binds would.
+@MainActor
+private final class LaunchCountReadinessProbe: CoreReadinessProbing {
+  private let launcher: SequencedProcessLauncher
+  private let readyFromLaunch: Int
+  private let version: String
+
+  init(launcher: SequencedProcessLauncher, readyFromLaunch: Int, version: String) {
+    self.launcher = launcher
+    self.readyFromLaunch = readyFromLaunch
+    self.version = version
+  }
+
+  func waitUntilReady(api: CoreAPIEndpoint) async throws -> String {
+    guard launcher.launchCount >= readyFromLaunch else {
+      try await Task.sleep(nanoseconds: 60_000_000_000)
+      throw CancellationError()
+    }
+    return version
+  }
+}
+
+@MainActor
+private final class StatusRecorder {
+  private(set) var statuses: [CoreStatus] = []
+
+  func record(_ status: CoreStatus) {
+    statuses.append(status)
+  }
+}
+
+private actor BindAttemptCounter {
+  private let failuresBeforeSuccess: Int
+  private var attempts: [Int: Int] = [:]
+
+  init(failuresBeforeSuccess: Int) {
+    self.failuresBeforeSuccess = failuresBeforeSuccess
+  }
+
+  func attempt(port: Int) -> Bool {
+    let count = (attempts[port] ?? 0) + 1
+    attempts[port] = count
+    return count > failuresBeforeSuccess
+  }
+
+  func count(for port: Int) -> Int {
+    attempts[port] ?? 0
   }
 }
 
@@ -1158,8 +1669,11 @@ private final class DeferredTerminationRunningProcess: RunningCoreProcess {
   private(set) var didTerminate = false
   private(set) var didKill = false
   private(set) var isRunning = true
-  init(processIdentifier: Int32) {
+  private let outputTail: String
+
+  init(processIdentifier: Int32, outputTail: String = "") {
     self.processIdentifier = processIdentifier
+    self.outputTail = outputTail
   }
 
   func terminate() {
@@ -1176,6 +1690,6 @@ private final class DeferredTerminationRunningProcess: RunningCoreProcess {
   }
 
   func recentOutputTail(maxBytes: Int) -> String {
-    ""
+    outputTail
   }
 }

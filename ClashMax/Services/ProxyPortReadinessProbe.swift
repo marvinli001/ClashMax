@@ -11,6 +11,24 @@ struct ProxyPortReadinessRequest: Equatable, Sendable {
 protocol ProxyPortReadinessProbing {
   func waitUntilReady(host: String, port: Int) async throws
   func waitUntilOpen(host: String, port: Int, serviceName: String) async throws
+  /// One connect attempt: is anything accepting TCP on `host:port` right now? Used after a stop
+  /// to confirm the ports a queued start will bind are actually free (issue #33).
+  func isAcceptingConnections(host: String, port: Int) async -> Bool
+  /// One bind attempt: would Mihomo be able to `bind` `host:port` right now? A port can refuse a
+  /// bind while nothing accepts on it (issue #33, root cause B), which the connect probe cannot see.
+  func isPortBindable(host: String, port: Int) async -> Bool
+}
+
+extension ProxyPortReadinessProbing {
+  /// Test doubles never hold a real port, so by default nothing is accepting and everything is
+  /// bindable. The live probe overrides both with real sockets.
+  func isAcceptingConnections(host: String, port: Int) async -> Bool {
+    false
+  }
+
+  func isPortBindable(host: String, port: Int) async -> Bool {
+    true
+  }
 }
 
 /// Why one SOCKS5 greeting attempt failed. The distinction matters more than the errno: a
@@ -106,6 +124,21 @@ struct SocksProxyReadinessProbe: ProxyPortReadinessProbing {
 
     let message = lastError.map(UserFacingError.message) ?? "Timed out waiting for TCP listener."
     throw AppError.coreNotReady("\(serviceName) \(host):\(port) did not accept TCP connections. \(message)")
+  }
+
+  func isAcceptingConnections(host: String, port: Int) async -> Bool {
+    let timeout = timeout
+    return await Task.detached(priority: .utility) {
+      Self.isAcceptingConnections(host: host, port: port, timeout: timeout)
+    }.value
+  }
+
+  func isPortBindable(host: String, port: Int) async -> Bool {
+    // The bind probe knows loopback only, which is where ClashMax binds both of its ports.
+    guard host == "127.0.0.1" || host == "localhost" else { return true }
+    return await Task.detached(priority: .utility) {
+      MihomoRuntimePortChecker.canBindLoopback(port: port)
+    }.value
   }
 
   private func attemptGreeting(host: String, port: Int) async throws {

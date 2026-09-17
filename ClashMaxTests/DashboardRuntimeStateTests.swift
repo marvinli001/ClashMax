@@ -932,7 +932,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
     model.warmPreviewRuntimeOnLaunch()
     model.profilePreviewGroups = [group]
 
-    for _ in 0..<500 where launcher.launchCount < 1 || !model.previewRuntimeActive {
+    // `previewRuntimeActive` flips before the core's readiness wait, which is a real suspension
+    // point now that the controller probe races the core's output (issue #33); wait for the
+    // state the assertions below actually describe.
+    for _ in 0..<500 where launcher.launchCount < 1 || !model.previewRuntimeActive || !model.canControlRuntimeProxies {
       await Task.yield()
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
@@ -9788,6 +9791,89 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(stopCount, 1)
   }
 
+  func testTunStopWithHelperStopTimedOutKeepsCleanupPendingAndDropsTheQueuedStart() async throws {
+    // Issue #33: the helper now answers ok:false running:true (stopTimedOut) instead of "stopped"
+    // while its root Mihomo is still tearing down. A queued restart must not launch a user-mode
+    // core next to it.
+    let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
+    let helperTransport = StopTimedOutTunnelHelperTransport()
+    let model = try await makeRunningTunnelModel(client: client, helperTransport: helperTransport)
+
+    model.restart()
+    await waitUntil { model.lastError != nil && model.runtimeOwner == .stopped }
+
+    let banner = try XCTUnwrap(model.lastError)
+    XCTAssertTrue(banner.hasPrefix("Could not stop TUN helper cleanly: TUN helper could not stop Mihomo (PID 99) in time"), banner)
+    XCTAssertTrue(banner.contains("click Stop again"), banner)
+    XCTAssertTrue(model.needsTerminationCleanup)
+    // Give a wrongly re-queued start time to reach the transport (it would start with a second
+    // stop cycle, because tunHelperStopUnconfirmed routes start() back through the stop path).
+    try? await Task.sleep(nanoseconds: 300_000_000)
+    let stopCount = await helperTransport.stopCount()
+    let startCount = await helperTransport.startCount()
+    XCTAssertEqual(stopCount, 1, "the queued start must be dropped, not turned into another stop cycle")
+    XCTAssertEqual(startCount, 0, "the queued start must be dropped while the helper's Mihomo is unconfirmed")
+    XCTAssertEqual(model.lastError, banner)
+    XCTAssertFalse(model.startInFlight)
+    XCTAssertFalse(model.isRunning)
+  }
+
+  func testTunStopWaitsForTheHelperPortsToStopAcceptingBeforeFinishing() async throws {
+    let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
+    let helperTransport = ReadyTunnelHelperTransport()
+    // Both ports still answer for the first four polls (~400ms), then the root core is really gone.
+    let probe = RecordingProxyPortReadinessProbe()
+    probe.acceptingReplies = Array(repeating: true, count: 8)
+    let model = try await makeRunningTunnelModel(client: client, helperTransport: helperTransport, proxyPortReadinessProbe: probe)
+
+    // Only a stop that hands the ports to a queued start waits for them; a plain Stop does not.
+    model.stop()
+    await waitUntil { !model.needsTerminationCleanup }
+    XCTAssertEqual(probe.acceptingRequests, [], "a plain Stop must not probe the ports")
+    XCTAssertEqual(probe.bindableRequests, [])
+    model.tunnelCoreRunning = true
+    model.tunEnabled = true
+
+    model.restart()
+    await waitUntil { probe.acceptingRequests.count >= 10 }
+    // The queued restart then runs a TUN start against the fake transport; let it settle.
+    await waitUntil { model.runtimeOwner != .stopped || model.lastError != nil }
+
+    XCTAssertEqual(Set(probe.acceptingRequests.map(\.port)), [7890, 9097], "\(probe.acceptingRequests)")
+    XCTAssertEqual(probe.acceptingRequests.count, 10, "four busy rounds of two ports plus the round that saw both free")
+    model.runtimeData.flushPendingLogs()
+    let logMessages = model.logs.map(\.message)
+    XCTAssertTrue(
+      logMessages.contains { $0.hasPrefix("TUN helper ports 7890, 9097 released after ") },
+      logMessages.joined(separator: "\n")
+    )
+  }
+
+  func testTunStopOnlyWarnsWhenTheHelperPortsNeverStopAccepting() async throws {
+    let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
+    let helperTransport = ReadyTunnelHelperTransport()
+    let probe = RecordingProxyPortReadinessProbe()
+    // Nothing accepts, yet a bind still fails: the exact state root cause B leaves behind.
+    probe.alwaysBindable = false
+    let model = try await makeRunningTunnelModel(client: client, helperTransport: helperTransport, proxyPortReadinessProbe: probe)
+    model.helperPortReleaseWaitSeconds = 0.3
+
+    model.restart()
+    await waitUntil {
+      model.runtimeData.flushPendingLogs()
+      return model.logs.contains { $0.level == "warn" && $0.message.contains("after the TUN helper reported Mihomo stopped") }
+    }
+
+    let warnings = model.logs.filter { $0.level == "warn" }.map(\.message)
+    XCTAssertTrue(
+      warnings.contains { $0.hasPrefix("Port 7890, 9097 still accepts connections or refuses a bind 300ms after the TUN helper reported Mihomo stopped") },
+      model.logs.map(\.message).joined(separator: "\n")
+    )
+    XCTAssertFalse(warnings.contains { $0.hasPrefix("Could not stop TUN helper") }, "a port that stays busy is a warning for the next start, not a stop failure")
+    XCTAssertEqual(Set(probe.bindableRequests.map(\.port)), [7890, 9097])
+    XCTAssertFalse(probe.acceptingRequests.isEmpty)
+  }
+
   func testRunningTunSettingsSaveReloadsRuntimeConfig() async throws {
     let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
     let helperTransport = ReadyTunnelHelperTransport()
@@ -11444,7 +11530,10 @@ final class DashboardRuntimeStateTests: XCTestCase {
           message: "Could not connect to the Mihomo controller at 127.0.0.1:9097. The core may still be starting or failed to open its controller port."
         ),
         reaper: RecordingCoreProcessReaper(),
-        portChecker: EmptyRuntimePortChecker()
+        portChecker: EmptyRuntimePortChecker(),
+        // FakeProcessLauncher hands back one process object, so a bind-failure relaunch would see
+        // it already terminated; the relaunch itself is covered in CoreProcessControllerTests.
+        retryPolicy: RuntimeStartRetryPolicy(controllerBindRetryLimit: 0)
       ),
       systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
       defaults: Self.makeIsolatedDefaults()
@@ -12191,6 +12280,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     tunRuntimeInspector: any TunRuntimeInspecting = RecordingTunRuntimeInspector(snapshots: []),
     systemProxyController: SystemProxyController? = nil,
     tunnelReadinessProbe: CoreReadinessProbing = RecordingCoreReadinessProbe(),
+    proxyPortReadinessProbe: (any ProxyPortReadinessProbing)? = nil,
     defaults: UserDefaults? = nil
   ) async throws -> AppModel {
     let paths = try Self.makeRuntimePaths()
@@ -12218,6 +12308,9 @@ final class DashboardRuntimeStateTests: XCTestCase {
       ),
       helperClient: helper,
       tunnelReadinessProbe: tunnelReadinessProbe,
+      // A stop that hands ports to a queued start probes 7890/9097; a real probe here would make
+      // 20+ tests depend on what happens to be listening on this Mac.
+      proxyPortReadinessProbe: proxyPortReadinessProbe ?? RecordingProxyPortReadinessProbe(),
       tunRuntimeInspector: tunRuntimeInspector,
       apiClient: client,
       defaults: effectiveDefaults
@@ -13364,9 +13457,27 @@ private final class RecordingProxyPortReadinessProbe: ProxyPortReadinessProbing 
   private(set) var requests: [ProxyPortReadinessRequest] = []
   var result: Result<Void, Error>
   var onProbe: (() -> Void)?
+  /// Scripted answers for `isAcceptingConnections`, consumed in order; `false` once exhausted.
+  var acceptingReplies: [Bool] = []
+  var alwaysAccepting = false
+  var alwaysBindable = true
+  private(set) var acceptingRequests: [ProxyPortReadinessRequest] = []
+  private(set) var bindableRequests: [ProxyPortReadinessRequest] = []
 
   init(result: Result<Void, Error> = .success(())) {
     self.result = result
+  }
+
+  func isAcceptingConnections(host: String, port: Int) async -> Bool {
+    acceptingRequests.append(ProxyPortReadinessRequest(host: host, port: port, serviceName: "accepting"))
+    if alwaysAccepting { return true }
+    guard !acceptingReplies.isEmpty else { return false }
+    return acceptingReplies.removeFirst()
+  }
+
+  func isPortBindable(host: String, port: Int) async -> Bool {
+    bindableRequests.append(ProxyPortReadinessRequest(host: host, port: port, serviceName: "bindable"))
+    return alwaysBindable
   }
 
   func waitUntilReady(host: String, port: Int) async throws {
@@ -13462,6 +13573,42 @@ private actor ReadyTunnelHelperTransport: HelperXPCTransport {
   func stopCount() -> Int { stops }
   func restartCount() -> Int { restarts }
   func statusCount() -> Int { statuses }
+}
+
+private actor StopTimedOutTunnelHelperTransport: HelperXPCTransport {
+  private var stops = 0
+  private var starts = 0
+
+  func status() async throws -> HelperClientResponse {
+    HelperClientResponse(payload: HelperXPCPayload.response(ok: true, running: true, pid: 99))
+  }
+
+  func startTunnel(coreURL: URL, configURL: URL, workDirectory: URL, secret: String) async throws -> HelperClientResponse {
+    starts += 1
+    return HelperClientResponse(payload: HelperXPCPayload.response(ok: true, running: true, pid: 99))
+  }
+
+  func stopTunnel() async throws -> HelperClientResponse {
+    stops += 1
+    return HelperClientResponse(payload: HelperXPCPayload.response(
+      ok: false,
+      running: true,
+      pid: 99,
+      code: HelperResponseCode.stopTimedOut,
+      message: "Mihomo pid 99 is still running 5.0s after SIGTERM and SIGKILL"
+    ))
+  }
+
+  func restartTunnel(coreURL: URL, configURL: URL, workDirectory: URL, secret: String) async throws -> HelperClientResponse {
+    try await startTunnel(coreURL: coreURL, configURL: configURL, workDirectory: workDirectory, secret: secret)
+  }
+
+  func recentLogs() async throws -> [String] {
+    []
+  }
+
+  func stopCount() -> Int { stops }
+  func startCount() -> Int { starts }
 }
 
 private actor StopStillRunningTunnelHelperTransport: HelperXPCTransport {

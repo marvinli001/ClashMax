@@ -86,6 +86,36 @@ final class TunnelHelperClientTests: XCTestCase {
     XCTAssertTrue(launchFailed.userFacingMessage.contains("spawn failed"))
   }
 
+  func testHelperStopTimedOutResponseKeepsTheRunningPIDAndTellsTheUserToStopAgain() {
+    // Issue #33: the helper now refuses to say "stopped" while its Mihomo is still alive.
+    let stopTimedOut = HelperClientResponse(payload: HelperXPCPayload.response(
+      ok: false,
+      running: true,
+      pid: 4242,
+      code: HelperResponseCode.stopTimedOut,
+      message: "Mihomo pid 4242 is still running 5.0s after SIGTERM and SIGKILL"
+    ))
+
+    XCTAssertFalse(stopTimedOut.ok)
+    XCTAssertTrue(stopTimedOut.running)
+    XCTAssertEqual(stopTimedOut.pid, 4242)
+    XCTAssertEqual(
+      stopTimedOut.userFacingMessage,
+      "TUN helper could not stop Mihomo (PID 4242) in time; it is still shutting down. Wait a moment, then click Stop again before switching modes."
+    )
+
+    let withoutPID = HelperClientResponse(payload: HelperXPCPayload.response(
+      ok: false,
+      running: true,
+      code: HelperResponseCode.stopTimedOut,
+      message: "still running"
+    ))
+    XCTAssertEqual(
+      withoutPID.userFacingMessage,
+      "TUN helper could not stop Mihomo in time; it is still shutting down. Wait a moment, then click Stop again before switching modes."
+    )
+  }
+
   func testStructuredStatusReportsBootstrappedEnabledHelper() async throws {
     let service = FakeHelperService(status: .enabled)
     let transport = FakeHelperTransport(statusResponse: HelperClientResponse(payload: HelperXPCPayload.response(

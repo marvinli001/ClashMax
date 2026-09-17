@@ -29,6 +29,12 @@ private enum RuntimeStopPurpose {
   var preservesRuntimeSettingsApplyTask: Bool {
     self == .settingsApplyRestart
   }
+
+  /// A start follows this stop without the user in between, so the ports the helper's Mihomo held
+  /// are about to be bound again.
+  var isFollowedByStart: Bool {
+    self == .settingsApplyRestart
+  }
 }
 
 private struct RuntimeStopResult {
@@ -3870,6 +3876,60 @@ final class AppModel {
       // to the app log and the settings-apply path reports through its own warning.
       throw coreController.explainMixedPortReadinessFailure(error, host: host, port: port)
     }
+  }
+
+  /// How long `stopRuntime` waits, after the helper confirms its Mihomo is gone, for the controller
+  /// and mixed ports to actually stop accepting connections before a queued start may reuse them.
+  /// Settable so tests can exercise the timeout branch without waiting it out.
+  var helperPortReleaseWaitSeconds: TimeInterval = 3
+
+  /// Issue #33, TUN -> NE Proxy. The helper's stop reply used to be the only gate between the root
+  /// Mihomo going away and the user-mode Mihomo binding the same ports; anything the root process
+  /// was still holding at that instant became `address already in use` for the new one. A port
+  /// counts as released when nothing accepts on it *and* a fresh socket can bind it — the second
+  /// half is the state the issue actually showed (lsof and connect both said "free", bind said
+  /// "in use"). Bounded: a port that never frees is logged and left to the start-side preflight.
+  private func waitForHelperPortsToRelease(ports: [Int], timeout: TimeInterval) async {
+    let uniquePorts = Array(Set(ports)).sorted()
+    guard !uniquePorts.isEmpty else { return }
+    let host = "127.0.0.1"
+    let started = Date()
+    while true {
+      var busy: [Int] = []
+      for port in uniquePorts {
+        let accepting = await proxyPortReadinessProbe.isAcceptingConnections(host: host, port: port)
+        if accepting {
+          busy.append(port)
+          continue
+        }
+        let bindable = await proxyPortReadinessProbe.isPortBindable(host: host, port: port)
+        if !bindable {
+          busy.append(port)
+        }
+      }
+      if busy.isEmpty {
+        let waited = Date().timeIntervalSince(started)
+        if waited > 0.25 {
+          appendAppLog(level: "info", message: "TUN helper ports \(uniquePorts.map(String.init).joined(separator: ", ")) released after \(Int((waited * 1000).rounded()))ms.")
+        }
+        return
+      }
+      guard Date().timeIntervalSince(started) < timeout else {
+        appendAppLog(
+          level: "warn",
+          message: "Port \(busy.map(String.init).joined(separator: ", ")) still accepts connections or refuses a bind \(Int((timeout * 1000).rounded()))ms after the TUN helper reported Mihomo stopped; a following start may find it busy."
+        )
+        return
+      }
+      await Self.sleepIgnoringCancellation(nanoseconds: 100_000_000)
+    }
+  }
+
+  private nonisolated static func sleepIgnoringCancellation(nanoseconds: UInt64) async {
+    let sleeper = Task.detached {
+      try? await Task.sleep(nanoseconds: nanoseconds)
+    }
+    await sleeper.value
   }
 
   func stop() {
@@ -8099,10 +8159,20 @@ final class AppModel {
     }
     runtimeData.clearRuntimeCollections()
     if mustStopTunnelHelper {
+      let helperRuntimeOverrides = settings.appliedRuntimeSettingsSnapshot?.overrides ?? overrides
+      // Only a stop that hands the ports straight to another core needs to see them released; a
+      // plain Stop or Quit must not stall on a port some other program legitimately owns.
+      let startFollows = pendingStartAfterStop != nil || purpose.isFollowedByStart
       do {
         _ = try await stopTunnelHelperForCleanup(
           verifyLateStart: helperLaunchRaceWasPossible || tunLaunchInFlight || tunStartAwaitingHelperReply
         )
+        if startFollows {
+          await waitForHelperPortsToRelease(
+            ports: [helperRuntimeOverrides.endpoint.port, helperRuntimeOverrides.mixedPort],
+            timeout: helperPortReleaseWaitSeconds
+          )
+        }
       } catch {
         tunHelperStopUnconfirmed = true
         result.helperStopError = error
@@ -9362,7 +9432,18 @@ final class AppModel {
     if Self.informationalStartupDiagnosticPrefixes.contains(where: { normalized.hasPrefix($0) }) {
       return "info"
     }
+    // Issue #33: a port that is mid-release and a relaunch that recovered from it are part of a
+    // start that went fine; only the give-up lines below are failures.
+    if normalized.hasPrefix("port "), normalized.contains("refuses a bind but nothing accepts") {
+      return "info"
+    }
     if normalized.hasPrefix("mihomo pid "), normalized.contains("did not exit after sigterm") {
+      return "warn"
+    }
+    if normalized.hasPrefix("mihomo pid "), normalized.contains("could not bind controller port") {
+      return "warn"
+    }
+    if normalized.hasPrefix("retry could not stop the previous core:") {
       return "warn"
     }
     if Self.failureStartupDiagnosticPrefixes.contains(where: { normalized.hasPrefix($0) }) {
@@ -9376,6 +9457,7 @@ final class AppModel {
     "using mihomo core:",
     "reaping stale clashmax-managed mihomo processes",
     "checking runtime ports:",
+    "runtime ports released after",
     "launching mihomo with config:",
     "mihomo launch pid:",
     "mihomo controller ready:",

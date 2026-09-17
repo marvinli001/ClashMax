@@ -78,6 +78,8 @@ enum HelperResponseCode {
   static let untrustedSignature = "untrustedSignature"
   static let launchFailed = "launchFailed"
   static let incompatibleProtocol = "incompatibleProtocol"
+  /// `stopTunnel` gave up waiting: the helper's Mihomo is still alive after SIGTERM and SIGKILL.
+  static let stopTimedOut = "stopTimedOut"
 }
 
 enum ClashMaxHelperProtocolVersion {
@@ -613,27 +615,125 @@ struct CodeSignatureCoreExecutableValidator: HelperCoreExecutableValidating {
 
 enum HelperRuntimeError: Error, CustomStringConvertible {
   case alreadyRunning(pid: pid_t)
+  case stopTimedOut(pid: pid_t, waited: TimeInterval)
 
   var description: String {
     switch self {
     case let .alreadyRunning(pid):
       return "Mihomo is already running with pid \(pid). Stop the tunnel or call restartTunnel before starting with new parameters."
+    case let .stopTimedOut(pid, waited):
+      return "Mihomo pid \(pid) is still running \(String(format: "%.1f", waited))s after SIGTERM and SIGKILL; it is probably still tearing down TUN. Wait a moment and stop again."
     }
   }
 }
 
-// Thread-safety: XPC methods may be invoked from arbitrary threads; process state is guarded by stateLock and the log buffer by logLock.
+/// The loopback ports the helper's Mihomo listens on, read from the runtime config it was
+/// launched with. The helper has no YAML parser and needs none: ClashMax generates that file
+/// itself with these keys at the root, one per line, and only these two matter for the stop
+/// hand-off (issue #33). Anything it cannot read yields no port, never a wrong one.
+enum HelperRuntimeListenerPorts {
+  static func parse(configText: String) -> [Int] {
+    var ports: [Int] = []
+    for rawLine in configText.split(omittingEmptySubsequences: true, whereSeparator: \.isNewline) {
+      guard let first = rawLine.first, !first.isWhitespace, first != "#" else { continue }
+      guard let colon = rawLine.firstIndex(of: ":") else { continue }
+      let key = rawLine[..<colon].trimmingCharacters(in: .whitespaces)
+      let value = rawLine[rawLine.index(after: colon)...]
+        .trimmingCharacters(in: .whitespaces)
+        .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+      switch key {
+      case "mixed-port":
+        if let port = Int(value) {
+          ports.append(port)
+        }
+      case "external-controller":
+        if let lastColon = value.lastIndex(of: ":"),
+           let port = Int(value[value.index(after: lastColon)...])
+        {
+          ports.append(port)
+        }
+      default:
+        continue
+      }
+    }
+    return Array(Set(ports.filter { (1...65_535).contains($0) })).sorted()
+  }
+
+  static func parse(configURL: URL) -> [Int] {
+    guard let text = try? String(contentsOf: configURL, encoding: .utf8) else { return [] }
+    return parse(configText: text)
+  }
+}
+
+/// A single loopback connect, for the helper to confirm its Mihomo's ports really closed before
+/// it tells the app "stopped". Any user can make this call; it needs no privilege. Non-blocking
+/// with a real deadline: SO_RCVTIMEO does not bound `connect(2)` on Darwin, and this runs inside
+/// the root helper, where nothing may hang on a socket.
+enum HelperLoopbackPortProbe {
+  static func isAccepting(port: Int, timeout: TimeInterval) -> Bool {
+    let descriptor = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
+    guard descriptor >= 0 else { return false }
+    defer { close(descriptor) }
+
+    var noSigPipe: Int32 = 1
+    setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
+    let flags = fcntl(descriptor, F_GETFL)
+    guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0 else { return false }
+
+    var address = sockaddr_in()
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_port = in_port_t(UInt16(clamping: port)).bigEndian
+    address.sin_addr.s_addr = inet_addr("127.0.0.1")
+    let result = withUnsafePointer(to: &address) {
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+        Darwin.connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+      }
+    }
+    if result == 0 {
+      return true
+    }
+    guard errno == EINPROGRESS else { return false }
+
+    var descriptors = pollfd(fd: descriptor, events: Int16(POLLOUT), revents: 0)
+    let ready = poll(&descriptors, 1, Int32(max(1, timeout * 1000)))
+    guard ready > 0 else { return false }
+    var socketError: Int32 = 0
+    var length = socklen_t(MemoryLayout<Int32>.size)
+    guard getsockopt(descriptor, SOL_SOCKET, SO_ERROR, &socketError, &length) == 0 else { return false }
+    return socketError == 0
+  }
+}
+
+// Thread-safety: XPC methods may be invoked from arbitrary threads; process state is guarded by
+// stateLock and the log buffer by logLock. start/stop/restart additionally serialize on
+// lifecycleLock for their whole duration (a stop can legitimately wait several seconds for a
+// Mihomo tearing down TUN), while stateLock is only ever held for a moment, so a status() call
+// arriving mid-stop answers immediately instead of queueing behind the wait.
 final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Sendable {
   // Guard every read/write of process with stateLock via withStateLock or *Locked helpers.
   private var process: Process?
+  /// Loopback ports the tracked process was launched to listen on; see `HelperRuntimeListenerPorts`.
+  private var trackedListenerPorts: [Int] = []
   private var logs = BoundedBuffer<String>(limit: 200)
   private let stateLock = NSLock()
+  /// Lock order: lifecycleLock before stateLock, never the reverse.
+  private let lifecycleLock = NSLock()
   private let logLock = NSLock()
   private let trustedPathsProvider: (uid_t) throws -> HelperTrustedPaths
   private let coreExecutableValidator: any HelperCoreExecutableValidating
   private let clientUserIDProvider: () throws -> uid_t
+  /// How long SIGTERM gets before SIGKILL.
   private let processTerminationTimeout: TimeInterval
+  /// How long SIGKILL gets before the stop is reported as failed. A root Mihomo tearing down TUN
+  /// (utun close, route and DNS restore) can outlive the old 1s, and reporting "stopped" while it
+  /// still held 9097 is what broke the TUN -> NE Proxy switch (issue #33).
+  private let processKillTimeout: TimeInterval
+  /// How long, after the process is gone, to wait for its ports to stop accepting connections.
+  private let portReleaseTimeout: TimeInterval
   private let processDidLaunch: ((Process) -> Void)?
+  private let portProbe: (Int) -> Bool
+  /// `kill(2)` for the SIGKILL escalation; tests substitute a sender that delays or withholds it.
+  private let killSignalSender: (pid_t, Int32) -> Int32
 
   init(
     trustedPathsProvider: @escaping (uid_t) throws -> HelperTrustedPaths = { userID in
@@ -647,13 +747,21 @@ final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Senda
       return connection.effectiveUserIdentifier
     },
     processTerminationTimeout: TimeInterval = 2,
-    processDidLaunch: ((Process) -> Void)? = nil
+    processKillTimeout: TimeInterval = 3,
+    portReleaseTimeout: TimeInterval = 2,
+    processDidLaunch: ((Process) -> Void)? = nil,
+    portProbe: @escaping (Int) -> Bool = { HelperLoopbackPortProbe.isAccepting(port: $0, timeout: 0.2) },
+    killSignalSender: @escaping (pid_t, Int32) -> Int32 = { kill($0, $1) }
   ) {
     self.trustedPathsProvider = trustedPathsProvider
     self.coreExecutableValidator = coreExecutableValidator
     self.clientUserIDProvider = clientUserIDProvider
     self.processTerminationTimeout = processTerminationTimeout
+    self.processKillTimeout = processKillTimeout
+    self.portReleaseTimeout = portReleaseTimeout
     self.processDidLaunch = processDidLaunch
+    self.portProbe = portProbe
+    self.killSignalSender = killSignalSender
   }
 
   func status(withReply reply: @escaping (NSString) -> Void) {
@@ -666,6 +774,7 @@ final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Senda
           HelperProcessOutputHandlers.clear(for: existingProcess)
         }
         process = nil
+        trackedListenerPorts = []
       }
       return (running, pid)
     }
@@ -698,11 +807,24 @@ final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Senda
   }
 
   func stopTunnel(withReply reply: @escaping (NSString) -> Void) {
-    withStateLock {
-      stopTrackedProcessLocked()
+    let outcome = withLifecycleLock {
+      stopTrackedProcess()
     }
 
-    reply(HelperXPCPayload.response(ok: true, running: false))
+    switch outcome {
+    case .stopped:
+      reply(HelperXPCPayload.response(ok: true, running: false))
+    case let .stillRunning(pid, waited):
+      // Keep tracking it: the next stop, status or restart must see this process, not a
+      // fresh slate that lets a new Mihomo collide with the one still shutting down.
+      reply(HelperXPCPayload.response(
+        ok: false,
+        running: true,
+        pid: Int(pid),
+        code: HelperResponseCode.stopTimedOut,
+        message: String(describing: HelperRuntimeError.stopTimedOut(pid: pid, waited: waited))
+      ))
+    }
   }
 
   func restartTunnel(
@@ -737,22 +859,28 @@ final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Senda
   }
 
   private func start(corePath: String, configPath: String, workDirectoryPath: String, secret: String) throws -> Process {
-    try rejectAlreadyRunningProcess()
-    let paths = try validatedPaths(corePath: corePath, configPath: configPath, workDirectoryPath: workDirectoryPath)
+    let launchedProcess = try withLifecycleLock {
+      try rejectAlreadyRunningProcess()
+      let paths = try validatedPaths(corePath: corePath, configPath: configPath, workDirectoryPath: workDirectoryPath)
 
-    let launchedProcess = try withStateLock {
-      try rejectAlreadyRunningProcessLocked()
-      return try launchProcessLocked(paths: paths, secret: secret)
+      return try withStateLock {
+        try rejectAlreadyRunningProcessLocked()
+        return try launchProcessLocked(paths: paths, secret: secret)
+      }
     }
     processDidLaunch?(launchedProcess)
     return launchedProcess
   }
 
   private func restart(corePath: String, configPath: String, workDirectoryPath: String, secret: String) throws -> Process {
-    let launchedProcess = try withStateLock {
-      stopTrackedProcessLocked()
+    let launchedProcess = try withLifecycleLock {
+      if case let .stillRunning(pid, waited) = stopTrackedProcess() {
+        throw HelperRuntimeError.stopTimedOut(pid: pid, waited: waited)
+      }
       let paths = try validatedPaths(corePath: corePath, configPath: configPath, workDirectoryPath: workDirectoryPath)
-      return try launchProcessLocked(paths: paths, secret: secret)
+      return try withStateLock {
+        try launchProcessLocked(paths: paths, secret: secret)
+      }
     }
     processDidLaunch?(launchedProcess)
     return launchedProcess
@@ -771,6 +899,7 @@ final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Senda
     }
     HelperProcessOutputHandlers.clear(for: existingProcess)
     process = nil
+    trackedListenerPorts = []
   }
 
   private func validatedPaths(corePath: String, configPath: String, workDirectoryPath: String) throws -> HelperValidatedTunnelPaths {
@@ -812,31 +941,74 @@ final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Senda
       throw error
     }
     self.process = process
+    trackedListenerPorts = HelperRuntimeListenerPorts.parse(configURL: paths.configURL)
     return process
   }
 
-  private func stopTrackedProcessLocked() {
-    guard let existingProcess = process else { return }
-    if existingProcess.isRunning {
-      terminateAndWait(existingProcess)
-    }
-    HelperProcessOutputHandlers.clear(for: existingProcess)
-    process = nil
+  private enum StopOutcome {
+    case stopped
+    case stillRunning(pid: pid_t, waited: TimeInterval)
   }
 
-  private func terminateAndWait(_ process: Process) {
+  /// Caller holds lifecycleLock. stateLock is taken only to read and to clear the tracked process,
+  /// never across the waits, so `status()` stays answerable while a stop is in progress.
+  @discardableResult
+  private func stopTrackedProcess() -> StopOutcome {
+    let tracked = withStateLock { (process: process, ports: trackedListenerPorts) }
+    guard let existingProcess = tracked.process else { return .stopped }
+    if existingProcess.isRunning {
+      let started = Date()
+      guard terminateAndWait(existingProcess) else {
+        let waited = Date().timeIntervalSince(started)
+        appendLog("mihomo pid \(existingProcess.processIdentifier) still running \(String(format: "%.1f", waited))s after SIGTERM and SIGKILL; stop not confirmed")
+        return .stillRunning(pid: existingProcess.processIdentifier, waited: waited)
+      }
+      waitForListenerPortsToRelease(tracked.ports)
+    }
+    withStateLock {
+      HelperProcessOutputHandlers.clear(for: existingProcess)
+      // A concurrent status() may already have cleared it; only clear what is still ours.
+      if process === existingProcess {
+        process = nil
+        trackedListenerPorts = []
+      }
+    }
+    return .stopped
+  }
+
+  /// SIGTERM, then SIGKILL, then keep waiting until the process is really gone or the kill budget
+  /// runs out. Returns false when it is still alive: the caller must keep tracking it.
+  private func terminateAndWait(_ process: Process) -> Bool {
     process.terminate()
     waitForProcessExit(process, timeout: processTerminationTimeout)
 
-    guard process.isRunning else { return }
-    kill(process.processIdentifier, SIGKILL)
-    waitForProcessExit(process, timeout: 1)
+    guard process.isRunning else { return true }
+    _ = killSignalSender(process.processIdentifier, SIGKILL)
+    waitForProcessExit(process, timeout: processKillTimeout)
+    return !process.isRunning
   }
 
   private func waitForProcessExit(_ process: Process, timeout: TimeInterval) {
     let deadline = Date().addingTimeInterval(timeout)
     while process.isRunning, Date() < deadline {
       Thread.sleep(forTimeInterval: 0.02)
+    }
+  }
+
+  /// The process has exited; its listening sockets close with it, but "stopped" must mean the
+  /// app can bind the same ports now, so confirm that rather than assume it. Bounded: a port
+  /// that stays busy is logged, not fatal — it may belong to something else entirely.
+  private func waitForListenerPortsToRelease(_ ports: [Int]) {
+    guard !ports.isEmpty else { return }
+    let deadline = Date().addingTimeInterval(portReleaseTimeout)
+    while true {
+      let busy = ports.filter(portProbe)
+      if busy.isEmpty { return }
+      guard Date() < deadline else {
+        appendLog("port \(busy.map(String.init).joined(separator: ",")) still accepts connections \(String(format: "%.1f", portReleaseTimeout))s after mihomo exited")
+        return
+      }
+      Thread.sleep(forTimeInterval: 0.05)
     }
   }
 
@@ -847,6 +1019,15 @@ final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Senda
         running: true,
         pid: Int(pid),
         code: HelperResponseCode.alreadyRunning,
+        message: String(describing: error)
+      )
+    }
+    if case let HelperRuntimeError.stopTimedOut(pid, _) = error {
+      return HelperXPCPayload.response(
+        ok: false,
+        running: true,
+        pid: Int(pid),
+        code: HelperResponseCode.stopTimedOut,
         message: String(describing: error)
       )
     }
@@ -878,6 +1059,12 @@ final class HelperService: NSObject, ClashMaxHelperXPCProtocol, @unchecked Senda
   private func withStateLock<T>(_ body: () throws -> T) rethrows -> T {
     stateLock.lock()
     defer { stateLock.unlock() }
+    return try body()
+  }
+
+  private func withLifecycleLock<T>(_ body: () throws -> T) rethrows -> T {
+    lifecycleLock.lock()
+    defer { lifecycleLock.unlock() }
     return try body()
   }
 }
