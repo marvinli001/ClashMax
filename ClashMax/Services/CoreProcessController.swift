@@ -142,6 +142,12 @@ final class CoreProcessController {
   private let readinessProbe: CoreReadinessProbing
   private let reaper: CoreProcessReaping
   private let portChecker: RuntimePortChecking
+  /// How much of the core's retained output is scanned for a diagnostic line. The whole retention
+  /// budget: Mihomo logs a bind failure once, early, and then one info line per proxy group and
+  /// provider, so on a real subscription the line the app needs is thousands of bytes back.
+  static let diagnosticScanBytes = 65_536
+  /// How much of the core's output is attached to an error as "Core output" for a human to read.
+  static let coreOutputExcerptBytes = 4096
   /// Process handle, not view state.
   @ObservationIgnored private var runningProcess: RunningCoreProcess?
   /// Stop-request latch consumed by the termination handler, not view state.
@@ -380,6 +386,18 @@ final class CoreProcessController {
     runningProcess = nil
   }
 
+  /// The live core's recent output, for callers that probe the core from outside this controller
+  /// (the NE Proxy mixed-port check) and need to explain a failure with the core's own words.
+  func currentOutputTail(maxBytes: Int = CoreProcessController.coreOutputExcerptBytes) -> String {
+    if let runningProcess {
+      let tail = runningProcess.recentOutputTail(maxBytes: maxBytes)
+      if !tail.isEmpty {
+        return tail
+      }
+    }
+    return recentCoreLog
+  }
+
   private func waitForExit(_ process: RunningCoreProcess, processIdentifier: Int32, timeout: TimeInterval) async -> Bool {
     let deadline = Date().addingTimeInterval(timeout)
     while process.isRunning, Date() < deadline {
@@ -451,6 +469,87 @@ final class CoreProcessController {
     3. Restarting macOS also releases it.
     Alternatively change ClashMax's controller/mixed port settings so the ports no longer collide.
     """
+  }
+
+  struct MixedPortBindFailure: Equatable {
+    var summary: String
+    var advice: String
+  }
+
+  /// The mixed-port twin of `controllerBindFailure`. Mihomo logs `Start Mixed(http+socks) server
+  /// error: listen tcp 127.0.0.1:7890: bind: address already in use` and keeps running with its
+  /// controller up, so the only outward symptom is the SOCKS5 probe never getting a reply
+  /// (issue #33: the profile's own `port: 7890` HTTP listener had taken the port first).
+  static func mixedPortBindFailure(host: String, port: Int, outputTail: String) -> MixedPortBindFailure? {
+    let lines = outputTail.split(whereSeparator: \.isNewline).map(String.init)
+    // The same long-lived core is scanned after every settings reload, so an old failure on a
+    // port the user has since moved away from, or one a later reload recovered from, must not be
+    // pinned on the current probe: the line has to name this port and not be followed by a
+    // successful listen on it.
+    guard let index = lines.lastIndex(where: {
+      $0.localizedCaseInsensitiveContains("Start Mixed(http+socks) server error") && $0.contains(":\(port)")
+    }) else {
+      return nil
+    }
+    let line = lines[index]
+    let recoveredLater = lines[(index + 1)...].contains {
+      $0.contains("Mixed(http+socks) proxy listening at:") && $0.contains(":\(port)")
+    }
+    guard !recoveredLater else { return nil }
+    let reported: String
+    if let range = line.range(of: "msg=\"") {
+      reported = String(line[range.upperBound...]).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+    } else {
+      reported = line.trimmingCharacters(in: .whitespaces)
+    }
+    let endpoint = "\(host):\(port)"
+    guard reported.localizedCaseInsensitiveContains("address already in use") else {
+      return MixedPortBindFailure(
+        summary: "Mihomo started but could not open its mixed-port \(endpoint). Open Details for the core's report.",
+        advice: "Mihomo reported: \(reported)"
+      )
+    }
+    return MixedPortBindFailure(
+      summary: "Mihomo started but could not open its mixed-port \(endpoint): address already in use. Another listener on this Mac took the port first, so the proxy never came up. Open Details for how to find it.",
+      advice: "Mihomo reported: \(reported)\n\(Self.mixedPortListenerAdvice(port: port))"
+    )
+  }
+
+  static func mixedPortListenerAdvice(port: Int) -> String {
+    """
+    To find what holds port \(port):
+    1. Run in Terminal: sudo lsof -nP -iTCP:\(port) -sTCP:LISTEN — then quit that process, or change ClashMax's mixed port in Settings.
+    2. If lsof names the Mihomo that ClashMax itself launched, the profile opened a listener of its own on this port. ClashMax drops a profile's root port:/socks-port: keys (the Logs page then shows a "Runtime config: Ignored the profile's own inbound listener ports" line), but a `listeners:` entry on this port is refused before launch instead, so check the profile for one.
+    """
+  }
+
+  /// Turns a failed mixed-port SOCKS5 probe into an error that names the cause when the core's
+  /// output shows one: the probe only knows "no SOCKS5 reply", the core knows "bind failed".
+  func explainMixedPortReadinessFailure(_ error: Error, host: String, port: Int) -> AppError {
+    let probeMessage: String
+    if let appError = error as? AppError, case let .coreNotReady(message) = appError {
+      probeMessage = message
+    } else {
+      probeMessage = UserFacingError.message(for: error)
+    }
+    let tail = currentOutputTail()
+    var summary = probeMessage
+    var detailSections: [String] = []
+    if let bindFailure = Self.mixedPortBindFailure(
+      host: host,
+      port: port,
+      outputTail: currentOutputTail(maxBytes: Self.diagnosticScanBytes)
+    ) {
+      summary = bindFailure.summary
+      detailSections.append(bindFailure.advice)
+      detailSections.append("Probe result: \(probeMessage)")
+    }
+    if !tail.isEmpty {
+      detailSections.append("Core output:\n\(tail)")
+    }
+    let combined = UserFacingError.attachDetails(detailSections, to: summary)
+    recordStartup("Mixed-port readiness failed: \(combined)")
+    return AppError.coreNotReady(combined)
   }
 
   struct ControllerBindFailure: Equatable {

@@ -13,6 +13,49 @@ protocol ProxyPortReadinessProbing {
   func waitUntilOpen(host: String, port: Int, serviceName: String) async throws
 }
 
+/// Why one SOCKS5 greeting attempt failed. The distinction matters more than the errno: a
+/// refused connect means nobody listens, while an accepted connect with no reply means *something
+/// else* owns the port (issue #33: the profile's own HTTP listener on 7890 accepted the TCP
+/// connection and then waited forever for a request line, and the user saw the localized
+/// EAGAIN text "资源暂时不可用" instead of anything actionable).
+enum SocksGreetingFailure: Error, Equatable, Sendable {
+  /// TCP connect failed; nobody is accepting on the port.
+  case connectFailed(errno: Int32)
+  /// The connection was accepted but no SOCKS5 reply arrived before `timeout` elapsed.
+  case noReply(timeout: TimeInterval)
+  /// The peer closed the connection before answering.
+  case closedWithoutReply
+  /// A reply arrived and it is not the no-authentication acceptance `05 00`.
+  case unexpectedReply([UInt8])
+  case sendFailed(errno: Int32)
+  /// `recv` failed for a reason other than the timeout or the peer closing.
+  case receiveFailed(errno: Int32)
+  case lookupFailed(String)
+
+  func explanation(host: String, port: Int) -> String {
+    let endpoint = "\(host):\(port)"
+    switch self {
+    case let .connectFailed(code):
+      let reason = String(cString: strerror(code))
+      return "Nothing is listening on \(endpoint) (\(reason)); Mihomo did not open its mixed-port."
+    case let .noReply(timeout):
+      let seconds = String(format: "%.1f", timeout)
+      return "Something accepted the TCP connection on \(endpoint) but did not answer a SOCKS5 greeting within \(seconds)s; that listener is not Mihomo's mixed-port. Another program, or a plain HTTP proxy, is holding the port."
+    case .closedWithoutReply:
+      return "Something accepted the TCP connection on \(endpoint) and closed it without a SOCKS5 reply; that listener is not Mihomo's mixed-port."
+    case let .unexpectedReply(bytes):
+      let hex = bytes.map { String(format: "%02x", $0) }.joined(separator: " ")
+      return "The listener on \(endpoint) answered the SOCKS5 greeting with \(hex) instead of 05 00; it is not Mihomo's mixed-port, or it requires authentication."
+    case let .sendFailed(code):
+      return "Could not send a SOCKS5 greeting to \(endpoint): \(String(cString: strerror(code)))."
+    case let .receiveFailed(code):
+      return "Could not read the SOCKS5 reply from \(endpoint): \(String(cString: strerror(code)))."
+    case let .lookupFailed(message):
+      return "Could not resolve \(host): \(message)."
+    }
+  }
+}
+
 struct SocksProxyReadinessProbe: ProxyPortReadinessProbing {
   let attempts: Int
   let delayNanoseconds: UInt64
@@ -40,7 +83,12 @@ struct SocksProxyReadinessProbe: ProxyPortReadinessProbing {
       }
     }
 
-    let message = lastError.map(UserFacingError.message) ?? "Timed out waiting for mixed-port SOCKS5 response."
+    let message: String
+    if let failure = lastError as? SocksGreetingFailure {
+      message = failure.explanation(host: host, port: port)
+    } else {
+      message = lastError.map(UserFacingError.message) ?? "Timed out waiting for mixed-port SOCKS5 response."
+    }
     throw AppError.coreNotReady("Mihomo mixed-port \(host):\(port) did not accept SOCKS5 traffic. \(message)")
   }
 
@@ -83,7 +131,7 @@ struct SocksProxyReadinessProbe: ProxyPortReadinessProbing {
     var result: UnsafeMutablePointer<addrinfo>?
     let lookup = getaddrinfo(host, String(port), &hints, &result)
     guard lookup == 0, let result else {
-      throw AppError.coreNotReady(String(cString: gai_strerror(lookup)))
+      throw SocksGreetingFailure.lookupFailed(String(cString: gai_strerror(lookup)))
     }
     defer { freeaddrinfo(result) }
 
@@ -94,12 +142,32 @@ struct SocksProxyReadinessProbe: ProxyPortReadinessProbing {
         try connectAndVerifySOCKS(candidate: candidate, timeout: timeout)
         return
       } catch {
-        lastError = error
+        // Prefer the most specific failure across address candidates: a listener that accepted
+        // and stayed silent on one address says more than a refused connect on the other.
+        if lastError == nil || !(error is POSIXError) {
+          lastError = error
+        }
       }
       current = candidate.pointee.ai_next
     }
 
-    throw lastError ?? AppError.coreNotReady("Could not connect to mixed-port.")
+    if let posixError = lastError as? POSIXError {
+      throw SocksGreetingFailure.connectFailed(errno: posixError.code.rawValue)
+    }
+    throw lastError ?? SocksGreetingFailure.connectFailed(errno: ECONNREFUSED)
+  }
+
+  /// One greeting attempt, classified. Exposed for tests that stand up their own listeners.
+  nonisolated static func probeGreeting(host: String, port: Int, timeout: TimeInterval) -> SocksGreetingFailure? {
+    do {
+      try performGreeting(host: host, port: port, timeout: timeout)
+      return nil
+    } catch let failure as SocksGreetingFailure {
+      return failure
+    } catch {
+      // performGreeting converts every POSIXError; anything else is a programming error.
+      return .connectFailed(errno: EIO)
+    }
   }
 
   /// True when something accepts a TCP connection on `host:port`. Unlike
@@ -146,7 +214,9 @@ struct SocksProxyReadinessProbe: ProxyPortReadinessProbing {
       Darwin.send(descriptor, $0.baseAddress, $0.count, 0)
     }
     guard sent == greeting.count else {
-      throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+      // errno is only meaningful after a failed call; a short write of a 3-byte greeting on a
+      // fresh loopback socket does not happen, but it must not report a stale errno either.
+      throw SocksGreetingFailure.sendFailed(errno: sent < 0 ? errno : EIO)
     }
 
     var response = [UInt8](repeating: 0, count: 2)
@@ -162,14 +232,30 @@ struct SocksProxyReadinessProbe: ProxyPortReadinessProbing {
           0
         )
       }
+      if count == 0 {
+        throw SocksGreetingFailure.closedWithoutReply
+      }
       guard count > 0 else {
-        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .ECONNRESET)
+        let code = errno
+        // SO_RCVTIMEO expired: the peer accepted the connection and is waiting for *us* — the
+        // signature of an HTTP listener that wants a request line, not a SOCKS5 server.
+        if code == EAGAIN || code == EWOULDBLOCK {
+          throw SocksGreetingFailure.noReply(timeout: timeout)
+        }
+        if code == EINTR {
+          continue
+        }
+        // ECONNRESET: the peer accepted and then tore the connection down.
+        if code == ECONNRESET {
+          throw SocksGreetingFailure.closedWithoutReply
+        }
+        throw SocksGreetingFailure.receiveFailed(errno: code)
       }
       received += count
     }
 
     guard response == [0x05, 0x00] else {
-      throw AppError.coreNotReady("SOCKS5 server rejected no-authentication greeting.")
+      throw SocksGreetingFailure.unexpectedReply(response)
     }
   }
 

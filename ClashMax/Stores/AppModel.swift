@@ -3786,7 +3786,7 @@ final class AppModel {
     try checkStartRequest(startRequestID)
 
     if shouldUseNetworkExtension {
-      try await proxyPortReadinessProbe.waitUntilReady(host: "127.0.0.1", port: startSnapshot.overrides.mixedPort)
+      try await waitForMixedPortReadiness(port: startSnapshot.overrides.mixedPort)
       if networkExtensionSettings.dnsCaptureEnabled {
         try await proxyPortReadinessProbe.waitUntilOpen(
           host: NetworkExtensionRoutingSettings.defaultDNSListenHost,
@@ -3853,6 +3853,22 @@ final class AppModel {
     }
     guard !response.running else {
       throw AppError.helperResponse("Helper reported stop success but TUN is still running.")
+    }
+  }
+
+  /// The SOCKS5 probe against the user-mode core's mixed-port, with the core's own explanation
+  /// attached when it has one. The probe can only say "no SOCKS5 reply"; the core log says why
+  /// (issue #33: `Start Mixed(http+socks) server error: ... address already in use`).
+  private func waitForMixedPortReadiness(port: Int) async throws {
+    let host = "127.0.0.1"
+    do {
+      try await proxyPortReadinessProbe.waitUntilReady(host: host, port: port)
+    } catch is CancellationError {
+      throw CancellationError()
+    } catch {
+      // Recorded in the controller's startup diagnostics, which the start-failure path republishes
+      // to the app log and the settings-apply path reports through its own warning.
+      throw coreController.explainMixedPortReadinessFailure(error, host: host, port: port)
     }
   }
 
@@ -4242,7 +4258,7 @@ final class AppModel {
     apiClient = clientForRuntime
 
     do {
-      try await proxyPortReadinessProbe.waitUntilReady(host: "127.0.0.1", port: target.overrides.mixedPort)
+      try await waitForMixedPortReadiness(port: target.overrides.mixedPort)
 
       if target.proxyRoutingMode == .systemProxy || systemProxyEnabled {
         try await applySystemProxySettings(target)
@@ -9368,6 +9384,7 @@ final class AppModel {
   private static let failureStartupDiagnosticPrefixes = [
     "port ",
     "readiness failed:",
+    "mixed-port readiness failed:",
     "mihomo exited before controller readiness:",
     "core tail:",
   ]

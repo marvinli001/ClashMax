@@ -8351,6 +8351,69 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(events.values, ["coreStop"])
   }
 
+  func testNetworkExtensionMixedPortReadinessFailureNamesTheCoreBindErrorInTheBanner() async throws {
+    // Issue #33 end to end for root cause A: the probe only knows "no SOCKS5 reply"; the banner
+    // must carry the core's own "Start Mixed(http+socks) server error" explanation.
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    _ = try await store.importLocalConfig(from: configURL)
+    let launcher = FakeProcessLauncher()
+    launcher.process.stubbedOutputTail = """
+    time="2026-09-16T07:04:17.614737000+08:00" level=info msg="HTTP proxy listening at: 127.0.0.1:7890"
+    time="2026-09-16T07:04:17.614803000+08:00" level=error msg="Start Mixed(http+socks) server error: listen tcp 127.0.0.1:7890: bind: address already in use"
+    """
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let proxyManager = RecordingTransparentProxyManager(startStatus: .connected)
+    let proxyPortReadiness = RecordingProxyPortReadinessProbe(
+      result: .failure(AppError.coreNotReady(
+        "Mihomo mixed-port 127.0.0.1:7890 did not accept SOCKS5 traffic. Something accepted the TCP connection on 127.0.0.1:7890 but did not answer a SOCKS5 greeting within 0.5s; that listener is not Mihomo's mixed-port."
+      ))
+    )
+    let model = try AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      networkExtensionController: NetworkExtensionController(
+        systemExtensionRequester: StaticSystemExtensionRequester(activationState: .activated),
+        transparentProxyManager: proxyManager
+      ),
+      proxyPortReadinessProbe: proxyPortReadiness,
+      defaults: Self.makeIsolatedDefaults()
+    )
+    model.setProxyRoutingMode(.neProxy)
+
+    model.start()
+    await waitUntil { !model.startInFlight && model.lastError != nil }
+
+    let banner = try XCTUnwrap(model.lastError)
+    XCTAssertTrue(
+      banner.hasPrefix("Mihomo controller did not become ready. Mihomo started but could not open its mixed-port 127.0.0.1:7890: address already in use."),
+      banner
+    )
+    let details = try XCTUnwrap(model.lastErrorDetails)
+    XCTAssertTrue(details.contains("Mihomo reported: Start Mixed(http+socks) server error: listen tcp 127.0.0.1:7890: bind: address already in use"), details)
+    XCTAssertTrue(details.contains("sudo lsof -nP -iTCP:7890 -sTCP:LISTEN"), details)
+    XCTAssertTrue(details.contains("Probe result: Mihomo mixed-port 127.0.0.1:7890 did not accept SOCKS5 traffic."), details)
+    XCTAssertEqual(proxyManager.startConfigurations, [])
+    XCTAssertFalse(model.isRunning)
+    model.runtimeData.flushPendingLogs()
+    let errorLogs = model.logs.filter { $0.level == "error" }.map(\.message)
+    XCTAssertEqual(
+      errorLogs.filter { $0.hasPrefix("Mixed-port readiness failed: Mihomo started but could not open its mixed-port") }.count,
+      1,
+      errorLogs.joined(separator: "\n")
+    )
+  }
+
   func testStartLogsWhenTheProfileDeclaresItsOwnInboundPorts() async throws {
     let paths = try Self.makeRuntimePaths()
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")

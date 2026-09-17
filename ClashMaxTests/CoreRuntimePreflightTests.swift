@@ -136,6 +136,160 @@ final class CoreRuntimePreflightTests: XCTestCase {
     try await validator.validate(coreURL: coreURL, configURL: configURL, workDirectory: directory)
   }
 
+  /// Issue #33, measured against the bundled core rather than assumed: a profile that declares
+  /// `port:` equal to ClashMax's `mixed-port` makes Mihomo open a plain HTTP listener first and fail
+  /// the mixed one, and the SOCKS5 probe then hangs on the HTTP listener. The normalized config
+  /// must not have that problem, and the raw one must (so this test would notice if either
+  /// side changed).
+  func testBundledMihomoOpensMixedPortWhenTheProfileDeclaresItsOwnInboundPorts() async throws {
+    guard let coreURL = Self.bundledCoreURL() else {
+      throw XCTSkip("Bundled Mihomo core is unavailable in Resources/Core.")
+    }
+
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxInboundPortCollision-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let (mixedPort, socksPort, controllerPort) = try Self.threeDistinctFreeLoopbackPorts()
+    let profile = """
+    port: \(mixedPort)
+    socks-port: \(socksPort)
+    mode: direct
+    log-level: info
+    proxies: []
+    proxy-groups: []
+    rules: []
+    """
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.mixedPort = mixedPort
+    overrides.externalControllerPort = controllerPort
+    overrides.dnsEnabled = false
+    let probe = SocksProxyReadinessProbe(attempts: 40, delayNanoseconds: 100_000_000, timeout: 0.5)
+
+    // Control: the profile as authored reproduces the user's core log and probe symptom.
+    let rawConfigURL = directory.appendingPathComponent("raw.yaml")
+    try (profile + "\nmixed-port: \(mixedPort)\nexternal-controller: 127.0.0.1:\(controllerPort)\n")
+      .write(to: rawConfigURL, atomically: true, encoding: .utf8)
+    let rawCore = try FoundationProcessLauncher().launch(
+      executable: coreURL,
+      arguments: ["-f", rawConfigURL.path, "-d", directory.path],
+      environment: ["SAFE_PATHS": directory.path],
+      workDirectory: directory
+    )
+    do {
+      defer { rawCore.terminate() }
+      let rawFailure = try await Self.waitForGreetingOutcome(port: mixedPort, timeout: 10) { outcome in
+        outcome == .noReply(timeout: 0.5)
+      }
+      XCTAssertEqual(rawFailure, .noReply(timeout: 0.5), "the profile's HTTP listener accepts and stays silent")
+      let rawTail = rawCore.recentOutputTail(maxBytes: 8192)
+      XCTAssertTrue(rawTail.contains("Start Mixed(http+socks) server error"), rawTail)
+      XCTAssertTrue(rawTail.contains("HTTP proxy listening at: 127.0.0.1:\(mixedPort)"), rawTail)
+      XCTAssertNotNil(
+        CoreProcessController.mixedPortBindFailure(host: "127.0.0.1", port: mixedPort, outputTail: rawTail),
+        "the failure line must be the one the app looks for"
+      )
+    }
+    await Self.waitForPortToClose(mixedPort)
+    await Self.waitForPortToClose(socksPort)
+    await Self.waitForPortToClose(controllerPort)
+
+    // The fix: the same profile through ConfigNormalizer.
+    let generation = try ConfigNormalizer().generateRuntimeConfig(from: profile, overrides: overrides)
+    XCTAssertEqual(generation.notes.count, 1, "\(generation.notes)")
+    let normalizedURL = directory.appendingPathComponent("normalized.yaml")
+    try generation.yaml.write(to: normalizedURL, atomically: true, encoding: .utf8)
+    let core = try FoundationProcessLauncher().launch(
+      executable: coreURL,
+      arguments: ["-f", normalizedURL.path, "-d", directory.path],
+      environment: ["SAFE_PATHS": directory.path],
+      workDirectory: directory
+    )
+    defer { core.terminate() }
+
+    try await probe.waitUntilReady(host: "127.0.0.1", port: mixedPort)
+    XCTAssertNil(SocksProxyReadinessProbe.probeGreeting(host: "127.0.0.1", port: mixedPort, timeout: 0.5), "greeting must be answered 05 00")
+    let tail = core.recentOutputTail(maxBytes: 8192)
+    XCTAssertTrue(tail.contains("Mixed(http+socks) proxy listening at: 127.0.0.1:\(mixedPort)"), tail)
+    XCTAssertFalse(tail.contains("Start Mixed(http+socks) server error"), tail)
+    XCTAssertFalse(tail.contains("controller listen error"), "the raw core must have released the controller port first: \(tail)")
+    XCTAssertFalse(tail.contains("HTTP proxy listening at:"), "the profile's own HTTP listener must be gone: \(tail)")
+    XCTAssertFalse(tail.contains("SOCKS proxy listening at:"), "the profile's own SOCKS listener must be gone: \(tail)")
+    XCTAssertFalse(SocksProxyReadinessProbe.isAcceptingConnections(host: "127.0.0.1", port: socksPort, timeout: 0.2))
+  }
+
+  private static func waitForGreetingOutcome(
+    port: Int,
+    timeout: TimeInterval,
+    until isExpected: (SocksGreetingFailure?) -> Bool
+  ) async throws -> SocksGreetingFailure? {
+    let deadline = Date().addingTimeInterval(timeout)
+    var last: SocksGreetingFailure?
+    while Date() < deadline {
+      last = SocksProxyReadinessProbe.probeGreeting(host: "127.0.0.1", port: port, timeout: 0.5)
+      if isExpected(last) {
+        return last
+      }
+      try await Task.sleep(nanoseconds: 100_000_000)
+    }
+    return last
+  }
+
+  private static func waitForPortToClose(_ port: Int) async {
+    let deadline = Date().addingTimeInterval(5)
+    while Date() < deadline, SocksProxyReadinessProbe.isAcceptingConnections(host: "127.0.0.1", port: port, timeout: 0.2) {
+      try? await Task.sleep(nanoseconds: 50_000_000)
+    }
+  }
+
+  /// Three ports reserved together, so the kernel cannot hand the same ephemeral port out twice.
+  private static func threeDistinctFreeLoopbackPorts() throws -> (Int, Int, Int) {
+    var descriptors: [Int32] = []
+    defer { descriptors.forEach { close($0) } }
+    var ports: [Int] = []
+    for _ in 0..<3 {
+      let (descriptor, port) = try freeLoopbackPort(keepOpen: true)
+      descriptors.append(descriptor)
+      ports.append(port)
+    }
+    XCTAssertEqual(Set(ports).count, 3, "\(ports)")
+    return (ports[0], ports[1], ports[2])
+  }
+
+  private static func freeLoopbackPort() throws -> Int {
+    try freeLoopbackPort(keepOpen: false).port
+  }
+
+  private static func freeLoopbackPort(keepOpen: Bool) throws -> (descriptor: Int32, port: Int) {
+    let descriptor = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
+    XCTAssertGreaterThanOrEqual(descriptor, 0)
+    defer {
+      if !keepOpen {
+        close(descriptor)
+      }
+    }
+    var address = sockaddr_in()
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_port = 0
+    address.sin_addr.s_addr = inet_addr("127.0.0.1")
+    let bindResult = withUnsafePointer(to: &address) {
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+        Darwin.bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+      }
+    }
+    XCTAssertEqual(bindResult, 0)
+    var bound = sockaddr_in()
+    var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+    let nameResult = withUnsafeMutablePointer(to: &bound) {
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+        getsockname(descriptor, $0, &length)
+      }
+    }
+    XCTAssertEqual(nameResult, 0)
+    return (descriptor, Int(UInt16(bigEndian: bound.sin_port)))
+  }
+
   func testBundledMihomoAcceptsGeneratedManualSOCKS5Profile() async throws {
     guard let coreURL = Self.bundledCoreURL() else {
       throw XCTSkip("Bundled Mihomo core is unavailable in Resources/Core.")

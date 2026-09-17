@@ -218,8 +218,11 @@ final class FakeRunningProcess: RunningCoreProcess {
     onTermination?(exitCode)
   }
 
+  /// Honors `maxBytes` like the real drain does, so a test can put a diagnostic line out of reach
+  /// of the short "Core output" excerpt but inside the wider scan window.
   func recentOutputTail(maxBytes: Int) -> String {
-    stubbedOutputTail
+    guard stubbedOutputTail.utf8.count > maxBytes else { return stubbedOutputTail }
+    return String(decoding: stubbedOutputTail.utf8.suffix(maxBytes), as: UTF8.self)
   }
 }
 

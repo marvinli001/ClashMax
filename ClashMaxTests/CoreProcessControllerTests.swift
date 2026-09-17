@@ -369,6 +369,214 @@ final class CoreProcessControllerTests: XCTestCase {
     XCTAssertTrue(controller.startupDiagnostics.contains { $0.hasPrefix("Readiness failed: Mihomo started but could not open its controller port") })
   }
 
+  // MARK: - Issue #33: the mixed-port SOCKS5 probe must say what it found
+
+  func testSocksGreetingAgainstASilentListenerIsClassifiedAsNoReply() throws {
+    // A bare listening socket completes the TCP handshake and never speaks — exactly what the
+    // profile's HTTP listener on 7890 did while waiting for a request line.
+    let (descriptor, port) = try Self.openLoopbackListener()
+    defer { close(descriptor) }
+
+    let failure = SocksProxyReadinessProbe.probeGreeting(host: "127.0.0.1", port: port, timeout: 0.2)
+
+    XCTAssertEqual(failure, .noReply(timeout: 0.2))
+    let explanation = try XCTUnwrap(failure?.explanation(host: "127.0.0.1", port: port))
+    XCTAssertTrue(explanation.hasPrefix("Something accepted the TCP connection on 127.0.0.1:\(port) but did not answer a SOCKS5 greeting within 0.2s"), explanation)
+    XCTAssertTrue(explanation.contains("not Mihomo's mixed-port"), explanation)
+    XCTAssertFalse(explanation.contains("资源暂时不可用"))
+    XCTAssertFalse(explanation.localizedCaseInsensitiveContains("temporarily unavailable"))
+  }
+
+  func testSocksGreetingAgainstAClosedPortIsClassifiedAsNobodyListening() throws {
+    let (descriptor, port) = try Self.openLoopbackListener()
+    close(descriptor)
+
+    let failure = SocksProxyReadinessProbe.probeGreeting(host: "127.0.0.1", port: port, timeout: 0.2)
+
+    XCTAssertEqual(failure, .connectFailed(errno: ECONNREFUSED))
+    let explanation = try XCTUnwrap(failure?.explanation(host: "127.0.0.1", port: port))
+    XCTAssertTrue(explanation.hasPrefix("Nothing is listening on 127.0.0.1:\(port)"), explanation)
+  }
+
+  func testSocksGreetingAgainstARealSocksReplyPasses() throws {
+    let (descriptor, port) = try Self.openLoopbackListener()
+    let responder = Self.startGreetingResponder(listener: descriptor, reply: [0x05, 0x00])
+    defer { responder.finish() }
+
+    XCTAssertNil(SocksProxyReadinessProbe.probeGreeting(host: "127.0.0.1", port: port, timeout: 5))
+  }
+
+  func testSocksGreetingWithAnUnexpectedReplyNamesTheBytes() throws {
+    let (descriptor, port) = try Self.openLoopbackListener()
+    let responder = Self.startGreetingResponder(listener: descriptor, reply: [0x05, 0xff])
+    defer { responder.finish() }
+
+    let failure = SocksProxyReadinessProbe.probeGreeting(host: "127.0.0.1", port: port, timeout: 5)
+
+    XCTAssertEqual(failure, .unexpectedReply([0x05, 0xff]))
+    XCTAssertTrue(failure?.explanation(host: "127.0.0.1", port: port).contains("05 ff instead of 05 00") ?? false)
+  }
+
+  func testSocksGreetingAgainstAListenerThatHangsUpIsClassifiedAsClosedWithoutReply() throws {
+    let (descriptor, port) = try Self.openLoopbackListener()
+    let responder = Self.startGreetingResponder(listener: descriptor, reply: [])
+    defer { responder.finish() }
+
+    let failure = SocksProxyReadinessProbe.probeGreeting(host: "127.0.0.1", port: port, timeout: 5)
+
+    XCTAssertEqual(failure, .closedWithoutReply)
+    let explanation = try XCTUnwrap(failure?.explanation(host: "127.0.0.1", port: port))
+    XCTAssertTrue(explanation.contains("closed it without a SOCKS5 reply"), explanation)
+  }
+
+  /// Accepts one connection on `listener`, reads the 3-byte greeting and answers `reply` (an empty
+  /// reply hangs up instead). `finish()` joins the thread and shuts the listener down so a
+  /// responder never outlives its test, even when the probe failed before connecting.
+  private static func startGreetingResponder(listener: Int32, reply: [UInt8]) -> GreetingResponder {
+    let done = DispatchSemaphore(value: 0)
+    let thread = Thread {
+      defer { done.signal() }
+      var address = sockaddr_in()
+      var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+      let accepted = withUnsafeMutablePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+          accept(listener, $0, &length)
+        }
+      }
+      guard accepted >= 0 else { return }
+      var greeting = [UInt8](repeating: 0, count: 3)
+      _ = recv(accepted, &greeting, 3, 0)
+      if !reply.isEmpty {
+        _ = reply.withUnsafeBytes { send(accepted, $0.baseAddress, $0.count, 0) }
+      }
+      close(accepted)
+    }
+    thread.start()
+    return GreetingResponder(listener: listener, done: done)
+  }
+
+  private struct GreetingResponder {
+    let listener: Int32
+    let done: DispatchSemaphore
+
+    func finish() {
+      // Unblock an accept() that never got a connection, then wait for the thread.
+      shutdown(listener, SHUT_RDWR)
+      close(listener)
+      _ = done.wait(timeout: .now() + 5)
+    }
+  }
+
+  func testWaitUntilReadyReportsTheSilentListenerInsteadOfTheLocalizedEAGAINText() async throws {
+    let (descriptor, port) = try Self.openLoopbackListener()
+    defer { close(descriptor) }
+    let probe = SocksProxyReadinessProbe(attempts: 2, delayNanoseconds: 1_000_000, timeout: 0.1)
+
+    await XCTAssertThrowsErrorAsync({ try await probe.waitUntilReady(host: "127.0.0.1", port: port) }) { error in
+      let message = UserFacingError.message(for: error)
+      XCTAssertTrue(message.hasPrefix("Mihomo controller did not become ready. Mihomo mixed-port 127.0.0.1:\(port) did not accept SOCKS5 traffic. Something accepted the TCP connection on 127.0.0.1:\(port) but did not answer a SOCKS5 greeting within 0.1s"), message)
+      XCTAssertFalse(message.contains("资源暂时不可用"), message)
+    }
+  }
+
+  func testMixedPortBindFailureIsParsedFromTheCoreOutput() throws {
+    let tail = """
+    time="2026-09-16T07:04:17.614737000+08:00" level=info msg="HTTP proxy listening at: 127.0.0.1:7890"
+    time="2026-09-16T07:04:17.614780000+08:00" level=info msg="SOCKS proxy listening at: 127.0.0.1:7891"
+    time="2026-09-16T07:04:17.614803000+08:00" level=error msg="Start Mixed(http+socks) server error: listen tcp 127.0.0.1:7890: bind: address already in use"
+    """
+
+    let failure = try XCTUnwrap(CoreProcessController.mixedPortBindFailure(host: "127.0.0.1", port: 7890, outputTail: tail))
+
+    XCTAssertEqual(
+      failure.summary,
+      "Mihomo started but could not open its mixed-port 127.0.0.1:7890: address already in use. Another listener on this Mac took the port first, so the proxy never came up. Open Details for how to find it."
+    )
+    XCTAssertTrue(failure.advice.hasPrefix("Mihomo reported: Start Mixed(http+socks) server error: listen tcp 127.0.0.1:7890: bind: address already in use"), failure.advice)
+    XCTAssertTrue(failure.advice.contains("sudo lsof -nP -iTCP:7890 -sTCP:LISTEN"), failure.advice)
+    XCTAssertNil(CoreProcessController.mixedPortBindFailure(host: "127.0.0.1", port: 7890, outputTail: "level=info msg=\"Mixed(http+socks) proxy listening at: 127.0.0.1:7890\""))
+    // A failure on some other port is not this port's failure, and a failure the core recovered
+    // from on a later reload is history: the same long-lived core is scanned after every apply.
+    XCTAssertNil(CoreProcessController.mixedPortBindFailure(host: "127.0.0.1", port: 7891, outputTail: tail))
+    XCTAssertNil(CoreProcessController.mixedPortBindFailure(
+      host: "127.0.0.1",
+      port: 7890,
+      outputTail: tail + "\nlevel=info msg=\"Mixed(http+socks) proxy listening at: 127.0.0.1:7890\""
+    ))
+  }
+
+  func testMixedPortBindFailureIsFoundBehindAProfileFullOfProviderStartupLines() async throws {
+    // The bind error is logged once, early; a real subscription then logs one info line per
+    // group and provider, which pushed the error past a 4096-byte tail on the user's profile.
+    let launcher = FakeProcessLauncher()
+    let filler = (0..<80).map { "time=\"2026-09-16T07:04:17.61+08:00\" level=info msg=\"Start initial compatible provider group-\($0)-with-a-long-emoji-name-that-users-actually-have\"" }
+    launcher.process.stubbedOutputTail = (
+      ["level=error msg=\"Start Mixed(http+socks) server error: listen tcp 127.0.0.1:7890: bind: address already in use\""] + filler
+    ).joined(separator: "\n")
+    XCTAssertGreaterThan(launcher.process.stubbedOutputTail.utf8.count, CoreProcessController.coreOutputExcerptBytes)
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: FakePortChecker(listeners: [])
+    )
+    try await controller.startUserMode(
+      coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+      configURL: URL(fileURLWithPath: "/tmp/config.yaml"),
+      workDirectory: URL(fileURLWithPath: "/tmp"),
+      api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc"),
+      proxyPort: 7890
+    )
+
+    let explained = controller.explainMixedPortReadinessFailure(AppError.coreNotReady("probe failed"), host: "127.0.0.1", port: 7890)
+
+    XCTAssertTrue(UserFacingError.message(for: explained).contains("could not open its mixed-port 127.0.0.1:7890: address already in use"), "\(explained)")
+  }
+
+  func testExplainMixedPortReadinessFailureAttachesTheCoreReportToTheProbeError() async throws {
+    let launcher = FakeProcessLauncher()
+    launcher.process.stubbedOutputTail = """
+    level=info msg="HTTP proxy listening at: 127.0.0.1:7890"
+    level=error msg="Start Mixed(http+socks) server error: listen tcp 127.0.0.1:7890: bind: address already in use"
+    """
+    let controller = CoreProcessController(
+      launcher: launcher,
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: FakePortChecker(listeners: [])
+    )
+    try await controller.startUserMode(
+      coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+      configURL: URL(fileURLWithPath: "/tmp/config.yaml"),
+      workDirectory: URL(fileURLWithPath: "/tmp"),
+      api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc"),
+      proxyPort: 7890
+    )
+    let probeError = AppError.coreNotReady(
+      "Mihomo mixed-port 127.0.0.1:7890 did not accept SOCKS5 traffic. Something accepted the TCP connection on 127.0.0.1:7890 but did not answer a SOCKS5 greeting within 0.5s; that listener is not Mihomo's mixed-port. Another program, or a plain HTTP proxy, is holding the port."
+    )
+
+    let explained = controller.explainMixedPortReadinessFailure(probeError, host: "127.0.0.1", port: 7890)
+
+    XCTAssertEqual(
+      UserFacingError.message(for: explained),
+      "Mihomo controller did not become ready. Mihomo started but could not open its mixed-port 127.0.0.1:7890: address already in use. Another listener on this Mac took the port first, so the proxy never came up. Open Details for how to find it."
+    )
+    let details = try XCTUnwrap(UserFacingError.details(for: explained))
+    XCTAssertTrue(details.contains("Mihomo reported: Start Mixed(http+socks) server error"), details)
+    XCTAssertTrue(details.contains("Probe result: Mihomo mixed-port 127.0.0.1:7890 did not accept SOCKS5 traffic."), details)
+    XCTAssertTrue(details.contains("Core output:"), details)
+    XCTAssertTrue(controller.startupDiagnostics.contains { $0.hasPrefix("Mixed-port readiness failed: Mihomo started but could not open its mixed-port") })
+
+    // Without a bind error in the core output the probe's own words stay the summary.
+    launcher.process.stubbedOutputTail = "level=info msg=\"Mixed(http+socks) proxy listening at: 127.0.0.1:7890\""
+    let unexplained = controller.explainMixedPortReadinessFailure(probeError, host: "127.0.0.1", port: 7890)
+    XCTAssertTrue(UserFacingError.message(for: unexplained).hasPrefix("Mihomo controller did not become ready. Mihomo mixed-port 127.0.0.1:7890 did not accept SOCKS5 traffic. Something accepted"))
+    XCTAssertEqual(UserFacingError.details(for: unexplained), "Core output:\nlevel=info msg=\"Mixed(http+socks) proxy listening at: 127.0.0.1:7890\"")
+  }
+
   func testReadinessFailureWithoutBindErrorKeepsGenericMessage() async throws {
     let launcher = FakeProcessLauncher()
     launcher.process.stubbedOutputTail = "level=info msg=\"Start initial configuration in progress\""
@@ -950,7 +1158,6 @@ private final class DeferredTerminationRunningProcess: RunningCoreProcess {
   private(set) var didTerminate = false
   private(set) var didKill = false
   private(set) var isRunning = true
-
   init(processIdentifier: Int32) {
     self.processIdentifier = processIdentifier
   }
