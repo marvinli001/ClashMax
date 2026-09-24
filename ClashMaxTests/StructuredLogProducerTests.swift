@@ -62,6 +62,24 @@ final class StructuredLogProducerTests: XCTestCase {
     )
   }
 
+  func testRedactionCoversMihomoProxyCredentialKeys() {
+    let sentinel = "CLASHMAX_SECRET_7F4B"
+    for key in [
+      "auth-key", "ech-key", "header-protection-key", "primary-key",
+      "tls-auth", "tls-crypt", "tls-crypt-v2",
+    ] {
+      let colon = StructuredLogRedactor.redactCredentials(in: "\(key): \(sentinel)")
+      XCTAssertFalse(colon.contains(sentinel), "\(key): leaked")
+      let equals = StructuredLogRedactor.redactCredentials(in: "\(key)=\(sentinel)")
+      XCTAssertFalse(equals.contains(sentinel), "\(key)= leaked")
+      let metadata = StructuredLogRedactor.redactCredentials(in: [key: sentinel])
+      XCTAssertEqual(metadata[key], StructuredLogRedactor.placeholder, "\(key) metadata leaked")
+    }
+    // The bare words stay readable in prose; only the named config keys are secrets.
+    let prose = StructuredLogRedactor.redactCredentials(in: "authentication failed: bad key")
+    XCTAssertEqual(prose, "authentication failed: bad key")
+  }
+
   func testRedactionKeepsDiagnosticStructureWorthReading() {
     let redacted = StructuredLogRedactor.redactCredentials(
       in: """

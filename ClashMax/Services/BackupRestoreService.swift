@@ -827,7 +827,7 @@ private enum BackupProfileSourceRedactor {
       return map.reduce(into: [String: Any]()) { result, entry in
         let key = entry.key
         let nextPath = path + [key]
-        if shouldRedactValue(forKey: key, path: path) {
+        if ConfigCredentialKeyPolicy.isCredential(key: key, path: path) {
           let count = credentialValueCount(entry.value)
           if count > 0 {
             credentialCount += count
@@ -846,33 +846,6 @@ private enum BackupProfileSourceRedactor {
     }
 
     return value
-  }
-
-  private static func shouldRedactValue(forKey key: String, path: [String]) -> Bool {
-    let normalized = key
-      .trimmingCharacters(in: .whitespacesAndNewlines)
-      .lowercased()
-      .replacingOccurrences(of: "_", with: "-")
-    if normalized == "url", path.contains("proxy-providers") {
-      return true
-    }
-    if normalized.contains("password")
-      || normalized.contains("token")
-      || normalized.contains("secret")
-    {
-      return true
-    }
-    return [
-      "uuid",
-      "private-key",
-      "auth",
-      "auth-str",
-      "authorization",
-      "proxy-authorization",
-      "credential",
-      "credentials",
-      "psk",
-    ].contains(normalized)
   }
 
   private static func credentialValueCount(_ value: Any) -> Int {

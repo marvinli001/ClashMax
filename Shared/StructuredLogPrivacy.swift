@@ -25,12 +25,18 @@ enum StructuredLogRedactor {
     "credential", "credentials",
     "session", "session-id", "sessionid",
     "signature", "uuid",
+    // Mihomo proxy keys (docs/config.yaml, v1.19.31). The bare `key`, `seed` and `authentication`
+    // stay out: in free text they would swallow ordinary lines such as "authentication failed: …".
+    "auth-key", "ech-key", "header-protection-key", "primary-key",
+    "tls-auth", "tls-crypt", "tls-crypt-v2",
   ]
 
   /// The same names as an ordered regex alternation. Longest spellings come first so
   /// `authorization` wins over `auth` at the same start position.
   private static let sensitiveKeyPattern = [
     "proxy-authorization", "authorization",
+    "header-protection-key", "tls-crypt-v2", "tls-crypt", "tls-auth",
+    "primary-key", "ech-key", "auth-key",
     "pre-shared-key", "preshared-key",
     "refresh-token", "refresh_token", "access-token", "access_token",
     "private-key", "private_key", "privatekey",

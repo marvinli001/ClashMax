@@ -780,6 +780,92 @@ final class BackupRestoreServiceTests: XCTestCase {
     XCTAssertFalse(restoredSource.contains("source-token"))
   }
 
+  /// Mihomo credential keys an exact-name list used to miss (`local-private-key`, `pre-shared-key`,
+  /// `auth-key`, OpenVPN's `key` / `tls-auth`, mKCP's `seed`, inbound `authentication`) went into a
+  /// passwordless backup in the clear. A ZeroTier moon `seed` is a public node ID and must survive,
+  /// or the restored profile loses its orbit for nothing.
+  func testPasswordlessExportRedactsMihomoCredentialKeys() async throws {
+    let source = try BackupFixture()
+    try """
+    authentication:
+      - "lan-user:lan-auth-pass"
+    proxies:
+      - name: Overlay
+        type: easytier
+        network-name: team
+        network-secret: et-network-secret
+        local-private-key: et-private-key-material
+        local-public-key: et-public-key-material
+        peers: [tcp://192.0.2.10:11010]
+      - name: WG
+        type: wireguard
+        server: 192.0.2.20
+        port: 51820
+        public-key: wg-public-key-material
+        pre-shared-key: wg-psk-material
+      - name: Tail
+        type: tailscale
+        auth-key: tskey-auth-material
+      - name: VPN
+        type: openvpn
+        server: 192.0.2.30
+        port: 1194
+        key: ovpn-client-key-material
+        tls-auth: ovpn-tls-auth-material
+      - name: KCP
+        type: ss
+        server: 192.0.2.40
+        port: 443
+        cipher: none
+        plugin: kcptun
+        plugin-opts:
+          seed: kcp-seed-material
+      - name: ZT
+        type: zerotier
+        network: "0123456789abcdef"
+        orbit:
+          - world: "0123456789abcdef"
+            seed: "9876543210"
+    proxy-groups:
+      - name: Elite
+        type: select
+        proxies: [Overlay, WG, Tail, VPN, KCP, ZT, DIRECT]
+    rules:
+      - MATCH,Elite
+    """.write(to: source.localProfileURL, atomically: true, encoding: .utf8)
+    let sourceStore = ProfileStore(paths: source.paths, keychain: InMemorySecretStore())
+    _ = try await sourceStore.importLocalConfig(from: source.localProfileURL)
+    let backupURL = source.root.appendingPathComponent("mihomo-keys-redacted.clashmax-backup")
+
+    let exportSummary = try await service.exportBackup(
+      to: backupURL,
+      profileStore: sourceStore,
+      settings: makeSettings(defaults: source.defaults),
+      proxyPreview: ProxyPreviewStore(defaults: source.defaults),
+      runtimeSnippetLibrary: makeSnippetLibrary(paths: source.paths),
+      includeSecrets: false,
+      password: nil
+    )
+
+    XCTAssertEqual(exportSummary.skippedSecretCount, 8)
+    let backupText = try String(contentsOf: backupURL, encoding: .utf8)
+    for secret in [
+      "lan-auth-pass",
+      "et-network-secret",
+      "et-private-key-material",
+      "wg-psk-material",
+      "tskey-auth-material",
+      "ovpn-client-key-material",
+      "ovpn-tls-auth-material",
+      "kcp-seed-material",
+    ] {
+      XCTAssertFalse(backupText.contains(secret), secret)
+    }
+    for visible in ["et-public-key-material", "wg-public-key-material", "9876543210"] {
+      XCTAssertTrue(backupText.contains(visible), visible)
+    }
+  }
+
   func testRestoreWithoutPasswordUsesRedactedProfileSourcesFromEncryptedBackup() async throws {
     let source = try BackupFixture()
     try credentialedProfileSource.write(to: source.localProfileURL, atomically: true, encoding: .utf8)

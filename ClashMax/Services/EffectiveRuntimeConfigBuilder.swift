@@ -683,6 +683,59 @@ struct EffectiveRuntimeConfigBuilder {
   }
 }
 
+/// Which profile/runtime YAML keys hold a credential. The Effective Config view, the exported
+/// diagnostics report and passwordless backups all ask this one policy, so they cannot drift apart.
+enum ConfigCredentialKeyPolicy {
+  static func isCredential(key: String, path: [String]) -> Bool {
+    let normalized = key
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .lowercased()
+      .replacingOccurrences(of: "_", with: "-")
+    if normalized == "url", path.contains(where: { $0.caseInsensitiveCompare("proxy-providers") == .orderedSame }) {
+      return true
+    }
+    // Suffix, not exact: EasyTier (core v1.19.31) spells its node key `local-private-key`.
+    if normalized.contains("password")
+      || normalized.contains("token")
+      || normalized.contains("secret")
+      || normalized.hasSuffix("private-key")
+    {
+      return true
+    }
+    // A ZeroTier `orbit` entry's `seed` is the moon root's public 10-digit node ID; everywhere else
+    // (mKCP transports and inbounds) `seed` is the shared AES-GCM authentication secret.
+    if normalized == "seed" {
+      return path.last?.caseInsensitiveCompare("orbit") != .orderedSame
+    }
+    return exactCredentialKeys.contains(normalized)
+  }
+
+  /// Mihomo's own key names (docs/config.yaml, v1.19.31). Only the bare `key` is listed on purpose:
+  /// XHTTP's `x-padding-key`, `session-key`, `seq-key` and `uplink-data-key` name *where* a value is
+  /// placed, not a secret, and `public-key` / `local-public-key` are public by definition.
+  private static let exactCredentialKeys: Set<String> = [
+    "auth",
+    "auth-key",
+    "auth-str",
+    "authentication",
+    "authorization",
+    "credential",
+    "credentials",
+    "ech-key",
+    "header-protection-key",
+    "key",
+    "pre-shared-key",
+    "primary-key",
+    "private-key",
+    "proxy-authorization",
+    "psk",
+    "tls-auth",
+    "tls-crypt",
+    "tls-crypt-v2",
+    "uuid",
+  ]
+}
+
 enum RuntimeConfigDisplayRedactor {
   static let redactedValue = "<redacted>"
 
@@ -719,7 +772,7 @@ enum RuntimeConfigDisplayRedactor {
       return map.reduce(into: [String: Any]()) { result, entry in
         let key = entry.key
         let nextPath = path + [key]
-        if shouldRedactValue(forKey: key, path: path) {
+        if ConfigCredentialKeyPolicy.isCredential(key: key, path: path) {
           result[key] = redactedValue
         } else if shouldRedactProviderPath(entry.value, key: key, path: path, providerContentPaths: providerContentPaths) {
           result[key] = redactedValue
@@ -747,33 +800,6 @@ enum RuntimeConfigDisplayRedactor {
       return redactScalarSecrets(string, controllerSecret: controllerSecret, providerContentPaths: providerContentPaths)
     }
     return value
-  }
-
-  private static func shouldRedactValue(forKey key: String, path: [String]) -> Bool {
-    let normalized = key
-      .trimmingCharacters(in: .whitespacesAndNewlines)
-      .lowercased()
-      .replacingOccurrences(of: "_", with: "-")
-    if normalized == "url", path.contains(where: { $0.caseInsensitiveCompare("proxy-providers") == .orderedSame }) {
-      return true
-    }
-    if normalized.contains("password")
-      || normalized.contains("token")
-      || normalized.contains("secret")
-    {
-      return true
-    }
-    return [
-      "uuid",
-      "private-key",
-      "auth",
-      "auth-str",
-      "authorization",
-      "proxy-authorization",
-      "credential",
-      "credentials",
-      "psk",
-    ].contains(normalized)
   }
 
   private static func shouldRedactProviderPath(

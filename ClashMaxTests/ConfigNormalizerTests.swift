@@ -1635,6 +1635,91 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertFalse(exported.contains(paths.runtime.path))
   }
 
+  /// Every credential key mihomo v1.19.31 documents must stay out of the Effective Config view and
+  /// exported reports, while the look-alike keys that are public or merely name a placement stay
+  /// readable, since they are what a user is debugging.
+  func testRuntimeConfigDisplayRedactorHidesMihomoCredentialKeys() {
+    let yaml = """
+    authentication:
+      - "lan-user:lan-auth-pass"
+    proxies:
+      - name: overlay
+        type: easytier
+        network-name: team
+        network-secret: et-network-secret
+        local-private-key: et-private-key-material
+        local-public-key: et-public-key-material
+      - name: wg
+        type: wireguard
+        public-key: wg-public-key-material
+        pre-shared-key: wg-psk-material
+        amnezia-wg-option:
+          header-protection-key: awg-hpk-material
+          rekey-after-time: 120
+      - name: tail
+        type: tailscale
+        auth-key: tskey-auth-material
+      - name: vpn
+        type: openvpn
+        key: ovpn-client-key-material
+        tls-auth: ovpn-tls-auth-material
+        tls-crypt: ovpn-tls-crypt-material
+        tls-crypt-v2: ovpn-tls-crypt-v2-material
+        key-direction: "1"
+      - name: kcp
+        type: ss
+        plugin-opts:
+          seed: kcp-seed-material
+      - name: mirror
+        type: vless
+        ech-key: ech-key-material
+        tlsmirror-opts:
+          primary-key: mirror-primary-key-material
+        xhttp-opts:
+          x-padding-key: x_padding
+          session-key: session-slot-name
+          seq-key: seq-slot-name
+          uplink-data-key: uplink-slot-name
+      - name: zt
+        type: zerotier
+        orbit:
+          - world: "0123456789abcdef"
+            seed: "9876543210"
+    """
+
+    let redacted = RuntimeConfigDisplayRedactor.redacted(yaml, controllerSecret: "controller-secret")
+
+    for secret in [
+      "lan-auth-pass",
+      "et-network-secret",
+      "et-private-key-material",
+      "wg-psk-material",
+      "awg-hpk-material",
+      "tskey-auth-material",
+      "ovpn-client-key-material",
+      "ovpn-tls-auth-material",
+      "ovpn-tls-crypt-material",
+      "ovpn-tls-crypt-v2-material",
+      "kcp-seed-material",
+      "ech-key-material",
+      "mirror-primary-key-material",
+    ] {
+      XCTAssertFalse(redacted.contains(secret), secret)
+    }
+    for visible in [
+      "et-public-key-material",
+      "wg-public-key-material",
+      "x_padding",
+      "session-slot-name",
+      "seq-slot-name",
+      "uplink-slot-name",
+      // A moon root's node ID is public, unlike an mKCP `seed`.
+      "9876543210",
+    ] {
+      XCTAssertTrue(redacted.contains(visible), visible)
+    }
+  }
+
   func testEffectiveRuntimeConfigDiffCapsLargeSingleLineChangeWithoutFullReplacement() throws {
     let oldLines = (0..<701).map { "rule-\($0)" }
     var newLines = oldLines
