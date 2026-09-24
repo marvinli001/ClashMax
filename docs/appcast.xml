@@ -3,6 +3,19 @@
     <channel>
         <title>ClashMax</title>
         <item>
+            <title>1.1.2</title>
+            <pubDate>Thu, 24 Sep 2026 22:21:02 +1200</pubDate>
+            <sparkle:version>32</sparkle:version>
+            <sparkle:shortVersionString>1.1.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/marvinli001/ClashMax/releases/download/v1.1.2/ClashMax-1.1.2.zip" length="56418785" type="application/octet-stream" sparkle:edSignature="1F8SQHjehJ6lkKMnc9ER9Iyj10YTJHOcCXvifrpEuQZwIMd7rStNG4mgss99Qh9P6TroTmgsn3BALgdx6GKIBg=="/>
+            <sparkle:deltas>
+                <enclosure url="https://github.com/marvinli001/ClashMax/releases/download/v1.1.2/ClashMax32-31.delta" sparkle:deltaFrom="31" length="14608190" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977840" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="mhtpWGJR/wghz0oi1Zs9sscJkXW5ZUcFYrJy5BQBVCC4QIb7eQ4w8KVHXHw1Y6dF2KuGPPoLA5/QrJPmVfy+CQ=="/>
+                <enclosure url="https://github.com/marvinli001/ClashMax/releases/download/v1.1.2/ClashMax32-30.delta" sparkle:deltaFrom="30" length="14817658" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977840" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="0X3+gXW0ozVuW3QgVtXCvVT7Fhmxh4FMMvunhTORZSBaVx9vadGWm1lEmRhttdbNy+DzcSQlQKFJXUVnieZVDQ=="/>
+                <enclosure url="https://github.com/marvinli001/ClashMax/releases/download/v1.1.2/ClashMax32-29.delta" sparkle:deltaFrom="29" length="16228018" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977840" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="BO7o/biyJawS8y+HvSFdQ59L5NxVU1SaDQJrvjSLvmChlVe8jvx4wPDmJWjGGNC7He786joEgjOBV7Z1aBvvAQ=="/>
+            </sparkle:deltas>
+        </item>
+        <item>
             <title>1.1.1</title>
             <pubDate>Tue, 15 Sep 2026 18:48:33 +1200</pubDate>
             <sparkle:version>31</sparkle:version>
