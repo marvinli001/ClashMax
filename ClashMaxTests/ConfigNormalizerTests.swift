@@ -718,6 +718,27 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertNil(disabledYAML["dns"])
   }
 
+  /// Core v1.19.31 added `stack: mips`; its `StackTypeMapping` lower-cases the value, so the raw
+  /// value written here must be exactly `mips`, and a stored choice must survive a relaunch.
+  func testMipsTunStackIsWrittenVerbatimAndRoundTrips() throws {
+    let source = """
+    proxies:
+      - name: DIRECT
+        type: direct
+    """
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.tunEnabled = true
+    overrides.tunSettings.stack = .mips
+
+    let output = try ConfigNormalizer().runtimeConfig(from: source, overrides: overrides)
+    let yaml = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let tun = try XCTUnwrap(yaml["tun"] as? [String: Any])
+    XCTAssertEqual(tun["stack"] as? String, "mips")
+
+    let stored = try JSONEncoder().encode(overrides.tunSettings)
+    XCTAssertEqual(try JSONDecoder().decode(TunSettings.self, from: stored).stack, .mips)
+  }
+
   func testRuntimeConfigPreservesProfileRouteExcludeAddressWhenTunSettingsAreDefault() throws {
     let source = """
     proxies:

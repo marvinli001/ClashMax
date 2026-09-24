@@ -3535,6 +3535,9 @@ enum TunStack: String, Codable, CaseIterable, Identifiable, Sendable {
   case system
   case gvisor
   case mixed
+  /// Mihomo's own userspace stack (metacubex/mipstack), accepted since core v1.19.31. The name is
+  /// the core's spelling, not the CPU architecture.
+  case mips
 
   var id: String { rawValue }
 
@@ -3543,6 +3546,7 @@ enum TunStack: String, Codable, CaseIterable, Identifiable, Sendable {
     case .system: "System"
     case .gvisor: "GVisor"
     case .mixed: "Mixed"
+    case .mips: "Mips"
     }
   }
 }

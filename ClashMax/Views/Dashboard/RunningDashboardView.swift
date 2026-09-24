@@ -422,6 +422,10 @@ enum DashboardProxySelectionState {
       return "Hysteria2"
     case "vless":
       return "VLESS"
+    case "easytier":
+      return "EasyTier"
+    case "zerotier":
+      return "ZeroTier"
     case "direct":
       return "Direct"
     default:

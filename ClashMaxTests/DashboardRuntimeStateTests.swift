@@ -4333,6 +4333,19 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(group.name, "Elite")
   }
 
+  /// The running core reports `EasyTier` / `ZeroTier`, a profile preview the lower-cased YAML type;
+  /// plain `capitalized` would turn both into "Easytier" / "Zerotier".
+  func testDashboardTypeLabelKeepsOverlayOutboundCasing() {
+    for type in ["EasyTier", "easytier"] {
+      let node = ProxyNode(name: "overlay", type: type, delay: nil, isSelectable: true)
+      XCTAssertEqual(DashboardProxySelectionState.typeLabel(for: node), "EasyTier")
+    }
+    for type in ["ZeroTier", "zerotier"] {
+      let node = ProxyNode(name: "overlay", type: type, delay: nil, isSelectable: true)
+      XCTAssertEqual(DashboardProxySelectionState.typeLabel(for: node), "ZeroTier")
+    }
+  }
+
   func testDashboardCurrentNodeDoesNotFallBackToDirectWhenSelectedNodeMissing() throws {
     // Issue #14: a provider-backed selection (韩国 SK…) is configured, but the raw runtime group only
     // carries the unexpanded provider placeholder + DIRECT, so the named node is absent. The dashboard

@@ -4,7 +4,7 @@
 
 **Status:** draft 2026-08-14, revised 2026-08-27, corrected 2026-08-29, extended 2026-08-30 ·
 maintainer [@marvinli001](https://github.com/marvinli001) · app 1.1.1, bundled Mihomo
-[v1.19.30](../Resources/Core/mihomo-manifest.json)
+[v1.19.31](../Resources/Core/mihomo-manifest.json)
 
 This document records **where ClashMax is going and why**, in a form that can be checked
 against the tree. It is not a wish list. Every gap named below was verified by reading the
