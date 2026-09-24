@@ -235,6 +235,31 @@ struct AppNotice: Equatable, Identifiable {
       return "exclamationmark.triangle.fill"
     }
   }
+
+  /// How long the toast stays up after the notice is posted. Warnings stay a little longer.
+  var displayDuration: TimeInterval {
+    tone == .warning ? 8 : 4
+  }
+
+  /// What is left of `displayDuration` at `now`. Counted from `postedAt`, not from when a window
+  /// first showed the toast: a notice posted while the window was closed has already had its time,
+  /// and opening the window later must not replay it for the full duration.
+  func remainingDisplayDuration(now: Date = Date()) -> TimeInterval {
+    displayDuration - now.timeIntervalSince(postedAt)
+  }
+}
+
+/// Opens the Proxies page on one group. The dashboard's group rows and its Current Node popover set
+/// it; `ProxiesView` consumes and clears it, the same hand-off `RoutingSimulationRequest` uses.
+struct ProxiesPageRequest: Identifiable, Equatable {
+  let id: UUID
+  /// The group to select, or `nil` to open the page as the user left it.
+  var groupName: String?
+
+  init(id: UUID = UUID(), groupName: String?) {
+    self.id = id
+    self.groupName = groupName
+  }
 }
 
 /// One error waiting for the user's acknowledgement.
@@ -825,6 +850,7 @@ final class AppModel {
   private(set) var providerSideLoadPreflightStatus: ProviderSideLoadPreflightStatus = .idle
   private(set) var proxyDelayBatchProgress: ProxyDelayBatchProgress?
   var routingSimulationRequest: RoutingSimulationRequest?
+  var proxiesPageRequest: ProxiesPageRequest?
   /// What the last rule/DNS commit actually did to the runtime. Published so a successful hot
   /// reload is visible rather than merely "no red text", and so a rollback — the runtime rejected
   /// the edit and ClashMax restored the previous config — is never silent (issue #15).
@@ -2070,6 +2096,19 @@ final class AppModel {
 
   func openRuntimeLogs() {
     selectedSection = .logs
+  }
+
+  /// Switches to the Proxies page, focused on `groupName` when one is given.
+  func openProxies(focusingGroup groupName: String? = nil) {
+    proxiesPageRequest = ProxiesPageRequest(groupName: groupName)
+    selectedSection = .proxies
+  }
+
+  /// Hands the pending Proxies page request to the page exactly once.
+  func consumeProxiesPageRequest() -> ProxiesPageRequest? {
+    guard let request = proxiesPageRequest else { return nil }
+    proxiesPageRequest = nil
+    return request
   }
 
   func openRoutingExplanation(for connection: ConnectionSnapshot) {
@@ -5564,8 +5603,10 @@ final class AppModel {
         ).preservingKnownDelayStates(knownDelayStates, profileID: profileStore.activeProfileID)
         rules = try await apiClient.rules()
         guard runtimeReloadToken == token, !Task.isCancelled else { return }
-        connections = try await apiClient.connections()
+        let connectionsReport = try await apiClient.connections()
         guard runtimeReloadToken == token, !Task.isCancelled else { return }
+        connections = connectionsReport.connections
+        runtimeData.recordTrafficTotals(connectionsReport.totals)
         if clearAfterConfirmation, let activeID = profileStore.activeProfileID {
           let confirmed = previewSelections.allSatisfy { groupName, nodeName in
             proxyGroups.first(where: { $0.name == groupName })?.selected == nodeName
@@ -9356,9 +9397,10 @@ final class AppModel {
   private func runConnectionStream(client: any MihomoAPIControlling, token: UUID) async {
     while shouldRetryRuntimeStream(token: token) {
       do {
-        for try await snapshot in client.connectionStream(interval: 1000) {
+        for try await report in client.connectionStream(interval: 1000) {
           guard !Task.isCancelled else { return }
-          await runtimeData.updateConnections(snapshot)
+          runtimeData.recordTrafficTotals(report.totals)
+          await runtimeData.updateConnections(report.connections)
         }
       } catch is CancellationError {
         return
@@ -9366,6 +9408,10 @@ final class AppModel {
         guard shouldRetryRuntimeStream(token: token) else { return }
       }
 
+      guard shouldRetryRuntimeStream(token: token) else { return }
+      // Same reasoning as the memory stream: the totals of a core that has since been replaced
+      // would read as this session's.
+      runtimeData.clearTrafficTotals()
       guard await waitBeforeRuntimeStreamReconnect(token: token) else { return }
     }
   }

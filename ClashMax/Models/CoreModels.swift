@@ -6338,6 +6338,30 @@ struct TrafficSample: Codable, Equatable, Sendable {
   }
 }
 
+/// The core's running byte counters, `downloadTotal` / `uploadTotal` on every `/connections` answer.
+///
+/// Contract measured against the bundled core on 2026-09-23: both are plain integers counted from
+/// the moment the core started, present even while `connections` is `null`. A core restart — which
+/// includes every System Proxy ↔ TUN switch — starts them from zero again, so they are only ever
+/// "this session", never a day's or a month's total.
+struct TrafficTotals: Codable, Equatable, Sendable {
+  var upload: Int
+  var download: Int
+
+  static let zero = TrafficTotals(upload: 0, download: 0)
+}
+
+/// One `/connections` answer: the open connections and the core's session byte totals.
+struct ConnectionsReport: Equatable, Sendable {
+  var connections: [ConnectionSnapshot]
+  var totals: TrafficTotals
+
+  init(connections: [ConnectionSnapshot], totals: TrafficTotals = .zero) {
+    self.connections = connections
+    self.totals = totals
+  }
+}
+
 /// One frame of the core's `/memory` stream.
 ///
 /// Contract measured against the bundled core (v1.19.30) on 2026-08-30:

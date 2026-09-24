@@ -249,17 +249,43 @@ enum MenuBarStatusItemImage {
   static let logoPointSize: CGFloat = 16
   static let logoTextGap: CGFloat = 4
 
-  static func render(lines: MenuBarTrafficStatusLabel.Lines, logo: NSImage?) -> NSImage {
-    let attributes: [NSAttributedString.Key: Any] = [
+  private static var textAttributes: [NSAttributedString.Key: Any] {
+    [
       .font: textFont,
       // Template images only use the alpha channel; black keeps full coverage.
       .foregroundColor: NSColor.black,
     ]
+  }
+
+  /// Widest line `MenuBarTrafficStatusLabel` produces below 1000 MB/s, measured in the status font:
+  /// the widest value of each unit `TrafficSample.format` switches through (1023 B/s, 1024 KB/s,
+  /// 999.9 MB/s), in both directions. Derived from the formatter, so a unit change moves it too.
+  static let referenceTextWidth: CGFloat = {
+    let widestReadings = [1_023, 1_048_575, 1_048_471_142]
+    let attributes = textAttributes
+    return widestReadings
+      .compactMap { bytesPerSecond in
+        MenuBarTrafficStatusLabel.lines(
+          showsTraffic: true,
+          hasTrafficData: true,
+          sample: TrafficSample(upload: bytesPerSecond, download: bytesPerSecond)
+        )
+      }
+      .flatMap { [$0.upload, $0.download] }
+      .map { NSAttributedString(string: $0, attributes: attributes).size().width }
+      .max() ?? 0
+  }()
+
+  static func render(lines: MenuBarTrafficStatusLabel.Lines, logo: NSImage?) -> NSImage {
+    let attributes = textAttributes
     let upload = NSAttributedString(string: lines.upload, attributes: attributes)
     let download = NSAttributedString(string: lines.download, attributes: attributes)
     let uploadSize = upload.size()
     let downloadSize = download.size()
-    let textWidth = ceil(max(uploadSize.width, downloadSize.width))
+    // The readings change every second, between "0B/s" and "12.3MB/s". An image as wide as the
+    // current text would resize the status item on each tick and shove every item to its left, so
+    // the text column is at least as wide as the widest reading the formatter produces.
+    let textWidth = ceil(max(uploadSize.width, downloadSize.width, referenceTextWidth))
     // Two 9pt rows keep the image inside the 22pt status-item height.
     let height = rowHeight * 2
     let logoWidth = logo == nil ? 0 : logoPointSize

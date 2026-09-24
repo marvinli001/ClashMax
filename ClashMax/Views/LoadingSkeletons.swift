@@ -2,22 +2,39 @@ import Shimmer
 import SwiftUI
 
 extension View {
+  /// Marks a whole skeleton — a list, a table, a card body — as loading, with one shimmer across
+  /// it. Apply it to the outermost skeleton container only: the bars and rows inside do not shimmer
+  /// on their own, so every bar in the container shares the same band instead of each running its
+  /// own looping mask. A skeleton nested in another one (the node skeleton inside the public-IP
+  /// skeleton) leaves the shimmer to the outer container.
   func clashMaxSkeleton(active: Bool = true) -> some View {
     modifier(ClashMaxSkeletonModifier(active: active))
   }
 }
 
+private extension EnvironmentValues {
+  @Entry var isInsideClashMaxSkeleton = false
+}
+
 private struct ClashMaxSkeletonModifier: ViewModifier {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.isInsideClashMaxSkeleton) private var isInsideSkeleton
   let active: Bool
 
   func body(content: Content) -> some View {
-    content
-      .redacted(reason: active ? .placeholder : [])
-      .shimmering(active: active && !reduceMotion)
+    if isInsideSkeleton {
+      content
+    } else {
+      content
+        .environment(\.isInsideClashMaxSkeleton, active)
+        .redacted(reason: active ? .placeholder : [])
+        .shimmering(active: active && !reduceMotion)
+    }
   }
 }
 
+/// One placeholder bar. It has no shimmer of its own: the container it sits in applies
+/// `clashMaxSkeleton()` once for all of its bars.
 struct ClashMaxSkeletonBar: View {
   var width: CGFloat?
   var height: CGFloat = 10
@@ -27,7 +44,6 @@ struct ClashMaxSkeletonBar: View {
     RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
       .fill(Color.secondary.opacity(0.24))
       .frame(width: width, height: height)
-      .clashMaxSkeleton()
       .accessibilityHidden(true)
   }
 }
@@ -56,7 +72,6 @@ struct ClashMaxSkeletonRow: View {
       }
     }
     .padding(.vertical, 5)
-    .clashMaxSkeleton()
     .accessibilityHidden(true)
   }
 }
@@ -75,6 +90,7 @@ struct ClashMaxSkeletonList: View {
         )
       }
     }
+    .clashMaxSkeleton()
     .accessibilityHidden(true)
   }
 }
@@ -101,6 +117,8 @@ struct ClashMaxSkeletonTable: View {
         }
       }
     }
+    // Inside the table's background, so the band sweeps the rows and the frame stays solid.
+    .clashMaxSkeleton()
     .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     .overlay {
       RoundedRectangle(cornerRadius: 8, style: .continuous)

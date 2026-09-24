@@ -380,6 +380,69 @@ final class LocalizationTests: XCTestCase {
     XCTAssertEqual(String(format: removeFormat, "Demo"), "从 ClashMax 移除 Demo。已存储的订阅元数据和应用管理的配置副本将被删除。")
   }
 
+  func testSimplifiedChineseStringCatalogProvidesHomeAndMenuBarFallbackKeys() throws {
+    // Each of these used to reach the screen as a plain String (verbatim English in zh-Hans).
+    let bundle = try XCTUnwrap(Bundle(identifier: AppConstants.bundleIdentifier))
+    let zhPath = try XCTUnwrap(bundle.path(forResource: "zh-Hans", ofType: "lproj"))
+    let zhBundle = try XCTUnwrap(Bundle(path: zhPath))
+
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Select a profile to start ClashMax", value: nil, table: nil), "选择配置后即可启动 ClashMax")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "No selection", value: nil, table: nil), "未选择")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Download", value: nil, table: nil), "下载")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Upload", value: nil, table: nil), "上传")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Start ClashMax", value: nil, table: nil), "启动 ClashMax")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Stop ClashMax", value: nil, table: nil), "停止 ClashMax")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "More Proxy Groups", value: nil, table: nil), "更多代理组")
+    // The menu bar's "More Proxy Groups" row value.
+    XCTAssertEqual(
+      String(format: zhBundle.localizedString(forKey: "%lld more", value: nil, table: nil), 2),
+      "还有 2 个"
+    )
+    XCTAssertEqual(
+      String(format: zhBundle.localizedString(forKey: "View All %lld", value: nil, table: nil), 9),
+      "查看全部 9 个"
+    )
+    XCTAssertEqual(
+      String(format: zhBundle.localizedString(forKey: "DNS Listen %lld", value: nil, table: nil), 5_353),
+      "DNS 监听 5353",
+      "A port never picks up a grouping separator"
+    )
+    for (key, translation) in [("Pass", "通过"), ("Warn", "警告"), ("Fail", "失败"), ("Skipped", "已跳过"), ("Info", "信息")] {
+      XCTAssertEqual(zhBundle.localizedString(forKey: key, value: nil, table: nil), translation)
+    }
+    // The copyable diagnostics report keeps its stable English wording.
+    XCTAssertEqual(
+      [TunDiagnosticStatus.pass, .warn, .fail, .skipped, .info].map(\.displayName),
+      ["Pass", "Warn", "Fail", "Skipped", "Info"]
+    )
+  }
+
+  func testSimplifiedChineseStringCatalogProvidesRunningHomeKeys() throws {
+    let bundle = try XCTUnwrap(Bundle(identifier: AppConstants.bundleIdentifier))
+    let zhPath = try XCTUnwrap(bundle.path(forResource: "zh-Hans", ofType: "lproj"))
+    let zhBundle = try XCTUnwrap(Bundle(path: zhPath))
+    func zh(_ key: String) -> String {
+      zhBundle.localizedString(forKey: key, value: nil, table: nil)
+    }
+
+    XCTAssertEqual(zh("Core Memory"), "核心内存")
+    XCTAssertEqual(String(format: zh("This session %@"), "1.2 GB"), "本次 1.2 GB")
+    XCTAssertEqual(zh("Search Nodes"), "搜索节点")
+    XCTAssertEqual(zh("Open in Proxies"), "在代理页中打开")
+    XCTAssertEqual(zh("Choose a node"), "选择节点")
+    XCTAssertEqual(String(format: zh("%@ (%@)"), "TUN Route", "失败"), "TUN Route（失败）")
+    XCTAssertEqual(String(format: zh("TUN checks need attention: %@"), "A"), "TUN 检查需要处理：A")
+    XCTAssertEqual(zh("Show in Status"), "在状态页查看")
+    XCTAssertEqual(String(format: zh("NE Proxy: %lld SOCKS handshake failures"), 2), "NE 代理：2 次 SOCKS 握手失败")
+    XCTAssertEqual(zh("NE Proxy reported an error"), "NE 代理报告了错误")
+    XCTAssertEqual(String(format: zh("Show %@ in Proxies"), "Proxy"), "在代理页中查看 Proxy")
+    // Reused, not new: the legend's accessibility names and the warning row's repair buttons.
+    XCTAssertEqual(zh("Download"), "下载")
+    XCTAssertEqual(zh("Upload"), "上传")
+    XCTAssertEqual(zh("Repair DNS"), "修复 DNS")
+    XCTAssertEqual(zh("Repair Routing"), "修复路由")
+  }
+
   func testSimplifiedChineseStringCatalogProvidesMenuBarKeys() throws {
     let bundle = try XCTUnwrap(Bundle(identifier: AppConstants.bundleIdentifier))
     let zhPath = try XCTUnwrap(bundle.path(forResource: "zh-Hans", ofType: "lproj"))

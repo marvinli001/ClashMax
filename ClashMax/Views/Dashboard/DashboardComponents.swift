@@ -26,9 +26,6 @@ enum DashboardLayoutMetrics {
   static let launchMixedPortControlWidth: CGFloat = 104
   static let launchStartButtonWidth: CGFloat = 156
   static let dashboardGridSpacing: CGFloat = 12
-  static let metricTileMinimumColumnWidth: CGFloat = 118
-  static let metricTileSingleRowBreakpoint: CGFloat = 680
-  static let metricTileTwoColumnBreakpoint: CGFloat = 420
   static let runningPairColumnsBreakpoint: CGFloat = 700
 
   static func pagePadding(for width: CGFloat) -> CGFloat {
@@ -235,8 +232,13 @@ private struct NetworkExtensionSettingsPopover: View {
         .toggleStyle(.switch)
         .disabled(!settings.dnsCaptureEnabled)
 
-      Stepper("DNS Listen \(settings.normalizedDNSListenPort)", value: $settings.dnsListenPort, in: 1...65_535)
-        .disabled(!settings.dnsCaptureEnabled)
+      // Formatted outside the localized key so the port does not pick up a grouping separator.
+      Stepper(
+        String(format: String(localized: "DNS Listen %lld"), settings.normalizedDNSListenPort),
+        value: $settings.dnsListenPort,
+        in: 1...65_535
+      )
+      .disabled(!settings.dnsCaptureEnabled)
 
       Toggle("System DNS Override", isOn: $settings.systemDNSOverrideEnabled)
         .toggleStyle(.switch)
@@ -1100,35 +1102,30 @@ private func popoverActions(onCancel: @escaping () -> Void, onSave: @escaping ()
   }
 }
 
+/// A labelled fact that sits directly on a card: no chip, no tinted fill. The symbol stays
+/// secondary unless `tint` carries a state (capture on, say), never to decorate the label.
 struct DashboardStatusPill: View {
   let title: LocalizedStringResource
   let value: String
   let symbolName: String
-  let tint: Color
+  var tint: Color?
 
   var body: some View {
-    HStack(spacing: 8) {
+    HStack(spacing: 7) {
       Image(systemName: symbolName)
-        .font(.system(size: 13, weight: .semibold))
-        .foregroundStyle(tint)
-        .frame(width: 20)
+        .font(.system(size: 12, weight: .medium))
+        .foregroundStyle(tint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.secondary))
+        .frame(width: 16)
 
       VStack(alignment: .leading, spacing: 1) {
         Text(title)
           .font(.caption2)
           .foregroundStyle(.secondary)
         Text(value)
-          .font(.system(.caption, design: .rounded).weight(.semibold))
+          .font(.callout.weight(.medium))
           .lineLimit(1)
           .minimumScaleFactor(0.72)
       }
-    }
-    .padding(.horizontal, 10)
-    .padding(.vertical, 7)
-    .background(tint.opacity(0.08), in: SurfaceRadius.shape(SurfaceRadius.tile))
-    .overlay {
-      SurfaceRadius.shape(SurfaceRadius.tile)
-        .strokeBorder(tint.opacity(0.20), lineWidth: 1)
     }
   }
 }
@@ -1195,15 +1192,6 @@ struct CardSurface: ShapeStyle {
   }
 }
 
-/// Inset blocks sitting on a `CardSurface` (node tiles, inspector panels).
-struct InsetSurface: ShapeStyle {
-  func resolve(in environment: EnvironmentValues) -> AnyShapeStyle {
-    environment.colorScheme == .dark
-      ? AnyShapeStyle(.fill.tertiary)
-      : AnyShapeStyle(Color(nsColor: .textBackgroundColor))
-  }
-}
-
 /// Subtle fact tiles on a `CardSurface` (status fact grid).
 struct TileSurface: ShapeStyle {
   func resolve(in environment: EnvironmentValues) -> AnyShapeStyle {
@@ -1217,75 +1205,32 @@ extension ShapeStyle where Self == CardSurface {
   static var cardSurface: CardSurface { CardSurface() }
 }
 
-extension ShapeStyle where Self == InsetSurface {
-  static var insetSurface: InsetSurface { InsetSurface() }
-}
-
 extension ShapeStyle where Self == TileSurface {
   static var tileSurface: TileSurface { TileSurface() }
 }
 
+/// The one surface every Home card sits on: opaque, one hairline, one shadow.
+///
+/// No card on the page is a control as a whole — the controls are the buttons and rows inside — so
+/// none of them gets glass or a hover lift. Liquid Glass stays with the chrome that floats above
+/// content (toolbar, toasts, the menu bar panel); behind dense operational text it only costs
+/// legibility.
 struct DashboardCardModifier: ViewModifier {
   @Environment(\.colorScheme) private var colorScheme
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  /// Cards that respond to the pointer (the whole card is a control or opens a
-  /// detail). Drives a hover lift so the affordance is discoverable before click.
-  var interactive = false
-  @State private var isHovering = false
-
-  private var isDark: Bool { colorScheme == .dark }
-  private var isLifted: Bool { interactive && isHovering }
 
   func body(content: Content) -> some View {
     let shape = SurfaceRadius.shape(SurfaceRadius.card)
-    if #available(macOS 26, *), interactive {
-      // Glass is reserved for cards that behave like controls. That keeps the
-      // material meaningful — glass reads as "you can act on this", opaque reads
-      // as "this is data" — instead of decorating every dense panel, and it avoids
-      // putting a translucent surface behind small operational text.
-      content
-        .glassEffect(.regular.interactive(), in: shape)
-        .contentShape(shape)
-    } else {
-      content
-        .background(.cardSurface, in: shape)
-        .overlay(shape.strokeBorder(borderStyle, lineWidth: 1))
-        .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, y: shadowOffsetY)
-        .contentShape(shape)
-        .onHover { hovering in
-          guard interactive else { return }
-          withAnimation(reduceMotion ? nil : .easeOut(duration: 0.12)) {
-            isHovering = hovering
-          }
-        }
-    }
-  }
-
-  /// Pre-macOS 26 fallback for the hover affordance: emphasise the border that is
-  /// already there rather than introducing a second one.
-  private var borderStyle: AnyShapeStyle {
-    isLifted ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.separator)
-  }
-
-  private var shadowOpacity: Double {
-    if isDark { return isLifted ? 0.24 : 0.16 }
-    return isLifted ? 0.08 : 0.04
-  }
-
-  private var shadowRadius: CGFloat {
-    if isDark { return isLifted ? 20 : 16 }
-    return isLifted ? 14 : 10
-  }
-
-  private var shadowOffsetY: CGFloat {
-    if isDark { return isLifted ? 10 : 8 }
-    return isLifted ? 4 : 2
+    let isDark = colorScheme == .dark
+    content
+      .background(.cardSurface, in: shape)
+      .overlay(shape.strokeBorder(.separator, lineWidth: 1))
+      .shadow(color: .black.opacity(isDark ? 0.16 : 0.04), radius: isDark ? 16 : 10, y: isDark ? 8 : 2)
   }
 }
 
 extension View {
-  func dashboardCard(interactive: Bool = false) -> some View {
-    modifier(DashboardCardModifier(interactive: interactive))
+  func dashboardCard() -> some View {
+    modifier(DashboardCardModifier())
   }
 }
 

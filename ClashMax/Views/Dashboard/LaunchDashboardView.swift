@@ -3,7 +3,6 @@ import SwiftUI
 
 struct LaunchDashboardView: View {
   @Environment(AppModel.self) private var appModel
-  @State private var coreActivationTrigger = 0
   let state: DashboardRuntimeState
   let namespace: Namespace.ID
   let reduceMotion: Bool
@@ -32,7 +31,7 @@ struct LaunchDashboardView: View {
         )
         .frame(maxWidth: DashboardLayoutMetrics.launchControlsMaxWidth(availableWidth: availableSize.width))
         .frame(maxWidth: .infinity)
-        .transition(.movingParts.blur)
+        .transition(.opacity)
 
         LaunchStatusMessage(state: state)
           .frame(maxWidth: DashboardLayoutMetrics.launchControlsMaxWidth(availableWidth: availableSize.width))
@@ -49,18 +48,14 @@ struct LaunchDashboardView: View {
       Button {
         runRuntime()
       } label: {
-        CoreVisualView(
-          state: state,
-          reduceMotion: reduceMotion,
-          activationTrigger: coreActivationTrigger
-        )
-        .frame(width: visualSide, height: visualSide)
-        .contentShape(Circle())
+        CoreVisualView(state: state, reduceMotion: reduceMotion)
+          .frame(width: visualSide, height: visualSide)
+          .contentShape(Circle())
       }
-      .buttonStyle(.plain)
+      .buttonStyle(CorePowerButtonStyle(reduceMotion: reduceMotion))
       .disabled(primaryActionDisabled)
-      .help(primaryActionDisabled ? launchTitle : (appModel.canStopRuntime ? "Stop ClashMax" : "Start ClashMax"))
-      .matchedGeometryEffect(id: "core-visual", in: namespace)
+      .help(primaryActionDisabled ? launchTitle : (appModel.canStopRuntime ? String(localized: "Stop ClashMax") : String(localized: "Start ClashMax")))
+      .dashboardMatchedGeometry(id: "core-visual", in: namespace, reduceMotion: reduceMotion)
 
       VStack(alignment: .leading, spacing: 4) {
         HStack(spacing: 8) {
@@ -76,12 +71,12 @@ struct LaunchDashboardView: View {
             .minimumScaleFactor(0.6)
         }
 
-        Text(appModel.profileStore.activeProfile?.name ?? "Select a profile to start ClashMax")
+        Text(appModel.profileStore.activeProfile?.name ?? String(localized: "Select a profile to start ClashMax"))
           .font(.callout)
           .foregroundStyle(.secondary)
           .lineLimit(1)
           .minimumScaleFactor(0.72)
-          .matchedGeometryEffect(id: "profile-summary", in: namespace)
+          .dashboardMatchedGeometry(id: "profile-summary", in: namespace, reduceMotion: reduceMotion)
       }
     }
     .frame(maxWidth: .infinity)
@@ -93,15 +88,14 @@ struct LaunchDashboardView: View {
     return appModel.readinessIssue != nil
   }
 
+  /// The same call the toolbar button, ⌘R and the menu bar make. The page swap that follows is
+  /// animated by `DashboardView`, keyed on the layout, not by a transaction opened here.
   private func runRuntime() {
     guard !primaryActionDisabled else { return }
-    coreActivationTrigger += 1
-    withAnimation(.spring(response: 0.52, dampingFraction: 0.82)) {
-      if appModel.canStopRuntime {
-        appModel.stop()
-      } else {
-        appModel.start()
-      }
+    if appModel.canStopRuntime {
+      appModel.stop()
+    } else {
+      appModel.start()
     }
   }
 
@@ -138,6 +132,20 @@ struct LaunchDashboardView: View {
     default:
       return .cyan
     }
+  }
+}
+
+/// The resting power symbol's press feedback: a slight dip while the pointer is down, released as soon
+/// as it lifts. With Reduce Motion on it dims instead of moving.
+private struct CorePowerButtonStyle: ButtonStyle {
+  let reduceMotion: Bool
+
+  func makeBody(configuration: Configuration) -> some View {
+    let isPressed = configuration.isPressed
+    configuration.label
+      .scaleEffect(isPressed && !reduceMotion ? 0.97 : 1)
+      .opacity(isPressed && reduceMotion ? 0.8 : 1)
+      .animation(.easeOut(duration: 0.12), value: isPressed)
   }
 }
 
@@ -187,7 +195,7 @@ private struct LaunchControlDeck: View {
     }
     .padding(.horizontal, 16)
     .padding(.vertical, 14)
-    .dashboardCard(interactive: true)
+    .dashboardCard()
   }
 
   private var profileControl: some View {
@@ -210,7 +218,7 @@ private struct LaunchControlDeck: View {
       .fixedSize()
       .disabled(appModel.profileStore.profiles.isEmpty)
       .frame(width: DashboardLayoutMetrics.launchProfileControlWidth, alignment: .leading)
-      .matchedGeometryEffect(id: "profile-control", in: namespace)
+      .dashboardMatchedGeometry(id: "profile-control", in: namespace, reduceMotion: reduceMotion)
     }
     .frame(width: DashboardLayoutMetrics.launchProfileControlWidth, alignment: .leading)
   }
@@ -237,7 +245,7 @@ private struct LaunchControlDeck: View {
         get: { appModel.overrides.mode },
         set: { appModel.requestMode($0) }
       ))
-      .matchedGeometryEffect(id: "mode-control", in: namespace)
+      .dashboardMatchedGeometry(id: "mode-control", in: namespace, reduceMotion: reduceMotion)
     }
     .frame(width: DashboardLayoutMetrics.runModePickerWidth, alignment: .leading)
   }
@@ -274,14 +282,17 @@ private struct LaunchControlDeck: View {
       Text("Mixed Port")
         .font(.caption2)
         .foregroundStyle(.secondary)
+      // A port is an identifier, not a quantity: an Int interpolated into a localized label picks up
+      // the locale's grouping separator and reads "7,890".
       Stepper(
-        "\(appModel.overrides.mixedPort)",
         value: Binding(
           get: { appModel.overrides.mixedPort },
           set: { appModel.setMixedPort($0) }
         ),
         in: 1024...65535
-      )
+      ) {
+        Text(verbatim: String(appModel.overrides.mixedPort))
+      }
       .frame(width: DashboardLayoutMetrics.launchMixedPortControlWidth, alignment: .leading)
     }
     .frame(width: DashboardLayoutMetrics.launchMixedPortControlWidth, alignment: .leading)
@@ -298,8 +309,7 @@ private struct LaunchControlDeck: View {
     .buttonStyle(.borderedProminent)
     .controlSize(.regular)
     .disabled(primaryActionDisabled)
-    .matchedGeometryEffect(id: "primary-run-control", in: namespace)
-    .changeEffect(.shine(duration: reduceMotion ? 0.18 : 0.72), value: state)
+    .dashboardMatchedGeometry(id: "primary-run-control", in: namespace, reduceMotion: reduceMotion)
   }
 
   private var primaryActionTitle: String {
@@ -313,6 +323,7 @@ private struct LaunchControlDeck: View {
 
 private struct LaunchStatusMessage: View {
   @Environment(AppModel.self) private var appModel
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let state: DashboardRuntimeState
 
   var body: some View {
@@ -330,7 +341,8 @@ private struct LaunchStatusMessage: View {
           RoundedRectangle(cornerRadius: 8, style: .continuous)
             .strokeBorder(presentation.color.opacity(0.22), lineWidth: 1)
         }
-        .changeEffect(.shake, value: presentation.shakesOnChange ? presentation.message : "")
+        // Pow does not check Reduce Motion itself.
+        .changeEffect(.shake, value: presentation.shakesOnChange ? presentation.message : "", isEnabled: !reduceMotion)
     }
   }
 
@@ -353,4 +365,17 @@ private struct LaunchStatusPresentation {
   var symbolName: String
   var color: Color
   var shakesOnChange: Bool
+}
+
+extension View {
+  /// Carries one control across the launch ↔ running swap. With Reduce Motion the two pages only
+  /// cross-fade, so nothing travels across the window.
+  @ViewBuilder
+  func dashboardMatchedGeometry(id: String, in namespace: Namespace.ID, reduceMotion: Bool) -> some View {
+    if reduceMotion {
+      self
+    } else {
+      matchedGeometryEffect(id: id, in: namespace)
+    }
+  }
 }

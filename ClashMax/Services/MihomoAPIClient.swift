@@ -7,7 +7,7 @@ protocol MihomoAPIControlling: Sendable {
   func structuredProxyProviders() async throws -> [ProxyProvider]
   func ruleProviders() async throws -> [RuleProvider]
   func rules() async throws -> [RuntimeRule]
-  func connections() async throws -> [ConnectionSnapshot]
+  func connections() async throws -> ConnectionsReport
   func selectProxy(group: String, proxy: String) async throws
   func testDelay(proxy: String, testURL: URL, timeout: Int) async throws -> Int
   func testGroupDelay(group: String, testURL: URL, timeout: Int) async throws -> [String: Int]
@@ -25,7 +25,7 @@ protocol MihomoAPIControlling: Sendable {
   func trafficStream() -> AsyncThrowingStream<TrafficSample, Error>
   func memoryStream() -> AsyncThrowingStream<CoreMemorySample, Error>
   func logStream(level: String) -> AsyncThrowingStream<LogEntry, Error>
-  func connectionStream(interval: Int) -> AsyncThrowingStream<[ConnectionSnapshot], Error>
+  func connectionStream(interval: Int) -> AsyncThrowingStream<ConnectionsReport, Error>
 }
 
 extension MihomoAPIControlling {
@@ -260,7 +260,7 @@ struct MihomoAPIClient: Sendable {
     }
   }
 
-  func connections() async throws -> [ConnectionSnapshot] {
+  func connections() async throws -> ConnectionsReport {
     let data = try await data(for: request(path: "/connections"))
     return try Self.decodeConnections(from: data)
   }
@@ -457,7 +457,7 @@ struct MihomoAPIClient: Sendable {
     }
   }
 
-  func connectionStream(interval: Int = 1000) -> AsyncThrowingStream<[ConnectionSnapshot], Error> {
+  func connectionStream(interval: Int = 1000) -> AsyncThrowingStream<ConnectionsReport, Error> {
     webSocketStream(path: "/connections", queryItems: [URLQueryItem(name: "interval", value: String(interval))]) { data in
       try Self.decodeConnections(from: data)
     }
@@ -608,10 +608,16 @@ struct MihomoAPIClient: Sendable {
     return components
   }
 
-  private static func decodeConnections(from data: Data) throws -> [ConnectionSnapshot] {
+  /// The core answers `{"downloadTotal", "uploadTotal", "connections", "memory"}`, with
+  /// `connections: null` while nothing is open (measured on the bundled core, 2026-09-23).
+  private static func decodeConnections(from data: Data) throws -> ConnectionsReport {
     let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-    let connections = object?["connections"] as? [[String: Any]] ?? []
-    return connections.compactMap { item in
+    let totals = TrafficTotals(
+      upload: int(from: object?["uploadTotal"]) ?? 0,
+      download: int(from: object?["downloadTotal"]) ?? 0
+    )
+    let items = object?["connections"] as? [[String: Any]] ?? []
+    let connections: [ConnectionSnapshot] = items.compactMap { item in
       guard let id = item["id"] as? String else { return nil }
       let metadata = item["metadata"] as? [String: Any] ?? [:]
       let chains = item["chains"] as? [String] ?? []
@@ -645,6 +651,7 @@ struct MihomoAPIClient: Sendable {
         startedAt: nil
       )
     }
+    return ConnectionsReport(connections: connections, totals: totals)
   }
 
   /// A node's most recent probe from its own `history`. Mihomo appends one `{time, delay}` entry

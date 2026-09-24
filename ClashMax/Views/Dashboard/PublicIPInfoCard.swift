@@ -97,8 +97,8 @@ struct PublicIPInfoCard: View {
       }
     }
     .padding(14)
-    .frame(maxWidth: .infinity, minHeight: isCompact ? 190 : 210, alignment: .topLeading)
-    .dashboardCard(interactive: true)
+    .frame(maxWidth: .infinity, minHeight: isCompact ? 190 : 210, maxHeight: .infinity, alignment: .topLeading)
+    .dashboardCard()
   }
 
   private func infoBody(_ info: PublicIPInfo) -> some View {
@@ -253,6 +253,7 @@ struct PublicIPInfoCard: View {
     }
   }
 
+  /// One skeleton, one shimmer: the node skeleton and the bars inside share the band applied here.
   private var publicIPSkeletonBody: some View {
     VStack(alignment: .leading, spacing: isCompact ? 8 : 12) {
       if shouldStackIdentity {
@@ -277,17 +278,13 @@ struct PublicIPInfoCard: View {
       }
     }
     .frame(maxWidth: .infinity, minHeight: isCompact ? 98 : 128, alignment: .topLeading)
+    .clashMaxSkeleton()
     .accessibilityHidden(true)
   }
 
+  /// Sits directly on the card, like the Current Node summary next to it: no tinted icon tile.
   private func regionIdentity(for info: PublicIPInfo) -> some View {
     HStack(spacing: 12) {
-      Image(systemName: "location.circle.fill")
-        .font(.system(size: 22, weight: .semibold))
-        .foregroundStyle(.cyan)
-        .frame(width: 42, height: 42)
-        .background(.cyan.opacity(0.13), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-
       VStack(alignment: .leading, spacing: 3) {
         Text(countryTitle(for: info))
           .font(.system(.title3, design: .rounded).weight(.semibold))

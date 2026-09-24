@@ -575,6 +575,43 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertFalse(runtimeConfig.contains("inactive.example"))
   }
 
+  func testSavingARoutingDraftKeepsTheSnippetTheListSwitchedOff() async throws {
+    // Draft with an unsaved edit -> the list's switch turns the snippet off -> Save. The editor's
+    // draft still says enabled=true; the save must not switch the snippet back on.
+    let model = try AppModel(paths: Self.makeRuntimePaths(), defaults: Self.makeIsolatedDefaults())
+    let editor = model.routingEditor
+    let snippet = RuntimeSnippet(
+      name: "Office",
+      enabled: true,
+      payload: .rules(
+        RuleOverlaySettings(
+          enabled: true,
+          prependRules: [ManagedRuleOverlayRule(kind: .domainSuffix, value: "office.example", policy: "DIRECT")]
+        )
+      )
+    )
+    let didSave = await model.saveRuntimeSnippet(snippet)
+    XCTAssertTrue(didSave)
+    editor.load(snippet)
+    editor.draftSnippet.name = "Office (edited)"
+    XCTAssertTrue(editor.draftHasUnsavedChanges)
+
+    let didToggle = await model.setRuntimeSnippet(snippet, enabled: false)
+    XCTAssertTrue(didToggle)
+    let stored = try XCTUnwrap(model.runtimeSnippetLibrary.snippets.first { $0.id == snippet.id })
+    XCTAssertFalse(stored.enabled)
+    // The draft was opened before the switch and still carries the old value.
+    XCTAssertTrue(editor.draftSnippet.enabled)
+    XCTAssertTrue(editor.draftHasUnsavedChanges, "The rename is still unsaved")
+
+    let didSaveDraft = await model.saveRuntimeSnippet(editor.snippetForSaving(in: model.runtimeSnippetLibrary.snippets))
+    XCTAssertTrue(didSaveDraft)
+
+    let saved = try XCTUnwrap(model.runtimeSnippetLibrary.snippets.first { $0.id == snippet.id })
+    XCTAssertFalse(saved.enabled, "Saving an edit must not re-enable a snippet the list switched off")
+    XCTAssertEqual(saved.name, "Office (edited)")
+  }
+
   func testActiveRuntimeSnippetRollsBackWhenReloadFails() async throws {
     let paths = try Self.makeRuntimePaths()
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
@@ -4077,6 +4114,170 @@ final class DashboardRuntimeStateTests: XCTestCase {
     )
   }
 
+  func testDashboardProxyGroupsCardListsProfileOrderAndCountsTheRest() throws {
+    func group(_ name: String) -> ProxyGroup {
+      ProxyGroup(
+        name: name,
+        type: "select",
+        selected: "\(name) node",
+        nodes: [ProxyNode(name: "\(name) node", type: "vless", delay: nil, isSelectable: true)]
+      )
+    }
+    let configured = (1...8).map { group("G\($0)") }
+    let model = try AppModel(paths: Self.makeRuntimePaths(), defaults: Self.makeIsolatedDefaults())
+    model.profilePreviewGroups = configured
+    // `/proxies` is a JSON object, so the running core hands the groups back in no particular order.
+    model.proxyGroups = [5, 2, 7, 0, 6, 1, 4, 3].map { configured[$0] }
+    model.tunnelCoreRunning = true
+
+    // The card reads `visibleProxyGroups`, exactly like the Proxies page.
+    let summary = DashboardProxyGroupsSummary(groups: model.visibleProxyGroups)
+    XCTAssertEqual(summary.rows.map(\.name), ["G1", "G2", "G3", "G4", "G5", "G6"])
+    XCTAssertEqual(summary.hiddenCount, 2)
+
+    XCTAssertEqual(DashboardProxyGroupsSummary.rowLimit, 6)
+    XCTAssertEqual(DashboardProxyGroupsSummary(groups: Array(configured.prefix(6))).hiddenCount, 0)
+    XCTAssertEqual(DashboardProxyGroupsSummary(groups: Array(configured.prefix(3))).rows.map(\.name), ["G1", "G2", "G3"])
+    XCTAssertEqual(DashboardProxyGroupsSummary(groups: []).hiddenCount, 0)
+    XCTAssertEqual(DashboardProxyGroupsSummary(groups: configured, limit: -1).hiddenCount, 8)
+  }
+
+  func testDashboardNumbersShowADashUntilTheCoreReports() {
+    let started = Date(timeIntervalSinceReferenceDate: 1_000)
+    let fresh = DashboardRuntimeMetric.all(
+      sample: .zero,
+      totals: nil,
+      connectionCount: 0,
+      sessionStartedAt: nil,
+      memory: .zero,
+      now: started
+    )
+    let byKind = Dictionary(uniqueKeysWithValues: fresh.map { ($0.kind, $0) })
+
+    XCTAssertEqual(fresh.map(\.kind), [.download, .upload, .connections, .uptime, .memory])
+    XCTAssertEqual(byKind[.memory]?.value, DashboardRuntimeMetric.placeholder, "The priming 0 B frame is not a reading")
+    XCTAssertNil(byKind[.memory]?.numericValue)
+    XCTAssertEqual(byKind[.uptime]?.value, DashboardRuntimeMetric.placeholder)
+    XCTAssertEqual(
+      byKind[.download]?.detail,
+      String(format: String(localized: "This session %@"), DashboardRuntimeMetric.placeholder),
+      "No /connections report yet: the total is unknown, not 0 B"
+    )
+    XCTAssertEqual(byKind[.connections]?.value, 0.formatted())
+    XCTAssertNil(byKind[.connections]?.detail)
+
+    let running = DashboardRuntimeMetric.all(
+      sample: TrafficSample(upload: 2_048, download: 1_048_576),
+      totals: TrafficTotals(upload: 85, download: 3 * 1_073_741_824),
+      connectionCount: 42,
+      sessionStartedAt: started,
+      memory: CoreMemorySample(inUse: 48_234_496, osLimit: 0),
+      now: started.addingTimeInterval(3_725)
+    )
+    let live = Dictionary(uniqueKeysWithValues: running.map { ($0.kind, $0) })
+
+    XCTAssertEqual(live[.download]?.value, TrafficSample.format(1_048_576))
+    XCTAssertEqual(live[.upload]?.value, TrafficSample.format(2_048))
+    XCTAssertEqual(live[.download]?.detail, String(format: String(localized: "This session %@"), "3.0 GB"))
+    XCTAssertEqual(live[.upload]?.detail, String(format: String(localized: "This session %@"), "85 B"))
+    XCTAssertEqual(live[.connections]?.value, 42.formatted())
+    XCTAssertEqual(live[.uptime]?.value, "1:02:05")
+    XCTAssertEqual(live[.memory]?.value, CoreMemorySample(inUse: 48_234_496, osLimit: 0).formattedInUse)
+    XCTAssertEqual(live[.memory]?.numericValue, 48_234_496)
+  }
+
+  func testDashboardRaisesOnlyFailingOrWarningTunChecks() {
+    func check(_ id: String, _ status: TunDiagnosticStatus) -> TunDiagnosticCheck {
+      TunDiagnosticCheck(id: id, title: id, status: status, message: "\(id) message")
+    }
+    func snapshot(_ checks: [TunDiagnosticCheck]) -> TunDiagnosticsSnapshot {
+      TunDiagnosticsSnapshot(checks: checks, updatedAt: Date(), externalProbeIncluded: false)
+    }
+
+    // Nothing to say while the checks have not run or all of them pass: the strip already says TUN is on.
+    XCTAssertEqual(DashboardTunAttention.issues(in: .empty), [])
+    XCTAssertEqual(
+      DashboardTunAttention.issues(in: snapshot([check("a", .pass), check("b", .info), check("c", .skipped)])),
+      []
+    )
+
+    let issues = DashboardTunAttention.issues(in: snapshot([
+      check("route", .warn),
+      check("helper", .pass),
+      check("dns", .fail),
+    ]))
+    XCTAssertEqual(issues.map(\.id), ["route", "dns"])
+    // Failures lead the summary, and each verdict is in the user's language (it read "Warn" in zh-Hans).
+    let summary = DashboardTunAttention.summary(of: issues)
+    let dns = String(format: String(localized: "%@ (%@)"), "dns", TunDiagnosticStatus.fail.localizedDisplayName)
+    let route = String(format: String(localized: "%@ (%@)"), "route", TunDiagnosticStatus.warn.localizedDisplayName)
+    XCTAssertEqual(summary, [dns, route].formatted(.list(type: .and, width: .narrow)))
+    XCTAssertFalse(summary.contains("/"), "No unexplained pass/warn/fail counters")
+  }
+
+  func testNodePickerListsSelectableNodesFilteredLikeTheProxiesPage() {
+    let group = ProxyGroup(
+      name: "Proxy",
+      type: "Selector",
+      selected: "JP 1",
+      nodes: [
+        ProxyNode(name: "JP 1", type: "vless", delay: 80, isSelectable: true),
+        ProxyNode(name: "US 1", type: "trojan", delay: nil, isSelectable: true),
+        ProxyNode(name: "JP 2", type: "vless", delay: nil, isSelectable: true),
+        ProxyNode(name: "JP hidden", type: "vless", delay: nil, isSelectable: false),
+      ]
+    )
+
+    XCTAssertEqual(DashboardNodePickerFilter.nodes(in: group, matching: "").map(\.name), ["JP 1", "US 1", "JP 2"])
+    XCTAssertEqual(DashboardNodePickerFilter.nodes(in: group, matching: "  jp ").map(\.name), ["JP 1", "JP 2"])
+    XCTAssertEqual(DashboardNodePickerFilter.nodes(in: group, matching: "type=trojan").map(\.name), ["US 1"])
+    XCTAssertEqual(DashboardNodePickerFilter.nodes(in: group, matching: "nothing").map(\.name), [])
+
+    // 1600 nodes filter well inside a keystroke.
+    let large = ProxyGroup(
+      name: "Large",
+      type: "Selector",
+      selected: "Node 0",
+      nodes: (0..<1_600).map { ProxyNode(name: "Node \($0)", type: "vless", delay: nil, isSelectable: true) }
+    )
+    // Words are ANDed, as on the Proxies page: "Node" and "159".
+    XCTAssertEqual(
+      DashboardNodePickerFilter.nodes(in: large, matching: "Node 159").map(\.name),
+      ["Node 159", "Node 1159"] + (1_590...1_599).map { "Node \($0)" }
+    )
+  }
+
+  func testDashboardOpensTheProxiesPageOnAGroupExactlyOnce() throws {
+    let model = try AppModel(paths: Self.makeRuntimePaths(), defaults: Self.makeIsolatedDefaults())
+    XCTAssertNil(model.consumeProxiesPageRequest())
+
+    model.openProxies(focusingGroup: "Streaming")
+    XCTAssertEqual(model.selectedSection, .proxies)
+    XCTAssertEqual(model.consumeProxiesPageRequest()?.groupName, "Streaming")
+    XCTAssertNil(model.consumeProxiesPageRequest(), "A later visit starts where the user left the page")
+    XCTAssertNil(model.proxiesPageRequest)
+
+    model.selectedSection = .home
+    model.openProxies()
+    XCTAssertEqual(model.selectedSection, .proxies)
+    let request = try XCTUnwrap(model.consumeProxiesPageRequest())
+    XCTAssertNil(request.groupName)
+  }
+
+  func testNoticeTimeCountsFromWhenItWasPosted() {
+    let posted = Date(timeIntervalSinceReferenceDate: 10_000)
+    let info = AppNotice(message: "Copied", tone: .info, postedAt: posted)
+    let warning = AppNotice(message: "Slow helper", tone: .warning, postedAt: posted)
+
+    XCTAssertEqual(info.displayDuration, 4)
+    XCTAssertEqual(warning.displayDuration, 8)
+    XCTAssertEqual(info.remainingDisplayDuration(now: posted.addingTimeInterval(1)), 3, accuracy: 0.001)
+    XCTAssertEqual(warning.remainingDisplayDuration(now: posted.addingTimeInterval(1)), 7, accuracy: 0.001)
+    // Posted while no window was open: by the time one opens, its time is up and it is not shown.
+    XCTAssertLessThanOrEqual(info.remainingDisplayDuration(now: posted.addingTimeInterval(600)), 0)
+    XCTAssertLessThanOrEqual(warning.remainingDisplayDuration(now: posted.addingTimeInterval(8)), 0)
+  }
+
   func testProxyNodeSorterKeepsProfileOrderButSortsByNameOnDemand() {
     let nodes = [
       ProxyNode(name: "z", type: "vless", delay: nil, isSelectable: true),
@@ -5294,11 +5495,13 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertFalse(model.runtimeDataLoading)
     XCTAssertTrue(client.yieldTraffic(TrafficSample(upload: 11, download: 22), subscription: 0))
     XCTAssertTrue(client.yieldLog(LogEntry(level: "info", message: "first stream"), subscription: 0))
+    XCTAssertTrue(client.yieldConnections([], totals: TrafficTotals(upload: 700, download: 9_000), subscription: 0))
 
     for _ in 0..<300 {
       model.runtimeData.flushPendingLogs()
       if model.trafficSample == TrafficSample(upload: 11, download: 22),
-         model.logs.contains(where: { $0.message == "first stream" })
+         model.logs.contains(where: { $0.message == "first stream" }),
+         model.runtimeData.trafficTotals == TrafficTotals(upload: 700, download: 9_000)
       {
         break
       }
@@ -5308,16 +5511,18 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     XCTAssertEqual(model.trafficSample, TrafficSample(upload: 11, download: 22))
     XCTAssertTrue(model.logs.contains { $0.message == "first stream" })
+    XCTAssertEqual(model.runtimeData.trafficTotals, TrafficTotals(upload: 700, download: 9_000))
 
     client.finishTraffic(subscription: 0)
     client.failLog(subscription: 0)
     client.finishConnections(subscription: 0)
 
-    for _ in 0..<300 where model.trafficSample != .zero {
+    for _ in 0..<300 where model.trafficSample != .zero || model.runtimeData.trafficTotals != nil {
       await Task.yield()
       try? await Task.sleep(nanoseconds: 2_000_000)
     }
     XCTAssertEqual(model.trafficSample, .zero)
+    XCTAssertNil(model.runtimeData.trafficTotals, "A dropped connection stream must not keep the old core's totals")
 
     for _ in 0..<1_500 where client.subscriptionCounts() != [2, 2, 2] {
       await Task.yield()
@@ -5329,13 +5534,18 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     XCTAssertTrue(client.yieldTraffic(TrafficSample(upload: 33, download: 44), subscription: 1))
     XCTAssertTrue(client.yieldLog(LogEntry(level: "warn", message: "reconnected stream"), subscription: 1))
-    XCTAssertTrue(client.yieldConnections([Self.streamConnection(id: "second")], subscription: 1))
+    XCTAssertTrue(client.yieldConnections(
+      [Self.streamConnection(id: "second")],
+      totals: TrafficTotals(upload: 5, download: 6),
+      subscription: 1
+    ))
 
     for _ in 0..<300 {
       model.runtimeData.flushPendingLogs()
       if model.trafficSample == TrafficSample(upload: 33, download: 44),
          model.logs.contains(where: { $0.message == "reconnected stream" }),
-         model.connections.map(\.id) == ["second"]
+         model.connections.map(\.id) == ["second"],
+         model.runtimeData.trafficTotals == TrafficTotals(upload: 5, download: 6)
       {
         break
       }
@@ -5346,6 +5556,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(model.trafficSample, TrafficSample(upload: 33, download: 44))
     XCTAssertTrue(model.logs.contains { $0.message == "reconnected stream" })
     XCTAssertEqual(model.connections.map(\.id), ["second"])
+    XCTAssertEqual(model.runtimeData.trafficTotals, TrafficTotals(upload: 5, download: 6), "A restarted core's totals start over")
 
     _ = await model.prepareForTermination()
   }
@@ -11449,22 +11660,12 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertGreaterThanOrEqual(restingLength, 68)
   }
 
-  func testHomeBackgroundUsesSingleSystemFillAcrossStates() {
-    XCTAssertEqual(DashboardHomeBackgroundStyle.fillID(for: .blocked(reason: "No profile")), "system-window")
-    XCTAssertEqual(DashboardHomeBackgroundStyle.fillID(for: .running), "system-window")
-    XCTAssertEqual(DashboardHomeBackgroundStyle.fillID(for: .crashed(message: "boom")), "system-window")
-  }
-
   func testCoreVisualActiveOnlyForOperationalStates() {
     XCTAssertFalse(DashboardRuntimeState.blocked(reason: "No profile").isVisualActive)
     XCTAssertFalse(DashboardRuntimeState.stopped.isVisualActive)
     XCTAssertFalse(DashboardRuntimeState.crashed(message: "boom").isVisualActive)
     XCTAssertTrue(DashboardRuntimeState.starting.isVisualActive)
     XCTAssertTrue(DashboardRuntimeState.running.isVisualActive)
-  }
-
-  func testDashboardCardModifierKeepsInteractiveAPI() {
-    XCTAssertTrue(DashboardCardModifier(interactive: true).interactive)
   }
 
   func testNetworkErrorsAreSummarizedForStatusSurfaces() {
@@ -12548,7 +12749,7 @@ private final class ScriptedRuntimeStreamController: MihomoAPIControlling, @unch
   private typealias TrafficContinuation = AsyncThrowingStream<TrafficSample, Error>.Continuation
   private typealias MemoryContinuation = AsyncThrowingStream<CoreMemorySample, Error>.Continuation
   private typealias LogContinuation = AsyncThrowingStream<LogEntry, Error>.Continuation
-  private typealias ConnectionContinuation = AsyncThrowingStream<[ConnectionSnapshot], Error>.Continuation
+  private typealias ConnectionContinuation = AsyncThrowingStream<ConnectionsReport, Error>.Continuation
 
   private let base = RecordingMihomoController(
     proxyGroupsResponse: [],
@@ -12592,10 +12793,10 @@ private final class ScriptedRuntimeStreamController: MihomoAPIControlling, @unch
     try await base.rules()
   }
 
-  func connections() async throws -> [ConnectionSnapshot] {
-    let snapshots = try await base.connections()
+  func connections() async throws -> ConnectionsReport {
+    let report = try await base.connections()
     recordCompletedConnectionRequest()
-    return snapshots
+    return report
   }
 
   func selectProxy(group: String, proxy: String) async throws {
@@ -12672,7 +12873,7 @@ private final class ScriptedRuntimeStreamController: MihomoAPIControlling, @unch
     }
   }
 
-  func connectionStream(interval: Int) -> AsyncThrowingStream<[ConnectionSnapshot], Error> {
+  func connectionStream(interval: Int) -> AsyncThrowingStream<ConnectionsReport, Error> {
     AsyncThrowingStream { [weak self] continuation in
       self?.installConnectionContinuation(continuation, interval: interval)
     }
@@ -12748,9 +12949,9 @@ private final class ScriptedRuntimeStreamController: MihomoAPIControlling, @unch
   }
 
   @discardableResult
-  func yieldConnections(_ snapshot: [ConnectionSnapshot], subscription: Int) -> Bool {
+  func yieldConnections(_ snapshot: [ConnectionSnapshot], totals: TrafficTotals = .zero, subscription: Int) -> Bool {
     guard let continuation = connectionContinuation(at: subscription) else { return false }
-    return Self.wasEnqueued(continuation.yield(snapshot))
+    return Self.wasEnqueued(continuation.yield(ConnectionsReport(connections: snapshot, totals: totals)))
   }
 
   func finishTraffic(subscription: Int) {
@@ -13122,8 +13323,8 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     []
   }
 
-  func connections() async throws -> [ConnectionSnapshot] {
-    connectionsResponse
+  func connections() async throws -> ConnectionsReport {
+    ConnectionsReport(connections: connectionsResponse)
   }
 
   func selectProxy(group: String, proxy: String) async throws {
@@ -13337,7 +13538,7 @@ private actor RecordingMihomoController: MihomoAPIControlling {
     AsyncThrowingStream { _ in }
   }
 
-  nonisolated func connectionStream(interval: Int) -> AsyncThrowingStream<[ConnectionSnapshot], Error> {
+  nonisolated func connectionStream(interval: Int) -> AsyncThrowingStream<ConnectionsReport, Error> {
     AsyncThrowingStream { _ in }
   }
 

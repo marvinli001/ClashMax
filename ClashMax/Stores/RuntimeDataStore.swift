@@ -22,6 +22,9 @@ final class RuntimeDataStore {
   /// The core's own resident-memory reading, or `.zero` while nothing has been reported yet.
   /// Only frames the core actually measured land here — see `appendMemorySample(_:)`.
   var memorySample: CoreMemorySample = .zero
+  /// The core's own byte counters since it started (`/connections`), or `nil` until the first
+  /// report lands. They restart from zero with the core, so the dashboard labels them "this session".
+  private(set) var trafficTotals: TrafficTotals?
   private(set) var providerHealthChecksInFlight: Set<ProxyProvider.ID> = []
   private(set) var proxyProviderUpdatesInFlight: Set<ProxyProvider.ID> = []
   private(set) var ruleProviderUpdatesInFlight: Set<RuleProvider.ID> = []
@@ -246,6 +249,19 @@ final class RuntimeDataStore {
     memorySample = sample
   }
 
+  /// Records the totals carried by a `/connections` report. Written only on a real change: the
+  /// stream repeats the same counters every second on an idle link.
+  func recordTrafficTotals(_ totals: TrafficTotals) {
+    guard trafficTotals != totals else { return }
+    trafficTotals = totals
+  }
+
+  /// Forgets the totals, so a counter from a core that has since gone away never reads as current.
+  func clearTrafficTotals() {
+    guard trafficTotals != nil else { return }
+    trafficTotals = nil
+  }
+
   func appendLog(level: String, message: String) {
     logBuffer.append(LogEntry(level: level, message: message))
     scheduleLogPublish()
@@ -283,6 +299,7 @@ final class RuntimeDataStore {
     trafficHistory = []
     trafficSampleCount = 0
     memorySample = .zero
+    trafficTotals = nil
   }
 
   private func scheduleLogPublish() {

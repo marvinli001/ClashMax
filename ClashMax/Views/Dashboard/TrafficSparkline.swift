@@ -65,6 +65,44 @@ struct TrafficChartGeometry: Equatable {
     }
     return quarter * 40
   }
+
+  /// One horizontal line of the chart's value axis.
+  struct AxisTick: Equatable {
+    /// Bytes per second at the line.
+    let value: Int
+    /// Height of the line as a fraction of the plot, 0 at the baseline and 1 at the top.
+    let fraction: Double
+    let label: String
+  }
+
+  /// The value axis for a ceiling: the ceiling and its three quarters, top to bottom, ending on
+  /// the zero baseline. The ceiling only moves between ladder rungs, so these hold still for as
+  /// long as the plot's scale does.
+  static func axisTicks(ceiling: Int) -> [AxisTick] {
+    let ceiling = max(ceiling, 0)
+    return [4, 3, 2, 1, 0].map { quarters in
+      let value = ceiling / 4 * quarters + ceiling % 4 * quarters / 4
+      return AxisTick(value: value, fraction: Double(quarters) / 4, label: axisLabel(for: value))
+    }
+  }
+
+  var axisTicks: [AxisTick] {
+    Self.axisTicks(ceiling: ceiling)
+  }
+
+  /// `TrafficSample.format`, with one decimal between 1 and 10 KB/s. The ladder is decimal while the
+  /// formatter is binary, so at those low rungs whole kilobytes round neighbouring quarters onto the
+  /// same label (2.4 and 1.8 KB/s both print as "2 KB/s" under a 2500 B/s ceiling).
+  static func axisLabel(for bytesPerSecond: Int) -> String {
+    guard bytesPerSecond >= 1024, bytesPerSecond < 10 * 1024 else {
+      return TrafficSample.format(bytesPerSecond)
+    }
+    var number = String(format: "%.1f", Double(bytesPerSecond) / 1024)
+    if number.hasSuffix(".0") {
+      number.removeLast(2)
+    }
+    return "\(number) KB/s"
+  }
 }
 
 /// One traffic series as a smoothed curve anchored to sample sequence numbers.
@@ -152,6 +190,9 @@ struct TrafficSparkline: View {
   var downloadLineWidth: CGFloat = 2.4
   var uploadLineWidth: CGFloat = 2
   var baselineOpacity = 0.18
+  /// Heights (fractions of the plot, as in `TrafficChartGeometry.AxisTick`) that get a faint grid
+  /// line. The baseline at 0 is always drawn.
+  var gridFractions: [Double] = []
   /// Two fewer than `RuntimeDataStore` retains (72): the sample sliding in on the right and the one
   /// sliding out on the left are both still needed while they are half visible, so the window shows
   /// slightly less than the buffer and the curve never starts short of the left edge.
@@ -170,6 +211,11 @@ struct TrafficSparkline: View {
     let geometry = TrafficChartGeometry(samples: samples, sampleCount: sampleCount)
 
     ZStack {
+      if !gridFractions.isEmpty {
+        TrafficGridShape(fractions: gridFractions)
+          .stroke(Color.secondary.opacity(baselineOpacity * 0.6), lineWidth: 1)
+      }
+
       Rectangle()
         .fill(Color.secondary.opacity(baselineOpacity))
         .frame(height: 1)
@@ -229,11 +275,56 @@ struct TrafficSparkline: View {
   }
 }
 
+/// Horizontal grid lines at fixed fractions of the plot height.
+private struct TrafficGridShape: Shape {
+  let fractions: [Double]
+
+  func path(in rect: CGRect) -> Path {
+    var path = Path()
+    for fraction in fractions where fraction > 0 {
+      // Half a point in, so the top line is not cut in half by the clip.
+      let y = max(rect.maxY - rect.height * CGFloat(fraction), rect.minY + 0.5)
+      path.move(to: CGPoint(x: rect.minX, y: y))
+      path.addLine(to: CGPoint(x: rect.maxX, y: y))
+    }
+    return path
+  }
+}
+
+/// The dashboard's traffic chart: the sparkline plus a value axis on the left, so a curve at the
+/// top of the plot says how much traffic that is.
 struct DashboardTrafficSparkline: View {
   let samples: [TrafficSample]
   let sampleCount: Int
+  /// Must match the sparkline's inset so each label sits on its grid line.
+  private let inset: CGFloat = 8
+  private let axisWidth: CGFloat = 60
 
   var body: some View {
-    TrafficSparkline(samples: samples, sampleCount: sampleCount)
+    let ticks = TrafficChartGeometry(samples: samples, sampleCount: sampleCount).axisTicks
+
+    HStack(spacing: 4) {
+      GeometryReader { proxy in
+        let plotHeight = max(0, proxy.size.height - inset * 2)
+        ForEach(ticks, id: \.fraction) { tick in
+          Text(tick.label)
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(.tertiary)
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .frame(width: axisWidth, alignment: .trailing)
+            .position(x: axisWidth / 2, y: inset + plotHeight * (1 - tick.fraction))
+        }
+      }
+      .frame(width: axisWidth)
+      .accessibilityHidden(true)
+
+      TrafficSparkline(
+        samples: samples,
+        sampleCount: sampleCount,
+        inset: inset,
+        gridFractions: ticks.map(\.fraction)
+      )
+    }
   }
 }

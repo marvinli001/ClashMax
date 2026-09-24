@@ -402,6 +402,51 @@ final class RuntimeDataStoreTests: XCTestCase {
     XCTAssertFalse(store.memorySample.hasReading)
   }
 
+  // MARK: Session traffic totals
+
+  func testTrafficTotalsStayUnknownUntilTheCoreReportsThem() {
+    let store = RuntimeDataStore()
+    XCTAssertNil(store.trafficTotals, "No report yet reads as unknown, never as 0 B")
+
+    store.recordTrafficTotals(.zero)
+    XCTAssertEqual(store.trafficTotals, .zero, "A fresh core really has moved nothing")
+
+    store.recordTrafficTotals(TrafficTotals(upload: 2_048, download: 1_048_576))
+    XCTAssertEqual(store.trafficTotals, TrafficTotals(upload: 2_048, download: 1_048_576))
+  }
+
+  func testRepeatedTotalsDoNotInvalidateObservers() {
+    // The connection stream repeats the same counters every second on an idle link.
+    let store = RuntimeDataStore()
+    let totals = TrafficTotals(upload: 10, download: 20)
+    store.recordTrafficTotals(totals)
+
+    let repeated = observedChange {
+      _ = store.trafficTotals
+    } during: {
+      store.recordTrafficTotals(totals)
+    }
+    let changed = observedChange {
+      _ = store.trafficTotals
+    } during: {
+      store.recordTrafficTotals(TrafficTotals(upload: 11, download: 20))
+    }
+
+    XCTAssertFalse(repeated)
+    XCTAssertTrue(changed)
+  }
+
+  func testTrafficTotalsAreClearedWithTheRuntimeAndOnReconnect() {
+    let store = RuntimeDataStore()
+    store.recordTrafficTotals(TrafficTotals(upload: 1, download: 2))
+    store.clearTrafficTotals()
+    XCTAssertNil(store.trafficTotals)
+
+    store.recordTrafficTotals(TrafficTotals(upload: 1, download: 2))
+    store.clearRuntimeCollections()
+    XCTAssertNil(store.trafficTotals)
+  }
+
   /// `oslimit` is 0 on macOS — the core only reports it where it enforces one — so the limit is
   /// shown only when there is one, instead of rendering a meaningless "of 0 B".
   func testMemorySampleFormatsOnlyWhatTheCoreReported() {

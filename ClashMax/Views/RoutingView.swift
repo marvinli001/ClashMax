@@ -123,12 +123,35 @@ final class RoutingEditorState {
   var explanationContext: RuleExplanation?
   var domainVerdictContext: SnifferDiagnosticsSnapshot?
 
+  /// `enabled` is left out: only the list's switch changes it, and that switch writes the store
+  /// directly, so a draft never holds an unsaved `enabled` of its own.
   var draftHasUnsavedChanges: Bool {
     if isEditingDetachedDraft {
       return true
     }
     guard let loadedSnippetSnapshot else { return false }
-    return draftSnippet != loadedSnippetSnapshot
+    var draft = draftSnippet
+    draft.enabled = loadedSnippetSnapshot.enabled
+    return draft != loadedSnippetSnapshot
+  }
+
+  /// Copies the stored `enabled` of the selected snippet into the draft and its baseline, leaving
+  /// every unsaved edit alone, so the preview and the applies-to line follow the list's switch.
+  func adoptStoredEnabledState(of librarySnippet: RuntimeSnippet) {
+    guard librarySnippet.id == selectedSnippetID else { return }
+    draftSnippet.enabled = librarySnippet.enabled
+    loadedSnippetSnapshot?.enabled = librarySnippet.enabled
+  }
+
+  /// What Save writes: the draft's edits with the snippet's `enabled` as stored right now. A draft
+  /// opened before the list switched the snippet off still carries the old value, and saving it
+  /// must not quietly switch the snippet back on. A new snippet has no stored value and keeps its own.
+  func snippetForSaving(in library: [RuntimeSnippet]) -> RuntimeSnippet {
+    var snippet = draftSnippet
+    if let stored = library.first(where: { $0.id == snippet.id }) {
+      snippet.enabled = stored.enabled
+    }
+    return snippet
   }
 
   func beginDetachedDraft(_ snippet: RuntimeSnippet) {
@@ -546,12 +569,6 @@ struct RoutingView: View {
           .textFieldStyle(.roundedBorder)
       }
 
-      RoutingEditRow("Enabled") {
-        Toggle("Enabled", isOn: $editor.draftSnippet.enabled)
-          .toggleStyle(.switch)
-          .labelsHidden()
-      }
-
       RoutingEditRow("Binding") {
         Picker("Binding", selection: bindingMode) {
           ForEach(RuntimeSnippetBindingMode.allCases) { mode in
@@ -595,8 +612,8 @@ struct RoutingView: View {
   private var payloadEditor: some View {
     switch editor.draftSnippet.payload {
     case .rules:
-      // The snippet's own "Enabled" row above is the only switch — a second overlay-level toggle
-      // just gives the same snippet two ways to be off.
+      // The snippet list's switch is the only one — a second overlay-level toggle just gives the
+      // same snippet two ways to be off.
       RoutingRuleListEditor(settings: rulesPayloadBinding)
     case .dnsPatch:
       ScrollView {
@@ -733,7 +750,7 @@ struct RoutingView: View {
   private func saveDraft(then action: RoutingPendingAction?) {
     attemptedSave = true
     guard canSave else { return }
-    let nextDraft = editor.draftSnippet
+    let nextDraft = editor.snippetForSaving(in: snippetLibrary.snippets)
     pendingAction = nil
     Task { @MainActor in
       if await appModel.saveRuntimeSnippet(nextDraft) {
@@ -869,6 +886,7 @@ struct RoutingView: View {
     if let selectedSnippetID = editor.selectedSnippetID,
        let snippet = snippetLibrary.snippets.first(where: { $0.id == selectedSnippetID })
     {
+      editor.adoptStoredEnabledState(of: snippet)
       if snippet == editor.draftSnippet {
         editor.loadedSnippetSnapshot = snippet
       } else if !editor.draftHasUnsavedChanges {

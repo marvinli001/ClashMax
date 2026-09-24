@@ -108,6 +108,42 @@ final class MenuBarPanelLayoutTests: XCTestCase {
     XCTAssertLessThanOrEqual(size.height, Self.maximumPanelHeight)
   }
 
+  func testManySelectorGroupsDoNotGrowThePanelPastTheFlatRowLimit() async throws {
+    // The panel is a plain VStack: before the cap every selector group added a row, and a profile
+    // with a couple of dozen groups pushed the System Proxy switch, the footer and Quit off screen.
+    func runningPanelHeight(groupCount: Int) async throws -> CGFloat {
+      let fixture = try Self.makeFixture()
+      defer { fixture.cleanup() }
+      let store = ProfileStore(paths: fixture.paths, keychain: InMemorySecretStore())
+      _ = try await importLocalProfile(into: store, paths: fixture.paths)
+      let model = makeAppModel(paths: fixture.paths, store: store, defaults: fixture.defaults)
+      model.tunnelCoreRunning = true
+      model.trafficSample = TrafficSample(upload: 4096, download: 32768)
+      model.trafficHistory = Self.sampleTrafficHistory
+      model.proxyGroups = (1...groupCount).map { index in
+        ProxyGroup(
+          name: "Group \(index)",
+          type: "Selector",
+          selected: "Node \(index)",
+          nodes: [ProxyNode(name: "Node \(index)", type: "vless", delay: nil, isSelectable: true)]
+        )
+      }
+      XCTAssertEqual(
+        MenuBarNodeSelection.selectorGroups(from: model.visibleProxyGroups, runMode: model.overrides.mode).count,
+        groupCount
+      )
+      return fittingSize(for: fullPanelView(model: model, localeIdentifier: "zh-Hans"), height: 2_000).height
+    }
+
+    let withOverflow = try await runningPanelHeight(groupCount: MenuBarNodeSelection.flatGroupLimit + 1)
+    let withManyGroups = try await runningPanelHeight(groupCount: 30)
+
+    XCTAssertEqual(withManyGroups, withOverflow, accuracy: 0.5, "Groups past the limit share the one More menu row")
+    // A 1280×800 screen (the smallest common default for supported Macs) leaves ~776pt under the
+    // menu bar; the capped panel has to fit it with room for the three pinned rows on top.
+    XCTAssertLessThanOrEqual(withManyGroups + 3 * 30, 776)
+  }
+
   func testTrafficSectionWithEmptySamplesFitsCompactLayout() {
     let view = MenuBarTrafficSection(sample: .zero, history: [], sampleCount: 0)
       .padding(MenuBarPanelLayout.padding)

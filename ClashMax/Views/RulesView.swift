@@ -302,7 +302,7 @@ private struct RuleSearchHelpPopover: View {
   }
 }
 
-private struct RuleSearchQuery {
+struct RuleSearchQuery {
   let terms: [String]
 
   init(rawValue: String) {
@@ -318,7 +318,7 @@ private struct RuleSearchQuery {
     terms.allSatisfy { term in
       let lowercased = term.lowercased()
       if lowercased.hasPrefix("type=") {
-        return rule.type.localizedCaseInsensitiveContains(value(after: "type=", in: term))
+        return Self.typeMatches(rule.type, query: value(after: "type=", in: term))
       }
       if lowercased.hasPrefix("policy=") {
         return rule.policy.localizedCaseInsensitiveContains(value(after: "policy=", in: term))
@@ -330,11 +330,23 @@ private struct RuleSearchQuery {
         .compactMap(\.self)
         .joined(separator: " ")
         .localizedCaseInsensitiveContains(term)
+        || Self.typeMatches(rule.type, query: term)
     }
   }
 
   private func value(after prefix: String, in term: String) -> String {
     String(term.dropFirst(prefix.count))
+  }
+
+  /// A running core reports types camel-cased (`DomainSuffix`, `IPCIDR`) while the syntax help and
+  /// the config write `DOMAIN-SUFFIX`, so both sides drop their separators before the substring
+  /// match. The core also folds `IP-CIDR6` into `IPCIDR`, which only the canonical form equates.
+  static func typeMatches(_ ruleType: String, query: String) -> Bool {
+    // An empty value matches nothing, like the other `key=` filters.
+    let query = RuntimeRuleTypeName.normalized(query)
+    guard !query.isEmpty else { return false }
+    return RuntimeRuleTypeName.normalized(ruleType).contains(query)
+      || RuntimeRuleTypeName.canonical(ruleType) == RuntimeRuleTypeName.canonical(query)
   }
 }
 

@@ -1,4 +1,3 @@
-import Pow
 import SwiftUI
 
 struct RunningDashboardView: View {
@@ -27,13 +26,16 @@ struct RunningDashboardView: View {
     self.availableWidth = availableWidth
   }
 
-  // Four things, in the order a person checks them after pressing Start: is it running and
-  // carrying traffic (header), which node am I on and what does the world see (node + public
-  // IP), how busy is it (traffic + groups), and only then — and only for the modes that have
-  // one — the routing diagnostics. Everything else the old dashboard repeated here (controller
-  // address, rule counts, memory, the last six log lines) has a page of its own.
+  // Four things, in the order a person checks them after pressing Start: is it running and what
+  // is it carrying (header and its numbers), which node am I on and what does the world see (node +
+  // public IP), how busy is it (traffic + groups). The routing checks only take a row when one of
+  // them is failing; the status strip already says TUN / NE is on. Everything else the old
+  // dashboard repeated here (controller address, rule counts, the last six log lines) has a page
+  // of its own.
   var body: some View {
     let selection = resolvedCurrentSelection
+    let resolvedGroups = currentNodeCoordinator.snapshot.unfilteredGroups
+    let groupsAreLoading = resolvedGroupsAreLoading
     return VStack(spacing: 12) {
       RunningHeaderCard(
         state: state,
@@ -42,12 +44,19 @@ struct RunningDashboardView: View {
         availableWidth: availableWidth
       )
 
+      if appModel.proxyRoutingMode == .tun {
+        TunDiagnosticsAttentionRow(availableWidth: availableWidth)
+      }
+      if appModel.proxyRoutingMode == .neProxy {
+        NetworkExtensionAttentionRow(availableWidth: availableWidth)
+      }
+
       DashboardResponsivePair(availableWidth: availableWidth) {
         CurrentProxyRuntimeCard(
           state: state,
           availableWidth: runtimeInfoCardWidth,
-          resolvedGroups: currentNodeCoordinator.snapshot.unfilteredGroups,
-          isLoading: currentNodeIsLoading,
+          resolvedGroups: resolvedGroups,
+          isLoading: groupsAreLoading,
           selectedGroupName: $selectedProxyGroupName
         )
       } trailing: {
@@ -60,26 +69,19 @@ struct RunningDashboardView: View {
           hasMissingSelection: selection.hasMissingSelection
         )
       }
-      .staggeredArrival(index: 0, reduceMotion: reduceMotion, trigger: state)
 
       DashboardResponsivePair(availableWidth: availableWidth) {
         TrafficRuntimeCard(
           samples: runtimeData.trafficHistory,
           sampleCount: runtimeData.trafficSampleCount,
+          sample: runtimeData.trafficSample,
           isLoading: showsInitialRuntimeSkeletons
         )
       } trailing: {
-        ProxyGroupsRuntimeCard()
-      }
-      .staggeredArrival(index: 1, reduceMotion: reduceMotion, trigger: state)
-
-      if appModel.proxyRoutingMode == .neProxy {
-        NetworkExtensionDiagnosticsRuntimeCard()
-          .staggeredArrival(index: 2, reduceMotion: reduceMotion, trigger: state)
-      }
-      if appModel.proxyRoutingMode == .tun {
-        TunDiagnosticsRuntimeCard()
-          .staggeredArrival(index: 2, reduceMotion: reduceMotion, trigger: state)
+        // The same resolved snapshot as the Current Node card: profile order (the raw `/proxies`
+        // object comes back in a different order every launch) and provider members expanded, so
+        // a group's current node has its delay.
+        ProxyGroupsRuntimeCard(groups: resolvedGroups, isLoading: groupsAreLoading)
       }
     }
     .task {
@@ -114,7 +116,7 @@ struct RunningDashboardView: View {
   /// Shows the skeleton only during genuine async loading — while starting, while runtime data is
   /// loading with nothing resolved yet, or before the off-main pipeline has produced its first
   /// result for a non-empty config — never in place of the empty/recovery states (AGENTS.md).
-  private var currentNodeIsLoading: Bool {
+  private var resolvedGroupsAreLoading: Bool {
     if state.isStarting { return true }
     let snapshot = currentNodeCoordinator.snapshot
     if appModel.runtimeDataLoading, snapshot.unfilteredGroups.isEmpty { return true }
@@ -140,7 +142,6 @@ struct RunningDashboardView: View {
 
 private struct RunningHeaderCard: View {
   @Environment(AppModel.self) private var appModel
-  @Environment(RuntimeDataStore.self) private var runtimeData
   let state: DashboardRuntimeState
   let namespace: Namespace.ID
   let reduceMotion: Bool
@@ -168,16 +169,19 @@ private struct RunningHeaderCard: View {
         }
       }
 
-      runtimeInfoPanel
+      Divider()
+        .opacity(0.5)
+
+      DashboardRuntimeNumbers(reduceMotion: reduceMotion)
     }
     .padding(16)
-    .dashboardCard(interactive: true)
+    .dashboardCard()
   }
 
   private var headerVisual: some View {
     CoreVisualView(state: state, reduceMotion: reduceMotion)
       .frame(width: availableWidth >= 820 ? 96 : 72, height: availableWidth >= 820 ? 96 : 72)
-      .matchedGeometryEffect(id: "core-visual", in: namespace)
+      .dashboardMatchedGeometry(id: "core-visual", in: namespace, reduceMotion: reduceMotion)
   }
 
   private var statusBlock: some View {
@@ -197,42 +201,40 @@ private struct RunningHeaderCard: View {
       .minimumScaleFactor(0.75)
 
       if availableWidth >= 620 {
-        HStack(spacing: 8) {
-          statusPills
+        HStack(spacing: 20) {
+          statusFacts
         }
       } else {
         VStack(alignment: .leading, spacing: 8) {
-          statusPills
+          statusFacts
         }
       }
     }
   }
 
   @ViewBuilder
-  private var statusPills: some View {
+  private var statusFacts: some View {
     DashboardStatusPill(
       title: "Profile",
       value: appModel.profileStore.activeProfile?.name ?? String(localized: "None"),
-      symbolName: "doc.text",
-      tint: .cyan
+      symbolName: "doc.text"
     )
-    .matchedGeometryEffect(id: "profile-summary", in: namespace)
+    .dashboardMatchedGeometry(id: "profile-summary", in: namespace, reduceMotion: reduceMotion)
 
     DashboardStatusPill(
       title: "Mode",
       value: appModel.currentRuntimeOverrides.mode.displayName,
-      symbolName: "switch.2",
-      tint: .purple
+      symbolName: "switch.2"
     )
-    .matchedGeometryEffect(id: "mode-control", in: namespace)
+    .dashboardMatchedGeometry(id: "mode-control", in: namespace, reduceMotion: reduceMotion)
   }
 
   private var runControls: some View {
     VStack(alignment: availableWidth >= 820 ? .trailing : .leading, spacing: 10) {
+      // A plain call, like the toolbar button, ⌘R and the menu bar: the page swap that follows is
+      // animated by `DashboardView`, not by a transaction opened here.
       Button {
-        withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
-          appModel.stop()
-        }
+        appModel.stop()
       } label: {
         Label("Stop", systemImage: "stop.fill")
           .frame(minWidth: 96)
@@ -240,69 +242,16 @@ private struct RunningHeaderCard: View {
       .buttonStyle(.borderedProminent)
       .controlSize(.large)
       .help(state.isStarting ? "Stop starting runtime" : "Stop ClashMax")
-      .matchedGeometryEffect(id: "primary-run-control", in: namespace)
+      .dashboardMatchedGeometry(id: "primary-run-control", in: namespace, reduceMotion: reduceMotion)
 
       DashboardStatusPill(
         title: "Proxy",
         value: appModel.proxyRoutingMode.displayName,
         symbolName: appModel.proxyRoutingMode.symbolName,
-        tint: appModel.systemProxyEnabled || appModel.tunEnabled || appModel.networkExtensionEnabled ? .green : .secondary
+        // Green only as a state: capture is actually on.
+        tint: appModel.systemProxyEnabled || appModel.tunEnabled || appModel.networkExtensionEnabled ? .green : nil
       )
     }
-  }
-
-  /// The live numbers: how long it has been up, what is moving right now, and how many
-  /// connections are open. One panel, refreshed once a second with the traffic stream.
-  private var runtimeInfoPanel: some View {
-    TimelineView(.periodic(from: Date(), by: 1)) { context in
-      ViewThatFits(in: .horizontal) {
-        HStack(spacing: 10) {
-          runtimeInfoItems(now: context.date)
-        }
-
-        LazyVGrid(
-          columns: [
-            GridItem(.flexible(minimum: 120), spacing: 8),
-            GridItem(.flexible(minimum: 120), spacing: 8),
-          ],
-          alignment: .leading,
-          spacing: 8
-        ) {
-          runtimeInfoItems(now: context.date)
-        }
-      }
-    }
-    .padding(10)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .dashboardInsetSurface()
-  }
-
-  @ViewBuilder
-  private func runtimeInfoItems(now: Date) -> some View {
-    DashboardMiniInfoItem(
-      title: "Uptime",
-      value: dashboardDurationString(from: appModel.sessionStartedAt, now: now),
-      symbolName: "clock",
-      tint: .cyan
-    )
-    DashboardMiniInfoItem(
-      title: "Download",
-      value: TrafficSample.format(runtimeData.trafficSample.download),
-      symbolName: "arrow.down",
-      tint: .cyan
-    )
-    DashboardMiniInfoItem(
-      title: "Upload",
-      value: TrafficSample.format(runtimeData.trafficSample.upload),
-      symbolName: "arrow.up",
-      tint: .indigo
-    )
-    DashboardMiniInfoItem(
-      title: "Connections",
-      value: "\(runtimeData.connections.count)",
-      symbolName: "network",
-      tint: .orange
-    )
   }
 
   private var statusTitle: String {
@@ -310,35 +259,189 @@ private struct RunningHeaderCard: View {
   }
 }
 
-private struct DashboardMiniInfoItem: View {
-  let title: LocalizedStringResource
-  let value: String
-  let symbolName: String
-  let tint: Color
+/// The header's numbers: what is moving right now, how much this core has moved, how many
+/// connections are open, how long it has been up and what the core itself weighs.
+///
+/// The labels are monochrome on purpose — on this page colour means state, or one of the two
+/// traffic curves, and nothing else.
+private struct DashboardRuntimeNumbers: View {
+  @Environment(AppModel.self) private var appModel
+  @Environment(RuntimeDataStore.self) private var runtimeData
+  let reduceMotion: Bool
 
   var body: some View {
-    HStack(spacing: 8) {
-      Image(systemName: symbolName)
-        .font(.system(size: 12, weight: .semibold))
-        .foregroundStyle(tint)
-        .frame(width: 22, height: 22)
-        .background(tint.opacity(0.12), in: SurfaceRadius.shape(SurfaceRadius.chip))
+    // Uptime is the only value that changes without a runtime event, so only it needs the clock.
+    TimelineView(.periodic(from: Date(), by: 1)) { context in
+      let metrics = metrics(now: context.date)
+      ViewThatFits(in: .horizontal) {
+        HStack(alignment: .top, spacing: 12) {
+          ForEach(metrics) { metric in
+            DashboardMetricCell(metric: metric, reduceMotion: reduceMotion)
+              .frame(minWidth: 112, maxWidth: .infinity, alignment: .leading)
+          }
+        }
 
-      VStack(alignment: .leading, spacing: 1) {
-        Text(title)
-          .font(.caption2)
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
-        Text(value)
-          .font(.caption.weight(.semibold).monospacedDigit())
-          .lineLimit(1)
-          .minimumScaleFactor(0.7)
+        Grid(alignment: .topLeading, horizontalSpacing: 12, verticalSpacing: 12) {
+          GridRow {
+            ForEach(metrics.prefix(3)) { metric in
+              DashboardMetricCell(metric: metric, reduceMotion: reduceMotion)
+            }
+          }
+          GridRow {
+            ForEach(metrics.dropFirst(3)) { metric in
+              DashboardMetricCell(metric: metric, reduceMotion: reduceMotion)
+            }
+          }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
       }
     }
-    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private func metrics(now: Date) -> [DashboardRuntimeMetric] {
+    DashboardRuntimeMetric.all(
+      sample: runtimeData.trafficSample,
+      totals: runtimeData.trafficTotals,
+      connectionCount: runtimeData.connections.count,
+      sessionStartedAt: appModel.sessionStartedAt,
+      memory: runtimeData.memorySample,
+      now: now
+    )
   }
 }
 
+/// One number in the header strip, resolved away from SwiftUI so the wording of each placeholder
+/// and total can be tested.
+struct DashboardRuntimeMetric: Identifiable, Equatable {
+  enum Kind: String {
+    case download
+    case upload
+    case connections
+    case uptime
+    case memory
+  }
+
+  /// Shown until the core has reported the value. An em dash, not "0": zero would be a reading.
+  static let placeholder = "—"
+
+  let kind: Kind
+  let value: String
+  /// Drives the direction of the digit roll; `nil` where the value is not a quantity.
+  let numericValue: Double?
+  /// The session total under a rate, e.g. "This session 1.2 GB".
+  let detail: String?
+
+  var id: Kind { kind }
+
+  var title: LocalizedStringResource {
+    switch kind {
+    case .download: "Download"
+    case .upload: "Upload"
+    case .connections: "Connections"
+    case .uptime: "Uptime"
+    case .memory: "Core Memory"
+    }
+  }
+
+  var symbolName: String {
+    switch kind {
+    case .download: "arrow.down"
+    case .upload: "arrow.up"
+    case .connections: "network"
+    case .uptime: "clock"
+    case .memory: "memorychip"
+    }
+  }
+
+  static func all(
+    sample: TrafficSample,
+    totals: TrafficTotals?,
+    connectionCount: Int,
+    sessionStartedAt: Date?,
+    memory: CoreMemorySample,
+    now: Date
+  ) -> [DashboardRuntimeMetric] {
+    [
+      DashboardRuntimeMetric(
+        kind: .download,
+        value: TrafficSample.format(sample.download),
+        numericValue: Double(sample.download),
+        detail: sessionTotal(totals?.download)
+      ),
+      DashboardRuntimeMetric(
+        kind: .upload,
+        value: TrafficSample.format(sample.upload),
+        numericValue: Double(sample.upload),
+        detail: sessionTotal(totals?.upload)
+      ),
+      DashboardRuntimeMetric(
+        kind: .connections,
+        value: connectionCount.formatted(),
+        numericValue: Double(connectionCount),
+        detail: nil
+      ),
+      DashboardRuntimeMetric(
+        kind: .uptime,
+        value: sessionStartedAt.map { dashboardDurationString(from: $0, now: now) } ?? placeholder,
+        numericValue: sessionStartedAt.map { now.timeIntervalSince($0) },
+        detail: nil
+      ),
+      DashboardRuntimeMetric(
+        kind: .memory,
+        value: memory.hasReading ? memory.formattedInUse : placeholder,
+        numericValue: memory.hasReading ? Double(memory.inUse) : nil,
+        detail: nil
+      ),
+    ]
+  }
+
+  /// The core counts from its own start, so the total is labelled "this session": it restarts at
+  /// zero with the core, including on every System Proxy ↔ TUN switch.
+  static func sessionTotal(_ bytes: Int?) -> String {
+    let value = bytes.map(TrafficSample.formatBytes) ?? placeholder
+    return String(format: String(localized: "This session %@"), value)
+  }
+}
+
+private struct DashboardMetricCell: View {
+  let metric: DashboardRuntimeMetric
+  let reduceMotion: Bool
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 3) {
+      Label {
+        Text(metric.title)
+      } icon: {
+        Image(systemName: metric.symbolName)
+      }
+      .font(.caption)
+      .foregroundStyle(.secondary)
+      .lineLimit(1)
+
+      Text(metric.value)
+        .font(.system(.title2, design: .rounded).weight(.semibold).monospacedDigit())
+        .contentTransition(.numericText(value: metric.numericValue ?? 0))
+        .lineLimit(1)
+        .minimumScaleFactor(0.7)
+        // Short and ease-out: the numbers change every second, and a roll that outlasts a fraction
+        // of that second reads as lag.
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: metric.value)
+
+      if let detail = metric.detail {
+        Text(detail)
+          .font(.caption.monospacedDigit())
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+          .minimumScaleFactor(0.8)
+      }
+    }
+    .accessibilityElement(children: .combine)
+  }
+}
+
+/// Two cards side by side, as tall as each other. `fixedSize` lets the row settle on its tallest
+/// card's ideal height, and every card fills that height (`maxHeight: .infinity`) — so the pair
+/// never leaves one card ending 80 points above the other. Narrow windows stack them unchanged.
 private struct DashboardResponsivePair<Leading: View, Trailing: View>: View {
   let availableWidth: CGFloat
   @ViewBuilder var leading: Leading
@@ -350,6 +453,7 @@ private struct DashboardResponsivePair<Leading: View, Trailing: View>: View {
         leading
         trailing
       }
+      .fixedSize(horizontal: false, vertical: true)
     } else {
       VStack(alignment: .leading, spacing: DashboardLayoutMetrics.dashboardGridSpacing) {
         leading
@@ -359,10 +463,26 @@ private struct DashboardResponsivePair<Leading: View, Trailing: View>: View {
   }
 }
 
+/// What the dashboard's Proxy Groups card lists: the first `limit` groups in the order it is given,
+/// plus how many it left out. The caller passes groups in profile order — the dashboard's resolved
+/// snapshot of `AppModel.visibleProxyGroups`, the same list the Proxies page shows — never the raw
+/// `/proxies` groups, whose order changes per launch.
+struct DashboardProxyGroupsSummary: Equatable {
+  static let rowLimit = 6
+
+  let rows: [ProxyGroup]
+  let hiddenCount: Int
+
+  init(groups: [ProxyGroup], limit: Int = rowLimit) {
+    rows = Array(groups.prefix(max(0, limit)))
+    hiddenCount = groups.count - rows.count
+  }
+}
+
 enum DashboardProxySelectionState {
   static func selectableGroups(from groups: [ProxyGroup]) -> [ProxyGroup] {
     groups.filter { group in
-      group.allowsManualProxySelection && !group.nodes.filter(\.isSelectable).isEmpty
+      group.allowsManualProxySelection && group.nodes.contains(where: \.isSelectable)
     }
   }
 
@@ -493,8 +613,8 @@ private struct CurrentProxyRuntimeCard: View {
       }
     }
     .padding(14)
-    .frame(maxWidth: .infinity, minHeight: availableWidth < 460 ? 190 : 210, alignment: .topLeading)
-    .dashboardCard(interactive: true)
+    .frame(maxWidth: .infinity, minHeight: availableWidth < 460 ? 190 : 210, maxHeight: .infinity, alignment: .topLeading)
+    .dashboardCard()
     // Measure the node the selector actually uses as soon as the runtime is up (and again when the
     // user picks another one), so the card shows a delay without anyone pressing the button. The
     // key only changes per session and per node, so a finished probe is never re-run by a repaint.
@@ -536,40 +656,26 @@ private struct CurrentProxyRuntimeCard: View {
     )
   }
 
+  /// Sits directly on the card: no inset panel, no tinted icon tile. The delay pill is the one
+  /// coloured element, and its colour is the delay verdict.
   private func currentNodeSummary(group: ProxyGroup, node: ProxyNode) -> some View {
     HStack(spacing: 12) {
-      Image(systemName: "shield.lefthalf.filled")
-        .font(.system(size: 20, weight: .semibold))
-        .foregroundStyle(.green)
-        .frame(width: 42, height: 42)
-        .background(.green.opacity(0.13), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-
       VStack(alignment: .leading, spacing: 4) {
         Text(node.name)
           .font(.system(.title3, design: .rounded).weight(.semibold))
           .lineLimit(1)
           .minimumScaleFactor(0.68)
-        HStack(spacing: 6) {
-          Text(group.name)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-          Text(DashboardProxySelectionState.typeLabel(for: node))
-            .font(.caption.weight(.medium))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 2)
-            .background(.secondary.opacity(0.12), in: Capsule())
-        }
+        Text(verbatim: "\(group.name) · \(DashboardProxySelectionState.typeLabel(for: node))")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
       }
 
       Spacer(minLength: 12)
 
       delayPill(for: node)
     }
-    .padding(12)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .dashboardInsetSurface()
   }
 
   /// The same verdict and colour the Proxies list uses, so "142 ms" here and there agree.
@@ -607,14 +713,10 @@ private struct CurrentProxyRuntimeCard: View {
   private func nodeControl(group: ProxyGroup, node: ProxyNode) -> some View {
     DashboardLabeledControl(title: "Node") {
       HStack(spacing: 8) {
-        Picker("Node", selection: nodeSelection(group: group)) {
-          ForEach(group.nodes.filter(\.isSelectable)) { node in
-            Text(node.name).tag(node.name)
-          }
-        }
-        .labelsHidden()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .controlSize(.small)
+        // A button, not a `Picker`: a picker builds a menu item for every node on every repaint,
+        // which for a 1600-node group is 1600 views rebuilt once a second. The list behind this
+        // button is built only while its popover is open, and lazily.
+        DashboardNodePickerButton(group: group, currentNode: node)
 
         // Probe under the group the card shows. Looking the node up by name used to find it in
         // whichever group listed it first, and the result was filed under that group's key, so the
@@ -652,15 +754,153 @@ private struct CurrentProxyRuntimeCard: View {
       set: { selectedGroupName = $0 }
     )
   }
+}
 
-  private func nodeSelection(group: ProxyGroup) -> Binding<String> {
-    Binding(
-      get: { DashboardProxySelectionState.currentNode(in: group)?.name ?? "" },
-      set: { nodeName in
-        guard let node = group.nodes.first(where: { $0.name == nodeName }) else { return }
-        appModel.selectProxy(group: group, node: node)
+/// The Current Node card's node control: the current node's name, opening a searchable list of the
+/// group's nodes.
+private struct DashboardNodePickerButton: View {
+  @Environment(AppModel.self) private var appModel
+  let group: ProxyGroup
+  let currentNode: ProxyNode
+  @State private var isPresented = false
+
+  var body: some View {
+    Button {
+      isPresented.toggle()
+    } label: {
+      HStack(spacing: 6) {
+        Text(currentNode.name)
+          .lineLimit(1)
+          .truncationMode(.middle)
+        Spacer(minLength: 4)
+        Image(systemName: "chevron.up.chevron.down")
+          .font(.caption2.weight(.semibold))
+          .foregroundStyle(.secondary)
       }
-    )
+      .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    .buttonStyle(.bordered)
+    .controlSize(.small)
+    .help("Choose a node")
+    .accessibilityLabel(Text("Node"))
+    .accessibilityValue(Text(currentNode.name))
+    .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+      DashboardNodePickerPopover(
+        group: group,
+        currentNodeName: currentNode.name,
+        onSelect: { node in
+          isPresented = false
+          appModel.selectProxy(group: group, node: node)
+        },
+        onOpenInProxies: {
+          isPresented = false
+          appModel.openProxies(focusingGroup: group.name)
+        }
+      )
+    }
+  }
+}
+
+/// Which of a group's nodes the Current Node popover lists for a search: the selectable ones, in
+/// the order the Proxies page shows them, filtered with the Proxies page's own query syntax.
+enum DashboardNodePickerFilter {
+  static func nodes(in group: ProxyGroup, matching searchText: String) -> [ProxyNode] {
+    let query = ProxySearchQuery(rawValue: searchText)
+    return group.nodes.filter { node in
+      node.isSelectable && (query.isEmpty || query.matches(group: group, node: node))
+    }
+  }
+}
+
+private struct DashboardNodePickerPopover: View {
+  let group: ProxyGroup
+  let currentNodeName: String
+  let onSelect: (ProxyNode) -> Void
+  let onOpenInProxies: () -> Void
+  @State private var searchText = ""
+
+  var body: some View {
+    let nodes = DashboardNodePickerFilter.nodes(in: group, matching: searchText)
+
+    VStack(spacing: 0) {
+      TextField("Search Nodes", text: $searchText, prompt: Text("Search Nodes"))
+        .textFieldStyle(.roundedBorder)
+        .labelsHidden()
+        // Return takes the first match, so type-to-filter then Return never needs the mouse.
+        .onSubmit {
+          if let first = nodes.first {
+            onSelect(first)
+          }
+        }
+        .padding(10)
+
+      Divider()
+
+      if nodes.isEmpty {
+        ContentUnavailableView.search(text: searchText)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+      } else {
+        ScrollViewReader { proxy in
+          List(nodes) { node in
+            DashboardNodePickerRow(node: node, isCurrent: node.name == currentNodeName) {
+              onSelect(node)
+            }
+          }
+          .listStyle(.plain)
+          .onAppear {
+            if let current = nodes.first(where: { $0.name == currentNodeName }) {
+              proxy.scrollTo(current.id, anchor: .center)
+            }
+          }
+        }
+      }
+
+      Divider()
+
+      HStack(spacing: 8) {
+        Text(String.localizedStringWithFormat(NSLocalizedString("%lld nodes", comment: ""), Int64(nodes.count)))
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .monospacedDigit()
+        Spacer(minLength: 8)
+        Button("Open in Proxies", action: onOpenInProxies)
+          .controlSize(.small)
+      }
+      .padding(.horizontal, 12)
+      .padding(.vertical, 9)
+    }
+    .frame(width: 340, height: 420)
+  }
+}
+
+private struct DashboardNodePickerRow: View {
+  let node: ProxyNode
+  let isCurrent: Bool
+  let action: () -> Void
+
+  var body: some View {
+    // The same verdict and colour as the Proxies list.
+    let delay = ProxyDelayDisplay(state: node.resolvedDelayState)
+    Button(action: action) {
+      HStack(spacing: 8) {
+        Image(systemName: "checkmark")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.tint)
+          .opacity(isCurrent ? 1 : 0)
+          .frame(width: 14)
+          .accessibilityHidden(true)
+        Text(node.name)
+          .lineLimit(1)
+          .truncationMode(.middle)
+        Spacer(minLength: 8)
+        Text(delay.localizedLabel)
+          .font(.caption.monospacedDigit())
+          .foregroundStyle(delay.tone.color)
+      }
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .accessibilityAddTraits(isCurrent ? .isSelected : [])
   }
 }
 
@@ -679,231 +919,162 @@ private struct DashboardLabeledControl<Content: View>: View {
   }
 }
 
-/// TUN health at a glance: the counters, then only the checks that are not passing. The full list
-/// with every passing row lives on the Status page; here a healthy tunnel is one green line.
-private struct TunDiagnosticsRuntimeCard: View {
-  @Environment(AppModel.self) private var appModel
+/// Which TUN checks Home raises: only a warning or a failure. A passing, informational or skipped
+/// check, and a run that has not produced checks yet, raise nothing — the status strip already says
+/// TUN is on, and the full list lives on the Status page.
+enum DashboardTunAttention {
+  static func issues(in diagnostics: TunDiagnosticsSnapshot) -> [TunDiagnosticCheck] {
+    diagnostics.checks.filter { $0.status == .fail || $0.status == .warn }
+  }
+
+  /// "TUN Route (Fail), System DNS (Warn)", failures first, in the user's language.
+  static func summary(of issues: [TunDiagnosticCheck]) -> String {
+    let ordered = issues.filter { $0.status == .fail } + issues.filter { $0.status != .fail }
+    return ordered
+      .map { String(format: String(localized: "%@ (%@)"), localizedRuntimeText($0.title), $0.status.localizedDisplayName) }
+      .formatted(.list(type: .and, width: .narrow))
+  }
+}
+
+/// A single compact warning on Home, with the recoveries the app already has for it next to it.
+private struct DashboardAttentionRow<Actions: View>: View {
+  let isError: Bool
+  let title: String
+  let detail: String?
+  let availableWidth: CGFloat
+  @ViewBuilder var actions: Actions
 
   var body: some View {
-    let diagnostics = appModel.tunDiagnostics
-    let issues = diagnostics.checks.filter { $0.status == .warn || $0.status == .fail }
-
-    VStack(alignment: .leading, spacing: 14) {
-      HStack(spacing: 10) {
-        DashboardSectionHeader(title: "TUN Diagnostics", symbolName: "point.topleft.down.curvedto.point.bottomright.up")
-        Spacer()
-        Button {
-          appModel.refreshTunDiagnostics()
-        } label: {
-          Image(systemName: "arrow.clockwise")
+    Group {
+      if availableWidth >= 820 {
+        HStack(alignment: .center, spacing: 12) {
+          message
+          Spacer(minLength: 12)
+          actionButtons
         }
-        .buttonStyle(.borderless)
-        .help("Refresh TUN diagnostics")
+      } else {
+        VStack(alignment: .leading, spacing: 10) {
+          message
+          actionButtons
+        }
+      }
+    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 11)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .dashboardCard()
+  }
 
-        Button {
+  private var message: some View {
+    Label {
+      VStack(alignment: .leading, spacing: 2) {
+        Text(title)
+          .font(.callout.weight(.medium))
+          .fixedSize(horizontal: false, vertical: true)
+        if let detail, !detail.isEmpty {
+          Text(detail)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
+            .textSelection(.enabled)
+        }
+      }
+    } icon: {
+      Image(systemName: isError ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
+        .foregroundStyle(isError ? Color.red : Color.orange)
+    }
+  }
+
+  private var actionButtons: some View {
+    HStack(spacing: 12) {
+      actions
+    }
+    .buttonStyle(.link)
+    .font(.callout)
+    .fixedSize()
+  }
+}
+
+private struct TunDiagnosticsAttentionRow: View {
+  @Environment(AppModel.self) private var appModel
+  let availableWidth: CGFloat
+
+  var body: some View {
+    let issues = DashboardTunAttention.issues(in: appModel.tunDiagnostics)
+    let dnsRepairError = appModel.tunSystemDNSState.errorMessage
+    if !issues.isEmpty || dnsRepairError != nil {
+      DashboardAttentionRow(
+        isError: issues.contains { $0.status == .fail } || dnsRepairError != nil,
+        title: title(issues: issues),
+        detail: dnsRepairError ?? issues.first.map { $0.detail ?? $0.message },
+        availableWidth: availableWidth
+      ) {
+        Button("Repair DNS") {
           appModel.repairTunDNS()
-        } label: {
-          Image(systemName: "wrench.and.screwdriver")
         }
-        .buttonStyle(.borderless)
         .disabled(!appModel.canRepairTunDNS)
-        .help("Repair TUN system DNS")
 
-        Button {
+        Button("Repair Routing") {
           appModel.repairTunRouting()
-        } label: {
-          Image(systemName: "network")
         }
-        .buttonStyle(.borderless)
         .disabled(!appModel.canRepairTunRouting)
-        .help("Repair TUN routing")
 
         if appModel.hasResidualSystemProxy {
-          Button {
+          Button("Disable System Proxy") {
             appModel.disableResidualSystemProxy()
-          } label: {
-            Image(systemName: "xmark.shield")
           }
-          .buttonStyle(.borderless)
           .disabled(!appModel.canDisableResidualSystemProxy)
-          .help("Disable residual System Proxy")
+        }
+
+        Button("Show in Status") {
+          appModel.selectedSection = .status
         }
       }
-
-      HStack(spacing: 10) {
-        RuntimeStat(title: "Helper", value: helperPIDText, tint: appModel.tunEnabled ? .green : .secondary)
-        RuntimeStat(title: "Stack", value: appModel.currentRuntimeOverrides.tunSettings.stack.displayName, tint: .cyan)
-        RuntimeStat(title: "Checks", value: diagnosticCounterText, tint: diagnosticTint)
-        RuntimeStat(title: "DNS", value: appModel.currentRuntimeOverrides.tunSettings.dnsFakeIPEnabled ? "Fake IP" : "Profile", tint: .orange)
-      }
-
-      Divider()
-        .opacity(0.24)
-
-      if diagnostics.checks.isEmpty {
-        RuntimeLine(title: "Last Check", value: "Waiting")
-      } else {
-        if issues.isEmpty {
-          Label {
-            Text("All checks passed")
-          } icon: {
-            Image(systemName: "checkmark.circle.fill")
-              .foregroundStyle(.green)
-          }
-          .font(.callout)
-        } else {
-          ForEach(issues) { check in
-            TunDiagnosticCheckRow(check: check)
-          }
-        }
-        if let dnsError = appModel.tunSystemDNSState.errorMessage {
-          RuntimeLine(title: "DNS Repair", value: dnsError)
-        }
-        RuntimeLine(title: "Last Check", value: lastUpdateText)
-      }
     }
-    .padding(14)
-    .frame(maxWidth: .infinity, minHeight: 156, alignment: .topLeading)
-    .dashboardCard()
   }
 
-  private var helperPIDText: String {
-    guard let pid = appModel.tunHelperPID else {
-      return appModel.tunEnabled ? "Running" : "Ready"
-    }
-    return "#\(pid)"
-  }
-
-  private var diagnosticCounterText: String {
-    let diagnostics = appModel.tunDiagnostics
-    guard !diagnostics.checks.isEmpty else { return "Waiting" }
-    let base = "\(diagnostics.passCount)/\(diagnostics.warnCount)/\(diagnostics.failCount)"
-    // Only widen the tile when something was actually downgraded, so the segments always
-    // account for every listed check.
-    return diagnostics.infoCount > 0 ? "\(base)/\(diagnostics.infoCount)" : base
-  }
-
-  private var lastUpdateText: String {
-    let updatedAt = appModel.tunDiagnostics.updatedAt
-    return updatedAt == Date.distantPast ? "Waiting" : updatedAt.formatted(date: .omitted, time: .standard)
-  }
-
-  private var diagnosticTint: Color {
-    switch appModel.tunDiagnostics.overallStatus {
-    case .pass:
-      return .green
-    case .warn:
-      return .orange
-    case .fail:
-      return .red
-    case .info:
-      return .blue
-    case .skipped:
-      return .secondary
-    }
+  private func title(issues: [TunDiagnosticCheck]) -> String {
+    guard !issues.isEmpty else { return String(localized: "TUN system DNS repair needed") }
+    return String(format: String(localized: "TUN checks need attention: %@"), DashboardTunAttention.summary(of: issues))
   }
 }
 
-private struct TunDiagnosticCheckRow: View {
-  let check: TunDiagnosticCheck
-
-  var body: some View {
-    HStack(alignment: .firstTextBaseline, spacing: 10) {
-      Image(systemName: symbolName)
-        .font(.system(size: 11, weight: .semibold))
-        .foregroundStyle(tint)
-        .frame(width: 14)
-      VStack(alignment: .leading, spacing: 2) {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-          Text(check.title)
-            .foregroundStyle(.primary)
-          Spacer(minLength: 8)
-          Text(check.status.displayName)
-            .foregroundStyle(tint)
-        }
-        Text(check.detail ?? check.message)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .lineLimit(2)
-      }
-    }
-    .font(.callout)
-  }
-
-  private var symbolName: String {
-    switch check.status {
-    case .pass:
-      return "checkmark.circle.fill"
-    case .warn:
-      return "exclamationmark.triangle.fill"
-    case .fail:
-      return "xmark.octagon.fill"
-    case .info:
-      return "info.circle.fill"
-    case .skipped:
-      return "minus.circle"
-    }
-  }
-
-  private var tint: Color {
-    switch check.status {
-    case .pass:
-      return .green
-    case .warn:
-      return .orange
-    case .fail:
-      return .red
-    case .info:
-      return .blue
-    case .skipped:
-      return .secondary
-    }
-  }
-}
-
-private struct NetworkExtensionDiagnosticsRuntimeCard: View {
+/// The NE counterpart of `TunDiagnosticsAttentionRow`: nothing while the extension reports no
+/// errors, one row naming the latest problem when it does.
+private struct NetworkExtensionAttentionRow: View {
   @Environment(AppModel.self) private var appModel
+  let availableWidth: CGFloat
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      DashboardSectionHeader(title: "NE Diagnostics", symbolName: "network")
-
-      HStack(spacing: 10) {
-        RuntimeStat(title: "TCP", value: "\(diagnostics.activeTCPBridgeCount)", tint: .cyan)
-        RuntimeStat(title: "UDP", value: "\(diagnostics.activeUDPBridgeCount)", tint: .indigo)
-        RuntimeStat(title: "DNS", value: "\(diagnostics.dnsCaptureCount)", tint: .orange)
-        RuntimeStat(title: "SOCKS Fail", value: "\(diagnostics.socksHandshakeFailureCount)", tint: diagnostics.socksHandshakeFailureCount > 0 ? .red : .green)
-      }
-
-      Divider()
-        .opacity(0.24)
-
-      RuntimeLine(title: "Excluded CIDR", value: "\(appModel.networkExtensionRoutingSettings.effectiveRouteExcludeCIDRs.count)")
-      RuntimeLine(title: "DNS Runtime", value: appModel.networkExtensionRoutingSettings.dnsFakeIPEnabled ? "Fake IP" : "Profile default")
-      RuntimeLine(title: "DNS Capture", value: appModel.networkExtensionRoutingSettings.dnsCaptureEnabled ? "127.0.0.1:\(appModel.networkExtensionRoutingSettings.normalizedDNSListenPort)" : "Off")
-      RuntimeLine(title: "System DNS", value: appModel.networkExtensionSystemDNSState.displayName)
-      if let dnsError = appModel.networkExtensionSystemDNSState.errorMessage {
-        RuntimeLine(title: "DNS Repair", value: dnsError)
-      }
-      RuntimeLine(title: "Last Update", value: lastUpdateText)
-      if let event = diagnostics.recentBypasses.last {
-        RuntimeLine(title: "Last Bypass", value: eventSummary(event))
-      }
-      if let event = diagnostics.recentErrors.last {
-        RuntimeLine(title: "Last Error", value: eventSummary(event))
+    let diagnostics = appModel.networkExtensionController.diagnostics
+    let dnsError = appModel.networkExtensionSystemDNSState.errorMessage
+    let lastError = diagnostics.recentErrors.last
+    let socksFailures = diagnostics.socksHandshakeFailureCount
+    if dnsError != nil || lastError != nil || socksFailures > 0 {
+      DashboardAttentionRow(
+        isError: true,
+        title: title(dnsError: dnsError, socksFailures: socksFailures),
+        detail: dnsError ?? lastError.map(eventSummary),
+        availableWidth: availableWidth
+      ) {
+        Button("Show in Status") {
+          appModel.selectedSection = .status
+        }
       }
     }
-    .padding(14)
-    .frame(maxWidth: .infinity, minHeight: 156, alignment: .topLeading)
-    .dashboardCard()
   }
 
-  private var diagnostics: NetworkExtensionDiagnosticsSnapshot {
-    appModel.networkExtensionController.diagnostics
-  }
-
-  private var lastUpdateText: String {
-    diagnostics.updatedAt == Date.distantPast ? "Waiting" : diagnostics.updatedAt.formatted(date: .omitted, time: .standard)
+  private func title(dnsError: String?, socksFailures: Int) -> String {
+    if dnsError != nil {
+      return String(localized: "NE system DNS repair needed")
+    }
+    if socksFailures > 0 {
+      return String.localizedStringWithFormat(
+        NSLocalizedString("NE Proxy: %lld SOCKS handshake failures", comment: ""),
+        Int64(socksFailures)
+      )
+    }
+    return String(localized: "NE Proxy reported an error")
   }
 
   private func eventSummary(_ event: NetworkExtensionDiagnosticEvent) -> String {
@@ -915,7 +1086,7 @@ private struct NetworkExtensionDiagnosticsRuntimeCard: View {
     .compactMap(\.self)
     .filter { !$0.isEmpty }
     .joined(separator: " ")
-    return context.isEmpty ? event.message : context
+    return context.isEmpty ? event.message : "\(event.message) — \(context)"
   }
 }
 
@@ -1704,7 +1875,7 @@ private struct StatusTunDiagnosticCheckRow: View {
   var body: some View {
     LabeledContent {
       VStack(alignment: .trailing, spacing: 2) {
-        Text(check.status.displayName)
+        Text(check.status.localizedDisplayName)
           .foregroundStyle(tint)
         Text(check.detail ?? check.message)
           .font(.caption)
@@ -1753,26 +1924,13 @@ private struct StatusTunDiagnosticCheckRow: View {
   }
 }
 
-private struct DashboardInsetSurfaceModifier: ViewModifier {
-  func body(content: Content) -> some View {
-    let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
-    content
-      .background(.insetSurface, in: shape)
-      .overlay(shape.strokeBorder(.separator.opacity(0.6), lineWidth: 1))
-  }
-}
-
-private extension View {
-  func dashboardInsetSurface() -> some View {
-    modifier(DashboardInsetSurfaceModifier())
-  }
-}
-
 private struct TrafficRuntimeCard: View {
   let samples: [TrafficSample]
   /// Total samples the store has ever appended this session; the chart anchors each sample to its
   /// sequence number so a new one slides in from the right instead of every slot morphing in place.
   let sampleCount: Int
+  /// The live reading, repeated in the legend next to the colour of its curve.
+  let sample: TrafficSample
   let isLoading: Bool
 
   var body: some View {
@@ -1788,23 +1946,48 @@ private struct TrafficRuntimeCard: View {
       }
 
       HStack(spacing: 16) {
-        LegendDot(title: "Download", color: .cyan)
-        LegendDot(title: "Upload", color: .indigo)
+        TrafficLegendValue(title: "Download", symbolName: "arrow.down", color: .cyan, rate: sample.download)
+        TrafficLegendValue(title: "Upload", symbolName: "arrow.up", color: .indigo, rate: sample.upload)
         Spacer()
       }
     }
     .padding(14)
-    .frame(maxWidth: .infinity, minHeight: 260, alignment: .topLeading)
+    .frame(maxWidth: .infinity, minHeight: 260, maxHeight: .infinity, alignment: .topLeading)
     .dashboardCard()
+  }
+}
+
+/// "↓ 246 KB/s": the arrow in its curve's colour is the legend swatch, the value is the reading.
+private struct TrafficLegendValue: View {
+  let title: LocalizedStringResource
+  let symbolName: String
+  let color: Color
+  let rate: Int
+
+  var body: some View {
+    HStack(spacing: 4) {
+      Image(systemName: symbolName)
+        .font(.caption.weight(.bold))
+        .foregroundStyle(color)
+      Text(TrafficSample.format(rate))
+        .font(.caption.monospacedDigit())
+        .foregroundStyle(.secondary)
+    }
+    .help(Text(title))
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(Text(title))
+    .accessibilityValue(Text(TrafficSample.format(rate)))
   }
 }
 
 private struct ProxyGroupsRuntimeCard: View {
   @Environment(AppModel.self) private var appModel
-  @Environment(RuntimeDataStore.self) private var runtimeData
+  /// Resolved groups in profile order, from `RunningDashboardView`.
+  let groups: [ProxyGroup]
+  let isLoading: Bool
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
+    VStack(alignment: .leading, spacing: 10) {
       HStack {
         DashboardSectionHeader(title: "Proxy Groups", symbolName: "point.3.connected.trianglepath.dotted")
         Button {
@@ -1816,117 +1999,93 @@ private struct ProxyGroupsRuntimeCard: View {
         .help("Refresh")
       }
 
-      if runtimeData.proxyGroups.isEmpty, appModel.runtimeDataLoading || appModel.dashboardRuntimeState.isStarting {
-        ClashMaxSkeletonList(rows: 4, showsLeadingIcon: true, trailingWidth: 58)
-      } else if runtimeData.proxyGroups.isEmpty {
+      if groups.isEmpty, isLoading {
+        ClashMaxSkeletonList(rows: 4, showsLeadingIcon: false, trailingWidth: 58)
+      } else if groups.isEmpty {
         DashboardEmptyRuntimeView(title: "Waiting for runtime data", symbolName: "hourglass")
       } else {
-        VStack(spacing: 8) {
-          ForEach(Array(runtimeData.proxyGroups.prefix(6))) { group in
-            HStack(spacing: 10) {
-              Image(systemName: "circle.grid.cross")
-                .foregroundStyle(.cyan)
-                .frame(width: 18)
-              VStack(alignment: .leading, spacing: 2) {
-                Text(group.name)
-                  .lineLimit(1)
-                Text(group.selected ?? "No selection")
-                  .font(.caption)
-                  .foregroundStyle(.secondary)
-                  .lineLimit(1)
-              }
-              Spacer()
-              Text(group.type)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        let summary = DashboardProxyGroupsSummary(groups: groups)
+        VStack(spacing: 0) {
+          ForEach(summary.rows) { group in
+            DashboardProxyGroupRow(group: group) {
+              appModel.openProxies(focusingGroup: group.name)
             }
-            .padding(.vertical, 4)
           }
+        }
+
+        if summary.hiddenCount > 0 {
+          Button("View All \(groups.count)") {
+            appModel.openProxies()
+          }
+          .buttonStyle(.link)
+          .font(.callout)
+          .padding(.leading, 8)
         }
       }
     }
     .padding(14)
-    .frame(maxWidth: .infinity, minHeight: 260, alignment: .topLeading)
+    .frame(maxWidth: .infinity, minHeight: 260, maxHeight: .infinity, alignment: .topLeading)
     .dashboardCard()
   }
 }
 
-private struct RuntimeStat: View {
-  let title: LocalizedStringResource
-  let value: String
-  let tint: Color
+/// One group: its name, the node it is on now and that node's delay. The whole row opens the
+/// Proxies page on the group.
+private struct DashboardProxyGroupRow: View {
+  let group: ProxyGroup
+  let action: () -> Void
+  @State private var isHovered = false
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 4) {
-      Text(title)
-        .font(.caption)
-        .foregroundStyle(.secondary)
-      Text(localizedRuntimeText(value))
-        .font(.system(.title3, design: .rounded).weight(.semibold))
-        .foregroundStyle(tint)
-        .lineLimit(1)
-        .minimumScaleFactor(0.68)
+    let node = DashboardProxySelectionState.currentNode(in: group)
+    Button(action: action) {
+      HStack(spacing: 10) {
+        Text(group.name)
+          .fontWeight(.medium)
+          .lineLimit(1)
+          .layoutPriority(1)
+        Text(group.selected ?? String(localized: "No selection"))
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+          .truncationMode(.tail)
+        Spacer(minLength: 8)
+        if let node, node.resolvedDelayState != .unknown {
+          DashboardDelayBadge(state: node.resolvedDelayState)
+        }
+        Image(systemName: "chevron.right")
+          .font(.caption2.weight(.semibold))
+          .foregroundStyle(.tertiary)
+      }
+      .font(.callout)
+      .padding(.horizontal, 8)
+      .padding(.vertical, 6)
+      .background(
+        isHovered ? AnyShapeStyle(.fill.quaternary) : AnyShapeStyle(.clear),
+        in: SurfaceRadius.shape(SurfaceRadius.chip)
+      )
+      .contentShape(Rectangle())
     }
-    .frame(maxWidth: .infinity, alignment: .leading)
+    .buttonStyle(.plain)
+    .onHover { isHovered = $0 }
+    .help(Text("Show \(group.name) in Proxies"))
   }
 }
 
-private struct RuntimeLine: View {
-  let title: LocalizedStringResource
-  let value: String
+/// The delay verdict as a small pill — the Proxies list's wording and colour.
+private struct DashboardDelayBadge: View {
+  let state: ProxyDelayState
 
   var body: some View {
-    HStack {
-      Text(title)
-        .foregroundStyle(.secondary)
-      Spacer()
-      Text(localizedRuntimeText(value))
-        .lineLimit(1)
-        .minimumScaleFactor(0.72)
-    }
-    .font(.callout)
+    let display = ProxyDelayDisplay(state: state)
+    Text(display.localizedLabel)
+      .font(.caption.weight(.medium).monospacedDigit())
+      .foregroundStyle(display.tone.color)
+      .padding(.horizontal, 7)
+      .padding(.vertical, 2)
+      .background(display.tone.color.opacity(0.13), in: Capsule())
   }
 }
 
 private func localizedRuntimeText(_ value: String) -> String {
   NSLocalizedString(value, comment: "")
-}
-
-private struct LegendDot: View {
-  let title: String
-  let color: Color
-
-  var body: some View {
-    HStack(spacing: 5) {
-      Circle()
-        .fill(color)
-        .frame(width: 7, height: 7)
-      Text(title)
-        .font(.caption)
-        .foregroundStyle(.secondary)
-    }
-  }
-}
-
-private extension View {
-  func staggeredArrival(index: Int, reduceMotion: Bool, trigger: DashboardRuntimeState) -> some View {
-    modifier(StaggeredArrivalModifier(index: index, reduceMotion: reduceMotion, trigger: trigger))
-  }
-}
-
-private struct StaggeredArrivalModifier: ViewModifier {
-  let index: Int
-  let reduceMotion: Bool
-  let trigger: DashboardRuntimeState
-
-  func body(content: Content) -> some View {
-    content
-      .phaseAnimator([false, true], trigger: trigger) { view, phase in
-        view
-          .opacity(phase ? 1 : 0.72)
-          .offset(y: reduceMotion ? 0 : (phase ? 0 : 10))
-      } animation: { _ in
-        reduceMotion ? .easeInOut(duration: 0.12) : .easeOut(duration: 0.28).delay(Double(index) * 0.05)
-      }
-  }
 }

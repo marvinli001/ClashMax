@@ -105,6 +105,46 @@ final class TrafficChartGeometryTests: XCTestCase {
     XCTAssertEqual(quiet.ceiling, busier.ceiling)
   }
 
+  // MARK: - Value axis
+
+  func testAxisIsTheCeilingItsQuartersAndTheBaseline() {
+    let ticks = TrafficChartGeometry.axisTicks(ceiling: 400_000)
+
+    XCTAssertEqual(ticks.map(\.fraction), [1, 0.75, 0.5, 0.25, 0])
+    XCTAssertEqual(ticks.map(\.value), [400_000, 300_000, 200_000, 100_000, 0])
+    XCTAssertEqual(ticks.map(\.label), [400_000, 300_000, 200_000, 100_000, 0].map(TrafficSample.format))
+  }
+
+  func testAxisFollowsTheGeometrysCeiling() {
+    let geometry = TrafficChartGeometry(samples: samples([120_000, 148_000]), sampleCount: 2)
+
+    XCTAssertEqual(geometry.axisTicks, TrafficChartGeometry.axisTicks(ceiling: geometry.ceiling))
+    XCTAssertEqual(geometry.axisTicks.first?.value, geometry.ceiling)
+    XCTAssertEqual(TrafficChartGeometry(samples: [], sampleCount: 0).axisTicks.first?.value, TrafficChartGeometry.minimumCeiling)
+  }
+
+  func testAxisHoldsStillWhileTheCeilingDoes() {
+    let quiet = TrafficChartGeometry(samples: samples([120_000, 131_000]), sampleCount: 2)
+    let busier = TrafficChartGeometry(samples: samples([120_000, 148_000]), sampleCount: 2)
+
+    XCTAssertEqual(quiet.axisTicks.map(\.label), busier.axisTicks.map(\.label))
+  }
+
+  func testAxisLabelsNeverRepeatOnAnyRung() {
+    // Whole kilobytes put two quarters of a 2500 B/s ceiling on the same "2 KB/s" label; the axis
+    // keeps one decimal below 10 KB/s so every line reads differently.
+    XCTAssertEqual(
+      TrafficChartGeometry.axisTicks(ceiling: 2_500).map(\.label),
+      ["2.4 KB/s", "1.8 KB/s", "1.2 KB/s", "625 B/s", "0 B/s"]
+    )
+    XCTAssertEqual(TrafficChartGeometry.axisTicks(ceiling: 2_048).first?.label, "2 KB/s")
+    for peak in stride(from: 0, through: 40_000_000, by: 997) {
+      let ceiling = TrafficChartGeometry.niceCeiling(atLeast: peak)
+      let labels = TrafficChartGeometry.axisTicks(ceiling: ceiling).map(\.label)
+      XCTAssertEqual(Set(labels).count, labels.count, "ceiling \(ceiling): \(labels)")
+    }
+  }
+
   func testIdleTrickleStaysFlatInsteadOfFillingThePlot() {
     let geometry = TrafficChartGeometry(samples: samples([40, 12, 40]), sampleCount: 3)
 

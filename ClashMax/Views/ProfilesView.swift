@@ -3104,7 +3104,7 @@ private struct OutboundProxyEndpointManagerSheet: View {
             .lineLimit(1)
           endpointBadges(endpoint)
         }
-        Text("\(endpoint.kind == .socks5 ? "SOCKS5" : "HTTP") · \(endpoint.host):\(endpoint.port)")
+        Text(verbatim: "\(endpoint.kind == .socks5 ? "SOCKS5" : "HTTP") · \(endpoint.host):\(endpoint.port)")
           .font(.caption.monospaced())
           .foregroundStyle(.secondary)
           .lineLimit(1)

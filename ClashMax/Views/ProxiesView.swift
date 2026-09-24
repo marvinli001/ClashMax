@@ -34,6 +34,10 @@ struct ProxiesView: View {
   @State private var customDelayURLPopoverPresented = false
   @State private var providersPopoverPresented = false
   @State private var scrollToCurrentNodeRequest = 0
+  /// A group the dashboard asked to open (`AppModel.proxiesPageRequest`) that the resolved snapshot
+  /// does not list yet. Held until it does, so a first visit that is still resolving does not fall
+  /// back to the default group and forget the request.
+  @State private var pendingFocusGroupName: String?
 
   /// `initialSelectedGroupID` / `initialSelectedNodeID` seed the browsing selection for previews and
   /// fixture renders; the app always starts from the default selection.
@@ -115,7 +119,12 @@ struct ProxiesView: View {
       searchCoordinator.submit(makeSearchInput(searchText: searchText), reason: .initial)
     }
     .onAppear {
+      consumeProxiesPageRequest(displayedGroups: groups)
       selectDefaultGroupIfNeeded(from: groups)
+    }
+    .onChange(of: appModel.proxiesPageRequest?.id) { _, id in
+      guard id != nil else { return }
+      consumeProxiesPageRequest(displayedGroups: groups)
     }
     .onChange(of: searchText) { _, newValue in
       searchCoordinator.submit(makeSearchInput(searchText: newValue), reason: .searchText)
@@ -407,7 +416,25 @@ struct ProxiesView: View {
     return groups.first { $0.id == id }
   }
 
+  /// Takes the dashboard's "open this group" request. A search that hides the group would bounce the
+  /// selection straight back to the first match, so it is cleared first.
+  private func consumeProxiesPageRequest(displayedGroups groups: [ProxyGroup]) {
+    guard let request = appModel.consumeProxiesPageRequest(), let groupName = request.groupName else { return }
+    if !searchText.isEmpty, !groups.contains(where: { $0.name == groupName }) {
+      searchText = ""
+    }
+    pendingFocusGroupName = groupName
+    selectDefaultGroupIfNeeded(from: groups)
+  }
+
   private func selectDefaultGroupIfNeeded(from groups: [ProxyGroup]) {
+    if let pendingFocusGroupName, let group = groups.first(where: { $0.name == pendingFocusGroupName }) {
+      self.pendingFocusGroupName = nil
+      if selectedGroupID != group.id {
+        selectedGroupID = group.id
+      }
+      return
+    }
     let resolved = ProxyGroupSelectionPolicy.resolvedSelection(current: selectedGroupID, groups: groups)
     // Only write when it actually changes, so keeping a still-valid selection doesn't churn @State.
     if resolved != selectedGroupID {

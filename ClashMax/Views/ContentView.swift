@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ContentView: View {
   @Environment(AppModel.self) private var appModel
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
     // @Environment does not vend bindings; @Bindable wraps the tracked reference so
@@ -29,15 +30,31 @@ struct ContentView: View {
         // late) float over the page and go away by themselves. Errors are the alert below.
         .overlay(alignment: .top) {
           // A readiness issue already stands in the strip (and on the Home page); a toast repeating
-          // the same words on top of it would be a third copy of one fact.
-          if let notice = appModel.appNotice, notice.message != appModel.readinessIssue {
+          // the same words on top of it would be a third copy of one fact. A notice whose time ran
+          // out while no window was open is never drawn; the task below clears it.
+          if let notice = appModel.appNotice,
+             notice.message != appModel.readinessIssue,
+             notice.remainingDisplayDuration() > 0
+          {
             AppNoticeToast(notice: notice)
               .padding(.top, 12)
               .padding(.horizontal, 16)
-              .transition(.move(edge: .top).combined(with: .opacity))
+              .transition(reduceMotion ? .opacity : .offset(y: -10).combined(with: .opacity))
           }
         }
-        .animation(.spring(response: 0.36, dampingFraction: 0.86), value: appModel.appNotice?.id)
+        .animation(.spring(duration: 0.28, bounce: 0), value: appModel.appNotice?.id)
+        // Each notice leaves when its own time is up, counted from when it was posted — not from
+        // when this window happened to show it. Dismissed by id, so a notice that times out never
+        // takes a newer one down with it.
+        .task(id: appModel.appNotice?.id) {
+          guard let notice = appModel.appNotice else { return }
+          let remaining = notice.remainingDisplayDuration()
+          if remaining > 0 {
+            try? await Task.sleep(for: .seconds(remaining))
+            guard !Task.isCancelled else { return }
+          }
+          appModel.dismissAppNotice(id: notice.id)
+        }
       }
       .toolbar {
         // Deliberately the default placement, not `.navigation`: `.navigation` sits
@@ -475,8 +492,8 @@ struct StatusStripContent: View {
   }
 }
 
-/// A notice that floats over the page and leaves on its own. Warnings stay a little longer than
-/// confirmations; any of them can be clicked away.
+/// A notice that floats over the page and leaves on its own (`ContentView` times it). Warnings
+/// stay a little longer than confirmations; any of them can be clicked away.
 private struct AppNoticeToast: View {
   @Environment(AppModel.self) private var appModel
   let notice: AppNotice
@@ -504,15 +521,6 @@ private struct AppNoticeToast: View {
     .frame(maxWidth: 560)
     .toastSurface()
     .accessibilityElement(children: .combine)
-    .task(id: notice.id) {
-      try? await Task.sleep(for: .seconds(displayDuration))
-      guard !Task.isCancelled else { return }
-      appModel.dismissAppNotice(id: notice.id)
-    }
-  }
-
-  private var displayDuration: Double {
-    notice.tone == .warning ? 8 : 4
   }
 
   private var tint: Color {

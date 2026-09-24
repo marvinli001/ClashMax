@@ -193,6 +193,40 @@ final class PageSimplificationTests: XCTestCase {
     XCTAssertFalse(editor.draftHasUnsavedChanges)
   }
 
+  func testRoutingDraftLeavesEnabledToTheListSwitch() {
+    // The editor has no Enabled switch; the list's switch writes the store directly. So a draft
+    // whose `enabled` differs from its baseline is not "unsaved", and Save writes the stored value.
+    let editor = RoutingEditorState()
+    let saved = RuntimeSnippet(name: "Office", enabled: true, payload: .rules(RuleOverlaySettings(enabled: true)))
+    editor.load(saved)
+    editor.draftSnippet.name = "Office (edited)"
+
+    var switchedOff = saved
+    switchedOff.enabled = false
+    editor.adoptStoredEnabledState(of: switchedOff)
+    XCTAssertFalse(editor.draftSnippet.enabled, "The draft follows the list switch")
+    XCTAssertEqual(editor.draftSnippet.name, "Office (edited)", "…without losing the unsaved edit")
+    XCTAssertTrue(editor.draftHasUnsavedChanges)
+
+    let toSave = editor.snippetForSaving(in: [switchedOff])
+    XCTAssertFalse(toSave.enabled)
+    XCTAssertEqual(toSave.name, "Office (edited)")
+
+    // A stale `enabled` alone never counts as an edit, and never reaches the store.
+    editor.load(saved)
+    editor.draftSnippet.enabled = false
+    XCTAssertFalse(editor.draftHasUnsavedChanges)
+    editor.draftSnippet.enabled = true
+    XCTAssertFalse(editor.snippetForSaving(in: [switchedOff]).enabled)
+
+    // Another snippet's state is not adopted, and a new snippet keeps its own value.
+    let other = RuntimeSnippet(name: "Other", enabled: false, payload: .rules(RuleOverlaySettings(enabled: true)))
+    editor.adoptStoredEnabledState(of: other)
+    XCTAssertTrue(editor.draftSnippet.enabled)
+    editor.beginDetachedDraft(RuntimeSnippet.defaultRuleSnippet)
+    XCTAssertTrue(editor.snippetForSaving(in: [switchedOff, other]).enabled)
+  }
+
   func testRoutingEditorKeepsTheOpenToolAndSimulationAcrossPageVisits() {
     // The state is owned by AppModel precisely so a page switch cannot reset it; the view only
     // reads it. This pins the two hand-offs Connections relies on.
@@ -248,6 +282,36 @@ final class PageSimplificationTests: XCTestCase {
     XCTAssertFalse(RulesLayout.showsProviderColumn(pageWidth: 2_000, hasProviderRules: false))
     XCTAssertFalse(RulesLayout.showsProviderColumn(pageWidth: .nan, hasProviderRules: true))
     XCTAssertFalse(RulesLayout.showsProviderColumn(pageWidth: 0, hasProviderRules: true))
+  }
+
+  func testRuleTypeSearchMatchesTheConfigSpellingAgainstRuntimeCamelCase() {
+    // A running core reports `DomainSuffix` / `IPCIDR`; the help text teaches `type=DOMAIN-SUFFIX`.
+    let suffix = RuntimeRule(index: 0, type: "DomainSuffix", payload: "example.com", policy: "DIRECT")
+    let domain = RuntimeRule(index: 1, type: "Domain", payload: "example.org", policy: "Proxy")
+    let cidr = RuntimeRule(index: 2, type: "IPCIDR", payload: "10.0.0.0/8", policy: "DIRECT")
+    let previewCIDR6 = RuntimeRule(index: 3, type: "IP-CIDR6", payload: "fd00::/8", policy: "DIRECT")
+    let rules = [suffix, domain, cidr, previewCIDR6]
+
+    func search(_ text: String) -> [Int] {
+      let query = RuleSearchQuery(rawValue: text)
+      return rules.filter { query.matches($0) }.map(\.index)
+    }
+
+    XCTAssertEqual(search("type=DOMAIN-SUFFIX"), [0])
+    XCTAssertEqual(search("type=domain_suffix"), [0])
+    XCTAssertEqual(search("type=domainsuffix"), [0])
+    // A partial type is still a substring match, so `type=domain` keeps catching the whole family.
+    XCTAssertEqual(search("type=domain"), [0, 1])
+    XCTAssertEqual(search("type=suffix"), [0])
+    // The core folds IP-CIDR6 into IPCIDR, so either spelling finds both.
+    XCTAssertEqual(search("type=IP-CIDR"), [2, 3])
+    XCTAssertEqual(search("type=IP-CIDR6"), [2, 3])
+    XCTAssertEqual(search("type=cidr6"), [3])
+    XCTAssertEqual(search("type="), [], "An empty value matches nothing, like policy= and provider=")
+    // Plain words describe the type too, in either spelling.
+    XCTAssertEqual(search("DOMAIN-SUFFIX"), [0])
+    XCTAssertEqual(search("type=DOMAIN-SUFFIX policy=DIRECT"), [0])
+    XCTAssertEqual(search("type=DOMAIN-SUFFIX policy=Proxy"), [])
   }
 
   // MARK: - Connections

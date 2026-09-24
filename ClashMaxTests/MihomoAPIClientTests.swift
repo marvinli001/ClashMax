@@ -397,7 +397,7 @@ final class MihomoAPIClientTests: XCTestCase {
     let session = URLSession(configuration: recorder.configuration)
     let client = MihomoAPIClient(baseURL: URL(string: "http://127.0.0.1:9097")!, secret: "abc", session: session)
 
-    let connections = try await client.connections()
+    let connections = try await client.connections().connections
     let connection = try XCTUnwrap(connections.first)
 
     XCTAssertEqual(connection.processName, "Safari")
@@ -407,6 +407,33 @@ final class MihomoAPIClientTests: XCTestCase {
     XCTAssertEqual(connection.inboundPort, 7890)
     XCTAssertEqual(connection.ruleSummary, "DOMAIN-SUFFIX example.com")
     XCTAssertEqual(connection.chain, ["Proxy", "Japan"])
+  }
+
+  func testConnectionsDecodeTheCoreSessionTotals() async throws {
+    // The shape the bundled core answers with (probed 2026-09-23): the totals sit next to the list
+    // and are present even while nothing is open, when `connections` is `null`.
+    let recorder = URLProtocolRecorder(responseBody: """
+    {"downloadTotal":5368709120,"uploadTotal":85,"connections":null,"memory":0}
+    """)
+    let session = URLSession(configuration: recorder.configuration)
+    let client = MihomoAPIClient(baseURL: URL(string: "http://127.0.0.1:9097")!, secret: "abc", session: session)
+
+    let report = try await client.connections()
+
+    XCTAssertEqual(report.connections, [])
+    XCTAssertEqual(report.totals, TrafficTotals(upload: 85, download: 5_368_709_120), "A 5 GB total must not overflow")
+    XCTAssertEqual(try XCTUnwrap(recorder.lastRequest?.url?.path), "/connections")
+  }
+
+  func testConnectionsWithoutTotalsReadAsZero() async throws {
+    let recorder = URLProtocolRecorder(responseBody: #"{"connections":[]}"#)
+    let session = URLSession(configuration: recorder.configuration)
+    let client = MihomoAPIClient(baseURL: URL(string: "http://127.0.0.1:9097")!, secret: "abc", session: session)
+
+    let report = try await client.connections()
+
+    XCTAssertEqual(report.totals, .zero)
+    XCTAssertEqual(report.connections, [])
   }
 
   func testConnectionCloseAndReloadRequestsUseAuthenticatedControlEndpoints() async throws {
@@ -539,7 +566,7 @@ final class MihomoAPIClientTests: XCTestCase {
     let session = URLSession(configuration: recorder.configuration)
     let client = MihomoAPIClient(baseURL: URL(string: "http://127.0.0.1:9097")!, secret: "abc", session: session)
 
-    let connections = try await client.connections()
+    let connections = try await client.connections().connections
     XCTAssertEqual(connections.map(\.id), [
       "reported",
       "sniffed-overriding",

@@ -11,6 +11,7 @@ enum TunDiagnosticStatus: String, Codable, Equatable, Sendable {
   /// reads as a failure or triggers a helper restart (issue #19).
   case info
 
+  /// Stable English label for the copyable diagnostics report.
   var displayName: String {
     switch self {
     case .pass: "Pass"
@@ -18,6 +19,17 @@ enum TunDiagnosticStatus: String, Codable, Equatable, Sendable {
     case .fail: "Fail"
     case .skipped: "Skipped"
     case .info: "Info"
+    }
+  }
+
+  /// The same verdict in the user's language, for the check rows on screen.
+  var localizedDisplayName: String {
+    switch self {
+    case .pass: String(localized: "Pass")
+    case .warn: String(localized: "Warn")
+    case .fail: String(localized: "Fail")
+    case .skipped: String(localized: "Skipped")
+    case .info: String(localized: "Info")
     }
   }
 }

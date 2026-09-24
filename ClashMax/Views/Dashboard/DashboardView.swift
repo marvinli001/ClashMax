@@ -1,4 +1,3 @@
-import Pow
 import SwiftUI
 
 struct DashboardView: View {
@@ -21,7 +20,7 @@ struct DashboardView: View {
                 reduceMotion: reduceMotion,
                 availableWidth: proxy.size.width
               )
-              .transition(.movingParts.blur.combined(with: .opacity))
+              .transition(.opacity)
             }
             .padding(DashboardLayoutMetrics.pagePadding(for: proxy.size.width))
             .frame(maxWidth: DashboardLayoutMetrics.dashboardMaxWidth(for: proxy.size.width))
@@ -34,7 +33,7 @@ struct DashboardView: View {
             reduceMotion: reduceMotion,
             availableSize: proxy.size
           )
-          .transition(.movingParts.blur.combined(with: .opacity))
+          .transition(.opacity)
           .padding(DashboardLayoutMetrics.pagePadding(for: proxy.size.width))
           .frame(maxWidth: DashboardLayoutMetrics.dashboardMaxWidth(for: proxy.size.width))
           .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -44,17 +43,14 @@ struct DashboardView: View {
     .background {
       DashboardSceneBackground()
     }
+    // Only the swap between the launch page and the running page animates. Keyed on the layout
+    // rather than on `state`, so starting → running (same layout) does not replay it, and nothing
+    // else that happens to change in the same update — a crash message, a readiness issue, a
+    // profile switch — is swept into a page-wide spring.
     .animation(
-      reduceMotion ? .easeInOut(duration: 0.16) : .spring(response: 0.62, dampingFraction: 0.86),
-      value: state
+      reduceMotion ? .easeOut(duration: 0.16) : .spring(duration: 0.35, bounce: 0),
+      value: state.usesOperationalLayout
     )
-    .animation(.easeInOut(duration: 0.24), value: appModel.profileStore.activeProfileID)
-  }
-}
-
-enum DashboardHomeBackgroundStyle {
-  static func fillID(for _: DashboardRuntimeState) -> String {
-    "system-window"
   }
 }
 

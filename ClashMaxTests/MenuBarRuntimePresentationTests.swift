@@ -276,6 +276,41 @@ final class MenuBarStatusItemImageTests: XCTestCase {
     )
   }
 
+  func testRenderKeepsOneWidthWhateverTheReading() {
+    // The status item is as wide as this image; a width that followed the text would shove every
+    // menu bar item to its left once a second as the rate changes.
+    let readings = [0, 7, 512, 1_023, 1_024, 48_000, 1_048_575, 1_048_576, 12_900_000, 999_000_000, 1_048_471_142]
+    let widths = Set(readings.map { bytesPerSecond in
+      let lines = MenuBarTrafficStatusLabel.lines(
+        showsTraffic: true,
+        hasTrafficData: true,
+        sample: TrafficSample(upload: bytesPerSecond, download: readings.last! - bytesPerSecond)
+      )!
+      return MenuBarStatusItemImage.render(lines: lines, logo: solidLogo()).size.width
+    })
+
+    XCTAssertEqual(widths.count, 1, "Widths: \(widths.sorted())")
+    XCTAssertEqual(
+      widths.first,
+      MenuBarStatusItemImage.logoPointSize + MenuBarStatusItemImage.logoTextGap + ceil(MenuBarStatusItemImage.referenceTextWidth)
+    )
+    XCTAssertEqual(
+      MenuBarStatusItemImage.render(lines: .init(upload: "↑0B/s", download: "↓0B/s"), logo: nil).size.width,
+      MenuBarStatusItemImage.render(lines: .init(upload: "↑999.9MB/s", download: "↓1024KB/s"), logo: nil).size.width
+    )
+  }
+
+  func testRenderRightAlignsTheShorterReadingInsideTheFixedColumn() throws {
+    let image = MenuBarStatusItemImage.render(lines: .init(upload: "↑0B/s", download: "↓0B/s"), logo: nil)
+    let rep = try XCTUnwrap(image.representations.first as? NSBitmapImageRep)
+    let leftQuarter = 0..<(rep.pixelsWide / 4)
+    let rightQuarter = (rep.pixelsWide * 3 / 4)..<rep.pixelsWide
+
+    // The slack sits between the logo and the text; the units stay flush on the right edge.
+    XCTAssertEqual(alphaPixels(in: rep, xRange: leftQuarter), 0)
+    XCTAssertGreaterThan(alphaPixels(in: rep, xRange: rightQuarter), 0)
+  }
+
   func testRenderWithoutLogoStillDrawsBothRows() {
     let lines = MenuBarTrafficStatusLabel.Lines(upload: "↑0B/s", download: "↓0B/s")
 
@@ -434,6 +469,27 @@ final class MenuBarNodeSelectionTests: XCTestCase {
       MenuBarNodeSelection.currentSelectionLabel(for: empty),
       String(localized: "Select")
     )
+  }
+
+  func testGroupRowLayoutKeepsFourRowsAndMovesTheRestIntoOneMenu() {
+    let groups = (1...9).map { group(name: "G\($0)", type: "Selector") }
+
+    let layout = MenuBarNodeSelection.GroupRowLayout(groups: groups)
+
+    XCTAssertEqual(MenuBarNodeSelection.flatGroupLimit, 4)
+    XCTAssertEqual(layout.flatGroups.map(\.name), ["G1", "G2", "G3", "G4"])
+    XCTAssertEqual(layout.overflowGroups.map(\.name), ["G5", "G6", "G7", "G8", "G9"], "Overflow keeps profile order")
+
+    let exact = MenuBarNodeSelection.GroupRowLayout(groups: Array(groups.prefix(4)))
+    XCTAssertEqual(exact.flatGroups.count, 4)
+    XCTAssertTrue(exact.overflowGroups.isEmpty, "No More menu while every group fits")
+
+    let few = MenuBarNodeSelection.GroupRowLayout(groups: Array(groups.prefix(2)))
+    XCTAssertEqual(few.flatGroups.map(\.name), ["G1", "G2"])
+    XCTAssertTrue(few.overflowGroups.isEmpty)
+
+    XCTAssertEqual(MenuBarNodeSelection.GroupRowLayout(groups: []), MenuBarNodeSelection.GroupRowLayout(groups: [], flatLimit: 0))
+    XCTAssertEqual(MenuBarNodeSelection.GroupRowLayout(groups: groups, flatLimit: -1).overflowGroups.count, 9)
   }
 
   func testNodeMenuTitleAppendsDelayExceptWhenUnknown() {

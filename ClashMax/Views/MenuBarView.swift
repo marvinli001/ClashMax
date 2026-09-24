@@ -122,8 +122,18 @@ struct MenuBarView: View {
           .disabled(appModel.profileStore.profiles.isEmpty)
         }
 
-        ForEach(nodeSelectorGroups) { group in
+        // Pinned groups are the ones the user asked to see first, so they lead the list.
+        if !appModel.pinnedMenuBarProxyGroups.isEmpty {
+          MenuBarPinnedGroupsSection(groups: appModel.pinnedMenuBarProxyGroups)
+        }
+
+        let groupLayout = MenuBarNodeSelection.GroupRowLayout(groups: nodeSelectorGroups)
+        ForEach(groupLayout.flatGroups) { group in
           MenuBarGroupSelectionRow(group: group, systemImage: MenuBarNodeSelection.groupSymbolName)
+        }
+
+        if !groupLayout.overflowGroups.isEmpty {
+          MenuBarMoreGroupsRow(groups: groupLayout.overflowGroups)
         }
 
         MenuBarControlRow(title: systemProxyToggleTitle, systemImage: "network.badge.shield.half.filled") {
@@ -140,12 +150,6 @@ struct MenuBarView: View {
             ? String(localized: "System Proxy")
             : String(localized: "System Proxy requires System Proxy routing.")
         )
-      }
-
-      if !appModel.pinnedMenuBarProxyGroups.isEmpty {
-        Divider()
-
-        MenuBarPinnedGroupsSection(groups: appModel.pinnedMenuBarProxyGroups)
       }
 
       Divider()
@@ -485,6 +489,23 @@ enum MenuBarNodeSelection {
   /// this reuses the glyph the Proxies navigator already uses for selectable groups.
   static let groupSymbolName = "point.3.connected.trianglepath.dotted"
 
+  /// How many selector groups get a row of their own. The rest share one "More Proxy Groups" menu, so
+  /// a profile with dozens of groups cannot push the System Proxy switch, the footer buttons and Quit
+  /// below the bottom of the screen — the panel is a plain VStack with no scroll view.
+  static let flatGroupLimit = 4
+
+  /// The selector groups split into rows and overflow, both in the order given (profile order).
+  struct GroupRowLayout: Equatable {
+    let flatGroups: [ProxyGroup]
+    let overflowGroups: [ProxyGroup]
+
+    init(groups: [ProxyGroup], flatLimit: Int = MenuBarNodeSelection.flatGroupLimit) {
+      let limit = max(0, flatLimit)
+      flatGroups = Array(groups.prefix(limit))
+      overflowGroups = Array(groups.dropFirst(limit))
+    }
+  }
+
   static func selectorGroups(
     from groups: [ProxyGroup],
     runMode: RunMode,
@@ -546,6 +567,30 @@ private struct MenuBarGroupSelectionRow: View {
         )
       }
       .disabled(!appModel.canSelectProxyNodesFromMenuBar || group.nodes.filter(\.isSelectable).isEmpty)
+    }
+  }
+}
+
+/// The selector groups past `MenuBarNodeSelection.flatGroupLimit`, one submenu each. A submenu holds
+/// the same node buttons a group row does, so selection, the checkmark and the delays match.
+private struct MenuBarMoreGroupsRow: View {
+  @Environment(AppModel.self) private var appModel
+  let groups: [ProxyGroup]
+
+  var body: some View {
+    MenuBarControlRow(title: String(localized: "More Proxy Groups"), systemImage: "ellipsis.circle") {
+      MenuBarSelectionMenu {
+        ForEach(groups) { group in
+          Menu {
+            MenuBarGroupNodeButtons(group: group)
+          } label: {
+            Text(verbatim: "\(group.name) · \(MenuBarNodeSelection.currentSelectionLabel(for: group))")
+          }
+          .disabled(!appModel.canSelectProxyNodesFromMenuBar)
+        }
+      } value: {
+        Text(String(localized: "\(groups.count) more"))
+      }
     }
   }
 }
