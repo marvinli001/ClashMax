@@ -107,7 +107,9 @@ L1 的修复按钮和 L2 的意图表单，必须写入 L3 用户手工编辑的
 把它们挪走，应用就再也无法回滚这个补丁本身。配置文件自带的入站监听键（`port`、`socks-port`、
 `redir-port`、`tproxy-port`）不会被拒绝，而是在每一层（包括原始补丁）都被删除并写入应用日志
 （issue #33）：Mihomo 会先于 mixed 监听器打开这些监听，所以一个同时声明了 `port: 7890` 的订阅会
-先占住应用的端口，`mixed-port` 永远起不来。
+先占住应用的端口，`mixed-port` 永远起不来。配置文件自带的其他控制器监听（`external-controller-tls`、
+`-unix`、`-pipe`）也以同样方式从配置文件这一层删除并写入应用日志（2026-10-01，见 [C1](#c1导入时的订阅审计报告)）：unix socket
+不校验密钥，所以带着它的订阅等于把内核交给了这台 Mac 上的每一个进程。
 
 满足 INV-2 之后，**ClashMax 的上限就等于 Mihomo 的上限**，而 UI 不会膨胀。明天 Mihomo 发布一个新 key，
 高级用户当天就能用上，我们什么都不用发。
@@ -676,7 +678,26 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
   它不重新实现 normalizer 的规则，因此不会和规则产生偏差。针对内核 v1.19.31 的实测补充了几点：`authentication:` 列表会让
   ClashMax **自己的** mixed 端口对本机 App 返回 407，所以带这一项的订阅会让系统代理失效（现在是带这个后果的 `warning`）；
   `script:` 块会被接受然后忽略，`SCRIPT` 规则会让整个配置加载失败（报告为 `info`）；`external-controller-tls/-unix/-pipe`
-  不归 normalizer 管，按原样运行（报告为 `danger`；unix socket 是否校验密钥没有实测——在测试路径下无法绑定 socket）。
+  在下面的决定之前按原样运行，现在报告为 `danger`、*已覆盖*。
+- **2026-10-01 决定：normalizer 删除配置文件自带的其他控制器监听。** 针对内核 v1.19.31 实测，socket 绑定在 `/tmp` 下
+  （草稿路径超过了 104 字节的 `sun_path`），所用配置的 TCP 控制器在不带密钥时返回 401：
+  - `external-controller-unix` **不校验密钥。** 不带请求头和带错误的 bearer 都返回 200；未认证的 `PATCH /configs`
+    返回 204 并把模式切成了 `global`；未认证的 `PUT /configs` 重新加载了配置。socket 以 `srw-rw-rw-` 创建。带着它的订阅
+    让这台 Mac 上的每一个进程都能完全控制内核，绕过了控制器唯一的保护——每次运行生成的密钥。
+  - `external-controller-tls` 会校验密钥（401 / 401 / 200），即使没有 `tls:` 证书也会监听（内核自己生成一张）——但监听在
+    配置文件指定的任意地址上，比如 `0.0.0.0`，这违反了控制器只绑定回环地址的规则。内核 home 目录之外的证书路径会被
+    `SAFE_PATHS` 拒绝。
+  - `external-controller-pipe` 只在 Windows 上有效：在 macOS 上被忽略，也不打日志。
+
+  三者都通过 [`ConfigNormalizer.profileControllerVariantKeys`](../ClashMax/Services/ConfigNormalizer.swift) 删除，位置紧跟
+  C3 监听闸门、在旧的合并 YAML 和片段之前，并在应用日志写一行 "Runtime config: Ignored the profile's own extra control
+  API listeners"。和入站端口的删除一样，它作用于所有配置，包括本地文件：TCP 控制器和密钥本来就对所有配置覆盖，而用户自己
+  的逃生口也拒绝这些 key（[`RawYAMLPatchPolicy`](../ClashMax/Models/RawYAMLPatch.swift)；有测试保证两份列表一致）。不过滤的：
+  旧的按配置文件合并 YAML——它由用户自己编写、已不可编辑，`ProviderOptionsRisk` 也不会为这三个 key 标记它。证据：
+  `ConfigNormalizerTests`（带说明删除、托管的那一对不产生说明、与策略一致）、
+  `CoreRuntimePreflightTests.testBundledMihomoUnixControllerIgnoresTheSecretAndTheNormalizerDropsIt`（原始配置那一半固定了
+  实测结果，内核一旦开始校验密钥就会让它失败、重新打开这个决定；规范化那一半证明 socket 从未出现），以及 C1 测试现在期望
+  *已覆盖*——这样的配置不再因为这个 key 需要关注。
 - **验收标准：**
   - [x] 在导入时和更新时，给出一份大白话报告：这份订阅试图改什么、ClashMax 覆盖了什么、放行了什么。→ **2026-10-01**：
         报告和面板里分成这三组。导入（订阅或本地 YAML）结束时打开面板；手动和自动更新同样会审计，但从不弹面板——手动更新

@@ -2006,6 +2006,59 @@ final class ConfigNormalizerTests: XCTestCase {
     )
   }
 
+  func testProfileControllerVariantsAreDroppedSoOnlyTheAppControllerRemains() throws {
+    // The unix socket answers without the secret (measured on v1.19.31), so a profile that ships
+    // one hands the core to every process on this Mac. Default options: a local file is covered
+    // too, not only a subscription.
+    let source = """
+    external-controller: 0.0.0.0:9090
+    secret: author-known-secret
+    external-controller-tls: 0.0.0.0:9443
+    external-controller-unix: /tmp/mihomo.sock
+    external-controller-pipe: \\\\.\\pipe\\mihomo
+    \(Self.minimalProfileSource)
+    """
+
+    let generation = try ConfigNormalizer().generateRuntimeConfig(
+      from: source,
+      overrides: .defaultForLaunch(secret: "secret-token")
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: generation.yaml) as? [String: Any])
+
+    XCTAssertEqual(yaml["external-controller"] as? String, "127.0.0.1:9097")
+    XCTAssertEqual(yaml["secret"] as? String, "secret-token")
+    for key in ConfigNormalizer.profileControllerVariantKeys {
+      XCTAssertNil(yaml[key], "\(key) must not survive normalization")
+    }
+    XCTAssertFalse(generation.yaml.contains("mihomo.sock"), generation.yaml)
+    XCTAssertEqual(
+      generation.notes,
+      [
+        "Ignored the profile's own extra control API listeners (external-controller-tls: 0.0.0.0:9443, external-controller-unix: /tmp/mihomo.sock, external-controller-pipe: \\\\.\\pipe\\mihomo); ClashMax serves the control API only on external-controller, behind its own secret.",
+      ]
+    )
+  }
+
+  func testProfileWithOnlyTheAppControllerKeysProducesNoControllerNote() throws {
+    let generation = try ConfigNormalizer().generateRuntimeConfig(
+      from: "external-controller: 0.0.0.0:9090\nsecret: s\n\(Self.minimalProfileSource)",
+      overrides: .defaultForLaunch(secret: "secret-token")
+    )
+
+    XCTAssertEqual(generation.notes, [], "the managed controller is overwritten, not reported as dropped")
+  }
+
+  func testRawYAMLSnippetsRefuseEveryControllerVariantTheNormalizerDrops() {
+    // The normalizer only filters the profile layer; a raw snippet is held off by the policy. The
+    // two lists must not drift apart, or a snippet could reopen what a profile no longer can.
+    XCTAssertTrue(
+      Set(ConfigNormalizer.profileControllerVariantKeys).isSubset(of: RawYAMLPatchPolicy.reservedControlChannelKeys)
+    )
+    for key in ConfigNormalizer.profileControllerVariantKeys {
+      XCTAssertThrowsError(try RawYAMLPatchPolicy.validateReservedKeys(in: [key: "x"]), key)
+    }
+  }
+
   func testProviderOptionsGuardrailMarksDangerousYAMLKeys() throws {
     let options = SubscriptionProviderOptions(
       overrideYAML: """

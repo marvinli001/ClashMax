@@ -42,9 +42,11 @@ final class SubscriptionAuditTests: XCTestCase {
     XCTAssertEqual(item("external-controller", in: report)?.disposition, .overridden)
     XCTAssertTrue(item("external-controller", in: report)?.consequence?.contains("0.0.0.0:9090") == true)
     XCTAssertEqual(item("secret", in: report)?.disposition, .overridden)
-    // The normalizer does not manage the other controller variants, and the report says so.
-    XCTAssertEqual(item("external-controller-unix", in: report)?.disposition, .passedThrough)
-    XCTAssertTrue(report.needsAttention)
+    // The normalizer drops the other controller variants: the unix socket ignores the secret.
+    XCTAssertEqual(item("external-controller-unix", in: report)?.disposition, .overridden)
+    XCTAssertEqual(item("external-controller-unix", in: report)?.outcome, String(localized: "Removed by ClashMax."))
+    // Every danger item here was overridden, so nothing is left for the user to act on.
+    XCTAssertFalse(report.needsAttention)
 
     let encoded = try String(decoding: JSONEncoder().encode(report), as: UTF8.self)
     XCTAssertFalse(encoded.contains("author-known-secret"))

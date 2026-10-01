@@ -215,6 +215,122 @@ final class CoreRuntimePreflightTests: XCTestCase {
     XCTAssertFalse(SocksProxyReadinessProbe.isAcceptingConnections(host: "127.0.0.1", port: socksPort, timeout: 0.2))
   }
 
+  /// A profile's `external-controller-unix` is dropped because the socket ignores the secret. The
+  /// raw half pins that fact, so a core that starts checking it would fail here and reopen the
+  /// decision; the normalized half proves the socket never appears.
+  func testBundledMihomoUnixControllerIgnoresTheSecretAndTheNormalizerDropsIt() async throws {
+    guard let coreURL = try BundledCoreRequirement.coreURL() else { return }
+
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxUnixController-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    // sun_path holds 104 bytes; the temporary directory is too long for it.
+    let socketPath = "/tmp/clashmax-\(UUID().uuidString.prefix(8)).sock"
+    defer { try? FileManager.default.removeItem(atPath: socketPath) }
+
+    let (mixedPort, controllerPort, _) = try Self.threeDistinctFreeLoopbackPorts()
+    let profile = """
+    external-controller-unix: \(socketPath)
+    mode: direct
+    log-level: info
+    proxies: []
+    proxy-groups: []
+    rules: []
+    """
+
+    // Control: the profile as authored, behind a secret.
+    let rawConfigURL = directory.appendingPathComponent("raw.yaml")
+    try (profile + "\nmixed-port: \(mixedPort)\nexternal-controller: 127.0.0.1:\(controllerPort)\nsecret: profile-secret\n")
+      .write(to: rawConfigURL, atomically: true, encoding: .utf8)
+    let rawCore = try FoundationProcessLauncher().launch(
+      executable: coreURL,
+      arguments: ["-f", rawConfigURL.path, "-d", directory.path],
+      environment: ["SAFE_PATHS": directory.path],
+      workDirectory: directory
+    )
+    do {
+      defer { rawCore.terminate() }
+      let deadline = Date().addingTimeInterval(10)
+      while Date() < deadline, !FileManager.default.fileExists(atPath: socketPath) {
+        try await Task.sleep(nanoseconds: 50_000_000)
+      }
+      let version = "GET /version HTTP/1.0\r\nHost: localhost\r\n\r\n"
+      XCTAssertEqual(Self.unixSocketStatusCode(path: socketPath, request: version), 200, rawCore.recentOutputTail(maxBytes: 4096))
+      XCTAssertEqual(
+        Self.unixSocketStatusCode(
+          path: socketPath,
+          request: "GET /version HTTP/1.0\r\nHost: localhost\r\nAuthorization: Bearer wrong\r\n\r\n"
+        ),
+        200
+      )
+      let body = #"{"mode":"global"}"#
+      XCTAssertEqual(
+        Self.unixSocketStatusCode(
+          path: socketPath,
+          request: "PATCH /configs HTTP/1.0\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: \(body.utf8.count)\r\n\r\n\(body)"
+        ),
+        204,
+        "an unauthenticated caller can change the running config"
+      )
+    }
+    await Self.waitForPortToClose(mixedPort)
+    await Self.waitForPortToClose(controllerPort)
+    try? FileManager.default.removeItem(atPath: socketPath)
+
+    // The fix: the same profile through ConfigNormalizer.
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.mixedPort = mixedPort
+    overrides.externalControllerPort = controllerPort
+    overrides.dnsEnabled = false
+    let generation = try ConfigNormalizer().generateRuntimeConfig(from: profile, overrides: overrides)
+    XCTAssertEqual(generation.notes.count, 1, "\(generation.notes)")
+    let normalizedURL = directory.appendingPathComponent("normalized.yaml")
+    try generation.yaml.write(to: normalizedURL, atomically: true, encoding: .utf8)
+    let core = try FoundationProcessLauncher().launch(
+      executable: coreURL,
+      arguments: ["-f", normalizedURL.path, "-d", directory.path],
+      environment: ["SAFE_PATHS": directory.path],
+      workDirectory: directory
+    )
+    defer { core.terminate() }
+
+    // The controllers start before the mixed listener, so once it answers they all would have.
+    try await SocksProxyReadinessProbe(attempts: 40, delayNanoseconds: 100_000_000, timeout: 0.5)
+      .waitUntilReady(host: "127.0.0.1", port: mixedPort)
+    XCTAssertTrue(SocksProxyReadinessProbe.isAcceptingConnections(host: "127.0.0.1", port: controllerPort, timeout: 0.5))
+    XCTAssertFalse(FileManager.default.fileExists(atPath: socketPath))
+    XCTAssertFalse(core.recentOutputTail(maxBytes: 8192).contains("unix listening"))
+  }
+
+  /// The status code of one HTTP/1.0 exchange over a unix socket, or nil when nothing answered.
+  private static func unixSocketStatusCode(path: String, request: String) -> Int? {
+    let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
+    guard descriptor >= 0 else { return nil }
+    defer { close(descriptor) }
+    var timeout = timeval(tv_sec: 2, tv_usec: 0)
+    setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+    var address = sockaddr_un()
+    address.sun_family = sa_family_t(AF_UNIX)
+    let pathBytes = Array(path.utf8)
+    guard pathBytes.count < MemoryLayout.size(ofValue: address.sun_path) else { return nil }
+    withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: pathBytes) }
+    let connected = withUnsafePointer(to: &address) {
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+        connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+      }
+    }
+    guard connected == 0 else { return nil }
+    let requestBytes = Array(request.utf8)
+    guard write(descriptor, requestBytes, requestBytes.count) == requestBytes.count else { return nil }
+    var buffer = [UInt8](repeating: 0, count: 256)
+    let count = read(descriptor, &buffer, buffer.count)
+    guard count > 0 else { return nil }
+    // "HTTP/1.0 200 OK"
+    let statusLine = String(decoding: buffer[..<count], as: UTF8.self).prefix { $0 != "\r" }
+    return statusLine.split(separator: " ").dropFirst().first.flatMap { Int($0) }
+  }
+
   private static func waitForGreetingOutcome(
     port: Int,
     timeout: TimeInterval,

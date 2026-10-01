@@ -131,6 +131,11 @@ struct ConfigNormalizer {
     if options.blocksInheritedExposedListeners {
       Self.removeInheritedExposedListeners(from: &root, notes: &notes)
     }
+    // `external-controller` and `secret` are overwritten below, but the other controller listeners
+    // would run as the profile wrote them. Measured on v1.19.31: the unix socket answers without the
+    // secret (no header and a wrong bearer both get 200, and an unauthenticated PATCH /configs
+    // switched the mode), and it is created 0666, so any process on this Mac could drive the core.
+    Self.removeProfileControllerVariantKeys(from: &root, notes: &notes)
 
     let runtimeMergeYAML = options.subscriptionProviderOptions.runtimeMergeYAML
       .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -383,6 +388,24 @@ struct ConfigNormalizer {
     guard !dropped.isEmpty else { return }
     notes.append(
       "Ignored the \(source)'s own inbound listener ports (\(dropped.joined(separator: ", "))); ClashMax only exposes mixed-port."
+    )
+  }
+
+  /// Controller listeners besides `external-controller` that a profile may carry. A raw YAML snippet
+  /// cannot set them either (`RawYAMLPatchPolicy.reservedControlChannelKeys`). The TLS listener does
+  /// check the secret, but on an address ClashMax does not choose, and the pipe is Windows-only and
+  /// ignored on macOS; dropping both keeps the control API on the one listener the app manages.
+  static let profileControllerVariantKeys = ["external-controller-tls", "external-controller-unix", "external-controller-pipe"]
+
+  private static func removeProfileControllerVariantKeys(from root: inout [String: Any], notes: inout [String]) {
+    var dropped: [String] = []
+    for key in profileControllerVariantKeys {
+      guard let value = root.removeValue(forKey: key) else { continue }
+      dropped.append("\(key): \(value)")
+    }
+    guard !dropped.isEmpty else { return }
+    notes.append(
+      "Ignored the profile's own extra control API listeners (\(dropped.joined(separator: ", "))); ClashMax serves the control API only on external-controller, behind its own secret."
     )
   }
 

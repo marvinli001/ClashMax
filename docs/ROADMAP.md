@@ -128,7 +128,11 @@ control in Settings, and a patch that moved one would leave the app unable to ro
 patch. The profile's own inbound listener keys (`port`, `socks-port`, `redir-port`, `tproxy-port`)
 are not refused but dropped from every layer, raw patches included, and the drop is written to the
 app log (issue #33): Mihomo opens those listeners before the mixed one, so a subscription that also
-declared `port: 7890` took the app's port first and `mixed-port` never came up.
+declared `port: 7890` took the app's port first and `mixed-port` never came up. The profile's
+other controller listeners (`external-controller-tls`, `-unix`, `-pipe`) are dropped from the
+profile layer the same way, with a log line (2026-10-01, see [C1](#c1--import-time-subscription-audit-report)):
+the unix socket answers without the secret, so a subscription that shipped one handed the core to
+every process on the Mac.
 
 With INV-2 satisfied, **ClashMax's ceiling equals Mihomo's ceiling** and the UI does not
 grow. When Mihomo ships a new key tomorrow, advanced users have it the same day and we ship
@@ -865,9 +869,36 @@ A subscription can change your DNS, open listeners, and rebind the external cont
   `authentication:` list makes ClashMax's **own** mixed port answer 407 to apps on this Mac, so a
   subscription carrying one breaks the system proxy (now a `warning` with that consequence); a
   `script:` block is accepted and ignored, and a `SCRIPT` rule fails the whole config (reported as
-  `info`); `external-controller-tls/-unix/-pipe` are not managed by the normalizer and run as
-  authored (reported as `danger`; whether the unix socket enforces the secret was not measured —
-  the probe could not bind a socket under the test path).
+  `info`); `external-controller-tls/-unix/-pipe` ran as authored until the decision below and are
+  now reported as `danger`, *overridden*.
+- **Decided 2026-10-01: the normalizer drops a profile's other controller listeners.** Measured
+  against core v1.19.31 with the socket bound under `/tmp` (the scratch path is longer than the
+  104-byte `sun_path`), on a config whose TCP controller answered 401 without its secret:
+  - `external-controller-unix` **does not check the secret.** No header and a wrong bearer both got
+    200; an unauthenticated `PATCH /configs` returned 204 and switched the mode to `global`; an
+    unauthenticated `PUT /configs` reloaded the config. The socket is created `srw-rw-rw-`. A
+    subscription carrying it gave every process on the Mac full control of the core, outside the
+    per-run secret that is the controller's only protection.
+  - `external-controller-tls` does check the secret (401 / 401 / 200), and listens even without a
+    `tls:` certificate (the core generates one) — but on whatever address the profile names, such
+    as `0.0.0.0`, which breaks the rule that the controller binds to loopback. A certificate path
+    outside the core's home directory is refused by `SAFE_PATHS`.
+  - `external-controller-pipe` is Windows-only: ignored on macOS without a log line.
+
+  All three go, through
+  [`ConfigNormalizer.profileControllerVariantKeys`](../ClashMax/Services/ConfigNormalizer.swift),
+  right after the C3 listener gate and before the legacy merge YAML and snippets, with a "Runtime
+  config: Ignored the profile's own extra control API listeners" line in the app log. Like the
+  inbound-port drop it applies to every profile, local files included: the TCP controller and secret
+  are already overwritten for every profile, and the user's own escape hatch refuses these keys
+  ([`RawYAMLPatchPolicy`](../ClashMax/Models/RawYAMLPatch.swift); a test keeps the two lists in
+  step). Not filtered: the legacy per-profile merge YAML, which is user-authored and no longer
+  editable, and which `ProviderOptionsRisk` does not flag for these three keys either. Evidence:
+  `ConfigNormalizerTests` (dropped with the note, no note for the managed pair, policy in step),
+  `CoreRuntimePreflightTests.testBundledMihomoUnixControllerIgnoresTheSecretAndTheNormalizerDropsIt`
+  (the raw half pins the measurement, so a core that starts checking the secret fails it and
+  reopens this decision; the normalized half proves the socket never appears), and the C1 test now
+  expects *overridden* — such a profile no longer needs attention for this key.
 - **Acceptance criteria:**
   - [x] On import and on update, a plain-language report: what this subscription tried to
         change, what ClashMax overrode, and what it let through. → **2026-10-01**: three groups

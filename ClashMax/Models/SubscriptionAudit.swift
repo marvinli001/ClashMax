@@ -279,7 +279,11 @@ enum SubscriptionAuditBuilder {
     }
 
     private func secondControllerItem(key: String, value: Any) -> SubscriptionAuditReport.Item {
-      let disposition = disposition(for: key, sourceValue: value) ?? .passedThrough
+      // The normalizer drops the variants it knows; one it does not would run as authored.
+      let unmeasured: SubscriptionAuditReport.Disposition = ConfigNormalizer.profileControllerVariantKeys.contains(key)
+        ? .overridden
+        : .passedThrough
+      let disposition = disposition(for: key, sourceValue: value) ?? unmeasured
       return SubscriptionAuditReport.Item(
         key: key,
         severity: .danger,
