@@ -1237,6 +1237,7 @@ private struct StatusAttentionItem: Identifiable {
     case repairTunRouting
     case disableResidualSystemProxy
     case showSection(StatusDetailSection)
+    case openAuditReport(Profile.ID)
 
     var title: String {
       switch self {
@@ -1246,6 +1247,7 @@ private struct StatusAttentionItem: Identifiable {
       case .repairTunRouting: String(localized: "Repair Routing")
       case .disableResidualSystemProxy: String(localized: "Disable System Proxy")
       case .showSection: String(localized: "Show Details")
+      case .openAuditReport: String(localized: "Open Audit Report")
       }
     }
   }
@@ -1429,6 +1431,8 @@ struct StatusView: View {
       appModel.disableResidualSystemProxy()
     case let .showSection(section):
       expandedSections.insert(section)
+    case let .openAuditReport(profileID):
+      appModel.presentAuditReport(for: profileID)
     }
   }
 
@@ -1462,6 +1466,19 @@ struct StatusView: View {
       ))
     }
     items.append(contentsOf: diagnosticAttentionItems)
+    // Roadmap C1: a background update never opens a sheet, so what it brought in waits here.
+    for profile in appModel.profilesNeedingAuditReview {
+      items.append(StatusAttentionItem(
+        id: "audit-\(profile.id.uuidString)",
+        title: String(localized: "Subscription needs review"),
+        message: String(
+          format: String(localized: "%@ asks for settings that need your review. Open its audit report from the profile."),
+          profile.name
+        ),
+        isError: false,
+        actions: [.openAuditReport(profile.id)]
+      ))
+    }
     // The generic last error comes after the specific items and only when it says something they
     // do not: a failed DNS repair, for instance, already stands there with its Repair button, so
     // repeating its text as "Last Error" would show the same problem twice.

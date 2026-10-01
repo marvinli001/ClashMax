@@ -199,6 +199,8 @@ struct MihomoSubscriptionProfilePreflightValidator: SubscriptionProfilePreflight
     let preflightOverrides = overrides
     var preflightOptions = try await runtimeEndpointOptionsProvider(profileID)
     preflightOptions.subscriptionProviderOptions = providerOptions
+    // Always a subscription here: preflight what the start would run, listeners gate included.
+    preflightOptions.blocksInheritedExposedListeners = providerOptions.exposedListenerPolicy != .allowExposed
     preflightOptions.runtimeSnippets = await runtimeSnippetsProvider(profileID)
     let runtimeConfigURL = try await materializer.materialize(
       RuntimeConfigMaterializationRequest(
@@ -1220,6 +1222,28 @@ final class ProfileStore {
       index[subscription.profileID] = subscription
     }
     return index
+  }
+
+  /// Keeps the newest audit for a profile (roadmap C1). Local profiles get one too: an imported
+  /// file can carry the same keys a subscription can.
+  func recordAudit(_ report: SubscriptionAuditReport, for profileID: Profile.ID) async throws {
+    try await mutateProfile(profileID) { $0.subscriptionDiagnostics.latestAudit = report }
+  }
+
+  func acknowledgeAudit(for profileID: Profile.ID) async throws {
+    try await mutateProfile(profileID) { $0.subscriptionDiagnostics.latestAudit?.acknowledged = true }
+  }
+
+  private func mutateProfile(_ profileID: Profile.ID, transform: (inout Profile) -> Void) async throws {
+    await waitForManifestLoad()
+    try await withMutationLock {
+      guard let index = profiles.firstIndex(where: { $0.id == profileID }) else { return }
+      var nextProfiles = profiles
+      transform(&nextProfiles[index])
+      guard nextProfiles != profiles else { return }
+      try await saveManifest(profiles: nextProfiles, activeProfileID: activeProfileID)
+      profiles = nextProfiles
+    }
   }
 
   private func updateSubscriptionUpdateStatus(

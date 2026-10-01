@@ -383,6 +383,9 @@ struct SubscriptionProviderOptions: Codable, Equatable, Sendable {
   var ruleOverlay: RuleOverlaySettings
   var generatedTemplate: SubscriptionTemplateKind
   var generatedTemplateVersion: Int
+  /// Roadmap C3: the user's answer about the subscription's own network-reachable `listeners`.
+  /// `nil` means never asked, which keeps them off.
+  var exposedListenerPolicy: InheritedListenerPolicy?
 
   private enum CodingKeys: String, CodingKey {
     case intervalSeconds
@@ -400,6 +403,7 @@ struct SubscriptionProviderOptions: Codable, Equatable, Sendable {
     case ruleOverlay
     case generatedTemplate
     case generatedTemplateVersion
+    case exposedListenerPolicy
   }
 
   init(
@@ -416,7 +420,8 @@ struct SubscriptionProviderOptions: Codable, Equatable, Sendable {
     finalRulePolicy: String = "Proxy",
     ruleOverlay: RuleOverlaySettings = .disabled,
     generatedTemplate: SubscriptionTemplateKind = .minimal,
-    generatedTemplateVersion: Int = SubscriptionTemplateKind.currentVersion
+    generatedTemplateVersion: Int = SubscriptionTemplateKind.currentVersion,
+    exposedListenerPolicy: InheritedListenerPolicy? = nil
   ) {
     self.intervalSeconds = min(max(intervalSeconds, Self.minimumIntervalSeconds), Self.maximumIntervalSeconds)
     self.filter = filter
@@ -432,6 +437,7 @@ struct SubscriptionProviderOptions: Codable, Equatable, Sendable {
     self.ruleOverlay = ruleOverlay
     self.generatedTemplate = generatedTemplate
     self.generatedTemplateVersion = max(1, generatedTemplateVersion)
+    self.exposedListenerPolicy = exposedListenerPolicy
   }
 
   static let `default` = SubscriptionProviderOptions()
@@ -465,7 +471,8 @@ struct SubscriptionProviderOptions: Codable, Equatable, Sendable {
         Int.self,
         forKey: .generatedTemplateVersion,
         default: SubscriptionTemplateKind.legacyVersion
-      )
+      ),
+      exposedListenerPolicy: try? container.decodeIfPresent(InheritedListenerPolicy.self, forKey: .exposedListenerPolicy)
     )
   }
 
@@ -487,6 +494,7 @@ struct SubscriptionProviderOptions: Codable, Equatable, Sendable {
     try container.encode(ruleOverlay, forKey: .ruleOverlay)
     try container.encode(generatedTemplate, forKey: .generatedTemplate)
     try container.encode(generatedTemplateVersion, forKey: .generatedTemplateVersion)
+    try container.encodeIfPresent(exposedListenerPolicy, forKey: .exposedListenerPolicy)
   }
 
   var normalizedHeaders: [String: String] {
@@ -1518,21 +1526,27 @@ struct SubscriptionDiagnostics: Codable, Equatable, Sendable {
   var latestFetch: SubscriptionFetchDiagnostics?
   var latestPreflight: SubscriptionPreflightDiagnostics?
   var updateHistory: [SubscriptionUpdateHistoryEntry]
+  /// The newest import/update audit (roadmap C1). Only the latest is kept, already bounded and
+  /// redacted by `SubscriptionAuditBuilder`.
+  var latestAudit: SubscriptionAuditReport?
 
   private enum CodingKeys: String, CodingKey {
     case latestFetch
     case latestPreflight
     case updateHistory
+    case latestAudit
   }
 
   init(
     latestFetch: SubscriptionFetchDiagnostics? = nil,
     latestPreflight: SubscriptionPreflightDiagnostics? = nil,
-    updateHistory: [SubscriptionUpdateHistoryEntry] = []
+    updateHistory: [SubscriptionUpdateHistoryEntry] = [],
+    latestAudit: SubscriptionAuditReport? = nil
   ) {
     self.latestFetch = latestFetch
     self.latestPreflight = latestPreflight
     self.updateHistory = Array(updateHistory.prefix(Self.historyLimit))
+    self.latestAudit = latestAudit
   }
 
   init(from decoder: Decoder) throws {
@@ -1544,7 +1558,9 @@ struct SubscriptionDiagnostics: Codable, Equatable, Sendable {
         [SubscriptionUpdateHistoryEntry].self,
         forKey: .updateHistory,
         default: []
-      )
+      ),
+      // A report written by a newer build that this one cannot read is dropped, not fatal.
+      latestAudit: try? container.decodeIfPresent(SubscriptionAuditReport.self, forKey: .latestAudit)
     )
   }
 

@@ -115,9 +115,19 @@ struct ContentView: View {
     .sheet(isPresented: diagnosticBundleSheetPresented) {
       DiagnosticBundleSheet()
     }
+    .sheet(item: subscriptionAuditPresentation) { presentation in
+      SubscriptionAuditSheet(profileID: presentation.profileID)
+    }
     .onAppear {
       appModel.evaluateInitialTunHelperPromptOnLaunch()
     }
+  }
+
+  private var subscriptionAuditPresentation: Binding<SubscriptionAuditPresentation?> {
+    Binding(
+      get: { appModel.subscriptionAuditPresentation },
+      set: { appModel.subscriptionAuditPresentation = $0 }
+    )
   }
 
   private var diagnosticBundleSheetPresented: Binding<Bool> {

@@ -3211,6 +3211,63 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(bundle.contents.text.contains("jp.node-example.com"))
   }
 
+  /// Roadmap C1/C3 end to end: an added subscription that opens a listener to the network is
+  /// audited and stored, the listener is not started until allowed, and allowing it goes through the
+  /// provider-options path and shows up in the next report.
+  func testSubscriptionAuditStoresTheReportAndGatesExposedListenersUntilAllowed() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    let recorder = URLProtocolRecorder(
+      responseBody: """
+      listeners:
+        - {name: lan-mixed, type: mixed, port: 7999}
+      proxies:
+        - {name: JP, type: ss, server: jp.example.com, port: 8388, cipher: aes-128-gcm, password: node-pass}
+      proxy-groups:
+        - {name: Proxy, type: select, proxies: [JP, DIRECT]}
+      rules:
+        - MATCH,Proxy
+      """,
+      responseHeaders: ["Content-Type": "text/yaml"]
+    )
+    let profile = try await store.addSubscription(
+      name: "Airport",
+      url: XCTUnwrap(URL(string: "https://sub.example.com/sub")),
+      session: URLSession(configuration: recorder.configuration)
+    )
+    let model = try AppModel(
+      paths: paths,
+      profileStore: store,
+      defaults: Self.makeIsolatedDefaults(),
+      bundledCoreURLProvider: { try Self.makeRuleOverlayPreflightCore(in: paths.appSupport, rejectedToken: "never-matched") }
+    )
+
+    let audited = await model.auditProfile(profile.id, trigger: .imported)
+    let report = try XCTUnwrap(audited)
+
+    XCTAssertEqual(report.exposedListeners.map(\.name), ["lan-mixed"])
+    XCTAssertTrue(report.needsListenerDecision)
+    XCTAssertEqual(report.items.first { $0.key == "listeners" }?.disposition, .overridden)
+    XCTAssertEqual(store.profiles.first?.subscriptionDiagnostics.latestAudit, report)
+    XCTAssertEqual(model.profilesNeedingAuditReview.map(\.id), [profile.id])
+
+    let allowed = await model.setInheritedListenerPolicy(.allowExposed, for: profile.id)
+
+    XCTAssertTrue(allowed)
+    let stored = try XCTUnwrap(store.profiles.first)
+    XCTAssertEqual(stored.subscriptionProviderOptions.exposedListenerPolicy, .allowExposed)
+    XCTAssertEqual(stored.subscriptionDiagnostics.latestAudit?.items.first { $0.key == "listeners" }?.disposition, .passedThrough)
+    XCTAssertEqual(stored.subscriptionDiagnostics.latestAudit?.acknowledged, true)
+    XCTAssertTrue(model.profilesNeedingAuditReview.isEmpty)
+
+    // Every update is audited again, never as a sheet.
+    let updated = await model.updateSubscription(stored, session: URLSession(configuration: recorder.configuration))
+
+    XCTAssertTrue(updated)
+    XCTAssertEqual(store.profiles.first?.subscriptionDiagnostics.latestAudit?.trigger, .updated)
+    XCTAssertNil(model.subscriptionAuditPresentation)
+  }
+
   func testNetworkPolicyRuleAutoStartDefaultsOffForLegacyDecoding() throws {
     let decoded = try JSONDecoder().decode(NetworkPolicyRule.self, from: Data("""
     {

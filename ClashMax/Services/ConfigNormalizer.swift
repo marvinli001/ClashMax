@@ -8,8 +8,20 @@ struct RuntimeConfigOptions: Equatable, Sendable {
   var runtimeSnippets: [RuntimeSnippet] = []
   var manualProxyEndpoint: ResolvedOutboundProxyEndpoint?
   var upstreamProxyEndpoint: ResolvedOutboundProxyEndpoint?
+  /// Roadmap C3: drop the profile's own `listeners` that other machines can reach. Set for a
+  /// subscription whose user has not allowed them (`RuntimeConfigOptions.forProfile`); a local file
+  /// is the user's own config and is left as written.
+  var blocksInheritedExposedListeners = false
 
   static let `default` = RuntimeConfigOptions()
+
+  /// The profile-derived part of the options, set in one place for every generation path — start,
+  /// preview, effective-config view and preflight — so none of them can disagree about a listener.
+  mutating func apply(profile: Profile) {
+    subscriptionProviderOptions = profile.subscriptionProviderOptions
+    blocksInheritedExposedListeners = profile.isSubscription
+      && profile.subscriptionProviderOptions.exposedListenerPolicy != .allowExposed
+  }
 }
 
 /// The generated runtime YAML and what the normalizer changed on the way there.
@@ -112,6 +124,12 @@ struct ConfigNormalizer {
     } else {
       root = try loadMapping(from: source)
       providerContentProxyNames = nil
+    }
+
+    // Before the user's own merge YAML and snippets: those are the user's consent, the profile's
+    // listeners are someone else's (roadmap C3).
+    if options.blocksInheritedExposedListeners {
+      Self.removeInheritedExposedListeners(from: &root, notes: &notes)
     }
 
     let runtimeMergeYAML = options.subscriptionProviderOptions.runtimeMergeYAML
@@ -365,6 +383,36 @@ struct ConfigNormalizer {
     guard !dropped.isEmpty else { return }
     notes.append(
       "Ignored the \(source)'s own inbound listener ports (\(dropped.joined(separator: ", "))); ClashMax only exposes mixed-port."
+    )
+  }
+
+  /// Measured on v1.19.30 (ListenerExposure.swift): `allow-lan: false` does not gate `listeners`,
+  /// and an omitted `listen` binds every interface. So a subscription's listener is either pinned to
+  /// this Mac, or it is an inbound other machines can use, and only the second kind needs consent.
+  private static func removeInheritedExposedListeners(from root: inout [String: Any], notes: inout [String]) {
+    guard let entries = root["listeners"] as? [Any] else { return }
+    var kept: [Any] = []
+    var dropped: [String] = []
+    for entry in entries {
+      guard let mapping = entry as? [String: Any] else {
+        kept.append(entry)
+        continue
+      }
+      let listener = ListenerRuntimeFacts.facts(from: ["listeners": [mapping]]).listeners.first
+      if let listener, listener.isLANExposed {
+        dropped.append(listener.summary)
+      } else {
+        kept.append(entry)
+      }
+    }
+    guard !dropped.isEmpty else { return }
+    if kept.isEmpty {
+      root.removeValue(forKey: "listeners")
+    } else {
+      root["listeners"] = kept
+    }
+    notes.append(
+      "Kept the subscription's network-reachable listeners off until they are allowed in its audit report (\(dropped.joined(separator: "; ")))."
     )
   }
 

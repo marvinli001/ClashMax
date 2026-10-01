@@ -162,7 +162,7 @@ ClashMax 已经在用的 Mihomo 控制 API 端点，来自
 | **`/configs/geo`** | **2026-08-27 已补齐**——`updateGeoDatabases(timeout:)`，对应「立即更新」动作 | *（原：没有应用内 geo 数据库刷新）* |
 | **`/memory`** | **2026-08-30 已补齐**——`memoryStream()` 复用 `/traffic` 的同一套流式管道，采样存入 `RuntimeDataStore.memorySample`，并在运行中仪表盘上以 **Memory** 指标呈现。两处实测细节写进了代码而不是靠猜：第一帧恒为 `{"inuse":0,"oslimit":0}`，那是握手用的空帧而不是读数，因此 0 样本渲染为 `—`；`oslimit` 在 macOS 上恒为 0（本平台没有 cgroup 上限），因此不画那种永远读作 0 的「占上限百分比」表盘 | *（原：没有内核内存遥测）* |
 | **`tcp-concurrent`、`global-client-fingerprint`、`find-process-mode`、`keep-alive-interval`、`ntp`、`experimental`、`global-ua`、`interface-name`** | **2026-08-29 关闭**——按名字算依然是全仓 0 命中，而且是有意为之：**Raw YAML** 片段载荷（[`RawYAMLPatch.swift`](../ClashMax/Models/RawYAMLPatch.swift)）能够到达它们全部，以及 Mihomo 明天新增的任何 key，应用不需要为此多长一个开关。见 [INV-2](#23-两条不变量) | *（曾经：高级用户会撞到硬天花板；按 INV-2，解法是通用覆盖路径，而不是八个新开关）* |
-| **`listeners`** | **2026-08-30 已作出决定。** 旧条目错了两处：`listeners` 是被*标记*、从未被剥离，而且只在 provider 覆盖 YAML 与 runtime-merge YAML 里被标记（[`CoreModels.swift:744`](../ClashMax/Models/CoreModels.swift#L744)）——普通订阅顶层的 `listeners:` 一直是原封不动地穿过 `ConfigNormalizer`，**并且不带任何标记**，而这才是这个 bug 更糟的那一半。决定写在 [C3](#c3就-listeners-做出决定)：按 [INV-2](#23-两条不变量) 在 L3 经由 Raw YAML 片段支持，条件是它造成的暴露永远不能是无声的。[`ListenerExposureDiagnostics`](../ClashMax/Models/ListenerExposure.swift) 把运行时 YAML 读回来，把「已暴露且没有 `authentication:`」的入站报告为开放代理。唯一还开着的那条标准是导入时的*提示*，它归 [C1](#c1导入时的订阅审计报告) | *（原：入站监听（给局域网其他设备用）不可用；这需要一个明确的决定，而不是一个默认值）* |
+| **`listeners`** | **2026-08-30 已作出决定。** 旧条目错了两处：`listeners` 是被*标记*、从未被剥离，而且只在 provider 覆盖 YAML 与 runtime-merge YAML 里被标记（[`CoreModels.swift:744`](../ClashMax/Models/CoreModels.swift#L744)）——普通订阅顶层的 `listeners:` 一直是原封不动地穿过 `ConfigNormalizer`，**并且不带任何标记**，而这才是这个 bug 更糟的那一半。决定写在 [C3](#c3就-listeners-做出决定)：按 [INV-2](#23-两条不变量) 在 L3 经由 Raw YAML 片段支持，条件是它造成的暴露永远不能是无声的。[`ListenerExposureDiagnostics`](../ClashMax/Models/ListenerExposure.swift) 把运行时 YAML 读回来，把「已暴露且没有 `authentication:`」的入站报告为开放代理。导入时的提示已于 2026-10-01 随 [C1](#c1导入时的订阅审计报告) 落地：订阅里其他设备可以访问的监听器，在用户允许之前一律保持关闭 | *（原：入站监听（给局域网其他设备用）不可用；这需要一个明确的决定，而不是一个默认值）* |
 
 ### 3.3 已经建到一半的原生 macOS 优势
 
@@ -316,8 +316,10 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
 - **验收标准：**
   - [x] `sniffer` 以 `warning` 级别加入被扫描的 key 集合——它改变的是流量识别，不是局域网暴露面——并给出
         点明后果的信息，语气与现有的 `dns`、`tun` 条目一致。
-  - [ ] 导入时的报告（C1）说明该订阅的 sniffer 块想改什么、以及 ClashMax 保留了什么。**等 C1，而 C1 还
-        开着。** 这个 key 今天已经被扫描、被标记；缺的是它本该被标记*在里面*的那份报告。
+  - [x] 导入时的报告（C1）说明该订阅的 sniffer 块想改什么、以及 ClashMax 保留了什么。→ **2026-10-01**：C1 报告里的
+        `sniffer` 条目列出配置想要什么（开或关、`override-destination`、`skip-domain` / `force-domain` 的条数、哪些协议），
+        哪些子 key 被 ClashMax 替换、哪些按原样运行；当配置关掉嗅探并且就这样运行时，还会说明此时域名规则永远匹配不到
+        直接连 IP 的连接。`SubscriptionAuditTests.testSnifferStatesWhatTheSubscriptionWouldChangeAndWhatWasKept`。
 
 ##### A1e——回归与手工验证
 
@@ -667,13 +669,32 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
 
 #### C1——导入时的订阅审计报告
 
-- **基础：** [`CoreModels.swift:805`](../ClashMax/Models/CoreModels.swift#L805) 中的
-  `ProviderOptionsRisk`。
+- **基础：** [`CoreModels.swift`](../ClashMax/Models/CoreModels.swift) 中的 `ProviderOptionsRisk`。
+- **状态：2026-10-01 交付。面板、配置上的标记和通知都还没人亲眼看过。**
+- **怎么判断。** [`SubscriptionAuditBuilder`](../ClashMax/Models/SubscriptionAudit.swift) 是纯函数：它把抓下来的配置，和
+  ClashMax 用用户设置、但**不带任何用户片段**生成的配置做比较，所以每一处差异都是针对订阅的决定，而不是用户自己写的东西。
+  它不重新实现 normalizer 的规则，因此不会和规则产生偏差。针对内核 v1.19.31 的实测补充了几点：`authentication:` 列表会让
+  ClashMax **自己的** mixed 端口对本机 App 返回 407，所以带这一项的订阅会让系统代理失效（现在是带这个后果的 `warning`）；
+  `script:` 块会被接受然后忽略，`SCRIPT` 规则会让整个配置加载失败（报告为 `info`）；`external-controller-tls/-unix/-pipe`
+  不归 normalizer 管，按原样运行（报告为 `danger`；unix socket 是否校验密钥没有实测——在测试路径下无法绑定 socket）。
 - **验收标准：**
-  - [ ] 在导入时和更新时，给出一份大白话报告：这份订阅试图改什么、ClashMax 覆盖了什么、放行了什么。
-  - [ ] 严重级别是可操作的——每个 `danger` 条目都点名具体后果。
-  - [ ] 该报告之后仍可从配置文件处进入，而不只在导入时出现一次。
-  - [ ] 至少覆盖现有的危险 key 集合，外加 `sniffer`（A1d）。
+  - [x] 在导入时和更新时，给出一份大白话报告：这份订阅试图改什么、ClashMax 覆盖了什么、放行了什么。→ **2026-10-01**：
+        报告和面板里分成这三组。导入（订阅或本地 YAML）结束时打开面板；手动和自动更新同样会审计，但从不弹面板——手动更新
+        发一条提示，自动更新发一条系统通知，两者都会在配置上做标记，并在 Status 页加一条注意事项，直到报告被打开为止。覆盖的
+        key：控制器及其密钥、CORS 和其他控制器变体、所有入站端口 key、`allow-lan`、`tun`、`dns`（按子 key 区分替换与保留）、
+        `sniffer`、顶层 `listeners`、`authentication`、`script`、`external-ui*`、`hosts`，以及 `find-process-mode: off`。
+        `SubscriptionAuditTests`（13 个测试，跑的是真实的 normalizer）和 AppModel 集成测试，后者还检查了更新会重新审计且
+        不弹面板。
+  - [x] 严重级别是可操作的——每个 `danger` 条目都点名具体后果。→ `testEveryDangerItemNamesItsConsequenceAndNoSecretIsKept`
+        （并且没有任何秘密值进入存下来的报告）。
+  - [ ] 该报告之后仍可从配置文件处进入，而不只在导入时出现一次。已实现：最新一份报告存在配置上
+        （`SubscriptionDiagnostics.latestAudit`，最多 40 条、每个字段最多 300 个字符，经过 `StructuredLogRedactor`，不保留
+        URL 路径、query 或凭据——`testStoredTextIsRedactedAndBounded`），可以从配置菜单的 *审计报告…*（对报告功能出现之前
+        导入的配置会当场运行一次）、配置行上的橙色盾牌，或 Status 页打开。没有勾，因为还没人打开过——见
+        [`MANUAL_TEST_PLAN.md` 的 C1](MANUAL_TEST_PLAN.md#c1--import-a-subscription-and-read-its-audit-report)。
+  - [x] 至少覆盖现有的危险 key 集合，外加 `sniffer`（A1d）。→ `ProviderOptionsRisk` 集合里的每个 key 加上上面新增的；
+        每类 key 都有测试，另有干净订阅和只提供节点列表的订阅各一个测试。
+- **这次没做：** 更新 *diff*（C2）——更新带来的新危险 key 会被报告和标记，但不会阻止这次更新。
 
 #### C2——订阅更新 diff
 
@@ -723,9 +744,17 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
         `pass`；并且会点名 `allow-lan` **管不着**什么，因为一个把它关掉的用户完全有理由以为它管得着。以
         Routing 里的 **Inbound Listeners** 面板、以及可复制诊断报告里的一行呈现——是一个持续在那儿的结论，
         而不是一条滚过去就没了的通知。
-  - [ ] 绝不在**无提示**的情况下从订阅继承。上面那个持续结论抓得住被继承的监听，但那个*提示*属于
-        [C1](#c1导入时的订阅审计报告) 的导入时报告，而 C1 还开着。这里选择记下而不是打勾，因为"用户得自己
-        走过去看"的结论，和"导入时就问一句"不是同一个承诺。
+  - [x] 绝不在**无提示**的情况下从订阅继承。→ **2026-10-01**。这个承诺由 normalizer 保证，而不是靠一个面板：对订阅来说，
+        每个其他机器可以访问的 `listeners:` 条目（`listen` 是暴露地址，或者干脆没写）都会在用户自己的 merge YAML 和片段
+        生效之前被去掉，直到用户允许为止；只监听回环地址的条目、本地文件里的监听器照原样运行，Raw YAML 片段里的监听器是
+        用户自己写的，从不受限。这个问题在导入报告里提出（*保持关闭* / *允许…*，确认框会写明后果）；更新带来新的暴露监听器
+        时同样保持关闭，并在配置上做标记。用户的回答存为 `SubscriptionProviderOptions.exposedListenerPolicy`，经由普通的
+        provider options 路径生效。所有生成路径都从同一个地方 `RuntimeConfigOptions.apply(profile:)` 取这个开关，所以启动、
+        预览、Effective Config 视图和预检不可能结论不一致。证据：
+        `SubscriptionAuditTests.testExposedListenersWithoutAuthenticationAreKeptOffUntilAllowed`、
+        `testOnlyASubscriptionsUnapprovedListenersAreGated`、`testAUsersOwnRawYAMLListenerIsNeverGated`，以及
+        `DashboardRuntimeStateTests.testSubscriptionAuditStoresTheReportAndGatesExposedListenersUntilAllowed`。
+        **行为变化：** 已经依赖某个暴露监听器的订阅，下次启动时会失去它，直到从配置的审计报告里允许。
 - **缺口：** 从没亲眼看过。没有任何一处是在运行中的应用里、对着局域网上真实的第二台机器被观察着做出它的
   结论的——那几次暴露探测是直接打内核跑的。
 
@@ -800,10 +829,10 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
 | **首先** | ~~**A1a**~~ | 一个不带 UI 的解码器修复，也是硬前置：在连接解码器停止把"没有域名"坍缩成"目标 IP"之前，A1c 的诊断根本算不出来。可以单独发布，一天的量。 |
 | **然后** | ~~**A1b + A1c**~~、A1d | 本文中优先级最高的一项，也是能验证整套论点的最小闭环：一个真实的内核缺口、一个真实的诊断缺口、一个修复按钮、不需要新的 UI 范式。如果三层模型是错的，这里能以最低代价暴露出来。**A1a–A1c 已于 2026-08-16 交付**；A1d 的扫描器随它们一起交付，剩下的部分并入 C1。现在还把 A1 摁着不放的是 A1e 的人工签核。 |
 | **然后** | ~~A2~~ | 路由故事的另一半。放在 A1 之后做，这样 DNS 面板里显示的域名和规则实际匹配所用的域名，是已知同一个值。**2026-08-30 交付**，如约排在 A1a–A1d 之后。 |
-| **然后** | ~~A3~~、A5、C1 | 低风险、高杠杆。A5 与 C1 都直接降低维护者负担；C1 吸收 A1d。**A3 已于 2026-08-27 随 B5 一并交付。** |
-| **然后** | B1、A4 | B1 是最重磅的面向用户功能；A4 是让护城河变得显而易见的那个界面。B1 放在 A1 之后，免得进程规则成为第二个在无域名连接上失效的东西。 |
+| **然后** | ~~A3~~、~~A5~~、~~C1~~ | 低风险、高杠杆。A5 与 C1 都直接降低维护者负担；C1 吸收 A1d。**A3 已于 2026-08-27 随 B5 一并交付。** |
+| **然后** | ~~B1~~、A4 | B1 是最重磅的面向用户功能；A4 是让护城河变得显而易见的那个界面。B1 放在 A1 之后，免得进程规则成为第二个在无域名连接上失效的东西。 |
 | **然后** | B2、C2 | 两者都是有状态的，需要先让前面的工作变得可信。 |
-| **之后** | B3、B4、~~B5~~、~~A6~~、~~C3~~ | 有价值，但不承重。**C3 已被提前，于 2026-08-30 作出决定**，因为那次专门去看它的评审发现的事实和本文原先的说法正好相反：顶层的 `listeners:` 块一直在不带标记地穿过去，于是这一项根本不是一个躺着的功能请求，而是一处没挂牌的暴露面。**B5 与 A6 已被提前，于 2026-08-27 交付。** B5 是因为它是本列表上唯一一项什么都不做也会持续劣化的东西——而且在维护者自己的机器上已经劣化了四个月，这是「不承重」这个判断没能预见到的。A6 是因为 #10 / #11 / #18 这一串卡顿问题，源头都在它去掉的那套逐节点扇出上。 |
+| **之后** | ~~B3~~、B4、~~B5~~、~~A6~~、~~C3~~ | 有价值，但不承重。**C3 已被提前，于 2026-08-30 作出决定**，因为那次专门去看它的评审发现的事实和本文原先的说法正好相反：顶层的 `listeners:` 块一直在不带标记地穿过去，于是这一项根本不是一个躺着的功能请求，而是一处没挂牌的暴露面。**B5 与 A6 已被提前，于 2026-08-27 交付。** B5 是因为它是本列表上唯一一项什么都不做也会持续劣化的东西——而且在维护者自己的机器上已经劣化了四个月，这是「不承重」这个判断没能预见到的。A6 是因为 #10 / #11 / #18 这一串卡顿问题，源头都在它去掉的那套逐节点扇出上。 |
 | **贯穿始终** | D1、D2、D3 | 永远不作为独立里程碑。 |
 
 ---

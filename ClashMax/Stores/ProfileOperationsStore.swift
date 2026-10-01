@@ -38,6 +38,7 @@ final class ProfileCoordinator {
     notifySubscriptionUpdateFailure: @escaping (String, String) -> Void,
     clearRuntimeProxyGroups: @escaping () -> Void,
     shouldSyncRuntimeAfterProfileChange: @escaping () -> Bool,
+    auditAfterUpdate: @escaping (Profile.ID, Bool) async -> Void = { _, _ in },
     restartRuntime: @escaping () -> Void,
     stopRuntime: @escaping () -> Void
   ) {
@@ -51,6 +52,7 @@ final class ProfileCoordinator {
       notifySubscriptionUpdateFailure: notifySubscriptionUpdateFailure,
       clearRuntimeProxyGroups: clearRuntimeProxyGroups,
       shouldSyncRuntimeAfterProfileChange: shouldSyncRuntimeAfterProfileChange,
+      auditAfterUpdate: auditAfterUpdate,
       restartRuntime: restartRuntime,
       stopRuntime: stopRuntime
     )
@@ -439,6 +441,8 @@ final class ProfileCoordinator {
       )
       let name = profileStore.profiles.first { $0.id == profile.id }?.name ?? profile.name
       message = "Updated subscription \(name)."
+      // Roadmap C1: every update is audited; what needs a look is announced, never a sheet.
+      await hooks.auditAfterUpdate(profile.id, trigger == .automatic)
       return true
     } catch {
       let failedAt = Date()
@@ -566,6 +570,7 @@ private struct ProfileCoordinatorHooks {
   var notifySubscriptionUpdateFailure: (String, String) -> Void = { _, _ in }
   var clearRuntimeProxyGroups: () -> Void = {}
   var shouldSyncRuntimeAfterProfileChange: () -> Bool = { false }
+  var auditAfterUpdate: (Profile.ID, Bool) async -> Void = { _, _ in }
   var restartRuntime: () -> Void = {}
   var stopRuntime: () -> Void = {}
 }

@@ -144,7 +144,7 @@ struct EffectiveRuntimeConfigBuilder {
     }
 
     var options = baseOptions
-    options.subscriptionProviderOptions = profile.subscriptionProviderOptions
+    options.apply(profile: profile)
     options.runtimeSnippets = runtimeSnippets
 
     let materialization = try await materializer.materializeResult(

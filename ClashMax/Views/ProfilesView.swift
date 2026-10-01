@@ -363,6 +363,25 @@ struct ProfilesView: View {
     }
     .disabled(profile == nil)
 
+    // Roadmap C1: the import-time report stays reachable, and is run now for a profile imported
+    // before reports existed.
+    Button("Audit Report…") {
+      guard let profile else { return }
+      if profile.subscriptionDiagnostics.latestAudit != nil {
+        appModel.presentAuditReport(for: profile.id)
+      } else {
+        Task { @MainActor in
+          if await appModel.auditProfile(profile.id, trigger: .onDemand) != nil {
+            appModel.presentAuditReport(for: profile.id)
+          }
+        }
+      }
+    }
+    .disabled(profile.map { profile in
+      if case .manualProxy = profile.source { return true }
+      return false
+    } ?? true)
+
     Divider()
 
     Button("Delete…", role: .destructive) {
@@ -1076,6 +1095,13 @@ private struct ProfileNameCell: View {
       if isUpdating {
         ProgressView()
           .controlSize(.mini)
+      }
+
+      if profile.subscriptionDiagnostics.latestAudit?.needsAttention == true {
+        Image(systemName: "exclamationmark.shield.fill")
+          .foregroundStyle(.orange)
+          .help("Its latest audit report needs your review.")
+          .accessibilityLabel("Audit needs review")
       }
     }
     .help(profile.name)

@@ -186,7 +186,7 @@ Gaps, in priority order:
 | **`/configs/geo`** | **Closed 2026-08-27** — `updateGeoDatabases(timeout:)` behind an Update Now action | *(was: no in-app geo database refresh)* |
 | **`/memory`** | **Closed 2026-08-30** — `memoryStream()` on the same stream plumbing as `/traffic`, kept in `RuntimeDataStore.memorySample` and shown as a **Memory** stat on the running dashboard. Two measured details are in the code rather than assumed: the first frame is always `{"inuse":0,"oslimit":0}` and is a priming tick, not a reading, so a zero sample renders as `—`; and `oslimit` is 0 on macOS, which has no cgroup ceiling, so nothing draws a percentage-of-limit gauge that would always read 0 | *(was: no core memory telemetry)* |
 | **`tcp-concurrent`, `global-client-fingerprint`, `find-process-mode`, `keep-alive-interval`, `ntp`, `experimental`, `global-ua`, `interface-name`** | **Closed 2026-08-29** — still zero occurrences by name, and deliberately so: the **Raw YAML** snippet payload ([`RawYAMLPatch.swift`](../ClashMax/Models/RawYAMLPatch.swift)) reaches all of them, and every key Mihomo ships tomorrow, without the app growing a switch. See [INV-2](#23-two-invariants) | *(was: advanced users hit a hard ceiling; per INV-2 the fix is the generic override path, not eight new toggles)* |
-| **`listeners`** | **Decided 2026-08-30.** The old entry was wrong twice: `listeners` is *flagged*, never stripped, and only inside provider-override and runtime-merge YAML ([`CoreModels.swift:744`](../ClashMax/Models/CoreModels.swift#L744)) — a plain subscription's top-level `listeners:` has always passed through `ConfigNormalizer` untouched **and unflagged**, which is the worse half of the bug. The decision is written in [C3](#c3--decide-the-listeners-question): supported at L3 through the Raw YAML snippet per [INV-2](#23-two-invariants), on the condition that the exposure it creates is never silent. [`ListenerExposureDiagnostics`](../ClashMax/Models/ListenerExposure.swift) reads the runtime YAML back and reports an exposed inbound with no `authentication:` as an open proxy. The one criterion left open is the import-time *prompt*, which belongs to [C1](#c1--import-time-subscription-audit-report) | *(was: inbound listeners serving other devices on the LAN are unavailable; needs a deliberate decision, not a default)* |
+| **`listeners`** | **Decided 2026-08-30.** The old entry was wrong twice: `listeners` is *flagged*, never stripped, and only inside provider-override and runtime-merge YAML ([`CoreModels.swift:744`](../ClashMax/Models/CoreModels.swift#L744)) — a plain subscription's top-level `listeners:` has always passed through `ConfigNormalizer` untouched **and unflagged**, which is the worse half of the bug. The decision is written in [C3](#c3--decide-the-listeners-question): supported at L3 through the Raw YAML snippet per [INV-2](#23-two-invariants), on the condition that the exposure it creates is never silent. [`ListenerExposureDiagnostics`](../ClashMax/Models/ListenerExposure.swift) reads the runtime YAML back and reports an exposed inbound with no `authentication:` as an open proxy. The import-time prompt landed with [C1](#c1--import-time-subscription-audit-report) on 2026-10-01: a subscription's network-reachable listeners are now kept off until the user allows them | *(was: inbound listeners serving other devices on the LAN are unavailable; needs a deliberate decision, not a default)* |
 
 ### 3.3 Native macOS leverage already half-built
 
@@ -369,9 +369,13 @@ match the user's traffic with nothing surfaced. It joined that set on 2026-08-16
   - [x] `sniffer` joins the scanned key set at `warning` severity — it changes traffic
         identification, not LAN exposure — with a message naming the consequence, in the
         same register as the existing `dns` and `tun` entries.
-  - [ ] The import-time report (C1) states what the subscription's sniffer block would
-        change and what ClashMax kept. **Waits on C1, which is open.** The key is scanned
-        and flagged today; the report it should be flagged *in* does not exist yet.
+  - [x] The import-time report (C1) states what the subscription's sniffer block would
+        change and what ClashMax kept. → **2026-10-01**: the C1 report's `sniffer` item lists
+        what the profile asks for (on or off, `override-destination`, how many `skip-domain` /
+        `force-domain` entries, which protocols), which sub-keys ClashMax replaced and which ran
+        as authored, and — when the profile turns sniffing off and it runs that way — that
+        domain rules can then never match an IP-dialed connection.
+        `SubscriptionAuditTests.testSnifferStatesWhatTheSubscriptionWouldChangeAndWhatWasKept`.
 
 ##### A1e — Regression and manual proof
 
@@ -850,13 +854,47 @@ A subscription can change your DNS, open listeners, and rebind the external cont
 
 #### C1 — Import-time subscription audit report
 
-- **Foundation:** `ProviderOptionsRisk` in [`CoreModels.swift:805`](../ClashMax/Models/CoreModels.swift#L805).
+- **Foundation:** `ProviderOptionsRisk` in [`CoreModels.swift`](../ClashMax/Models/CoreModels.swift).
+- **Status: shipped 2026-10-01. The sheet, the profile marker and the notification have not been
+  seen by eye.**
+- **How it decides.** [`SubscriptionAuditBuilder`](../ClashMax/Models/SubscriptionAudit.swift) is
+  pure: it compares the profile as fetched with the config ClashMax generates from it using the
+  user's settings and **none of the user's snippets**, so every difference is a decision about the
+  subscription rather than something the user wrote. It does not re-implement the normalizer's
+  rules, which is why it cannot drift from them. What the probes against core v1.19.31 added: an
+  `authentication:` list makes ClashMax's **own** mixed port answer 407 to apps on this Mac, so a
+  subscription carrying one breaks the system proxy (now a `warning` with that consequence); a
+  `script:` block is accepted and ignored, and a `SCRIPT` rule fails the whole config (reported as
+  `info`); `external-controller-tls/-unix/-pipe` are not managed by the normalizer and run as
+  authored (reported as `danger`; whether the unix socket enforces the secret was not measured —
+  the probe could not bind a socket under the test path).
 - **Acceptance criteria:**
-  - [ ] On import and on update, a plain-language report: what this subscription tried to
-        change, what ClashMax overrode, and what it let through.
-  - [ ] Severity is actionable — every `danger` item names the concrete consequence.
-  - [ ] The report is reachable later from the profile, not only at import time.
-  - [ ] Covers at minimum the existing danger key set plus `sniffer` (A1d).
+  - [x] On import and on update, a plain-language report: what this subscription tried to
+        change, what ClashMax overrode, and what it let through. → **2026-10-01**: three groups
+        in the report and its sheet. Import (subscription or local YAML) ends on the sheet;
+        manual and automatic updates are audited too and never open one — a manual update posts
+        a notice, an automatic one a system notification, and both mark the profile and add a
+        Status-page attention item until the report is opened. Covered keys: the controller and
+        its secret, CORS and the other controller variants, every inbound port key, `allow-lan`,
+        `tun`, `dns` (per sub-key: replaced vs kept), `sniffer`, top-level `listeners`,
+        `authentication`, `script`, `external-ui*`, `hosts`, and `find-process-mode: off`.
+        `SubscriptionAuditTests` (13 tests over the real normalizer) and the AppModel
+        integration test, which also checks that an update re-audits without presenting.
+  - [x] Severity is actionable — every `danger` item names the concrete consequence. →
+        `testEveryDangerItemNamesItsConsequenceAndNoSecretIsKept` (and no secret value reaches
+        the stored report).
+  - [ ] The report is reachable later from the profile, not only at import time. Built: the
+        newest report is stored on the profile (`SubscriptionDiagnostics.latestAudit`, at most 40
+        items and 300 characters per field, passed through `StructuredLogRedactor` so no URL path,
+        query or credential is kept — `testStoredTextIsRedactedAndBounded`), opened from
+        *Audit Report…* in the profile menu (run on demand for profiles imported before reports
+        existed), the orange shield on the profile row, or the Status page. Not ticked because no
+        one has opened it — see [C1 in `MANUAL_TEST_PLAN.md`](MANUAL_TEST_PLAN.md#c1--import-a-subscription-and-read-its-audit-report).
+  - [x] Covers at minimum the existing danger key set plus `sniffer` (A1d). → every key in
+        `ProviderOptionsRisk`'s set plus the additions above; tests per key family, a clean
+        subscription, and a node-list-only subscription.
+- **Not done here:** the update *diff* (C2) — a new danger key on an update is reported and marked
+  but does not block the update.
 
 #### C2 — Subscription update diff
 
@@ -924,11 +962,22 @@ A subscription can change your DNS, open listeners, and rebind the external cont
         Surfaced as an **Inbound Listeners** panel in Routing and as a line in the copyable
         diagnostics report, so it is a standing verdict rather than a notification that
         scrolls away.
-  - [ ] Never inherited from a subscription **without a prompt**. The standing verdict above
-        catches an inherited listener, but the *prompt* belongs to the import-time report in
-        [C1](#c1--import-time-subscription-audit-report), which is open. Filed here rather
-        than ticked, because a verdict the user has to go look at is not the same promise as
-        a question asked at import.
+  - [x] Never inherited from a subscription **without a prompt**. → **2026-10-01**. The
+        promise is held by the normalizer, not by a sheet: for a subscription, every
+        `listeners:` entry another machine can reach (an exposed `listen`, or none at all) is
+        dropped before the user's own merge YAML and snippets apply, until the user allows it;
+        loopback-only entries and a local file's listeners run as written, and a Raw YAML
+        snippet's listeners are the user's own and never gated. The question is asked in the
+        import report (*Keep Off* / *Allow…*, with a confirmation that names the consequence);
+        an update that brings new exposed listeners keeps them off and marks the profile.
+        The answer is `SubscriptionProviderOptions.exposedListenerPolicy`, applied through the
+        ordinary provider-options path. Every generation path takes the gate from one place,
+        `RuntimeConfigOptions.apply(profile:)`, so start, preview, the Effective Config view
+        and preflight cannot disagree. Evidence: `SubscriptionAuditTests.testExposedListenersWithoutAuthenticationAreKeptOffUntilAllowed`,
+        `testOnlyASubscriptionsUnapprovedListenersAreGated`, `testAUsersOwnRawYAMLListenerIsNeverGated`,
+        and `DashboardRuntimeStateTests.testSubscriptionAuditStoresTheReportAndGatesExposedListenersUntilAllowed`.
+        **Behavior change:** a subscription that already relied on an exposed listener loses it
+        on the next start until it is allowed from the profile's audit report.
 - **Gap:** never seen by eye. Nothing here has been watched making its claim in a running
   app against a real second machine on the LAN — the exposure probes were run against the
   core directly.
@@ -1022,10 +1071,10 @@ Deliberately conservative — one track at a time, with D interleaved.
 | **First** | ~~**A1a**~~ | A decoder fix with no UI, and a hard prerequisite: until the connections decoder stops collapsing "no domain" into "the destination IP", the diagnosis in A1c is not computable. Ships on its own, in a day. |
 | **Then** | ~~**A1b + A1c**~~, A1d | The highest-priority item in this document, and the smallest closed loop that validates the whole thesis: a real kernel gap, a real diagnostic gap, one fix button, no new UI paradigm. If the three-layer model is wrong, this is where it shows cheaply. **A1a–A1c shipped 2026-08-16**; A1d's scanner shipped with them and the rest of it folds into C1. A1e's manual sign-off is what still holds A1 open. |
 | **Then** | ~~A2~~ | The other half of the routing story. Do it after A1 so the domain shown in the DNS panel and the domain the rules actually matched on are known to be the same value. **Shipped 2026-08-30**, after A1a–A1d, as ordered. |
-| **Then** | ~~A3~~, A5, C1 | Low-risk, high-leverage. A5 and C1 both reduce maintainer load directly; C1 absorbs A1d. **A3 shipped 2026-08-27** alongside B5. |
-| **Then** | B1, A4 | B1 is the headline user-facing feature; A4 is the screen that makes the moat obvious. Do B1 after A1 so process rules are not the second thing to fail on domainless connections. |
+| **Then** | ~~A3~~, ~~A5~~, ~~C1~~ | Low-risk, high-leverage. A5 and C1 both reduce maintainer load directly; C1 absorbs A1d. **A3 shipped 2026-08-27** alongside B5. |
+| **Then** | ~~B1~~, A4 | B1 is the headline user-facing feature; A4 is the screen that makes the moat obvious. Do B1 after A1 so process rules are not the second thing to fail on domainless connections. |
 | **Then** | B2, C2 | Both are stateful and need the earlier work to be trustworthy first. |
-| **Later** | B3, B4, ~~B5~~, ~~A6~~, ~~C3~~ | Valuable, not load-bearing. **C3 was pulled forward and decided 2026-08-30**, because the review that went looking for it found the opposite of what this document claimed: a top-level `listeners:` block was passing through unflagged, so the item was not a dormant feature request but an unlabeled exposure. **B5 and A6 were pulled forward and shipped 2026-08-27.** B5 because it was the one item on this list that degrades while nothing happens — and it had already been degrading for four months on the maintainer's own machine, which "not load-bearing" failed to predict. A6 because the #10 / #11 / #18 jank series all originate in the per-node fan-out it removes. |
+| **Later** | ~~B3~~, B4, ~~B5~~, ~~A6~~, ~~C3~~ | Valuable, not load-bearing. **C3 was pulled forward and decided 2026-08-30**, because the review that went looking for it found the opposite of what this document claimed: a top-level `listeners:` block was passing through unflagged, so the item was not a dormant feature request but an unlabeled exposure. **B5 and A6 were pulled forward and shipped 2026-08-27.** B5 because it was the one item on this list that degrades while nothing happens — and it had already been degrading for four months on the maintainer's own machine, which "not load-bearing" failed to predict. A6 because the #10 / #11 / #18 jank series all originate in the per-node fan-out it removes. |
 | **Throughout** | D1, D2, D3 | Never a milestone of its own. |
 
 ---

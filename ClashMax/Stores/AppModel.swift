@@ -622,7 +622,7 @@ struct MihomoProviderSideLoadPreflightRunner: ProviderSideLoadPreflightRunning {
     var preflightOverrides = overrides
     preflightOverrides.tunEnabled = false
     var options = runtimeOptions
-    options.subscriptionProviderOptions = profile.subscriptionProviderOptions
+    options.apply(profile: profile)
     options.runtimeSnippets = runtimeSnippets
     let materialization = try await materializer.materializeResult(
       RuntimeConfigMaterializationRequest(
@@ -860,6 +860,9 @@ final class AppModel {
   /// Raised by the Help menu and the Status page; the main window presents the diagnostic bundle
   /// sheet while it is set (roadmap A5).
   var isDiagnosticBundleSheetPresented = false
+  /// The audit report the main window is showing (roadmap C1): raised by an import, the profile
+  /// menu, or the Status page.
+  var subscriptionAuditPresentation: SubscriptionAuditPresentation?
   var proxiesPageRequest: ProxiesPageRequest?
   /// What the last rule/DNS commit actually did to the runtime. Published so a successful hot
   /// reload is visible rather than merely "no red text", and so a rollback — the runtime rejected
@@ -1298,6 +1301,9 @@ final class AppModel {
       shouldSyncRuntimeAfterProfileChange: { [weak self] in
         guard let self else { return false }
         return isRunning || startInFlight
+      },
+      auditAfterUpdate: { [weak self] profileID, automatic in
+        await self?.announceAuditAfterUpdate(profileID, automatic: automatic)
       },
       restartRuntime: { [weak self] in
         self?.restart()
@@ -2208,9 +2214,13 @@ final class AppModel {
     Task { @MainActor [weak self] in
       guard let self else { return }
       do {
-        _ = try await profileCoordinator.importLocalProfile(from: url)
+        let profile = try await profileCoordinator.importLocalProfile(from: url)
         restartPreviewRuntimeIfNeeded(reason: "profile import")
         lastError = nil
+        // Roadmap C1: every import ends on its audit report.
+        if await auditProfile(profile.id, trigger: .imported) != nil {
+          presentAuditReport(for: profile.id)
+        }
       } catch {
         profileCoordinator.clearMessage()
         lastError = UserFacingError.message(for: error)
@@ -2507,7 +2517,7 @@ final class AppModel {
       } else {
         resolvedUpstream = nil
       }
-      guard try await profileCoordinator.addSubscription(
+      guard let profile = try await profileCoordinator.addSubscription(
         name: name,
         url: resolution.url,
         displayNameHint: resolution.displayNameHint,
@@ -2517,10 +2527,15 @@ final class AppModel {
         session: session,
         fetchOptions: fetchOptions,
         preflightValidator: subscriptionPreflightValidator(fixedUpstreamEndpoint: resolvedUpstream)
-      ) != nil else {
+      ) else {
         return false
       }
       restartPreviewRuntimeIfNeeded(reason: "subscription import")
+      // Roadmap C1: every import ends on its audit report, which is also where a subscription's
+      // network-reachable listeners are asked about (C3) instead of being started silently.
+      if await auditProfile(profile.id, trigger: .imported) != nil {
+        presentAuditReport(for: profile.id)
+      }
       return true
     } catch {
       profileCoordinator.clearMessage()
@@ -9347,7 +9362,7 @@ final class AppModel {
   ) async throws -> RuntimeConfigMaterializationResult {
     let effectiveOverrides = overrides ?? self.overrides
     var effectiveOptions = options
-    effectiveOptions.subscriptionProviderOptions = profile.subscriptionProviderOptions
+    effectiveOptions.apply(profile: profile)
     await runtimeSnippetLibrary.waitForLoad()
     effectiveOptions.runtimeSnippets = runtimeSnippetLibrary.snippets(applyingTo: profile.id)
     effectiveOptions = try await resolvedRuntimeConfigOptions(
@@ -9677,6 +9692,139 @@ final class AppModel {
         self?.lastError = "Could not verify stale System Proxy settings from a previous ClashMax session: \(UserFacingError.message(for: error))"
       }
     )
+  }
+}
+
+// MARK: - Subscription audit (roadmap C1)
+
+/// Which profile's audit report the main window is showing.
+struct SubscriptionAuditPresentation: Identifiable, Equatable {
+  var profileID: Profile.ID
+  var id: Profile.ID { profileID }
+}
+
+extension AppModel {
+  /// Compares a profile's current source with what ClashMax generates from it, stores the report on
+  /// the profile, and returns it. The generation uses the user's settings but none of their snippets,
+  /// so every difference is a decision about the profile, not something the user wrote.
+  @discardableResult
+  func auditProfile(
+    _ profileID: Profile.ID,
+    trigger: SubscriptionAuditReport.Trigger,
+    now: Date = Date()
+  ) async -> SubscriptionAuditReport? {
+    guard let profile = profileStore.profiles.first(where: { $0.id == profileID }) else { return nil }
+    if case .manualProxy = profile.source { return nil }
+    guard let source = await Self.readDiagnosticText(URL(fileURLWithPath: profile.originalConfigPath)) else {
+      return nil
+    }
+    var auditOverrides = overrides
+    auditOverrides.tunEnabled = proxyRoutingMode == .tun
+    auditOverrides.tunSettings = tunSettings
+    var runtimeYAML: String?
+    var failure: String?
+    do {
+      var options = currentRoutingRuntimeConfigOptions()
+      options.apply(profile: profile)
+      options = try await resolvedRuntimeConfigOptions(for: profile, baseOptions: options)
+      let finalOptions = options
+      let profileName = profile.name
+      runtimeYAML = try await Task.detached(priority: .userInitiated) {
+        try ConfigNormalizer().runtimeConfig(
+          from: source,
+          providerContentPath: "provider.yaml",
+          profileName: profileName,
+          overrides: auditOverrides,
+          options: finalOptions
+        )
+      }.value
+    } catch {
+      failure = UserFacingError.message(for: error)
+    }
+    let policy = profile.subscriptionProviderOptions.exposedListenerPolicy
+    let generatedYAML = runtimeYAML
+    let failureMessage = failure
+    let report = await Task.detached(priority: .userInitiated) {
+      SubscriptionAuditBuilder.build(
+        sourceYAML: source,
+        runtimeYAML: generatedYAML,
+        generationFailure: failureMessage,
+        listenerPolicy: profile.isSubscription ? policy : .allowExposed,
+        trigger: trigger,
+        generatedAt: now
+      )
+    }.value
+    do {
+      try await profileStore.recordAudit(report, for: profileID)
+    } catch {
+      appendAppLog(level: "warn", message: "Could not save the audit report for \(profile.name): \(UserFacingError.message(for: error))")
+    }
+    return report
+  }
+
+  /// After an update the report is never a sheet: a background refresh must not interrupt, and a
+  /// manual one already says it finished. What needs a look is announced instead and stays marked
+  /// on the profile until it is opened.
+  func announceAuditAfterUpdate(_ profileID: Profile.ID, automatic: Bool) async {
+    guard let report = await auditProfile(profileID, trigger: automatic ? .automaticUpdate : .updated),
+          report.needsAttention,
+          let profile = profileStore.profiles.first(where: { $0.id == profileID })
+    else { return }
+    let message = String(
+      format: String(localized: "%@ asks for settings that need your review. Open its audit report from the profile."),
+      profile.name
+    )
+    appendAppLog(level: "warn", message: "Subscription audit for \(profile.name) needs review.")
+    if automatic {
+      notifySubscriptionAudit(profileName: profile.name, message: message)
+    } else {
+      publishWarningNotice(message)
+    }
+  }
+
+  func presentAuditReport(for profileID: Profile.ID) {
+    subscriptionAuditPresentation = SubscriptionAuditPresentation(profileID: profileID)
+  }
+
+  func acknowledgeAuditReport(for profileID: Profile.ID) {
+    Task { @MainActor [weak self] in
+      try? await self?.profileStore.acknowledgeAudit(for: profileID)
+    }
+  }
+
+  /// Roadmap C3: the user's answer to "start the listeners this subscription opens to the network?",
+  /// applied through the ordinary provider-options path (preflight, reload, rollback), then audited
+  /// again so the report shows the new state.
+  @discardableResult
+  func setInheritedListenerPolicy(_ policy: InheritedListenerPolicy, for profileID: Profile.ID) async -> Bool {
+    guard let profile = profileStore.profiles.first(where: { $0.id == profileID }) else { return false }
+    var options = profile.subscriptionProviderOptions
+    options.exposedListenerPolicy = policy
+    guard await updateSubscriptionProviderOptions(profile, options: options) else { return false }
+    await auditProfile(profileID, trigger: profile.subscriptionDiagnostics.latestAudit?.trigger ?? .updated)
+    try? await profileStore.acknowledgeAudit(for: profileID)
+    return true
+  }
+
+  /// Profiles whose newest audit has something unreviewed, for the Status page.
+  var profilesNeedingAuditReview: [Profile] {
+    profileStore.profiles.filter { $0.subscriptionDiagnostics.latestAudit?.needsAttention == true }
+  }
+
+  private func notifySubscriptionAudit(profileName: String, message: String) {
+    let content = UNMutableNotificationContent()
+    content.title = String(localized: "Subscription Needs Review")
+    content.subtitle = profileName
+    content.body = message
+    let request = UNNotificationRequest(
+      identifier: "subscription-audit-\(profileName)-\(Date().timeIntervalSince1970)",
+      content: content,
+      trigger: nil
+    )
+    UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
+      guard granted else { return }
+      UNUserNotificationCenter.current().add(request)
+    }
   }
 }
 
