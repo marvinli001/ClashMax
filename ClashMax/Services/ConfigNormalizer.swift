@@ -341,6 +341,10 @@ struct ConfigNormalizer {
     // A raw patch cannot set `mixed-port` (reserved), but it can still add `port:`; the inbound
     // port promise has to hold after the last write, not only after the profile.
     Self.removeProfileInboundPortKeys(from: &root, source: "raw YAML snippet", notes: &notes)
+    // The same promise for `authentication:`, which a profile, the legacy merge or a raw patch can
+    // each bring: apps on this Mac must reach mixed-port without credentials. It only ever adds
+    // prefixes, so the list keeps gating every port another machine reaches.
+    Self.exemptLoopbackFromInboundAuthentication(in: &root, notes: &notes)
     // `listeners:` is passed through as authored, but a typed inbound on one of ClashMax's own
     // ports fails exactly like a root `port:` did (measured: Mihomo patches listeners before it
     // creates the mixed listener), so that collision is refused with the reason rather than
@@ -436,6 +440,33 @@ struct ConfigNormalizer {
     }
     notes.append(
       "Kept the subscription's network-reachable listeners off until they are allowed in its audit report (\(dropped.joined(separator: "; ")))."
+    )
+  }
+
+  /// Both families: measured on v1.19.31, `127.0.0.0/8` alone still left a request over `[::1]`
+  /// answered 407 once Allow LAN made the mixed port dual-stack.
+  static let loopbackSkipAuthPrefixes = ["127.0.0.0/8", "::1/128"]
+
+  /// Measured on v1.19.31 (docs/ROADMAP.md, C1): with an `authentication:` list, ClashMax's own
+  /// mixed-port answered 407 to apps on this Mac and `05 02` to the SOCKS5 readiness probe, so the
+  /// system proxy broke and an NE Proxy start failed. `skip-auth-prefixes` exempts by source
+  /// address only: with it, a `listen: 0.0.0.0` listener (and the mixed port under Allow LAN)
+  /// still answered 407 to the Mac's own LAN address without credentials and 200 with them, which
+  /// is what keeps an exposed listener from being an open proxy (ListenerExposure.swift).
+  private static func exemptLoopbackFromInboundAuthentication(in root: inout [String: Any], notes: inout [String]) {
+    guard ListenerRuntimeFacts.facts(from: root).hasInboundAuthentication else { return }
+    // The config's own prefixes are kept; a lone string becomes a list, anything else would not load.
+    let existing: [Any] = switch root["skip-auth-prefixes"] {
+    case let list as [Any]: list
+    case let prefix as String: [prefix]
+    default: []
+    }
+    let present = Set(existing.compactMap { ($0 as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() })
+    let added = loopbackSkipAuthPrefixes.filter { !present.contains($0) }
+    guard !added.isEmpty else { return }
+    root["skip-auth-prefixes"] = existing + added
+    notes.append(
+      "Let apps on this Mac use mixed-port without the config's inbound authentication (added \(added.joined(separator: ", ")) to skip-auth-prefixes); other machines still need its credentials."
     )
   }
 

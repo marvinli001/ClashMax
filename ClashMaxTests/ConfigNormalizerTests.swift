@@ -2059,6 +2059,108 @@ final class ConfigNormalizerTests: XCTestCase {
     }
   }
 
+  // MARK: - C1: a profile's `authentication:` must not lock this Mac out of mixed-port
+
+  func testInboundAuthenticationExemptsOnlyLoopbackSoTheMixedPortStaysUsable() throws {
+    // Measured on v1.19.31: without the exemption the mixed port answered apps on this Mac 407 and
+    // the SOCKS5 readiness probe 05 02. The list itself stays, because it is what gates the
+    // exposed listener below — the bundled-core test checks that against the real core.
+    let source = """
+    authentication:
+      - "lan-user:lan-pass"
+    listeners:
+      - {name: lan, type: mixed, listen: 0.0.0.0, port: 7999}
+    \(Self.minimalProfileSource)
+    """
+
+    let generation = try ConfigNormalizer().generateRuntimeConfig(
+      from: source,
+      overrides: .defaultForLaunch(secret: "secret-token")
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: generation.yaml) as? [String: Any])
+
+    XCTAssertEqual(yaml["authentication"] as? [String], ["lan-user:lan-pass"])
+    XCTAssertEqual(yaml["skip-auth-prefixes"] as? [String], ["127.0.0.0/8", "::1/128"])
+    let facts = ListenerRuntimeFacts.facts(from: yaml)
+    XCTAssertTrue(facts.hasInboundAuthentication)
+    XCTAssertEqual(facts.exposedListeners.map(\.name), ["lan"])
+    XCTAssertEqual(
+      generation.notes,
+      ["Let apps on this Mac use mixed-port without the config's inbound authentication (added 127.0.0.0/8, ::1/128 to skip-auth-prefixes); other machines still need its credentials."]
+    )
+  }
+
+  func testProfileSkipAuthPrefixesAreKeptAndOnlyMissingLoopbackIsAdded() throws {
+    func generate(_ prefixes: String) throws -> (prefixes: [String]?, notes: [String]) {
+      let source = """
+      authentication: ["lan-user:lan-pass"]
+      skip-auth-prefixes: \(prefixes)
+      \(Self.minimalProfileSource)
+      """
+      let generation = try ConfigNormalizer().generateRuntimeConfig(
+        from: source,
+        overrides: .defaultForLaunch(secret: "secret-token")
+      )
+      let yaml = try XCTUnwrap(Yams.load(yaml: generation.yaml) as? [String: Any])
+      return (yaml["skip-auth-prefixes"] as? [String], generation.notes)
+    }
+
+    let partial = try generate(#"["192.168.8.0/24", "::1/128"]"#)
+    XCTAssertEqual(partial.prefixes, ["192.168.8.0/24", "::1/128", "127.0.0.0/8"])
+    XCTAssertEqual(partial.notes.count, 1)
+    XCTAssertTrue(partial.notes[0].contains("(added 127.0.0.0/8 to skip-auth-prefixes)"), partial.notes[0])
+
+    // A single prefix written as a scalar becomes a list instead of being dropped.
+    XCTAssertEqual(try generate("10.0.0.0/8").prefixes, ["10.0.0.0/8", "127.0.0.0/8", "::1/128"])
+
+    let complete = try generate(#"["127.0.0.0/8", "::1/128"]"#)
+    XCTAssertEqual(complete.prefixes, ["127.0.0.0/8", "::1/128"])
+    XCTAssertEqual(complete.notes, [])
+  }
+
+  func testWithoutInboundAuthenticationSkipAuthPrefixesAreLeftAsAuthored() throws {
+    for source in [
+      Self.minimalProfileSource,
+      "authentication: []\n\(Self.minimalProfileSource)",
+      "skip-auth-prefixes: [10.0.0.0/8]\n\(Self.minimalProfileSource)",
+    ] {
+      let generation = try ConfigNormalizer().generateRuntimeConfig(
+        from: source,
+        overrides: .defaultForLaunch(secret: "secret-token")
+      )
+      let yaml = try XCTUnwrap(Yams.load(yaml: generation.yaml) as? [String: Any])
+      let authored = try XCTUnwrap(Yams.load(yaml: source) as? [String: Any])["skip-auth-prefixes"] as? [String]
+      XCTAssertEqual(yaml["skip-auth-prefixes"] as? [String], authored, source)
+      XCTAssertEqual(generation.notes, [], source)
+    }
+  }
+
+  func testRawYAMLSnippetAuthenticationStillLeavesLoopbackExempt() throws {
+    // The user's own snippet may add the list to share the proxy on the LAN and replace the
+    // prefixes in the same breath; the exemption holds after the last write, like the port promise.
+    var options = RuntimeConfigOptions.default
+    options.runtimeSnippets = [
+      RuntimeSnippet(
+        name: "LAN sharing",
+        payload: .rawYAML(RawYAMLPatchSettings(
+          yaml: "authentication:\n  - \"phone:phone-pass\"\nskip-auth-prefixes:\n  - 10.0.0.0/8\n",
+          listStrategy: .replace
+        ))
+      ),
+    ]
+
+    let generation = try ConfigNormalizer().generateRuntimeConfig(
+      from: Self.minimalProfileSource,
+      overrides: .defaultForLaunch(secret: "secret-token"),
+      options: options
+    )
+    let yaml = try XCTUnwrap(Yams.load(yaml: generation.yaml) as? [String: Any])
+
+    XCTAssertEqual(yaml["authentication"] as? [String], ["phone:phone-pass"])
+    XCTAssertEqual(yaml["skip-auth-prefixes"] as? [String], ["10.0.0.0/8", "127.0.0.0/8", "::1/128"])
+    XCTAssertEqual(generation.notes.count, 1)
+  }
+
   func testProviderOptionsGuardrailMarksDangerousYAMLKeys() throws {
     let options = SubscriptionProviderOptions(
       overrideYAML: """

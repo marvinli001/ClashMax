@@ -304,6 +304,103 @@ final class CoreRuntimePreflightTests: XCTestCase {
   }
 
   /// The status code of one HTTP/1.0 exchange over a unix socket, or nil when nothing answered.
+  /// C1, measured on v1.19.31: a profile's `authentication:` gated ClashMax's own mixed port too, so
+  /// the readiness probe got `05 02` and apps on this Mac got 407. The loopback exemption the
+  /// normalizer adds has to fix that without opening the profile's exposed listener to the network.
+  func testBundledMihomoExemptsThisMacFromProfileAuthenticationButNotTheNetwork() async throws {
+    guard let coreURL = try BundledCoreRequirement.coreURL() else { return }
+    guard let lanAddress = Self.firstNonLoopbackIPv4Address() else {
+      throw XCTSkip("No non-loopback IPv4 address to reach the exposed listener from.")
+    }
+
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxInboundAuthentication-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let (mixedPort, listenerPort, controllerPort) = try Self.threeDistinctFreeLoopbackPorts()
+    let profile = """
+    authentication:
+      - "lan-user:lan-pass"
+    listeners:
+      - {name: lan, type: mixed, listen: 0.0.0.0, port: \(listenerPort)}
+    mode: direct
+    log-level: info
+    proxies: []
+    proxy-groups: []
+    rules: []
+    """
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.mixedPort = mixedPort
+    overrides.externalControllerPort = controllerPort
+    overrides.dnsEnabled = false
+    let probe = SocksProxyReadinessProbe(attempts: 40, delayNanoseconds: 100_000_000, timeout: 0.5)
+    let authenticationRequired = SocksGreetingFailure.unexpectedReply([0x05, 0x02])
+
+    // Control: the profile as authored locks this Mac out of its own port.
+    let rawConfigURL = directory.appendingPathComponent("raw.yaml")
+    try (profile + "\nmixed-port: \(mixedPort)\nexternal-controller: 127.0.0.1:\(controllerPort)\n")
+      .write(to: rawConfigURL, atomically: true, encoding: .utf8)
+    let rawCore = try FoundationProcessLauncher().launch(
+      executable: coreURL,
+      arguments: ["-f", rawConfigURL.path, "-d", directory.path],
+      environment: ["SAFE_PATHS": directory.path],
+      workDirectory: directory
+    )
+    do {
+      defer { rawCore.terminate() }
+      let rawOutcome = try await Self.waitForGreetingOutcome(port: mixedPort, timeout: 10) { $0 == authenticationRequired }
+      XCTAssertEqual(rawOutcome, authenticationRequired, "the readiness probe is refused by the profile's authentication")
+    }
+    await Self.waitForPortToClose(mixedPort)
+    await Self.waitForPortToClose(listenerPort)
+    await Self.waitForPortToClose(controllerPort)
+
+    // The fix: the same profile through ConfigNormalizer, listener allowed.
+    let generation = try ConfigNormalizer().generateRuntimeConfig(from: profile, overrides: overrides)
+    let normalizedURL = directory.appendingPathComponent("normalized.yaml")
+    try generation.yaml.write(to: normalizedURL, atomically: true, encoding: .utf8)
+    let core = try FoundationProcessLauncher().launch(
+      executable: coreURL,
+      arguments: ["-f", normalizedURL.path, "-d", directory.path],
+      environment: ["SAFE_PATHS": directory.path],
+      workDirectory: directory
+    )
+    defer { core.terminate() }
+
+    try await probe.waitUntilReady(host: "127.0.0.1", port: mixedPort)
+    // Exempt by source address, not by port: this Mac gets through the listener as well.
+    XCTAssertNil(SocksProxyReadinessProbe.probeGreeting(host: "127.0.0.1", port: listenerPort, timeout: 0.5))
+    // From the Mac's own LAN address — not loopback — the listener still wants the credentials.
+    XCTAssertEqual(
+      SocksProxyReadinessProbe.probeGreeting(host: lanAddress, port: listenerPort, timeout: 0.5),
+      authenticationRequired,
+      "\(lanAddress):\(listenerPort) must not become an open proxy; core output: \(core.recentOutputTail(maxBytes: 4096))"
+    )
+  }
+
+  private static func firstNonLoopbackIPv4Address() -> String? {
+    var interfaces: UnsafeMutablePointer<ifaddrs>?
+    guard getifaddrs(&interfaces) == 0, let interfaces else { return nil }
+    defer { freeifaddrs(interfaces) }
+    var current: UnsafeMutablePointer<ifaddrs>? = interfaces
+    while let entry = current {
+      defer { current = entry.pointee.ifa_next }
+      let flags = Int32(entry.pointee.ifa_flags)
+      guard let address = entry.pointee.ifa_addr,
+            address.pointee.sa_family == sa_family_t(AF_INET),
+            flags & IFF_UP != 0,
+            flags & IFF_LOOPBACK == 0
+      else { continue }
+      var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+      guard getnameinfo(address, socklen_t(address.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 else {
+        continue
+      }
+      return String(decoding: host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    }
+    return nil
+  }
+
   private static func unixSocketStatusCode(path: String, request: String) -> Int? {
     let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
     guard descriptor >= 0 else { return nil }

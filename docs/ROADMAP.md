@@ -867,7 +867,7 @@ A subscription can change your DNS, open listeners, and rebind the external cont
   subscription rather than something the user wrote. It does not re-implement the normalizer's
   rules, which is why it cannot drift from them. What the probes against core v1.19.31 added: an
   `authentication:` list makes ClashMax's **own** mixed port answer 407 to apps on this Mac, so a
-  subscription carrying one breaks the system proxy (now a `warning` with that consequence); a
+  subscription carrying one breaks the system proxy (fixed the same day, measured below); a
   `script:` block is accepted and ignored, and a `SCRIPT` rule fails the whole config (reported as
   `info`); `external-controller-tls/-unix/-pipe` ran as authored until the decision below and are
   now reported as `danger`, *overridden*.
@@ -899,6 +899,36 @@ A subscription can change your DNS, open listeners, and rebind the external cont
   (the raw half pins the measurement, so a core that starts checking the secret fails it and
   reopens this decision; the normalized half proves the socket never appears), and the C1 test now
   expects *overridden* — such a profile no longer needs attention for this key.
+- **`authentication:` locking this Mac out — fixed 2026-10-01.** Probed with a throwaway bundled
+  core v1.19.31 on high ports: `authentication: ["u:p"]`, the mixed port, and a
+  `listen: 0.0.0.0` mixed listener. "LAN" below is this Mac's own `en0` address, which the core
+  sees as a non-loopback source.
+  - **Without `skip-auth-prefixes`:** the mixed port answered `127.0.0.1` with `407` (`200` with
+    credentials), and the SOCKS5 greeting ClashMax's readiness probe sends got `05 02`. So it was
+    worse than the system proxy: an NE Proxy start and a settings apply while running failed
+    readiness too ("requires authentication").
+  - **With `skip-auth-prefixes: [127.0.0.0/8, ::1/128]`:** the mixed port answered `127.0.0.1`
+    with `200` and the greeting with `05 00`. The exposed listener answered the LAN address with
+    `407` without credentials, `200` with them, and `05 02` to the greeting. The exemption is by
+    source address, not by port: the same listener answered `127.0.0.1` with `200`.
+  - **With Allow LAN** (mixed port on `*:port`): `127.0.0.1` and `[::1]` got `200`, the LAN
+    address `407`. `127.0.0.0/8` alone left `[::1]` at `407`, so both families are needed.
+    Duplicate and overlapping prefixes are accepted, and `GET /configs` echoes
+    `skip-auth-prefixes` (and only the user names of `authentication`).
+  - **What ships:** [`ConfigNormalizer`](../ClashMax/Services/ConfigNormalizer.swift) appends
+    the two loopback prefixes to any the config already has whenever the final config carries a
+    non-empty `authentication` list. It does this after the user's Raw YAML snippets too, the same
+    rule as the inbound-port promise. The list itself is never touched, so
+    [`ListenerExposure`](../ClashMax/Models/ListenerExposure.swift)'s "authenticated" verdict for
+    an exposed listener still holds. The audit reads the exemption back from the generated config
+    and reports the key as `info`, naming who still needs the credentials; a runtime without the
+    exemption would still be reported as a `warning` with the 407. Tests: four in
+    `ConfigNormalizerTests`, two in `SubscriptionAuditTests`, and
+    `testBundledMihomoExemptsThisMacFromProfileAuthenticationButNotTheNetwork`, which reproduces
+    the `05 02` against the real core and checks the LAN side.
+  - **Not covered:** a profile's own `skip-auth-prefixes` is merged, not judged. A subscription
+    that lists `0.0.0.0/0` exempts the network as well, and `ListenerExposure` would still call
+    its exposed listener authenticated.
 - **Acceptance criteria:**
   - [x] On import and on update, a plain-language report: what this subscription tried to
         change, what ClashMax overrode, and what it let through. → **2026-10-01**: three groups

@@ -20,6 +20,10 @@ private extension String {
 /// - **The global `authentication:` list does apply**: without credentials the same LAN request
 ///   answered 407, with them 200. An exposed listener and an empty `authentication` list together
 ///   are an open proxy for anyone who can reach the port.
+/// - **`skip-auth-prefixes` exempts by source address, on every inbound** (v1.19.31). With a list,
+///   `ConfigNormalizer` adds loopback so apps on this Mac can use `mixed-port`; the exposed listener
+///   still answered the Mac's own LAN address with 407. A config's own wider prefixes are not
+///   judged here.
 struct RuntimeListener: Equatable, Sendable, Identifiable {
   var name: String
   var type: String

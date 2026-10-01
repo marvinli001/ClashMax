@@ -676,7 +676,7 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
 - **怎么判断。** [`SubscriptionAuditBuilder`](../ClashMax/Models/SubscriptionAudit.swift) 是纯函数：它把抓下来的配置，和
   ClashMax 用用户设置、但**不带任何用户片段**生成的配置做比较，所以每一处差异都是针对订阅的决定，而不是用户自己写的东西。
   它不重新实现 normalizer 的规则，因此不会和规则产生偏差。针对内核 v1.19.31 的实测补充了几点：`authentication:` 列表会让
-  ClashMax **自己的** mixed 端口对本机 App 返回 407，所以带这一项的订阅会让系统代理失效（现在是带这个后果的 `warning`）；
+  ClashMax **自己的** mixed 端口对本机 App 返回 407，所以带这一项的订阅会让系统代理失效（当天已修复，实测见下）；
   `script:` 块会被接受然后忽略，`SCRIPT` 规则会让整个配置加载失败（报告为 `info`）；`external-controller-tls/-unix/-pipe`
   在下面的决定之前按原样运行，现在报告为 `danger`、*已覆盖*。
 - **2026-10-01 决定：normalizer 删除配置文件自带的其他控制器监听。** 针对内核 v1.19.31 实测，socket 绑定在 `/tmp` 下
@@ -698,6 +698,28 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
   `CoreRuntimePreflightTests.testBundledMihomoUnixControllerIgnoresTheSecretAndTheNormalizerDropsIt`（原始配置那一半固定了
   实测结果，内核一旦开始校验密钥就会让它失败、重新打开这个决定；规范化那一半证明 socket 从未出现），以及 C1 测试现在期望
   *已覆盖*——这样的配置不再因为这个 key 需要关注。
+- **`authentication:` 把本机挡在门外——2026-10-01 已修复。** 用一个临时的内置内核 v1.19.31 在高位端口上实测：
+  `authentication: ["u:p"]`、mixed 端口，加一个 `listen: 0.0.0.0` 的 mixed 监听器。下面的「局域网」指这台 Mac 自己的
+  `en0` 地址，内核把它看作非回环来源。
+  - **没有 `skip-auth-prefixes` 时：** mixed 端口对 `127.0.0.1` 返回 `407`（带凭据 `200`），ClashMax 就绪探测发出的
+    SOCKS5 问候收到 `05 02`。所以影响不止系统代理：NE Proxy 启动、运行中应用设置也会卡在就绪检查上
+    （"requires authentication"）。
+  - **加上 `skip-auth-prefixes: [127.0.0.0/8, ::1/128]` 后：** mixed 端口对 `127.0.0.1` 返回 `200`，问候回 `05 00`。
+    暴露的监听器对局域网地址不带凭据返回 `407`、带凭据 `200`，问候回 `05 02`。豁免按来源地址而不是按端口：同一个监听器
+    对 `127.0.0.1` 返回 `200`。
+  - **开启「允许局域网」时**（mixed 端口监听 `*:port`）：`127.0.0.1` 和 `[::1]` 返回 `200`，局域网地址 `407`。只写
+    `127.0.0.0/8` 时 `[::1]` 仍是 `407`，所以两个地址族都需要。重复和重叠的前缀都能被接受；`GET /configs` 会回显
+    `skip-auth-prefixes`（`authentication` 只回显用户名）。
+  - **交付的做法：** 只要最终配置里有非空的 `authentication` 列表，
+    [`ConfigNormalizer`](../ClashMax/Services/ConfigNormalizer.swift) 就把这两个回环前缀追加到配置已有的前缀之后。它在用户的
+    Raw YAML 片段之后也会执行，和入站端口的承诺是同一条规则。列表本身从不改动，所以
+    [`ListenerExposure`](../ClashMax/Models/ListenerExposure.swift) 对暴露监听器「有认证」的判断依然成立。审计从生成的配置
+    里读回这项豁免，把这个 key 报告为 `info`，并说明还有谁需要这些凭据；生成的配置里若没有豁免，仍会报告为带 407 后果的
+    `warning`。测试：`ConfigNormalizerTests` 四个、`SubscriptionAuditTests` 两个，以及
+    `testBundledMihomoExemptsThisMacFromProfileAuthenticationButNotTheNetwork`——它在真实内核上复现 `05 02`，并检查局域网
+    一侧。
+  - **未覆盖：** 配置文件自带的 `skip-auth-prefixes` 只会被合并、不会被评判。列出 `0.0.0.0/0` 的订阅会把网络也一并豁免，
+    而 `ListenerExposure` 仍会认为它暴露的监听器有认证。
 - **验收标准：**
   - [x] 在导入时和更新时，给出一份大白话报告：这份订阅试图改什么、ClashMax 覆盖了什么、放行了什么。→ **2026-10-01**：
         报告和面板里分成这三组。导入（订阅或本地 YAML）结束时打开面板；手动和自动更新同样会审计，但从不弹面板——手动更新

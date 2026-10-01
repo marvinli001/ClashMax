@@ -173,11 +173,56 @@ final class SubscriptionAuditTests: XCTestCase {
       )
     )
     XCTAssertFalse(report.needsListenerDecision)
-    // Measured: the same list makes ClashMax's own port answer 407 to local apps.
+    // Measured: the same list made ClashMax's own port answer 407 to local apps until the
+    // normalizer exempted loopback; it still gates every port another device reaches.
     let authentication = try XCTUnwrap(item("authentication", in: report))
-    XCTAssertTrue(authentication.consequence?.contains("407") == true)
+    XCTAssertEqual(authentication.severity, .info)
+    XCTAssertEqual(authentication.disposition, .passedThrough)
+    XCTAssertEqual(
+      authentication.outcome,
+      String(
+        format: String(localized: "Passed through. Apps on this Mac are exempt: ClashMax adds %@ to skip-auth-prefixes."),
+        "127.0.0.0/8, ::1/128"
+      )
+    )
+    XCTAssertEqual(
+      authentication.consequence,
+      String(localized: "Other devices that reach your proxy, through Allow LAN or a listener, must sign in with these credentials, which whoever wrote the subscription also knows.")
+    )
     let encoded = try String(decoding: JSONEncoder().encode(report), as: UTF8.self)
     XCTAssertFalse(encoded.contains("lan-pass"))
+  }
+
+  func testAuthenticationWithoutTheLoopbackExemptionIsStillReportedAsBreakingTheSystemProxy() throws {
+    // The exemption is read from the generated config, not assumed: a runtime that lacks it is
+    // reported with the measured 407.
+    let source = """
+    authentication:
+      - "lan-user:lan-pass"
+    \(Self.nodes)
+    """
+    let runtime = """
+    authentication:
+      - "lan-user:lan-pass"
+    skip-auth-prefixes: ["127.0.0.0/8"]
+    \(Self.nodes)
+    """
+
+    let report = SubscriptionAuditBuilder.build(
+      sourceYAML: source,
+      runtimeYAML: runtime,
+      listenerPolicy: nil,
+      trigger: .imported,
+      generatedAt: Date()
+    )
+
+    let authentication = try XCTUnwrap(item("authentication", in: report))
+    XCTAssertEqual(authentication.severity, .warning)
+    XCTAssertEqual(authentication.outcome, String(localized: "Passed through."))
+    XCTAssertEqual(
+      authentication.consequence,
+      String(localized: "ClashMax's own port asks for these credentials too, so apps using the system proxy get HTTP 407 and stop connecting.")
+    )
   }
 
   func testLoopbackOnlyListenersAreInformational() throws {

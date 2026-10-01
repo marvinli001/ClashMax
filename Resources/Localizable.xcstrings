@@ -13291,6 +13291,16 @@
         }
       }
     },
+    "Other devices that reach your proxy, through Allow LAN or a listener, must sign in with these credentials, which whoever wrote the subscription also knows." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其他设备通过“允许局域网”或监听器访问你的代理时，必须使用这些凭据登录，而订阅的作者也知道这些凭据。"
+          }
+        }
+      }
+    },
     "overlay order" : {
       "localizations" : {
         "zh-Hans" : {
@@ -13536,6 +13546,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已放行。"
+          }
+        }
+      }
+    },
+    "Passed through. Apps on this Mac are exempt: ClashMax adds %@ to skip-auth-prefixes." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已放行。本机上的 App 无需这些凭据：ClashMax 会把 %@ 加入 skip-auth-prefixes。"
           }
         }
       }

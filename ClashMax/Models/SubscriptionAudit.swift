@@ -448,19 +448,43 @@ enum SubscriptionAuditBuilder {
     }
 
     /// Measured against v1.19.31: with an `authentication` list, a request from this Mac to the
-    /// mixed port without credentials was answered 407, with them 200.
+    /// mixed port without credentials was answered 407, with them 200 — unless the source address
+    /// is in `skip-auth-prefixes`, which the normalizer fills with loopback. A request from the
+    /// LAN still needed the credentials. Whether this Mac is exempt is read from the generated
+    /// config, so the report cannot claim a fix the normalizer stopped making.
     private func authenticationItem(key: String, value: Any) -> SubscriptionAuditReport.Item {
       let count = (value as? [Any])?.count ?? 0
       let disposition = disposition(for: key, sourceValue: value) ?? .passedThrough
+      let enforced = count > 0 && disposition == .passedThrough
+      let runtimePrefixes = Set(((runtimeValue("skip-auth-prefixes") as? [Any]) ?? []).map {
+        SubscriptionAuditBuilder.scalar($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+      })
+      let thisMacExempt = ConfigNormalizer.loopbackSkipAuthPrefixes.allSatisfy(runtimePrefixes.contains)
+      let gatesThisMac = enforced && runtimeKnown && !thisMacExempt
+      let outcome = if disposition == .overridden {
+        String(localized: "Removed by ClashMax.")
+      } else if enforced, thisMacExempt {
+        String(
+          format: String(localized: "Passed through. Apps on this Mac are exempt: ClashMax adds %@ to skip-auth-prefixes."),
+          ConfigNormalizer.loopbackSkipAuthPrefixes.joined(separator: ", ")
+        )
+      } else {
+        String(localized: "Passed through.")
+      }
+      let consequence: String? = if gatesThisMac {
+        String(localized: "ClashMax's own port asks for these credentials too, so apps using the system proxy get HTTP 407 and stop connecting.")
+      } else if enforced {
+        String(localized: "Other devices that reach your proxy, through Allow LAN or a listener, must sign in with these credentials, which whoever wrote the subscription also knows.")
+      } else {
+        nil
+      }
       return SubscriptionAuditReport.Item(
         key: key,
-        severity: count > 0 ? .warning : .info,
+        severity: gatesThisMac ? .warning : .info,
         disposition: disposition,
         attempted: String(format: String(localized: "Require a username and password on inbound proxies (%lld account(s))."), Int64(count)),
-        outcome: disposition == .overridden ? String(localized: "Removed by ClashMax.") : String(localized: "Passed through."),
-        consequence: count > 0 && disposition == .passedThrough
-          ? String(localized: "ClashMax's own port asks for these credentials too, so apps using the system proxy get HTTP 407 and stop connecting.")
-          : nil
+        outcome: outcome,
+        consequence: consequence
       )
     }
 
