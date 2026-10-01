@@ -501,11 +501,39 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
 
 #### B3——App Intents 与快捷指令
 
+**状态：除场景 intent 外已于 2026-10-01 交付。还没有人在快捷指令 App 里亲手跑过。**
+
+- **原先的问题。** 现有的 6 个动作都设了 `openAppWhenRun`，打开一个 `clashmax://` URL 后立刻返回
+  `.result()`，所以 app 还没解析 URL，快捷指令就已经报告成功——启动失败、系统代理被拒绝、配置不存在，看起来
+  都和成功一模一样。现在这些动作在进程内针对正在运行的 `AppModel` 执行（在 `ClashMaxApp.init` 里注册到
+  `AppDependencyManager`，通过 `@Dependency` 取得），并等待自己发起的操作完成。基于 URL scheme 的旧快捷指令
+  不受影响。
 - **验收标准：**
-  - [ ] 提供以下 intent：设置路由模式、选择配置文件、在组内选择节点、开关系统代理、开关 TUN、激活场景。
-  - [ ] 每个 intent 都报告成功或具体失败；不允许任何一个静默空转。
-  - [ ] 需要特权 helper 的 intent，以 UI 给出的同样可操作的指引失败，并复用 `HelperSetupGuidance`。
-  - [ ] 在快捷指令 App 中手工验证，并记入 `MANUAL_TEST_PLAN.md`。
+  - [x] 提供以下 intent：设置路由模式、选择配置文件、在组内选择节点、开关系统代理、开关 TUN。→ **2026-10-01**，
+        见 [`ClashMaxAppIntents.swift`](../ClashMax/App/ClashMaxAppIntents.swift)：路由模式是 `AppEnum`
+        （系统代理 / TUN / NE 代理）；配置、代理组和节点是 `AppEntity`，节点列表取自同一个动作里已选的组
+        （`@IntentParameterDependency`）；系统代理和 TUN 都接受 开启 / 关闭 / 切换。在 ClashMax 里 TUN 是一种路由
+        模式，所以关闭 TUN 意味着回到系统代理路由。组和节点的标识符不依赖内核就能解析，所以 ClashMax 停止时运行
+        一个已保存的快捷指令，会走到它自己的报错，而不是弹出"缺少参数"。共 10 个 App Shortcut，正好是
+        `AppShortcutsProvider` 的上限。
+  - [ ] 提供 intent：激活场景。**依赖 [B2](#b2场景化推广-networkpolicyrule)**，B2 还没有场景模型；而且需要一个
+        App Shortcut 名额——10 个已经用满，届时得让出一个（intent 本身可以不占名额）。
+  - [x] 每个 intent 都报告成功或具体失败；不允许任何一个静默空转。→ **2026-10-01**。行为集中在
+        [`ClashMaxIntentExecutor`](../ClashMax/App/ClashMaxIntentExecutor.swift)，它要么返回一句结果，要么抛出
+        写明原因的 `ClashMaxIntentError`。在运行中的内核上启动、停止、重启、切换路由或切换配置，都会等生命周期稳定
+        下来——重启只有在出现*新的*一次运行时才算数，被替换的那次不算——45 秒内没稳定就报告"仍在处理"，而不是成功。
+        订阅更新和网络策略应用现在会返回实际结果（`SubscriptionUpdateBatchReport`、`NetworkPolicyApplyOutcome`），
+        而不只是写进状态栏。内核没运行时选节点会直接报错。证据：`ClashMaxIntentExecutorTests`（56 个测试，覆盖全部
+        10 个动作的每个成功和失败分支），以及针对真实 `AppModel` 的
+        `DashboardRuntimeStateTests.testAwaitedNetworkPolicy*` 和 `testIntentSurfaceOfAStoppedModelWithoutAProfile`；
+        命令 `xcodebuild test -only-testing:ClashMaxTests/ClashMaxIntentExecutorTests`。
+  - [x] 需要特权 helper 的 intent，以 UI 给出的同样可操作的指引失败，并复用 `HelperSetupGuidance`。→ **2026-10-01**。
+        `HelperSetupStage.guidanceMessage` 现在是"设置步骤 → 指引文字"的唯一映射，设置面板和动作都读它。在此之上，
+        启动 TUN 或切换到 TUN 之前会先通过 XPC 确认已启用的 helper 真能应答；切换到 TUN 的重启过程中如果 helper
+        失联，会立即停止等待并说明原因。证据：`testStartInTunModeGivesTheHelperSetupGuidanceForEveryUnreadyStage`、
+        `testSwitchIntoTunStopsWaitingWhenTheHelperFailsMidway`、`testHelperGuidanceMatchesWhatTheSetupSheetShows`。
+  - [ ] 在快捷指令 App 中手工验证，并记入 `MANUAL_TEST_PLAN.md`。步骤已写好（[`MANUAL_TEST_PLAN.md` 的 B3](MANUAL_TEST_PLAN.md#b3--every-shortcuts-action-reports-what-actually-happened)），
+        还没有人跑过。同样没验证的：`openAppWhenRun` 关掉之后，快捷指令能否在后台拉起 ClashMax 来执行动作。
 
 #### B4——控制中心小组件
 

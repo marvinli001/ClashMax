@@ -1,4 +1,5 @@
 import Foundation
+import ServiceManagement
 
 /// Why the app bundle's location blocks privileged helper registration.
 ///
@@ -117,6 +118,27 @@ enum HelperSetupStage: Equatable, Sendable {
   case approve
   case ready
   case failed(String)
+}
+
+extension HelperSetupStage {
+  /// The instruction the setup sheet shows for this step, or `nil` once the helper is ready.
+  ///
+  /// One mapping for every surface that has to explain the helper — the sheet, and a Shortcuts
+  /// action that needs TUN (roadmap B3) — so the guidance never drifts between them.
+  @MainActor var guidanceMessage: String? {
+    switch self {
+    case .ready:
+      return nil
+    case let .relocate(issue):
+      return issue.explanation
+    case .install:
+      return TunnelHelperClient.statusMessage(for: SMAppService.Status.notRegistered)
+    case .approve:
+      return TunnelHelperClient.statusMessage(for: SMAppService.Status.requiresApproval)
+    case let .failed(message):
+      return message
+    }
+  }
 }
 
 enum HelperSetupPolicy {

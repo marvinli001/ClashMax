@@ -1,16 +1,25 @@
+import AppIntents
 import AppKit
 import SwiftUI
 
 @main
 struct ClashMaxApp: App {
   @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-  @State private var appModel = AppModel.bootstrap()
+  @State private var appModel: AppModel
   @State private var appUpdateController = AppUpdateController()
   @Environment(\.openWindow) private var openWindow
   private let bundledCoreInfo = BundledCoreInfo()
   // Read once at process start: launch behavior is a scene-construction decision,
   // and the toggle only affects the NEXT launch anyway.
   private let silentStartRequested = UserDefaults.standard.bool(forKey: AppModel.silentStartDefaultsKey)
+
+  init() {
+    let appModel = AppModel.bootstrap()
+    _appModel = State(initialValue: appModel)
+    // Shortcuts actions run in this process and resolve the model through `@Dependency`. Registered
+    // here, before any scene exists, because a Shortcut can launch ClashMax just to run an action.
+    AppDependencyManager.shared.add(dependency: appModel)
+  }
 
   var body: some Scene {
     // Hand the delegate a window opener while the scene graph is built, i.e.

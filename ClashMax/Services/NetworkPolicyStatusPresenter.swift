@@ -52,3 +52,23 @@ enum NetworkPolicyStatusPresenter {
     }
   }
 }
+
+/// How one attempt to apply the current network's policy ended. The status line in Settings shows
+/// the same message; this is the form a caller that awaits the attempt can branch on (roadmap B3).
+enum NetworkPolicyApplyOutcome: Equatable, Sendable {
+  /// A saved policy matched and was applied.
+  case applied(String)
+  /// No policy matches any more and the state the last one replaced was put back.
+  case restored(String)
+  /// Nothing matched and there was nothing to restore, so nothing changed.
+  case nothingToApply(String)
+  case failed(String)
+  /// Superseded by a newer apply or restore before it finished.
+  case cancelled
+}
+
+/// Either the outcome is already known, or the apply/restore it started is still running.
+enum NetworkPolicyApplyDispatch {
+  case finished(NetworkPolicyApplyOutcome)
+  case pending(Task<NetworkPolicyApplyOutcome, Never>)
+}

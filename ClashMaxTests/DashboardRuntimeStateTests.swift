@@ -3071,6 +3071,90 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertTrue(commandRunner.commands.contains("/usr/sbin/networksetup -setwebproxy Wi-Fi 127.0.0.1 7890"))
   }
 
+  /// Roadmap B3: the Shortcuts action awaits the same apply path and gets its outcome back, so a
+  /// successful apply is known to be done — no polling — and its message is the status line's.
+  func testAwaitedNetworkPolicyApplyReturnsTheAppliedOutcome() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let commandRunner = RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())
+    let rule = NetworkPolicyRule(
+      name: "Office Wi-Fi",
+      ssid: "CorpNet",
+      proxyRoutingMode: .systemProxy,
+      enableSystemProxy: true
+    )
+    let model = try AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      systemProxyController: SystemProxyController(commandRunner: commandRunner),
+      defaults: Self.makeIsolatedDefaults(),
+      currentNetworkProvider: StaticCurrentNetworkProvider(ssid: "corpnet")
+    )
+    model.networkPolicySettings = NetworkPolicySettings(rules: [rule])
+
+    let outcome = await model.applyMatchingNetworkPolicyForCurrentNetworkAndWait()
+
+    XCTAssertEqual(outcome, .applied(String(format: String(localized: "Applied %@ for %@."), "Office Wi-Fi", "corpnet")))
+    XCTAssertTrue(model.systemProxyEnabled)
+    XCTAssertEqual(model.lastAppliedNetworkPolicyID, rule.id)
+  }
+
+  func testAwaitedNetworkPolicyApplyReportsNoMatchAndPermissionGapsDistinctly() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let unmatched = try AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: Self.makeIsolatedDefaults(),
+      currentNetworkProvider: StaticCurrentNetworkProvider(ssid: "cafe")
+    )
+    unmatched.networkPolicySettings = NetworkPolicySettings(rules: [
+      NetworkPolicyRule(name: "Office", ssid: "CorpNet", proxyRoutingMode: .systemProxy, enableSystemProxy: true),
+    ])
+
+    let noMatch = await unmatched.applyMatchingNetworkPolicyForCurrentNetworkAndWait()
+
+    XCTAssertEqual(noMatch, .nothingToApply(String(format: String(localized: "No saved policy matches %@."), "cafe")))
+
+    let blockedPaths = try Self.makeRuntimePaths()
+    let blocked = try AppModel(
+      paths: blockedPaths,
+      profileStore: ProfileStore(paths: blockedPaths, keychain: InMemorySecretStore()),
+      defaults: Self.makeIsolatedDefaults(),
+      currentNetworkProvider: StaticCurrentNetworkProvider(unavailable: .locationAuthorizationNotDetermined)
+    )
+
+    let gap = await blocked.applyMatchingNetworkPolicyForCurrentNetworkAndWait()
+
+    XCTAssertEqual(gap, .failed(NetworkPolicyStatusPresenter.unavailableMessage(.locationAuthorizationNotDetermined)))
+  }
+
+  /// The surface a Shortcuts action reads before it acts: a fresh model is stopped, says why it
+  /// cannot start, and refuses a node selection outright instead of storing it offline.
+  func testIntentSurfaceOfAStoppedModelWithoutAProfile() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let model = try AppModel(
+      paths: paths,
+      profileStore: ProfileStore(paths: paths, keychain: InMemorySecretStore()),
+      defaults: Self.makeIsolatedDefaults()
+    )
+
+    XCTAssertEqual(model.intentLifecyclePhase, .stopped)
+    XCTAssertEqual(model.intentStartBlocker, String(localized: "No active profile selected."))
+    XCTAssertEqual(model.intentProxyGroups, [])
+    do {
+      try await model.selectProxyForIntent(groupName: "Proxy", nodeName: "Tokyo")
+      XCTFail("Selecting a node on a stopped core must fail.")
+    } catch let error as ClashMaxIntentError {
+      XCTAssertEqual(error.message, String(localized: "ClashMax is not running. Start it before selecting a node."))
+    }
+    do {
+      _ = try await ClashMaxIntentExecutor(controller: model).start()
+      XCTFail("Starting without an active profile must fail.")
+    } catch let error as ClashMaxIntentError {
+      XCTAssertEqual(error.message, String(localized: "No active profile selected."))
+    }
+    XCTAssertEqual(model.intentLifecyclePhase, .stopped)
+  }
+
   func testNetworkPolicyRuleAutoStartDefaultsOffForLegacyDecoding() throws {
     let decoded = try JSONDecoder().decode(NetworkPolicyRule.self, from: Data("""
     {

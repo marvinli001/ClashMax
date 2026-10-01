@@ -388,6 +388,13 @@ final class ProfileCoordinator {
     }
   }
 
+  /// The same forced update as `updateAllSubscriptions`, awaited, with what happened to each
+  /// profile — so a Shortcuts action can report it instead of returning before anything ran
+  /// (roadmap B3).
+  func updateAllSubscriptionsReporting() async -> SubscriptionUpdateBatchReport {
+    await runDueSubscriptionAutoUpdates(forceAll: true)
+  }
+
   func cancelSubscriptionAutoUpdates() {
     subscriptionScheduler.cancel()
   }
@@ -455,17 +462,19 @@ final class ProfileCoordinator {
     }
   }
 
+  @discardableResult
   private func runDueSubscriptionAutoUpdates(
     forceDueOnly: Bool = false,
     forceAll: Bool = false,
     cancelScheduledTask: Bool = true
-  ) async {
+  ) async -> SubscriptionUpdateBatchReport {
     if cancelScheduledTask {
       subscriptionScheduler.cancel()
     } else {
       subscriptionScheduler.clearScheduledTask()
     }
-    guard forceDueOnly || forceAll || hooks.automaticSubscriptionUpdatesEnabled() else { return }
+    var report = SubscriptionUpdateBatchReport()
+    guard forceDueOnly || forceAll || hooks.automaticSubscriptionUpdatesEnabled() else { return report }
 
     let now = Date()
     let settings = hooks.subscriptionUpdateSettings()
@@ -474,7 +483,7 @@ final class ProfileCoordinator {
       : subscriptionScheduler.dueProfiles(from: profileStore.profiles, now: now, settings: settings)
     guard !dueProfiles.isEmpty else {
       rescheduleSubscriptionAutoUpdates(now: now)
-      return
+      return report
     }
 
     var shouldRefreshPreview = false
@@ -488,9 +497,11 @@ final class ProfileCoordinator {
           trigger: cancelScheduledTask ? .manual : .automatic
         )
         if updated {
+          report.updated.append(profileStore.profiles.first { $0.id == profile.id }?.name ?? profile.name)
           hooks.appendAppLog("info", "Auto-updated subscription \(profile.name).")
           shouldRefreshPreview = shouldRefreshPreview || profile.id == profileStore.activeProfileID
         } else {
+          report.skipped.append(profile.name)
           try? await profileStore.markSubscriptionUpdateFailed(
             profileID: profile.id,
             trigger: cancelScheduledTask ? .manual : .automatic,
@@ -502,6 +513,7 @@ final class ProfileCoordinator {
           )
         }
       } catch {
+        report.failed.append(.init(profileName: profile.name, message: UserFacingError.message(for: error)))
         hooks.appendAppLog(
           "warn",
           "Could not auto-update subscription \(profile.name): \(UserFacingError.message(for: error))"
@@ -515,6 +527,24 @@ final class ProfileCoordinator {
       loadSelectionsForActiveProfile()
     }
     rescheduleSubscriptionAutoUpdates()
+    return report
+  }
+}
+
+/// What one "update all subscriptions" pass did, profile by profile.
+struct SubscriptionUpdateBatchReport: Equatable, Sendable {
+  struct Failure: Equatable, Sendable {
+    var profileName: String
+    var message: String
+  }
+
+  var updated: [String] = []
+  /// Skipped because an update of the same profile was already running.
+  var skipped: [String] = []
+  var failed: [Failure] = []
+
+  var isEmpty: Bool {
+    updated.isEmpty && skipped.isEmpty && failed.isEmpty
   }
 }
 

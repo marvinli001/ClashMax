@@ -1098,7 +1098,7 @@ final class AppModel {
   @ObservationIgnored private var connectionCloseTokens: [ConnectionSnapshot.ID: UUID] = [:]
   @ObservationIgnored private var closeAllConnectionsTask: Task<Void, Never>?
   @ObservationIgnored private var closeAllConnectionsToken: UUID?
-  @ObservationIgnored private var networkPolicyApplyTask: Task<Void, Never>?
+  @ObservationIgnored private var networkPolicyApplyTask: Task<NetworkPolicyApplyOutcome, Never>?
   @ObservationIgnored private var networkPolicyApplyToken: UUID?
   @ObservationIgnored private var networkPolicyRestoreSnapshot: NetworkPolicyRestoreSnapshot?
   @ObservationIgnored private var networkEnvironmentTask: Task<Void, Never>?
@@ -4081,35 +4081,9 @@ final class AppModel {
     let shouldRestart = isRunning || startInFlight
     if mode != .systemProxy, systemProxyEnabled {
       stopSystemProxyGuard()
-      // Serialize System Proxy teardown ahead of the runtime transition: only
-      // switch mode / start / restart the runtime once restoration SUCCEEDS. If
-      // it fails we stay in System Proxy (handled below) — otherwise (issue #19)
-      // TUN can come up while macOS still points HTTP/HTTPS at a dead ClashMax
-      // port and apps time out.
       Task { @MainActor [weak self] in
-        guard let self else { return }
-        do {
-          _ = try await restoreSystemProxyState(disableWhenNoSnapshot: true)
-        } catch {
-          // Restore failed: macOS may still route through a ClashMax local port.
-          // Do NOT switch modes or start/restart the runtime — that would bring
-          // TUN/core up behind a dead System Proxy (issue #19). Stay in the
-          // current System Proxy state (re-arm its guard) and surface the failure.
-          try? await activateSystemProxyGuardIfNeeded()
-          let detail = UserFacingError.message(for: error)
-          lastError = detail
-          appNotice = AppNotice(
-            message: String(
-              format: String(localized: "Could not turn off the System Proxy: %@. It stayed on, so your network still routes through ClashMax. Try again, or disable it in System Settings."),
-              detail
-            ),
-            tone: .info
-          )
-          return
-        }
-        systemProxyEnabled = false
-        applyProxyRoutingModeTransition(
-          to: mode,
+        await self?.leaveSystemProxyThenApplyRoutingMode(
+          mode,
           shouldRestart: shouldRestart,
           preserveNetworkPolicyRestoreSnapshotOnRestart: preserveNetworkPolicyRestoreSnapshotOnRestart
         )
@@ -4121,6 +4095,44 @@ final class AppModel {
       shouldRestart: shouldRestart,
       preserveNetworkPolicyRestoreSnapshotOnRestart: preserveNetworkPolicyRestoreSnapshotOnRestart
     )
+  }
+
+  /// Serializes System Proxy teardown ahead of the runtime transition: the mode is only switched,
+  /// and the runtime only started or restarted, once restoration SUCCEEDS. If it fails the app stays
+  /// in System Proxy — otherwise (issue #19) TUN can come up while macOS still points HTTP/HTTPS at
+  /// a dead ClashMax port and apps time out. Returns whether the mode was switched.
+  @discardableResult
+  private func leaveSystemProxyThenApplyRoutingMode(
+    _ mode: ProxyRoutingMode,
+    shouldRestart: Bool,
+    preserveNetworkPolicyRestoreSnapshotOnRestart: Bool
+  ) async -> Bool {
+    do {
+      _ = try await restoreSystemProxyState(disableWhenNoSnapshot: true)
+    } catch {
+      // Restore failed: macOS may still route through a ClashMax local port.
+      // Do NOT switch modes or start/restart the runtime — that would bring
+      // TUN/core up behind a dead System Proxy (issue #19). Stay in the
+      // current System Proxy state (re-arm its guard) and surface the failure.
+      try? await activateSystemProxyGuardIfNeeded()
+      let detail = UserFacingError.message(for: error)
+      lastError = detail
+      appNotice = AppNotice(
+        message: String(
+          format: String(localized: "Could not turn off the System Proxy: %@. It stayed on, so your network still routes through ClashMax. Try again, or disable it in System Settings."),
+          detail
+        ),
+        tone: .info
+      )
+      return false
+    }
+    systemProxyEnabled = false
+    applyProxyRoutingModeTransition(
+      to: mode,
+      shouldRestart: shouldRestart,
+      preserveNetworkPolicyRestoreSnapshotOnRestart: preserveNetworkPolicyRestoreSnapshotOnRestart
+    )
+    return true
   }
 
   /// Applies the published mode change and any TUN/helper/core (re)start the new
@@ -4731,7 +4743,20 @@ final class AppModel {
     applyNetworkPolicy(rule, trigger: "manual", matchedSSID: nil)
   }
 
-  private func applyMatchingNetworkPolicyForCurrentNetwork(trigger: String) {
+  /// Applies the current network's policy and returns the outcome, awaited. The fire-and-forget
+  /// `applyMatchingNetworkPolicyForCurrentNetwork()` reports through the Settings status line; a
+  /// Shortcuts action has nowhere to read that from, so it waits for this instead (roadmap B3).
+  func applyMatchingNetworkPolicyForCurrentNetworkAndWait() async -> NetworkPolicyApplyOutcome {
+    switch applyMatchingNetworkPolicyForCurrentNetwork(trigger: "manual") {
+    case let .finished(outcome):
+      return outcome
+    case let .pending(task):
+      return await task.value
+    }
+  }
+
+  @discardableResult
+  private func applyMatchingNetworkPolicyForCurrentNetwork(trigger: String) -> NetworkPolicyApplyDispatch {
     let snapshot = currentNetworkProvider.currentNetwork()
     currentNetwork = snapshot
     guard let ssid = snapshot.ssid else {
@@ -4747,24 +4772,28 @@ final class AppModel {
         if trigger == "manual" {
           publishWarningNotice(message)
         }
-        return
+        return .finished(.failed(message))
       }
-      let didScheduleRestore = restoreNetworkPolicyStateIfNeeded(reason: message)
-      if trigger == "manual", !didScheduleRestore {
+      if let restore = restoreNetworkPolicyStateIfNeeded(reason: message) {
+        return .pending(restore)
+      }
+      if trigger == "manual" {
         appNotice = AppNotice(message: message, tone: .info)
       }
-      return
+      return .finished(.nothingToApply(message))
     }
     guard let rule = networkPolicySettings.matchingRule(ssid: ssid) else {
       let message = String(format: String(localized: "No saved policy matches %@."), ssid)
       networkPolicyStatusMessage = message
-      let didScheduleRestore = restoreNetworkPolicyStateIfNeeded(reason: message)
-      if trigger == "manual", !didScheduleRestore {
+      if let restore = restoreNetworkPolicyStateIfNeeded(reason: message) {
+        return .pending(restore)
+      }
+      if trigger == "manual" {
         appNotice = AppNotice(message: message, tone: .info)
       }
-      return
+      return .finished(.nothingToApply(message))
     }
-    applyNetworkPolicy(rule, trigger: trigger, matchedSSID: ssid)
+    return .pending(applyNetworkPolicy(rule, trigger: trigger, matchedSSID: ssid))
   }
 
   private func scheduleNetworkEnvironmentPolicyApply(reason: String) {
@@ -4780,28 +4809,39 @@ final class AppModel {
     }
   }
 
-  private func applyNetworkPolicy(_ rule: NetworkPolicyRule, trigger: String, matchedSSID: String?) {
+  @discardableResult
+  private func applyNetworkPolicy(
+    _ rule: NetworkPolicyRule,
+    trigger: String,
+    matchedSSID: String?
+  ) -> Task<NetworkPolicyApplyOutcome, Never> {
     networkPolicyApplyTask?.cancel()
     let token = UUID()
     networkPolicyApplyToken = token
-    networkPolicyApplyTask = Task { @MainActor [weak self] in
-      guard let self else { return }
+    let task = Task { @MainActor [weak self] () -> NetworkPolicyApplyOutcome in
+      guard let self else { return .cancelled }
       defer {
         if self.networkPolicyApplyToken == token {
           self.networkPolicyApplyTask = nil
           self.networkPolicyApplyToken = nil
         }
       }
-      guard !Task.isCancelled else { return }
-      await applyNetworkPolicyRule(rule, trigger: trigger, matchedSSID: matchedSSID)
+      guard !Task.isCancelled else { return .cancelled }
+      return await applyNetworkPolicyRule(rule, trigger: trigger, matchedSSID: matchedSSID)
     }
+    networkPolicyApplyTask = task
+    return task
   }
 
-  private func applyNetworkPolicyRule(_ rule: NetworkPolicyRule, trigger: String, matchedSSID: String?) async {
+  private func applyNetworkPolicyRule(
+    _ rule: NetworkPolicyRule,
+    trigger: String,
+    matchedSSID: String?
+  ) async -> NetworkPolicyApplyOutcome {
     if let validationError = rule.validationError {
       networkPolicyStatusMessage = validationError
       publishWarningNotice(validationError)
-      return
+      return .failed(validationError)
     }
 
     let automatic = trigger != "manual"
@@ -4832,10 +4872,10 @@ final class AppModel {
         let message = UserFacingError.message(for: error)
         networkPolicyStatusMessage = message
         lastError = message
-        return
+        return .failed(message)
       }
     }
-    guard !Task.isCancelled else { return }
+    guard !Task.isCancelled else { return .cancelled }
 
     lastAppliedNetworkPolicyID = rule.id
     let message: String
@@ -4854,30 +4894,37 @@ final class AppModel {
       level: "info",
       message: "Applied network policy \(rule.name) via \(trigger): \(rule.proxyRoutingMode.rawValue), autoStart=\(rule.autoStartRuntime)"
     )
+    return .applied(message)
   }
 
+  /// Schedules the restore of the state a matched policy replaced, or returns `nil` when there is
+  /// nothing to restore.
   @discardableResult
-  private func restoreNetworkPolicyStateIfNeeded(reason: String) -> Bool {
+  private func restoreNetworkPolicyStateIfNeeded(reason: String) -> Task<NetworkPolicyApplyOutcome, Never>? {
     guard networkPolicySettings.unmatchedBehavior == .restorePreviousState,
           let snapshot = networkPolicyRestoreSnapshot
-    else { return false }
+    else { return nil }
     networkPolicyApplyTask?.cancel()
     let token = UUID()
     networkPolicyApplyToken = token
-    networkPolicyApplyTask = Task { @MainActor [weak self] in
-      guard let self else { return }
+    let task = Task { @MainActor [weak self] () -> NetworkPolicyApplyOutcome in
+      guard let self else { return .cancelled }
       defer {
         if self.networkPolicyApplyToken == token {
           self.networkPolicyApplyTask = nil
           self.networkPolicyApplyToken = nil
         }
       }
-      await restoreNetworkPolicyState(snapshot, reason: reason)
+      return await restoreNetworkPolicyState(snapshot, reason: reason)
     }
-    return true
+    networkPolicyApplyTask = task
+    return task
   }
 
-  private func restoreNetworkPolicyState(_ snapshot: NetworkPolicyRestoreSnapshot, reason: String) async {
+  private func restoreNetworkPolicyState(
+    _ snapshot: NetworkPolicyRestoreSnapshot,
+    reason: String
+  ) async -> NetworkPolicyApplyOutcome {
     setProxyRoutingMode(
       snapshot.proxyRoutingMode,
       preserveNetworkPolicyRestoreSnapshotOnRestart: true
@@ -4892,7 +4939,7 @@ final class AppModel {
         guard result.succeeded else {
           networkPolicyStatusMessage = result.userFacingMessage
           lastError = result.userFacingMessage
-          return
+          return .failed(result.userFacingMessage ?? String(localized: "ClashMax could not stop the runtime."))
         }
       }
       networkPolicyRestoreSnapshot = nil
@@ -4905,10 +4952,12 @@ final class AppModel {
       networkPolicyStatusMessage = message
       appNotice = AppNotice(message: message, tone: .info)
       appendAppLog(level: "info", message: "Restored network policy state after leaving \(snapshot.ssid).")
+      return .restored(message)
     } catch {
       let message = UserFacingError.message(for: error)
       networkPolicyStatusMessage = message
       lastError = message
+      return .failed(message)
     }
   }
 
@@ -5212,20 +5261,8 @@ final class AppModel {
       initialTunHelperPromptFailure = nil
       cancelInitialTunHelperApprovalWatch()
       return
-    case let .relocate(issue):
-      initialTunHelperPrompt = InitialTunHelperPrompt(stage: stage, statusMessage: issue.explanation)
-    case .install:
-      initialTunHelperPrompt = InitialTunHelperPrompt(
-        stage: stage,
-        statusMessage: TunnelHelperClient.statusMessage(for: .notRegistered)
-      )
-    case .approve:
-      initialTunHelperPrompt = InitialTunHelperPrompt(
-        stage: stage,
-        statusMessage: TunnelHelperClient.statusMessage(for: .requiresApproval)
-      )
-    case let .failed(message):
-      initialTunHelperPrompt = InitialTunHelperPrompt(stage: stage, statusMessage: message)
+    case .relocate, .install, .approve, .failed:
+      initialTunHelperPrompt = InitialTunHelperPrompt(stage: stage, statusMessage: stage.guidanceMessage ?? "")
     }
     if HelperSetupPolicy.shouldPollForApproval(stage) {
       startInitialTunHelperApprovalWatch()
@@ -9597,6 +9634,162 @@ final class AppModel {
         self?.lastError = "Could not verify stale System Proxy settings from a previous ClashMax session: \(UserFacingError.message(for: error))"
       }
     )
+  }
+}
+
+// MARK: - Shortcuts (roadmap B3)
+
+/// The in-process surface the Shortcuts actions drive. Each awaited entry point runs the same code
+/// path as the control in the app, so an action reports what actually happened instead of opening a
+/// `clashmax://` URL and returning before anything ran.
+extension AppModel: ClashMaxIntentControlling {
+  var intentLifecyclePhase: ClashMaxIntentLifecyclePhase {
+    if startTask != nil || startInFlight || lifecycleStopInFlight || stopTask != nil
+      || pendingStartAfterStop != nil || tunLaunchInFlight || tunStartAwaitingHelperReply
+    {
+      return .transitioning
+    }
+    switch dashboardRuntimeState {
+    case .running:
+      return .running(session: sessionStartedAt)
+    case .starting:
+      return .transitioning
+    case let .crashed(message):
+      return .crashed(message)
+    case .stopped, .blocked:
+      return canStopRuntime ? .stopIncomplete : .stopped
+    }
+  }
+
+  var intentStartBlocker: String? {
+    if profileStore.activeProfile == nil {
+      return String(localized: "No active profile selected.")
+    }
+    if (try? bundledCoreURL()) == nil {
+      return AppError.missingBundledCore.description
+    }
+    return nil
+  }
+
+  var intentTunHelperStage: HelperSetupStage {
+    let stage = HelperSetupPolicy.stage(
+      locationIssue: installLocationInspector.locationIssue,
+      serviceStatus: helperClient.serviceStatus,
+      failureMessage: initialTunHelperPromptFailure
+    )
+    if stage == .ready, tunHelperPreparationState.isFailure {
+      return .failed(tunHelperPreparationState.message)
+    }
+    return stage
+  }
+
+  var intentProfiles: [ClashMaxIntentProfile] {
+    profileStore.profiles.map { profile in
+      ClashMaxIntentProfile(id: profile.id, name: profile.name, isActive: profile.id == profileStore.activeProfileID)
+    }
+  }
+
+  var intentProxyGroups: [ProxyGroup] {
+    isRunning ? visibleProxyGroups : []
+  }
+
+  func prepareTunHelperForIntent() async -> String? {
+    if tunHelperPreparationState.allowsStartAttempt {
+      return nil
+    }
+    tunHelperPreparationTask?.cancel()
+    tunHelperPreparationTask = nil
+    tunHelperPreparationState = .checking
+    // No System Settings detour from a Shortcut: approval is ruled out before this runs, and a
+    // window opening in the middle of an automation is not an answer.
+    let state = await helperClient.prepareForTunnelStart(openSystemSettingsWhenApprovalRequired: false)
+    applyTunHelperPreparationState(state)
+    await updateTunHelperStatusDetail()
+    return state.allowsStartAttempt ? nil : state.message
+  }
+
+  func setSystemProxyEnabledForIntent(_ enabled: Bool) async throws {
+    clearNetworkPolicyRestoreSnapshotForUserChange()
+    do {
+      try await applySystemProxyEnabledState(enabled)
+    } catch {
+      lastError = UserFacingError.message(for: error)
+      throw error
+    }
+  }
+
+  func setProxyRoutingModeForIntent(_ mode: ProxyRoutingMode) async throws {
+    clearNetworkPolicyRestoreSnapshotForUserChange()
+    pendingRoutingModeTask?.cancel()
+    pendingRoutingModeTask = nil
+    guard proxyRoutingMode != mode else { return }
+    appNotice = nil
+    let shouldRestart = isRunning || startInFlight
+    if mode != .systemProxy, systemProxyEnabled {
+      stopSystemProxyGuard()
+      let switched = await leaveSystemProxyThenApplyRoutingMode(
+        mode,
+        shouldRestart: shouldRestart,
+        preserveNetworkPolicyRestoreSnapshotOnRestart: false
+      )
+      guard switched else {
+        throw ClashMaxIntentError(lastError ?? String(localized: "Could not turn off the System Proxy."))
+      }
+      return
+    }
+    applyProxyRoutingModeTransition(
+      to: mode,
+      shouldRestart: shouldRestart,
+      preserveNetworkPolicyRestoreSnapshotOnRestart: false
+    )
+  }
+
+  func selectProfileForIntent(id: Profile.ID) async throws {
+    guard let profile = profileStore.profiles.first(where: { $0.id == id }) else {
+      throw ClashMaxIntentError(String(localized: "That profile no longer exists in ClashMax."))
+    }
+    guard await selectProfileAsync(profile) else {
+      throw ClashMaxIntentError(lastError ?? String(localized: "ClashMax could not switch profiles."))
+    }
+  }
+
+  /// The running-core half of `selectProxy`, awaited. Offline selection is deliberately not
+  /// offered: a Shortcut that "selects" a node on a stopped core changes nothing it can observe.
+  func selectProxyForIntent(groupName: String, nodeName: String) async throws {
+    guard isRunning, let apiClient else {
+      throw ClashMaxIntentError(String(localized: "ClashMax is not running. Start it before selecting a node."))
+    }
+    guard let group = visibleProxyGroups.first(where: { $0.name == groupName }) else {
+      throw ClashMaxIntentError(String(format: String(localized: "The running profile has no proxy group named %@."), groupName))
+    }
+    let previousSelection = group.selected
+    // A Proxies-page selection still in flight for this group would otherwise land after this one.
+    proxySelectionTasks[group.id]?.cancel()
+    proxySelectionTasks[group.id] = nil
+    proxySelectionTokens[group.id] = nil
+    do {
+      try await apiClient.selectProxy(group: group.name, proxy: nodeName)
+    } catch {
+      lastError = UserFacingError.message(for: error)
+      throw error
+    }
+    persistSelectedProxy(groupName: group.name, nodeName: nodeName)
+    applySelectedProxy(groupName: group.name, nodeName: nodeName)
+    closeOldConnectionsIfNeeded(
+      enabled: proxyPageSettings.closesOldConnectionsAfterSwitch,
+      previousSelection: previousSelection,
+      newSelection: nodeName
+    )
+    lastError = nil
+    reloadRuntimeData()
+  }
+
+  func updateAllSubscriptionsForIntent() async -> SubscriptionUpdateBatchReport {
+    await profileCoordinator.updateAllSubscriptionsReporting()
+  }
+
+  func applyCurrentNetworkPolicyForIntent() async -> NetworkPolicyApplyOutcome {
+    await applyMatchingNetworkPolicyForCurrentNetworkAndWait()
   }
 }
 

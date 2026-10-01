@@ -613,13 +613,54 @@ cannot copy cheaply.
 
 #### B3 — App Intents and Shortcuts
 
+**Status: shipped 2026-10-01 except the scenario intent. Never run from Shortcuts.app by hand.**
+
+- **What was wrong first.** All six existing actions set `openAppWhenRun`, opened a
+  `clashmax://` URL and returned `.result()` immediately, so Shortcuts reported success before
+  the app had even parsed the URL — a failed start, a refused System Proxy change and a missing
+  profile all looked identical to working. The actions now run in-process against the live
+  `AppModel` (registered with `AppDependencyManager` in `ClashMaxApp.init`, resolved with
+  `@Dependency`) and wait for the operation they started. The URL scheme is unchanged for
+  shortcuts built on it.
 - **Acceptance criteria:**
-  - [ ] Intents for: set routing mode, select profile, select node in group, toggle system
-        proxy, toggle TUN, activate scenario.
-  - [ ] Each intent reports success or a specific failure; none silently no-op.
-  - [ ] Intents that require the privileged helper fail with the same actionable guidance the
-        UI gives, reusing `HelperSetupGuidance`.
-  - [ ] Verified from Shortcuts.app by hand and recorded in `MANUAL_TEST_PLAN.md`.
+  - [x] Intents for: set routing mode, select profile, select node in group, toggle system
+        proxy, toggle TUN. → **2026-10-01**, in
+        [`ClashMaxAppIntents.swift`](../ClashMax/App/ClashMaxAppIntents.swift): routing mode is
+        an `AppEnum` (System Proxy / TUN / NE Proxy); profile, proxy group and node are
+        `AppEntity`s, the node list read from the group chosen in the same action
+        (`@IntentParameterDependency`); System Proxy and TUN take Turn On / Turn Off / Toggle.
+        TUN is a routing mode in ClashMax, so turning it off means System Proxy routing.
+        Group and node identifiers resolve without the core, so a saved shortcut run while
+        ClashMax is stopped reaches its own error instead of a missing-parameter prompt. Ten
+        App Shortcuts, the `AppShortcutsProvider` maximum.
+  - [ ] Intent for: activate scenario. **Waits on [B2](#b2--scenarios-generalize-networkpolicyrule)**,
+        which has no scenario model yet, and needs an App Shortcut slot — all ten are taken, so
+        one existing shortcut has to give way (the intent itself can exist without a slot).
+  - [x] Each intent reports success or a specific failure; none silently no-op. → **2026-10-01**.
+        The behavior lives in [`ClashMaxIntentExecutor`](../ClashMax/App/ClashMaxIntentExecutor.swift),
+        which returns a result sentence or throws a `ClashMaxIntentError` naming the cause. A
+        start, stop, restart, routing switch or profile switch on a running core waits for the
+        lifecycle to settle — a restart counts only when a *new* run appears, never the one it
+        replaced — and a lifecycle that does not settle within 45 s reports that it is still
+        working rather than success. Subscription updates and network-policy application now
+        return what happened (`SubscriptionUpdateBatchReport`, `NetworkPolicyApplyOutcome`)
+        instead of writing it only to a status line. Node selection refuses a stopped core
+        outright. Evidence: `ClashMaxIntentExecutorTests` (56 tests, every success and failure
+        branch of all ten actions) plus `DashboardRuntimeStateTests.testAwaitedNetworkPolicy*`
+        and `testIntentSurfaceOfAStoppedModelWithoutAProfile` against a real `AppModel`;
+        `xcodebuild test -only-testing:ClashMaxTests/ClashMaxIntentExecutorTests`.
+  - [x] Intents that require the privileged helper fail with the same actionable guidance the
+        UI gives, reusing `HelperSetupGuidance`. → **2026-10-01**. `HelperSetupStage.guidanceMessage`
+        is now the one mapping from setup step to instruction; the setup sheet and the actions
+        both read it. Past that, an enabled helper is confirmed over XPC before TUN is started or
+        switched to, and a switch into TUN that loses the helper mid-restart stops waiting and
+        says so. Evidence: `testStartInTunModeGivesTheHelperSetupGuidanceForEveryUnreadyStage`,
+        `testSwitchIntoTunStopsWaitingWhenTheHelperFailsMidway`,
+        `testHelperGuidanceMatchesWhatTheSetupSheetShows`.
+  - [ ] Verified from Shortcuts.app by hand and recorded in `MANUAL_TEST_PLAN.md`. The steps
+        are written ([B3 in `MANUAL_TEST_PLAN.md`](MANUAL_TEST_PLAN.md#b3--every-shortcuts-action-reports-what-actually-happened));
+        nobody has run them. Also unverified: that Shortcuts launches ClashMax in the background
+        for an action now that `openAppWhenRun` is off.
 
 #### B4 — Control Center widget
 
