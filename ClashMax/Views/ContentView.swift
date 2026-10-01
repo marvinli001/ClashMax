@@ -112,9 +112,19 @@ struct ContentView: View {
         )
       }
     }
+    .sheet(isPresented: diagnosticBundleSheetPresented) {
+      DiagnosticBundleSheet()
+    }
     .onAppear {
       appModel.evaluateInitialTunHelperPromptOnLaunch()
     }
+  }
+
+  private var diagnosticBundleSheetPresented: Binding<Bool> {
+    Binding(
+      get: { appModel.isDiagnosticBundleSheetPresented },
+      set: { appModel.isDiagnosticBundleSheetPresented = $0 }
+    )
   }
 
   /// Every published error raises this native alert once; dismissing it acknowledges the error

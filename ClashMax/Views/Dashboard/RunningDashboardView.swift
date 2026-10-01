@@ -1281,6 +1281,13 @@ struct StatusView: View {
       }
       .help("Copy a redacted diagnostics report")
 
+      Button {
+        appModel.isDiagnosticBundleSheetPresented = true
+      } label: {
+        Label("Export Diagnostic Bundle…", systemImage: "archivebox")
+      }
+      .help("Preview and save one redacted file to attach to a bug report")
+
       moreMenu
     } content: {
       Form {

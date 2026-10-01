@@ -416,13 +416,35 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
 - **问题：** issue 报告过来时都是*"它不工作"*。这是每个 issue 都要付一次的维护成本。
 - **基础：** [`StructuredLogPrivacy.swift`](../Shared/StructuredLogPrivacy.swift)、
   `SanitizedLineAccumulator`——脱敏本来就已经是一条代码边界。
+- **状态：2026-10-01 交付。预览面板还没有人亲眼看过。**
 - **验收标准：**
-  - [ ] 导出内容包括：应用/内核版本、有效运行时 YAML、全部诊断结论、近期日志、helper/TUN/系统代理状态、
-        网络环境。
-  - [ ] 每一个密钥、订阅 URL、凭据和 SSID 在任何内容落盘**之前**就已脱敏，并由针对写入方（而不是 UI）的
-        测试来保证。
-  - [ ] 文件写入之前，用户先看到确切的内容。
-  - [ ] 在 `SECURITY.md` 与 issue 模板中被引用。
+  - [x] 导出内容包括：应用/内核版本、有效运行时 YAML、全部诊断结论、近期日志、helper/TUN/系统代理状态、
+        网络环境。→ **2026-10-01**，由 [`DiagnosticBundleBuilder`](../ClashMax/Models/DiagnosticBundle.swift)
+        生成一个文本文件：应用版本与构建号、内置与运行中的内核、macOS、硬件与进程架构（注明 Rosetta）；运行时、
+        helper、TUN 与系统代理状态；proxy effect、TUN 检查、NE、sniffer（生成的方案与运行中内核的实际设置）、
+        fake-ip、geo、listener exposure 和 DNS（覆盖方案加 DNS 面板）；Wi-Fi 与网络策略状态；运行中内核加载的
+        YAML，或者生成的 YAML，并注明是哪一种；最近 500 条全级别日志、helper 日志和内核进程输出。每个没有数据的
+        章节都会写明原因，而不是空着（`testEverySectionExplainsMissingDataInsteadOfStayingEmpty`）。
+  - [x] 每一个密钥、订阅 URL、凭据和 SSID 在任何内容落盘**之前**就已脱敏，并由针对写入方（而不是 UI）的
+        测试来保证。→ **2026-10-01**。由类型保证：`DiagnosticBundleWriter` 只接受 `DiagnosticBundle`，而它只持有
+        `RedactedDiagnosticText`，后者的初始化方法对脱敏器所在文件之外是 `fileprivate` 的。脱敏器依次移除：app
+        按值持有的每个秘密（控制器密钥；订阅 URL 及其主机名、query token 和较长的路径段；请求头的值；provider
+        文件路径；公网 IP），在配置、已存储的 profile、provider 内容和 merge YAML 中找到的每个凭据*值*——所以错误
+        信息里引用的节点密码也会被去掉——不区分大小写的 Wi-Fi 名称，最后再过一遍日志管线的 `StructuredLogRedactor`
+        规则。YAML 另外还经过按 key 判断的 `RuntimeConfigDisplayRedactor`。证据：
+        `DiagnosticBundleTests.testWrittenBytesContainNoPlantedSecret` 在 YAML、日志、helper 与内核输出、
+        `lastError` 和网络状态里埋下每一类秘密，写出文件，再对读回来的字节断言（并断言它们与预览的字节一致、权限为
+        0600）；`DashboardRuntimeStateTests.testDiagnosticBundleFromALiveModelCarriesNoPlantedSecret` 通过真实的
+        `AppModel` 和 `ProfileStore` 再做一遍。**公网 IP：** 完全不写，只保留国家——即使是可复制报告里用的
+        `a.xxx.xxx.d` 掩码形式，也能把出口缩小到一个网络，而这正是一份公开的 bug 报告最不该带的东西。顺带发现：
+        `RuntimeConfigDisplayRedactor` 会把 Effective Config 视图里的每个 http(s) URL 显示成 `https://<redacted>>`，
+        因为第二遍又匹配了自己的输出（已修复，`testDisplayRedactorRedactsAURLOnceAndIsIdempotent`）；Copy
+        Diagnostics 原来只去掉控制器密钥，日志里引用的订阅 URL 会原样进剪贴板（现在走同一个脱敏器）。
+  - [ ] 文件写入之前，用户先看到确切的内容。已实现：Help → *导出诊断包…* 和 Status 页会打开一个面板，在
+        Copy 或 Save… 之前用等宽、可选中的视图显示诊断包的字节，保存下来的文件与显示的内容逐字节一致（在泄漏测试里
+        断言过）。没有勾，因为还没人看过这个面板——见 [`MANUAL_TEST_PLAN.md` 的 A5](MANUAL_TEST_PLAN.md#a5--the-diagnostic-bundle-shows-exactly-what-it-writes)。
+  - [x] 在 `SECURITY.md` 与 issue 模板中被引用。→ **2026-10-01**：`SECURITY.md` 在报告运行时问题时要求附上诊断包，
+        并写明它去掉什么、保留什么；`bug_report.yml` 的日志字段指向它，并且现在可以把文件作为附件拖进去。
 
 #### A6——通过 `/group/{name}/delay` 做批量测速
 

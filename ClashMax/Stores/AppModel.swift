@@ -364,30 +364,8 @@ struct RuntimeDiagnosticsReport: Equatable, Sendable {
     var lines = [
       "ClashMax Runtime Diagnostics",
       "Generated: \(generatedAt.formatted(date: .numeric, time: .standard))",
-      "Status: \(statusSummary)",
-      "Profile: \(profileName)",
-      "Runtime Owner: \(runtimeOwner.rawValue)",
-      "Routing Mode: \(routingMode.displayName)",
-      "Run Mode: \(runMode.displayName)",
-      "Controller: \(controllerHost):\(controllerPort)",
-      "Controller Secret: \(controllerSecret)",
-      "Core: \(coreStatus)",
-      "System Proxy: \(systemProxyEnabled ? "enabled" : "disabled")",
-      "TUN: \(tunEnabled ? "enabled" : "disabled")",
-      "NE Proxy: \(networkExtensionEnabled ? "enabled" : "disabled")",
-      "TUN DNS: \(tunSystemDNS) / \(tunDNSMode)",
-      "NE System DNS: \(networkExtensionSystemDNS)",
-      "Rule Overlay: \(ruleOverlaySummary)",
-      "Helper Service: \(helperDetail.serviceStatus.displayName)",
-      "Helper Fingerprint: \(helperFingerprintSummary)",
-      "Helper Protocol: \(helperDetail.protocolVersion.map { "v\($0)" } ?? "unknown")",
-      "Helper Build: \(helperDetail.helperBuildVersion ?? "unknown")",
-      "Helper Running: \(helperDetail.pid.map { "pid \($0)" } ?? (helperDetail.running ? "yes" : "no"))",
-      "Helper Safe Paths: helper validates bundled core, runtime config, and work directory before launch",
-      "Helper Status: \(helperDetail.message)",
-      "TUN Diagnostics: \(tunDiagnostics.summaryLabel)",
-      "NE Diagnostics: TCP \(networkExtensionDiagnostics.activeTCPBridgeCount), UDP \(networkExtensionDiagnostics.activeUDPBridgeCount), DNS \(networkExtensionDiagnostics.dnsCaptureCount)",
     ]
+    lines.append(contentsOf: stateLines)
     lines.append(contentsOf: proxyEffectReportLines())
     if let fakeIP {
       lines.append(contentsOf: fakeIP.plainTextLines)
@@ -422,18 +400,50 @@ struct RuntimeDiagnosticsReport: Equatable, Sendable {
     return lines
   }
 
+  /// Status, routing, controller and helper facts — shared with the diagnostic bundle (roadmap A5),
+  /// which arranges the rest of the report into its own sections.
+  var stateLines: [String] {
+    [
+      "Status: \(statusSummary)",
+      "Profile: \(profileName)",
+      "Runtime Owner: \(runtimeOwner.rawValue)",
+      "Routing Mode: \(routingMode.displayName)",
+      "Run Mode: \(runMode.displayName)",
+      "Controller: \(controllerHost):\(controllerPort)",
+      "Controller Secret: \(controllerSecret)",
+      "Core: \(coreStatus)",
+      "System Proxy: \(systemProxyEnabled ? "enabled" : "disabled")",
+      "TUN: \(tunEnabled ? "enabled" : "disabled")",
+      "NE Proxy: \(networkExtensionEnabled ? "enabled" : "disabled")",
+      "TUN DNS: \(tunSystemDNS) / \(tunDNSMode)",
+      "NE System DNS: \(networkExtensionSystemDNS)",
+      "Rule Overlay: \(ruleOverlaySummary)",
+      "Helper Service: \(helperDetail.serviceStatus.displayName)",
+      "Helper Fingerprint: \(helperFingerprintSummary)",
+      "Helper Protocol: \(helperDetail.protocolVersion.map { "v\($0)" } ?? "unknown")",
+      "Helper Build: \(helperDetail.helperBuildVersion ?? "unknown")",
+      "Helper Running: \(helperDetail.pid.map { "pid \($0)" } ?? (helperDetail.running ? "yes" : "no"))",
+      "Helper Safe Paths: helper validates bundled core, runtime config, and work directory before launch",
+      "Helper Status: \(helperDetail.message)",
+      "TUN Diagnostics: \(tunDiagnostics.summaryLabel)",
+      "NE Diagnostics: TCP \(networkExtensionDiagnostics.activeTCPBridgeCount), UDP \(networkExtensionDiagnostics.activeUDPBridgeCount), DNS \(networkExtensionDiagnostics.dnsCaptureCount)",
+    ]
+  }
+
   // A report that carries 12 runtime lines cannot explain a failure that took
   // longer than a few seconds to develop, which is what made ClashMax issues
   // unactionable (discussion #25). These are still small enough to paste.
   static let reportedRuntimeLogLimit = 200
   static let reportedHelperLogLimit = 40
 
-  private func proxyEffectReportLines() -> [String] {
-    var lines = [
-      "Public IP: \(publicIPSummary)",
+  /// The diagnostic bundle passes `includingPublicIP: false` and states the address is redacted:
+  /// even the masked form narrows the egress to one network, which a public bug report should not.
+  func proxyEffectReportLines(includingPublicIP: Bool = true) -> [String] {
+    var lines = includingPublicIP ? ["Public IP: \(publicIPSummary)"] : []
+    lines.append(contentsOf: [
       "Public IP Region: \(publicIPRegionSummary)",
       "Probe Host: \(probeHost.isEmpty ? "—" : probeHost)",
-    ]
+    ])
     if let proxyEffect {
       lines.append("Current Node: \(proxyEffect.currentNodeSummary)")
       lines.append("Rule Policy: \(proxyEffect.probePolicy ?? "—")")
@@ -453,7 +463,11 @@ struct RuntimeDiagnosticsReport: Equatable, Sendable {
   }
 
   private var publicIPRegionSummary: String {
-    proxyEffect?.publicIPRegion ?? "Unknown"
+    if let region = proxyEffect?.publicIPRegion {
+      return region
+    }
+    // The country is known as soon as the lookup returns, before there is a node to judge it by.
+    return publicIPInfo.map(ProxyEffectDiagnosticsBuilder.regionLabel(for:)) ?? "Unknown"
   }
 
   private var helperFingerprintSummary: String {
@@ -843,6 +857,9 @@ final class AppModel {
   private(set) var providerSideLoadPreflightStatus: ProviderSideLoadPreflightStatus = .idle
   private(set) var proxyDelayBatchProgress: ProxyDelayBatchProgress?
   var routingSimulationRequest: RoutingSimulationRequest?
+  /// Raised by the Help menu and the Status page; the main window presents the diagnostic bundle
+  /// sheet while it is set (roadmap A5).
+  var isDiagnosticBundleSheetPresented = false
   var proxiesPageRequest: ProxiesPageRequest?
   /// What the last rule/DNS commit actually did to the runtime. Published so a successful hot
   /// reload is visible rather than merely "no red text", and so a rollback — the runtime rejected
@@ -1998,8 +2015,11 @@ final class AppModel {
       // report is complete for the people who actually file the issue (discussion #25).
       await refreshHelperLogsForDiagnostics()
       let report = runtimeDiagnosticsReport()
+      // The report itself only strips the controller secret; its log lines can still quote a
+      // subscription URL, a token or a Wi-Fi name, so it goes through the bundle's redactor too.
+      let redacted = DiagnosticBundleRedactor(secrets: diagnosticSecrets()).redact(report.plainText)
       NSPasteboard.general.clearContents()
-      NSPasteboard.general.setString(report.plainText, forType: .string)
+      NSPasteboard.general.setString(redacted.text, forType: .string)
       appNotice = AppNotice(message: String(localized: "Diagnostics copied."), tone: .success)
     }
   }
@@ -9634,6 +9654,114 @@ final class AppModel {
         self?.lastError = "Could not verify stale System Proxy settings from a previous ClashMax session: \(UserFacingError.message(for: error))"
       }
     )
+  }
+}
+
+// MARK: - Diagnostic bundle (roadmap A5)
+
+extension AppModel {
+  /// Collects everything the diagnostic bundle reports and hands it to the builder, which redacts
+  /// it before anything can be shown, copied or written.
+  func makeDiagnosticBundle(now: Date = Date()) async -> DiagnosticBundle {
+    // The helper holds the core's own output in TUN mode; without this the bundle would carry an
+    // empty helper section for exactly the reports that need it (discussion #25).
+    await refreshHelperLogsForDiagnostics()
+    runtimeData.flushPendingLogs()
+    let report = runtimeDiagnosticsReport(now: now)
+    let profile = profileStore.activeProfile
+
+    var snapshot = effectiveRuntimeConfigSnapshotForActiveProfile
+    var snapshotFailure: String?
+    if snapshot == nil, let profile {
+      do {
+        snapshot = try await makeEffectiveRuntimeConfigSnapshot(
+          profile: profile,
+          overrides: overrides,
+          runtimeSnippets: effectiveRuntimeSnippets(for: profile.id, draftSnippet: nil),
+          preflight: .disabled
+        )
+      } catch {
+        snapshotFailure = UserFacingError.message(for: error)
+      }
+    }
+
+    let materialization = isRunning ? activeRuntimeConfigMaterialization : nil
+    let loadedYAML = await Self.readDiagnosticText(materialization?.runtimeConfigURL)
+    let providerContent = await Self.readDiagnosticText(materialization?.providerContentURL)
+    let profileSource = await Self.readDiagnosticText(profile.map { URL(fileURLWithPath: $0.originalConfigPath) })
+
+    let config: DiagnosticBundleConfigSource
+    if let materialization, let loadedYAML {
+      config = .loadedByCore(yaml: loadedYAML, path: materialization.runtimeConfigURL.path)
+    } else if let profile, let snapshot {
+      config = .generated(yaml: snapshot.redactedFinalYAML, profileName: profile.name)
+    } else if profile == nil {
+      config = .unavailable("no active profile is selected, so there is no runtime config to show")
+    } else {
+      config = .unavailable("the effective config could not be generated: \(snapshotFailure ?? "unknown error")")
+    }
+
+    let runningCore: String? = if isRunning, case let .running(version) = coreController.status {
+      version ?? "running, version not reported"
+    } else {
+      nil
+    }
+    let lastAppliedPolicyName = lastAppliedNetworkPolicyID.flatMap { id in
+      networkPolicySettings.rules.first { $0.id == id }?.name
+    }
+
+    let input = DiagnosticBundleInput(
+      generatedAt: now,
+      versions: .current(bundledCore: bundledCoreInfo.version, runningCore: runningCore),
+      report: report,
+      config: config,
+      dnsOverride: snapshot?.dnsOverride,
+      sniffer: snapshot?.sniffer,
+      runningCoreSniffing: isRunning ? activeSnifferSettings.map(\.isSniffingEnabled) : nil,
+      dnsResolution: dnsResolutionDiagnostics,
+      network: DiagnosticBundleNetwork(
+        wiFi: currentNetwork,
+        savedPolicyCount: networkPolicySettings.rules.count,
+        autoApplyEnabled: networkPolicySettings.autoApplyEnabled,
+        lastAppliedPolicyName: lastAppliedPolicyName,
+        policyStatus: networkPolicyStatusMessage,
+        lastNetworkChange: lastNetworkEnvironmentChangeAt
+      ),
+      logs: runtimeData.logs,
+      coreProcessOutput: coreController.recentCoreLog,
+      secrets: diagnosticSecrets(providerContentPath: materialization?.providerContentURL?.path),
+      credentialSourceYAMLs: [profileSource, providerContent].compactMap(\.self)
+        + profileStore.profiles.map(\.subscriptionProviderOptions.runtimeMergeYAML).filter { !$0.isEmpty }
+    )
+    // Parsing a large subscription for its credentials takes long enough to stall the UI.
+    return await Task.detached(priority: .userInitiated) {
+      DiagnosticBundleBuilder.build(input)
+    }.value
+  }
+
+  /// Every value the app holds as a secret, for the redactor that guards both the bundle and the
+  /// copied diagnostics report.
+  func diagnosticSecrets(providerContentPath: String? = nil) -> DiagnosticBundleSecrets {
+    var ssids = networkPolicySettings.rules.map(\.ssid)
+    ssids.append(contentsOf: [currentNetwork.ssid, networkPolicyRestoreSnapshot?.ssid].compactMap(\.self))
+    return DiagnosticBundleSecrets(
+      controllerSecrets: [overrides.secret, currentRuntimeOverrides.secret, previewRuntimeOverrides?.secret]
+        .compactMap(\.self),
+      subscriptionURLs: profileStore.profiles.compactMap(profileStore.subscriptionURLString(for:)),
+      ssids: ssids,
+      publicIPAddresses: [publicIPInfoState.info?.ipAddress].compactMap(\.self),
+      providerContentPaths: [providerContentPath].compactMap(\.self),
+      // A panel that authenticates by header carries the account token there, not in the URL.
+      otherSecrets: profileStore.profiles.flatMap { $0.subscriptionProviderOptions.requestHeaders.map(\.value) },
+      homeDirectory: FileManager.default.homeDirectoryForCurrentUser.path
+    )
+  }
+
+  private nonisolated static func readDiagnosticText(_ url: URL?) async -> String? {
+    guard let url else { return nil }
+    return await Task.detached(priority: .userInitiated) {
+      try? String(contentsOf: url, encoding: .utf8)
+    }.value
   }
 }
 

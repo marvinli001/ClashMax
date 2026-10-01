@@ -82,6 +82,13 @@ struct ClashMaxApp: App {
         .keyboardShortcut("0", modifiers: [.command])
       }
 
+      CommandGroup(after: .help) {
+        Button("Export Diagnostic Bundle…") {
+          AppDelegate.showMainWindow()
+          appModel.isDiagnosticBundleSheetPresented = true
+        }
+      }
+
       CommandMenu("Config") {
         Button("Rule Mode") {
           appModel.requestMode(.rule)

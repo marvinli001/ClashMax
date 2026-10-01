@@ -501,13 +501,49 @@ believing the user when they say their rules do not work.
   on every issue.
 - **Foundation:** [`StructuredLogPrivacy.swift`](../Shared/StructuredLogPrivacy.swift),
   `SanitizedLineAccumulator` — redaction is already a code boundary.
+- **Status: shipped 2026-10-01. The preview sheet has not been seen by eye.**
 - **Acceptance criteria:**
-  - [ ] Exports: app/core versions, effective runtime YAML, all diagnosis verdicts, recent
-        logs, helper/TUN/system-proxy state, network environment.
-  - [ ] Every secret, subscription URL, credential, and SSID is redacted **before** anything
-        is written to disk, enforced by tests over the writer, not the UI.
-  - [ ] The user sees the exact contents before the file is written.
-  - [ ] Referenced from `SECURITY.md` and the issue template.
+  - [x] Exports: app/core versions, effective runtime YAML, all diagnosis verdicts, recent
+        logs, helper/TUN/system-proxy state, network environment. → **2026-10-01**, one text
+        file built by [`DiagnosticBundleBuilder`](../ClashMax/Models/DiagnosticBundle.swift):
+        app version and build, bundled and running core, macOS, hardware and process
+        architecture (Rosetta named); runtime, helper, TUN and System Proxy state; proxy effect,
+        TUN checks, NE, sniffer (generated plan and the running core's setting), fake-ip, geo,
+        listener exposure and DNS (override plan plus the DNS panel); Wi-Fi and network-policy
+        state; the YAML the running core loaded, or the generated one, labelled as which; the
+        last 500 log entries at every level, the helper log and the core's process output.
+        Every section that has no data says why instead of staying empty
+        (`testEverySectionExplainsMissingDataInsteadOfStayingEmpty`).
+  - [x] Every secret, subscription URL, credential, and SSID is redacted **before** anything
+        is written to disk, enforced by tests over the writer, not the UI. → **2026-10-01**.
+        Enforced by type: `DiagnosticBundleWriter` only accepts a `DiagnosticBundle`, which only
+        holds `RedactedDiagnosticText`, whose initializer is `fileprivate` to the redactor's file.
+        The redactor removes, in order: every secret the app holds by value (controller secrets,
+        subscription URLs with their hosts, query tokens and long path segments, request-header
+        values, provider file paths, the public IP), every credential *value* found in the
+        config, the stored profile, provider content and merge YAML — so a node password quoted
+        in an error message goes too — Wi-Fi names case-insensitively, and then the log
+        pipeline's `StructuredLogRedactor` rules. The YAML additionally goes through the key-aware
+        `RuntimeConfigDisplayRedactor`. Evidence: `DiagnosticBundleTests.testWrittenBytesContainNoPlantedSecret`
+        plants each category in YAML, logs, helper and core output, `lastError` and network
+        state, writes the file, and asserts on the bytes read back (and that they equal the
+        previewed bytes, with mode 0600); `DashboardRuntimeStateTests.testDiagnosticBundleFromALiveModelCarriesNoPlantedSecret`
+        does the same through a real `AppModel` and `ProfileStore`. **Public IP:** left out
+        entirely, country kept — even the masked `a.xxx.xxx.d` form the copyable report used
+        narrows the egress to one network, which is the most a public bug report should never
+        carry. Found on the way: `RuntimeConfigDisplayRedactor` rendered every http(s) URL in
+        the Effective Config view as `https://<redacted>>` because its second pass re-matched
+        its own output (fixed, `testDisplayRedactorRedactsAURLOnceAndIsIdempotent`), and Copy
+        Diagnostics only stripped the controller secret, so a log line quoting a subscription
+        URL went to the clipboard as-is (now runs the same redactor).
+  - [ ] The user sees the exact contents before the file is written. Built: Help → *Export
+        Diagnostic Bundle…* and the Status page open a sheet that renders the bundle's bytes in
+        a monospaced, selectable view before Copy or Save…, and the saved file is byte-equal to
+        what was rendered (asserted in the leak test). Not ticked because no one has looked at
+        the sheet — see [A5 in `MANUAL_TEST_PLAN.md`](MANUAL_TEST_PLAN.md#a5--the-diagnostic-bundle-shows-exactly-what-it-writes).
+  - [x] Referenced from `SECURITY.md` and the issue template. → **2026-10-01**: `SECURITY.md`
+        asks for the bundle with a runtime report and states what it removes and keeps;
+        `bug_report.yml`'s log field points at it and now accepts the file as an attachment.
 
 #### A6 — Batch delay testing via `/group/{name}/delay`
 

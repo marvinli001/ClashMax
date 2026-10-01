@@ -58,7 +58,7 @@ body:
   - type: textarea
     id: logs
     attributes:
-      label: Logs or screenshots
-      description: Paste redacted logs or attach screenshots. Do not include secrets, subscription URLs, or node credentials.
-      render: text
+      label: Diagnostic bundle, logs or screenshots
+      description: |
+        Attach a diagnostic bundle: Help -> Export Diagnostic Bundle... (or the same button on the Status page) saves one text file with versions, runtime state, diagnoses, the effective runtime YAML and recent logs. It removes secrets, subscription URLs, node credentials, Wi-Fi names and your public IP before writing, and shows you the contents first; it keeps node names, server addresses and logged domains, so read it before attaching. Drag the .txt file into this box. Anything you paste by hand must be redacted yourself.
 

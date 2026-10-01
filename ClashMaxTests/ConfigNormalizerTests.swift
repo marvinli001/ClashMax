@@ -1635,6 +1635,30 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertFalse(exported.contains(paths.runtime.path))
   }
 
+  /// The URI pass runs over each scalar and again over the dumped YAML; the second pass used to
+  /// re-match its own output and render every http(s) URL as `https://<redacted>>`.
+  func testDisplayRedactorRedactsAURLOnceAndIsIdempotent() {
+    let yaml = """
+    geox-url:
+      geoip: https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat
+    proxies:
+      - name: Share
+        type: ss
+        server: s.example.com
+        port: 443
+        plugin-opts:
+          host: ss://YWVzOnBhc3M@s.example.com:443
+    """
+
+    let once = RuntimeConfigDisplayRedactor.redacted(yaml, controllerSecret: "")
+    let twice = RuntimeConfigDisplayRedactor.redacted(once, controllerSecret: "")
+
+    XCTAssertTrue(once.contains("geoip: https://<redacted>\n"), once)
+    XCTAssertTrue(once.contains("host: ss://<redacted>\n"), once)
+    XCTAssertFalse(once.contains("<redacted>>"), once)
+    XCTAssertEqual(once, twice)
+  }
+
   /// Every credential key mihomo v1.19.31 documents must stay out of the Effective Config view and
   /// exported reports, while the look-alike keys that are public or merely name a placement stay
   /// readable, since they are what a user is debugging.

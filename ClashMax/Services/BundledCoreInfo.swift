@@ -7,6 +7,8 @@ struct BundledCoreInfo: Equatable {
   /// requests (e.g. `mihomo/1.2.3`), or nil when the manifest is missing/unparseable.
   /// Used as a compatibility fallback when a panel rejects the user-configured UA.
   let subscriptionCompatibilityUserAgent: String?
+  /// The manifest's version string (e.g. `v1.19.31`), or nil when the manifest is unreadable.
+  let version: String?
 
   init(bundle: Bundle = .main) {
     self.init(manifestURL: Self.manifestURL(in: bundle))
@@ -21,12 +23,14 @@ struct BundledCoreInfo: Equatable {
       versionSummary = String(localized: "Mihomo unavailable")
       statusMessage = String(localized: "Bundled Mihomo core information is unavailable.")
       subscriptionCompatibilityUserAgent = nil
+      version = nil
       return
     }
 
     versionSummary = "Mihomo \(manifest.version)"
     statusMessage = String(localized: "Bundled with ClashMax. Updating ClashMax updates the bundled Mihomo core.")
     subscriptionCompatibilityUserAgent = Self.compatibilityUserAgent(fromVersion: manifest.version)
+    version = manifest.version
   }
 
   /// Normalizes a manifest version string (e.g. `v1.2.3`) into a `mihomo/<version>`

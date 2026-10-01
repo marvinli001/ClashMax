@@ -3155,6 +3155,62 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(model.intentLifecyclePhase, .stopped)
   }
 
+  /// Roadmap A5 end to end: the bundle a real model collects — subscription URL from the store,
+  /// node password from the stored profile, header token from the provider options, SSIDs from the
+  /// network state — carries none of them in the bytes it would write.
+  func testDiagnosticBundleFromALiveModelCarriesNoPlantedSecret() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    let token = "SUBTOKENabcdef123456"
+    let subscriptionURL = try XCTUnwrap(URL(string: "https://sub.airport-example.net/api/v1/client/subscribe?token=\(token)"))
+    let nodePassword = "node-pass-Q9w8E7r6"
+    let headerSecret = "header-secret-9a8b7c"
+    let recorder = URLProtocolRecorder(
+      responseBody: """
+      proxies:
+        - {name: JP-01, type: ss, server: jp.node-example.com, port: 8388, cipher: aes-128-gcm, password: \(nodePassword)}
+      proxy-groups:
+        - {name: Proxy, type: select, proxies: [JP-01]}
+      rules:
+        - MATCH,Proxy
+      """,
+      responseHeaders: ["Content-Type": "text/yaml"]
+    )
+    let profile = try await store.addSubscription(
+      name: "Airport",
+      url: subscriptionURL,
+      session: URLSession(configuration: recorder.configuration)
+    )
+    try await store.updateSubscriptionProviderOptions(
+      profile,
+      options: SubscriptionProviderOptions(requestHeaders: [SubscriptionRequestHeader(name: "X-Token", value: headerSecret)])
+    )
+    let model = try AppModel(
+      paths: paths,
+      profileStore: store,
+      defaults: Self.makeIsolatedDefaults(),
+      currentNetworkProvider: StaticCurrentNetworkProvider(ssid: "Marvin Home-5G")
+    )
+    model.networkPolicySettings = NetworkPolicySettings(rules: [
+      NetworkPolicyRule(name: "Office", ssid: "CorpNet-Guest", proxyRoutingMode: .systemProxy, enableSystemProxy: true),
+    ])
+    model.refreshCurrentNetworkPolicyState()
+    model.lastError = "fetch \(subscriptionURL.absoluteString) failed; node password \(nodePassword); X-Token \(headerSecret)"
+
+    let bundle = await model.makeDiagnosticBundle()
+
+    var secrets = [token, subscriptionURL.absoluteString, "sub.airport-example.net", nodePassword, headerSecret, "Marvin Home-5G", "CorpNet-Guest"]
+    let controllerSecret = model.currentRuntimeOverrides.secret
+    if controllerSecret.count >= DiagnosticBundleRedactor.minimumLiteralLength {
+      secrets.append(controllerSecret)
+    }
+    for secret in secrets {
+      XCTAssertNil(bundle.data.range(of: Data(secret.utf8)), "leaked: \(secret)")
+    }
+    XCTAssertTrue(bundle.contents.text.contains("Source: generated from the active profile Airport"))
+    XCTAssertTrue(bundle.contents.text.contains("jp.node-example.com"))
+  }
+
   func testNetworkPolicyRuleAutoStartDefaultsOffForLegacyDecoding() throws {
     let decoded = try JSONDecoder().decode(NetworkPolicyRule.self, from: Data("""
     {

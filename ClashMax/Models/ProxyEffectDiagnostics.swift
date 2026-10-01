@@ -410,7 +410,7 @@ enum ProxyEffectDiagnosticsBuilder {
     return false
   }
 
-  private static func regionLabel(for info: PublicIPInfo?) -> String {
+  static func regionLabel(for info: PublicIPInfo?) -> String {
     guard let info else { return String(localized: "Unavailable") }
     let name = info.countryName?.trimmingCharacters(in: .whitespacesAndNewlines).normalizedNonEmpty
     let code = info.countryCode?.trimmingCharacters(in: .whitespacesAndNewlines).normalizedNonEmpty

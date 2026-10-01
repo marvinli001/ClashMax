@@ -838,8 +838,13 @@ enum RuntimeConfigDisplayRedactor {
 
   private static func redactProviderURIs(_ value: String) -> String {
     var redacted = value
+    // `redacted(_:)` runs this over each scalar and again over the dumped YAML. Without the
+    // lookahead the second pass matched its own `https://<redacted` (the class stops at `>`) and
+    // rendered every URL as `https://<redacted>>`.
+    let alreadyRedacted = "(?!" + NSRegularExpression.escapedPattern(for: redactedValue) + ")"
     for scheme in ProfileConfigInspector.supportedURISchemes {
-      let pattern = #"(?i)\b"# + NSRegularExpression.escapedPattern(for: scheme) + #"://[^\s'"\]\)>,]+"#
+      let pattern = #"(?i)\b"# + NSRegularExpression.escapedPattern(for: scheme) + "://" + alreadyRedacted
+        + #"[^\s'"\]\)>,]+"#
       guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
       let range = NSRange(redacted.startIndex..<redacted.endIndex, in: redacted)
       redacted = regex.stringByReplacingMatches(

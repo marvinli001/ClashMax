@@ -35,6 +35,11 @@ Please include:
 - Minimal reproduction steps, and a **redacted** profile or config fragment if the issue
   depends on profile content.
 - Impact as you understand it: what an attacker gains, and what access they need first.
+- If the report is about runtime behavior, a **diagnostic bundle**: Help → *Export Diagnostic
+  Bundle…*, or the same button on the Status page. It collects versions, runtime and helper
+  state, every diagnosis, the effective runtime YAML, recent logs and the network environment
+  into one text file, and removes the secrets listed below before the file is written. The sheet
+  shows the exact contents first; read them before attaching.
 
 ### What to expect
 
@@ -68,7 +73,16 @@ attached logs, sample profiles, and CI logs:
 - **Personal network details**: public IPs, Wi-Fi SSIDs, MAC addresses, and account
   identifiers from your provider.
 
-Replace them with placeholders (`https://example.com/sub?token=<redacted>`,
+The diagnostic bundle removes the controller secret, subscription URLs (with their hosts,
+tokens and header tokens), node passwords, UUIDs and keys, inbound `authentication`
+usernames and passwords, Wi-Fi network names, and file names under your home folder. It
+leaves out your public IP address entirely and keeps only its country: even a partly masked
+address narrows the egress to one network, and a public bug report should not. It
+deliberately keeps proxy node names, server addresses and the domains in recent logs, because
+most routing bugs cannot be diagnosed without them — remove those yourself if they are
+private. Copy Diagnostics on the Status page goes through the same redaction.
+
+For anything you paste by hand, replace values with placeholders (`https://example.com/sub?token=<redacted>`,
 `internal.example`, `1.2.3.4`). A report with redactions is far more useful than a
 report we have to ask you to delete. If you have already posted something sensitive,
 tell us — the comment can be edited or hidden, but treat the value as compromised and
@@ -90,11 +104,15 @@ Reports are easier to write when you know where data lives:
 - **Runtime configs** are written under a ClashMax-managed Application Support path.
 - **The controller** binds to `127.0.0.1`. A new controller secret is generated for every
   launch, and control API access uses Bearer authentication.
-- **Logs are redacted at the producer boundary** (`Shared/StructuredLogPrivacy.swift`),
-  before a line reaches the in-memory ring, the on-disk JSONL, or a copied diagnostic
-  report. Redaction covers auth headers, tokens, passwords, keys, and subscription URLs,
-  and deliberately keeps schemes, hosts, ports, error domains, and error codes so logs
-  stay useful. Treat a leak *through* this boundary as a security bug, not a papercut.
+- **Core process output is redacted at the producer boundary** (`Shared/StructuredLogPrivacy.swift`,
+  `SanitizedLineAccumulator`) before a line is retained. Redaction covers auth headers,
+  tokens, passwords, keys, and subscription URLs, and deliberately keeps schemes, hosts,
+  ports, error domains, and error codes so logs stay useful. App log lines and the core's
+  `/logs` stream are shown on the Logs page as they arrive and are redacted when they leave
+  the app: the diagnostic bundle and Copy Diagnostics both run the same rules plus a literal
+  pass over every secret ClashMax holds (`ClashMax/Models/DiagnosticBundle.swift`). The
+  bundle's writer only accepts text that has been through that redactor. Treat a leak
+  *through* either boundary as a security bug, not a papercut.
 - **No telemetry.** ClashMax does not collect analytics or send profile data anywhere.
   Network requests it makes on its own are: subscription updates to the URL you supplied,
   the Sparkle appcast, and the optional public-IP probe.
