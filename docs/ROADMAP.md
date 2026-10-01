@@ -192,8 +192,8 @@ Gaps, in priority order:
 
 | Asset | State | Missing piece |
 | --- | --- | --- |
-| `PROCESS-NAME` / `PROCESS-PATH` rule kinds | Present in the rule enum ([`CoreModels.swift:2492`](../ClashMax/Models/CoreModels.swift#L2492)) | No app picker. Users must type a process name from memory. |
-| Process path + icon for live connections | Working ([`ConnectionsView.swift:578`](../ClashMax/Views/ConnectionsView.swift#L578)) | Not wired to rule creation. |
+| `PROCESS-NAME` / `PROCESS-PATH` rule kinds | Present in the rule enum, joined by `PROCESS-PATH-REGEX` on 2026-10-01 | ~~No app picker.~~ An app picker writes the bundle rule ([B1](#b1--per-app-routing-with-a-real-app-picker)). |
+| Process path + icon for live connections | Working ([`ConnectionsView.swift`](../ClashMax/Views/ConnectionsView.swift)) | ~~Not wired to rule creation.~~ *Route <app> Through…* on the row, since 2026-10-01. |
 | `NetworkPolicyRule` — per-SSID policy | Switches routing mode, system proxy, auto-start ([`CoreModels.swift:5580`](../ClashMax/Models/CoreModels.swift#L5580)) | Cannot switch **profile** or **rule set**. Trigger is SSID only. |
 | `NetworkEnvironmentMonitor`, `WiFiNetworkInfo` | Live SSID and path monitoring | Only consumed for policy matching and diagnostics. |
 
@@ -620,15 +620,67 @@ cannot copy cheaply.
 
 - **Problem:** the rule kinds exist; the affordance does not. This is the single largest
   gap between ClashMax and Surge.
+- **Status: shipped 2026-10-01. Never used by hand; TUN-mode matching not measured.**
+- **What the core actually does**, probed on 2026-10-01 against the bundled core v1.19.31: a
+  throwaway core on high ports, a minimal HTTP-proxy client compiled into a fake
+  `Probe App.app/Contents/MacOS/` *and* into a helper app nested under
+  `Contents/Frameworks/Probe App Helper (Renderer).app`, each sending one request through the
+  mixed port; the core's own `match` log line is the evidence.
+
+  | Rule | Main executable | Nested helper |
+  | --- | --- | --- |
+  | `PROCESS-PATH-REGEX,^<bundle path>/,REJECT` | matched | **matched** |
+  | `PROCESS-PATH,<main executable>,REJECT` | matched | missed |
+  | `PROCESS-NAME,Probe App,REJECT` | matched | missed |
+  | the bundle pattern with `find-process-mode: off` | missed | missed |
+
+  Also measured: the core attributes a mixed-port connection to the right local process;
+  `PROCESS-PATH-REGEX` matches **case-insensitively** (a lower-cased pattern still matched); a
+  bundle named `Probe+ (Beta), Inc.app` matched with `+ ( ) .` escaped and the comma written
+  `\x2C` — a literal comma would end the rule field; and `-t` rejects an uncompilable pattern
+  with `error parsing regexp: …` for the whole config. Unset `find-process-mode` (the core's
+  default) and `always` both match. **Decision:** the picker writes `PROCESS-PATH-REGEX,^<bundle
+  path>/`, because it is the only one of the three that covers the helper processes Chrome,
+  Electron apps and anything else with renderers actually open their connections from.
 - **Acceptance criteria:**
-  - [ ] Picker lists installed applications with name, icon, and bundle identifier, and
-        emits a correct `PROCESS-NAME` or `PROCESS-PATH` rule.
+  - [x] Picker lists installed applications with name, icon, and bundle identifier, and
+        emits a correct `PROCESS-NAME` or `PROCESS-PATH` rule. → **2026-10-01**, emitting
+        `PROCESS-PATH-REGEX` per the measurement above. `InstalledAppScanner` reads
+        `/Applications`, `~/Applications` and `/System/Applications` plus one folder down
+        (`Utilities`) off the main thread, never descends into a bundle, and lists Finder names;
+        *Choose…* takes any other `.app`. Evidence: `AppProcessRuleTests` (fixture-directory scan,
+        escaping, the generated YAML keeps the pattern byte for byte) and
+        `CoreRuntimePreflightTests.testBundledMihomoAcceptsAnAppPickerProcessRule` (the bundled
+        core accepts the generated config; runs in CI per D2).
   - [ ] Reachable from two places: the Routing editor, and *"route this app through…"* on a
-        Connections row (the icon and path are already there).
-  - [ ] Emits an ordinary quick rule into an ordinary snippet (INV-1) — no new storage.
-  - [ ] After applying, the existing post-apply verdict says which rule now wins.
-  - [ ] Helper text states plainly when process rules cannot match (e.g. traffic arriving
-        via the system proxy from a process the core cannot attribute).
+        Connections row (the icon and path are already there). Built: *Choose App…* in the
+        Routing rule form and the rule-overlay editor whenever a process kind is selected, and in
+        the quick-rule sheet; *Route <app> Through…* in the Connections row menu, which maps the
+        process path to its **outermost** `.app` (a Chrome renderer resolves to Google Chrome) and
+        falls back to `PROCESS-PATH` for an executable outside any bundle. Not ticked: nobody has
+        opened either entrance — see [B1 in `MANUAL_TEST_PLAN.md`](MANUAL_TEST_PLAN.md#b1--route-an-app-from-the-picker-and-see-it-take-effect).
+  - [x] Emits an ordinary quick rule into an ordinary snippet (INV-1) — no new storage. →
+        **2026-10-01**: a `QuickRuleDraft` into `QuickRuleLibrary`'s fixed-id snippet from the
+        Connections path, an ordinary `ManagedRuleOverlayRule` into the snippet being edited from
+        Routing. `testAnAppRuleLandsInTheSameQuickRulesSnippetAsEveryOtherQuickRule`.
+  - [x] After applying, the existing post-apply verdict says which rule now wins. →
+        **2026-10-01**: `RuleMatchSimulator` now evaluates `PROCESS-PATH-REGEX` (it used to hand
+        it to "decided inside Mihomo") with the case-insensitivity measured above, and an app
+        draft carries the executable — or, from a connection, the process actually seen — as its
+        probe. `testBundlePatternMatchesTheAppAndItsHelpersButNotASiblingApp` covers both the
+        config and the core's camel-cased type spelling, and that `Google Chrome Canary.app` is
+        not caught by Chrome's pattern.
+  - [x] Helper text states plainly when process rules cannot match (e.g. traffic arriving
+        via the system proxy from a process the core cannot attribute). → **2026-10-01**,
+        `ProcessRuleCoverage`, shown under every *Choose App…*: `find-process-mode: off` in the
+        running config (read back from the file, since `GET /configs` does not carry it) means no
+        process rule matches (measured); NE Proxy routing relays every flow over the extension's
+        own SOCKS connection, so the core can only ever see the extension (from the extension's
+        code, not measured live); System Proxy routing never sees an app that ignores the proxy;
+        and Safari's pages (WebKit's networking service) and background downloads
+        (`nsurlsessiond`) belong to system processes in every mode.
+        `testCoverageNotesNameWhatStopsAProcessRuleFromMatching`. **Not measured:** matching in
+        TUN mode, which needs the privileged helper.
 
 #### B2 — Scenarios: generalize `NetworkPolicyRule`
 

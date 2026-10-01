@@ -39,6 +39,9 @@ enum QuickRulePlacement: String, CaseIterable, Identifiable, Codable, Sendable {
 struct QuickRuleDraft: Equatable, Sendable {
   var rule: ManagedRuleOverlayRule
   var placement: QuickRulePlacement
+  /// A process path the rule should match, for the post-apply verdict. Only the app picker and
+  /// "route this app" set it: a bundle pattern carries no example path of its own (roadmap B1).
+  var verificationProcessPath: String?
 
   init(rule: ManagedRuleOverlayRule, placement: QuickRulePlacement = .beforeProfileRules) {
     self.rule = rule
@@ -140,7 +143,12 @@ struct QuickRuleDraft: Equatable, Sendable {
       return RuleMatchSimulationInput(inboundPort: port)
     case .processName, .processPath:
       guard !value.isEmpty else { return nil }
-      return RuleMatchSimulationInput(process: value)
+      return RuleMatchSimulationInput(process: verificationProcessPath ?? value)
+    case .processPathRegex:
+      guard let path = verificationProcessPath?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty else {
+        return nil
+      }
+      return RuleMatchSimulationInput(process: path)
     case .geoIP, .geoSite, .ruleSet, .subRule, .srcGeoIP, .srcIPASN, .srcIPSuffix, .match:
       // Matched by Mihomo itself, or (MATCH) matches everything and so proves nothing.
       return nil

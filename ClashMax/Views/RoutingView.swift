@@ -1540,6 +1540,15 @@ private struct RoutingRuleFormSheet: View {
               .focused($isValueFocused)
               .onSubmit(commit)
           }
+          if rule.kind.isProcessRule {
+            GridRow {
+              Color.clear.frame(width: 1, height: 1)
+              ProcessRuleAppChooser { app in
+                rule.kind = .processPathRegex
+                rule.value = AppProcessRule.bundlePathPattern(for: app.bundleURL)
+              }
+            }
+          }
         }
 
         GridRow {

@@ -1015,6 +1015,10 @@ final class AppModel {
   /// listening" (roadmap C3). It has to come from the file because `GET /configs` carries no
   /// `listeners` key at all.
   private(set) var activeListenerFacts: ListenerRuntimeFacts?
+  /// `find-process-mode` from the running config; nil when unset (the core's default, which looks
+  /// processes up when a rule needs one) or when nothing is running.
+  private(set) var activeFindProcessMode: String?
+  @ObservationIgnored private var activeFindProcessModeTask: Task<Void, Never>?
   @ObservationIgnored private var activeListenerFactsTask: Task<Void, Never>?
   /// The name the DNS resolution panel is asking about, and what came back (roadmap A2).
   var dnsResolutionQuery = ""
@@ -8888,11 +8892,30 @@ final class AppModel {
     refreshActiveSnifferSettings(from: materialization.runtimeConfigURL)
     refreshActiveDNSFacts(from: materialization.runtimeConfigURL)
     refreshActiveListenerFacts(from: materialization.runtimeConfigURL)
+    refreshActiveFindProcessMode(from: materialization.runtimeConfigURL)
     refreshGeoDatabaseInventory()
+  }
+
+  /// Whether the config the core was handed lets process rules match at all (roadmap B1).
+  private func refreshActiveFindProcessMode(from url: URL) {
+    activeFindProcessModeTask?.cancel()
+    activeFindProcessModeTask = Task { @MainActor [weak self] in
+      let mode = await FindProcessModeConfigReader.mode(at: url)
+      guard !Task.isCancelled, let self else { return }
+      activeFindProcessMode = mode
+    }
+  }
+
+  /// What can keep a process rule from matching, for the app picker and the quick-rule sheet.
+  var processRuleCoverageNotes: [ProcessRuleCoverage.Note] {
+    ProcessRuleCoverage.notes(routingMode: proxyRoutingMode, findProcessMode: isRunning ? activeFindProcessMode : nil)
   }
 
   private func clearActiveRuntimeArtifacts() {
     activeRuntimeConfigMaterialization = nil
+    activeFindProcessModeTask?.cancel()
+    activeFindProcessModeTask = nil
+    activeFindProcessMode = nil
     activeSnifferSettingsTask?.cancel()
     activeSnifferSettingsTask = nil
     activeSnifferSettings = nil

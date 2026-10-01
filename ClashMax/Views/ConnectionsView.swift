@@ -354,6 +354,22 @@ struct ConnectionsView: View {
       }
       .disabled(connectionRuleHost(connection).isEmpty)
 
+      // Roadmap B1: the process path is already on the row, so the app it belongs to is one lookup
+      // away — the outermost .app, which also covers the helpers that opened half its connections.
+      if let draft = AppProcessRule.draft(forProcessPath: connection.processPath) {
+        let appName = AppProcessRule.appName(forProcessPath: connection.processPath) ?? connection.appDisplayName
+        Button(String(format: String(localized: "Route %@ Through…"), appName)) {
+          quickRuleContext = QuickRuleSheetContext(
+            title: "Route This App",
+            subtitle: String(
+              format: String(localized: "Every connection %@ opens, from any of its processes, goes through the policy you choose."),
+              appName
+            ),
+            draft: draft
+          )
+        }
+      }
+
       Button("Open in Routing") {
         appModel.openRoutingExplanation(for: connection)
       }

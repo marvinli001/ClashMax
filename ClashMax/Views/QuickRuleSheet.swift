@@ -104,6 +104,19 @@ struct QuickRuleSheet: View {
         }
       }
 
+      if draft.rule.kind.isProcessRule {
+        LabeledContent {
+          ProcessRuleAppChooser { app in
+            let picked = AppProcessRule.draft(for: app, policy: draft.rule.policy)
+            draft.rule.kind = picked.rule.kind
+            draft.rule.value = picked.rule.value
+            draft.verificationProcessPath = picked.verificationProcessPath
+          }
+        } label: {
+          EmptyView()
+        }
+      }
+
       LabeledContent("Policy") {
         HStack(spacing: 6) {
           TextField(draft.rule.kind.policyPlaceholder, text: $draft.rule.policy)

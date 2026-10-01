@@ -2512,6 +2512,9 @@ struct ManagedRuleOverlayRule: Codable, Equatable, Identifiable, Sendable {
     case inPort = "IN-PORT"
     case processName = "PROCESS-NAME"
     case processPath = "PROCESS-PATH"
+    /// What the app picker writes (roadmap B1): `^<bundle path>/`, which also covers the helper
+    /// processes an app runs from inside its own bundle. Measured against core v1.19.31.
+    case processPathRegex = "PROCESS-PATH-REGEX"
     case match = "MATCH"
 
     var id: String { rawValue }
@@ -2527,7 +2530,7 @@ struct ManagedRuleOverlayRule: Codable, Equatable, Identifiable, Sendable {
         return true
       case .domain, .domainSuffix, .domainKeyword, .geoSite, .ruleSet, .subRule,
            .srcGeoIP, .srcIPASN, .srcIPCIDR, .srcIPSuffix, .dstPort, .srcPort,
-           .inPort, .processName, .processPath, .match:
+           .inPort, .processName, .processPath, .processPathRegex, .match:
         return false
       }
     }
@@ -2552,6 +2555,8 @@ struct ManagedRuleOverlayRule: Codable, Equatable, Identifiable, Sendable {
         return String(localized: "Process name")
       case .processPath:
         return String(localized: "Process path")
+      case .processPathRegex:
+        return String(localized: "Process path pattern")
       case .domain, .domainSuffix, .domainKeyword, .geoSite:
         return String(localized: "Rule value")
       case .match:
@@ -2567,7 +2572,7 @@ struct ManagedRuleOverlayRule: Codable, Equatable, Identifiable, Sendable {
         return String(localized: "Policy")
       case .domain, .domainSuffix, .domainKeyword, .ipCIDR, .ipCIDR6, .geoIP,
            .geoSite, .srcGeoIP, .srcIPASN, .srcIPCIDR, .srcIPSuffix, .dstPort,
-           .srcPort, .inPort, .processName, .processPath, .match:
+           .srcPort, .inPort, .processName, .processPath, .processPathRegex, .match:
         return String(localized: "Policy")
       }
     }
@@ -2669,6 +2674,10 @@ struct ManagedRuleOverlayRule: Codable, Equatable, Identifiable, Sendable {
     if kind.isPortRule, !Self.isValidPortRange(normalizedValue) {
       return String(localized: "Port rule value must be a port or range between 1 and 65535.")
     }
+    // The core rejects the whole config over one pattern it cannot compile.
+    if kind == .processPathRegex, (try? NSRegularExpression(pattern: normalizedValue)) == nil {
+      return String(localized: "Process path pattern must be a valid regular expression.")
+    }
     if normalizedPolicy.isEmpty {
       return String(localized: "Rule policy cannot be empty.")
     }
@@ -2721,7 +2730,7 @@ private extension ManagedRuleOverlayRule.Kind {
       return true
     case .domain, .domainSuffix, .domainKeyword, .ipCIDR, .ipCIDR6, .geoIP,
          .geoSite, .ruleSet, .subRule, .srcGeoIP, .srcIPASN, .srcIPCIDR,
-         .srcIPSuffix, .processName, .processPath, .match:
+         .srcIPSuffix, .processName, .processPath, .processPathRegex, .match:
       return false
     }
   }
@@ -5408,10 +5417,16 @@ struct RuleMatchSimulator: Sendable {
         || processNameWithoutExtension.caseInsensitiveCompare(payload) == .orderedSame
     case "PROCESSPATH":
       return process.caseInsensitiveCompare(payload) == .orderedSame
+    case "PROCESSPATHREGEX":
+      // Case-insensitive because the core matches this way: measured against v1.19.31, a pattern
+      // spelled `probe app\.app` matched `/…/Probe App.app/…`. A pattern ICU cannot compile is
+      // left to the core rather than reported as a miss.
+      guard let regex = try? NSRegularExpression(pattern: payload, options: [.caseInsensitive]) else { return nil }
+      return regex.firstMatch(in: process, range: NSRange(process.startIndex..., in: process)) != nil
     case "MATCH":
       return true
     case "GEOSITE", "GEOIP", "RULESET", "SUBRULE", "SRCGEOIP", "SRCIPASN",
-         "SRCIPSUFFIX", "IPSUFFIX", "NETWORK", "PROCESSNAMEREGEX", "PROCESSPATHREGEX":
+         "SRCIPSUFFIX", "IPSUFFIX", "NETWORK", "PROCESSNAMEREGEX":
       // Decided inside Mihomo, or (NETWORK) keyed on a fact the simulation input does not carry.
       // Reported as such instead of being guessed at by the fallback below.
       return nil

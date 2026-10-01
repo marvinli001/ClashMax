@@ -658,6 +658,40 @@ final class CoreRuntimePreflightTests: XCTestCase {
     )
   }
 
+  /// Roadmap B1: the rule the app picker writes is accepted by the bundled core once it has gone
+  /// through the same generation as every other snippet rule — a bundle name with regex
+  /// metacharacters and a comma included, since the comma is what would split the rule field.
+  func testBundledMihomoAcceptsAnAppPickerProcessRule() async throws {
+    guard let coreURL = try BundledCoreRequirement.coreURL() else { return }
+
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxAppRule-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let app = InstalledApp(bundleURL: URL(fileURLWithPath: "/Applications/Probe+ (Beta), Inc.app"), name: "Probe")
+    var options = RuntimeConfigOptions()
+    options.runtimeSnippets = [
+      RuntimeSnippet(
+        name: "Quick Rules",
+        payload: .rules(RuleOverlaySettings(enabled: true, prependRules: [AppProcessRule.draft(for: app, policy: "Proxy").rule]))
+      ),
+    ]
+    let runtimeYAML = try ConfigNormalizer().runtimeConfig(
+      from: Self.syntheticPreflightClashConfig,
+      overrides: .defaultForLaunch(secret: "app-rule-secret"),
+      options: options
+    )
+    let configURL = directory.appendingPathComponent("runtime.yaml")
+    try runtimeYAML.write(to: configURL, atomically: true, encoding: .utf8)
+
+    do {
+      try await MihomoRuntimeConfigValidator(timeout: 30).validate(coreURL: coreURL, configURL: configURL, workDirectory: directory)
+    } catch {
+      XCTFail("Bundled core rejected the app picker rule: \(BundledCoreRequirement.rejectionSummary(error))")
+    }
+  }
+
   /// The `cn-direct` template is the one generated config whose rules need geodata, so it is the one
   /// combination the core cannot validate offline. Kept separate — and skipped rather than failed
   /// when the download is unavailable — so the matrix above stays a pure offline test.

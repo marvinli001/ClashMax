@@ -1727,6 +1727,13 @@ struct RuleOverlaySettingsEditor: View {
             .textFieldStyle(.roundedBorder)
         }
 
+        if ruleCategory == .process {
+          ProcessRuleAppChooser { app in
+            kind = .processPathRegex
+            value = AppProcessRule.bundlePathPattern(for: app.bundleURL)
+          }
+        }
+
         TextField(LocalizedStringKey(kind.policyPlaceholder), text: $policy)
           .textFieldStyle(.roundedBorder)
 
@@ -1902,7 +1909,7 @@ private enum RuleBuilderCategory: String, CaseIterable, Identifiable {
     case .provider:
       [.ruleSet, .subRule]
     case .process:
-      [.processName, .processPath]
+      [.processPathRegex, .processName, .processPath]
     case .geo:
       [.geoSite, .geoIP]
     case .fallback:

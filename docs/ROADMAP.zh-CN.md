@@ -168,7 +168,7 @@ ClashMax 已经在用的 Mihomo 控制 API 端点，来自
 
 | 资产 | 状态 | 缺的那一块 |
 | --- | --- | --- |
-| `PROCESS-NAME` / `PROCESS-PATH` 规则类型 | 规则枚举中已存在（[`CoreModels.swift:2492`](../ClashMax/Models/CoreModels.swift#L2492)） | 没有 app 选择器。用户只能凭记忆手打进程名。 |
+| `PROCESS-NAME` / `PROCESS-PATH` 规则类型 | 规则枚举中已存在，2026-10-01 加入 `PROCESS-PATH-REGEX` | ~~没有 app 选择器。~~ app 选择器会写出整个 bundle 的规则（[B1](#b1带真正-app-选择器的按应用分流)）。 |
 | 实时连接的进程路径与图标 | 已可用（[`ConnectionsView.swift:578`](../ClashMax/Views/ConnectionsView.swift#L578)） | 没有接到规则创建上。 |
 | `NetworkPolicyRule`——按 SSID 的策略 | 可切换路由模式、系统代理、开机自启（[`CoreModels.swift:5580`](../ClashMax/Models/CoreModels.swift#L5580)） | 不能切换**配置文件**或**规则集**。触发条件仅限 SSID。 |
 | `NetworkEnvironmentMonitor`、`WiFiNetworkInfo` | 实时 SSID 与网络路径监控 | 只被策略匹配和诊断消费。 |
@@ -500,14 +500,48 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
 #### B1——带真正 app 选择器的按应用分流
 
 - **问题：** 规则类型已经存在，缺的是可操作的入口。这是 ClashMax 与 Surge 之间最大的一处差距。
+- **状态：2026-10-01 交付。还没有人亲手用过；TUN 模式下的匹配没有实测。**
+- **内核实际怎么做**，2026-10-01 针对内置内核 v1.19.31 实测：在高端口上起一个一次性内核，把一个最小的
+  HTTP 代理客户端分别编译进假的 `Probe App.app/Contents/MacOS/`，*以及*嵌套在 `Contents/Frameworks/Probe App
+  Helper (Renderer).app` 里的辅助 App，各自经 mixed 端口发一次请求；证据是内核自己打出的 `match` 日志行。
+
+  | 规则 | 主程序 | 嵌套的辅助进程 |
+  | --- | --- | --- |
+  | `PROCESS-PATH-REGEX,^<bundle 路径>/,REJECT` | 命中 | **命中** |
+  | `PROCESS-PATH,<主程序路径>,REJECT` | 命中 | 未命中 |
+  | `PROCESS-NAME,Probe App,REJECT` | 命中 | 未命中 |
+  | 同一个 bundle 模式，加上 `find-process-mode: off` | 未命中 | 未命中 |
+
+  同时测得：内核能把 mixed 端口上的连接正确归到本机进程；`PROCESS-PATH-REGEX` **不区分大小写**（全小写的模式照样
+  命中）；名为 `Probe+ (Beta), Inc.app` 的 bundle 在转义 `+ ( ) .`、并把逗号写成 `\x2C` 后可以命中——直接写逗号会
+  截断规则字段；`-t` 遇到无法编译的模式会以 `error parsing regexp: …` 拒绝整个配置。不设置 `find-process-mode`
+  （内核默认）和设为 `always` 都能命中。**结论：** 选择器写 `PROCESS-PATH-REGEX,^<bundle 路径>/`，因为三者中只有它能
+  覆盖 Chrome、Electron 应用以及其他带渲染进程的 App 真正用来发起连接的辅助进程。
 - **验收标准：**
-  - [ ] 选择器列出已安装应用的名称、图标与 bundle identifier，并生成正确的 `PROCESS-NAME` 或
-        `PROCESS-PATH` 规则。
+  - [x] 选择器列出已安装应用的名称、图标与 bundle identifier，并生成正确的 `PROCESS-NAME` 或
+        `PROCESS-PATH` 规则。→ **2026-10-01**，按上面的实测生成 `PROCESS-PATH-REGEX`。`InstalledAppScanner` 在主线程之外
+        读取 `/Applications`、`~/Applications`、`/System/Applications` 以及下一层文件夹（`Utilities`），从不进入
+        bundle 内部，显示 Finder 名称；*选择…* 可以挑任意其他位置的 `.app`。证据：`AppProcessRuleTests`（fixture 目录扫描、
+        转义、生成的 YAML 逐字节保留模式）以及 `CoreRuntimePreflightTests.testBundledMihomoAcceptsAnAppPickerProcessRule`
+        （内置内核接受生成的配置；按 D2 在 CI 中运行）。
   - [ ] 从两个地方可达：Routing 编辑器，以及 Connections 行上的*"让这个 app 走…"*（图标与路径本来就在
-        那儿）。
-  - [ ] 生成的是写入普通片段的普通快速规则（INV-1）——不新增存储。
-  - [ ] 应用之后，已有的 post-apply 结论说明现在是哪条规则胜出。
-  - [ ] 帮助文本明确说明进程规则在什么情况下无法命中（例如流量经系统代理到达，而内核无法归因到进程）。
+        那儿）。已实现：在 Routing 规则表单和规则覆盖编辑器中选中进程类规则时出现 *选择 App…*，快速规则面板里也有；
+        Connections 行菜单里有 *让 <App> 走…*，它把进程路径映射到**最外层**的 `.app`（Chrome 的渲染进程会归到 Google
+        Chrome），不在任何 bundle 里的可执行文件退回 `PROCESS-PATH`。没有勾：两个入口都还没人打开过——见
+        [`MANUAL_TEST_PLAN.md` 的 B1](MANUAL_TEST_PLAN.md#b1--route-an-app-from-the-picker-and-see-it-take-effect)。
+  - [x] 生成的是写入普通片段的普通快速规则（INV-1）——不新增存储。→ **2026-10-01**：从 Connections 进入时，是写进
+        `QuickRuleLibrary` 固定 id 片段的 `QuickRuleDraft`；从 Routing 进入时，是写进正在编辑的片段的普通
+        `ManagedRuleOverlayRule`。`testAnAppRuleLandsInTheSameQuickRulesSnippetAsEveryOtherQuickRule`。
+  - [x] 应用之后，已有的 post-apply 结论说明现在是哪条规则胜出。→ **2026-10-01**：`RuleMatchSimulator` 现在会按上面测得的
+        不区分大小写规则计算 `PROCESS-PATH-REGEX`（以前直接交给"由 Mihomo 内部决定"），App 草稿把主程序——或者从连接进入时
+        实际看到的那个进程——作为探测输入。`testBundlePatternMatchesTheAppAndItsHelpersButNotASiblingApp` 覆盖配置里的写法和
+        内核驼峰式的类型名，并确认 `Google Chrome Canary.app` 不会被 Chrome 的模式误伤。
+  - [x] 帮助文本明确说明进程规则在什么情况下无法命中（例如流量经系统代理到达，而内核无法归因到进程）。→ **2026-10-01**，
+        `ProcessRuleCoverage`，显示在每个 *选择 App…* 下方：运行中的配置里有 `find-process-mode: off`（从文件读回，因为
+        `GET /configs` 不带这个 key）时任何进程规则都不会命中（实测）；NE 代理路由下，扩展用自己的 SOCKS 连接转交每一条流量，
+        内核只能看到扩展（来自扩展代码，未实测）；系统代理路由看不到不理会代理的 App；Safari 的网页（WebKit 网络服务）和后台
+        下载（`nsurlsessiond`）在任何模式下都属于系统进程。`testCoverageNotesNameWhatStopsAProcessRuleFromMatching`。
+        **未实测：** TUN 模式下的匹配，因为需要特权 helper。
 
 #### B2——场景化：推广 `NetworkPolicyRule`
 
