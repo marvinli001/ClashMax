@@ -303,7 +303,6 @@ final class CoreRuntimePreflightTests: XCTestCase {
     XCTAssertFalse(core.recentOutputTail(maxBytes: 8192).contains("unix listening"))
   }
 
-  /// The status code of one HTTP/1.0 exchange over a unix socket, or nil when nothing answered.
   /// C1, measured on v1.19.31: a profile's `authentication:` gated ClashMax's own mixed port too, so
   /// the readiness probe got `05 02` and apps on this Mac got 407. The loopback exemption the
   /// normalizer adds has to fix that without opening the profile's exposed listener to the network.
@@ -401,6 +400,7 @@ final class CoreRuntimePreflightTests: XCTestCase {
     return nil
   }
 
+  /// The status code of one HTTP/1.0 exchange over a unix socket, or nil when nothing answered.
   private static func unixSocketStatusCode(path: String, request: String) -> Int? {
     let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
     guard descriptor >= 0 else { return nil }
