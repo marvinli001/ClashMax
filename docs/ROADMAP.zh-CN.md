@@ -816,8 +816,12 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
         内核拒绝时现在经由 `SubscriptionPreflightDiagnosticFormatter` 报告，失败信息以 `msg=` 的值开头，下面
         保留完整输出。证据：一个拒绝所有 TUN 配置的替身内核产生 46 个失败（45 个 TUN 组合 + 计数断言），每条形如
         `Bundled core rejected plain-profile/tun/dns-default/sniffer-app-managed: parse tun config error: …`。
-  - [ ] 在 CI 中针对内置内核运行。**2026-10-01 已接好，还没在 GitHub Actions 上实际跑过**（需要 push）。test 与
-        build 两个 job 都会执行 [`script/install_mihomo_core.sh`](../script/install_mihomo_core.sh)，每个
+  - [x] 在 CI 中针对内置内核运行。→ **2026-10-01**，首次在 CI 运行
+        [36828400111](https://github.com/marvinli001/ClashMax/actions/runs/36828400111)（`5306970`）中观察到：安装步骤
+        下载并校验了 v1.19.31 的两个 asset，合并为 `x86_64 arm64`；全部 7 个依赖内置内核的测试和架构检查都是**通过而不是
+        跳过**——135 个组合的矩阵用时 7.1 秒，`cn-direct` 的 geodata 测试 1.4 秒——整次运行 1562 个 XCTest、0 失败、2 个
+        跳过（只对 Intel 有意义的更新渠道测试，以及只存在于开发机的发布手册测试）；本地化 gate 在同一个 DerivedData 上的
+        第二次 xcodebuild 通过；release job 断言内嵌内核为 `x86_64 arm64`。接线方式：test 与 build 两个 job 都会执行 [`script/install_mihomo_core.sh`](../script/install_mihomo_core.sh)，每个
         asset 都按 [`mihomo-manifest.json`](../Resources/Core/mihomo-manifest.json) 里的 sha256 校验——
         包括从 `actions/cache` 恢复的那些；缓存里存的是下载包，不是合并后的二进制。test job 设置
         `TEST_RUNNER_CLASHMAX_REQUIRE_BUNDLED_CORE=1`，xcodebuild 会去掉前缀、以
@@ -826,9 +830,10 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
         在全新 DerivedData 上本地复现了整个 job：第二次 xcodebuild（`localization_gate.sh`）干净地重新构建，
         测试宿主里的 `Core/mihomo` 与安装的内核逐字节一致（`DashboardRuntimeStateTests` 的占位文件根本不会写入），
         `Sign Nested Core Binaries` 的 `lipo -archs` 检查通过。release build job 的 bundle 检查现在也断言内嵌内核
-        是 `x86_64 arm64`（对本地一份未签名的 universal Release 构建跑过，通过）。master 上第一次绿色运行之后再勾。
-  - [ ] 任何一个组合被新内核版本破坏，都会让构建失败，而不是被发布出去。本地已演示（上面的替身内核）；CI 那一半
-        等上一条。manifest 里的 sha256 错一位时，安装步骤失败并报 `checksum mismatch for <asset>: the manifest
+        是 `x86_64 arm64`（对本地一份未签名的 universal Release 构建跑过，通过）。
+  - [x] 任何一个组合被新内核版本破坏，都会让构建失败，而不是被发布出去。→ **2026-10-01**：CI 现在会针对 manifest 固定的
+        内核跑这个矩阵，缺内核即失败（见上面的 run 36828400111）；内核一旦拒绝某个组合，构建就会变红——第一条里的替身内核
+        已演示，46 个失败。manifest 里的 sha256 错一位时，安装步骤失败并报 `checksum mismatch for <asset>: the manifest
         expects … but the downloaded asset is …`，在 GitHub Actions 下会标注到 manifest 文件上。
 
 #### D3——补上手工验证的缺口

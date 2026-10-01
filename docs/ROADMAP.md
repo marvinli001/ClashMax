@@ -1060,8 +1060,15 @@ interleaved with A/B/C, touching only what the current feature touches.
         stand-in core that rejects every TUN config produced 46 failures (45 TUN combinations
         + the count check), each reading e.g. `Bundled core rejected
         plain-profile/tun/dns-default/sniffer-app-managed: parse tun config error: …`.
-  - [ ] Runs in CI against the bundled core. **Wired 2026-10-01, not yet observed on GitHub
-        Actions** (needs a push). Both the test and build jobs run
+  - [x] Runs in CI against the bundled core. → **2026-10-01**, first observed in CI run
+        [36828400111](https://github.com/marvinli001/ClashMax/actions/runs/36828400111) on
+        `5306970`: the install step fetched and verified both v1.19.31 assets and merged
+        `x86_64 arm64`; all seven bundled-core tests and the architecture checks **passed rather
+        than skipped** — the 135-case matrix in 7.1 s, the `cn-direct` geodata test in 1.4 s —
+        in a run of 1562 XCTest with 0 failures and 2 skips (the Intel-only update-channel test
+        and the workstation-only runbook test); the localization gate's second xcodebuild over
+        the same DerivedData passed; and the release job asserted the embedded core is
+        `x86_64 arm64`. How it is wired: both the test and build jobs run
         [`script/install_mihomo_core.sh`](../script/install_mihomo_core.sh), which checks every
         asset against the sha256 in [`mihomo-manifest.json`](../Resources/Core/mihomo-manifest.json)
         — including assets restored from `actions/cache`, which holds the downloads, not the
@@ -1075,10 +1082,12 @@ interleaved with A/B/C, touching only what the current feature touches.
         `DashboardRuntimeStateTests` placeholder is never written), and `Sign Nested Core
         Binaries` passes its `lipo -archs` check. The release build job's bundle checks now
         also assert the embedded core is `x86_64 arm64` (passed against a local unsigned
-        universal Release build). Tick after the first green run on master.
-  - [ ] A new core version that breaks any combination fails the build rather than shipping.
-        Demonstrated locally (the stand-in core above); the CI half waits on the criterion
-        above. A manifest whose sha256 is wrong by one digit fails the install step with
+        universal Release build).
+  - [x] A new core version that breaks any combination fails the build rather than shipping.
+        → **2026-10-01**: CI now runs the matrix against whatever the manifest pins and fails on
+        a missing core (run 36828400111 above), and a core that rejects a combination turns it
+        red — demonstrated with the stand-in core in the first criterion, 46 failures. A
+        manifest whose sha256 is wrong by one digit fails the install step with
         `checksum mismatch for <asset>: the manifest expects … but the downloaded asset is
         …`, annotated on the manifest file under GitHub Actions.
 
