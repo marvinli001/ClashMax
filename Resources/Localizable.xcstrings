@@ -688,6 +688,16 @@
         }
       }
     },
+    "%lld inbound listener(s) accept connections from other machines. They ask for credentials, but skip-auth-prefixes lets devices at %@ use your proxy without them." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个入站监听接受来自其他机器的连接。它们会要求凭据，但 skip-auth-prefixes 让来自 %@ 的设备无需凭据即可使用你的代理。"
+          }
+        }
+      }
+    },
     "%lld inbound listener(s) reachable from your network" : {
       "localizations" : {
         "zh-Hans" : {
@@ -2022,6 +2032,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%@ 已存在另一份 ClashMax。请先删除或重命名它，再把当前这份移动到「应用程序」文件夹。"
+          }
+        }
+      }
+    },
+    "any IPv4 address (%@)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "任意 IPv4 地址（%@）"
+          }
+        }
+      }
+    },
+    "any IPv6 address (%@)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "任意 IPv6 地址（%@）"
           }
         }
       }
@@ -5570,6 +5600,36 @@
         }
       }
     },
+    "Devices at %@ can use your proxy through %@ without a password, because the profile's skip-auth-prefixes exempts them. Other devices need the credentials in its authentication list." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来自 %@ 的设备无需密码即可通过 %@ 使用你的代理，因为配置的 skip-auth-prefixes 豁免了它们。其他设备需要使用其 authentication 列表中的凭据。"
+          }
+        }
+      }
+    },
+    "Devices at %@ can use your proxy through %@ without a password." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来自 %@ 的设备无需密码即可通过 %@ 使用你的代理。"
+          }
+        }
+      }
+    },
+    "Devices at %@ skip these credentials because of skip-auth-prefixes. Other devices that reach your proxy, through Allow LAN or a listener, must sign in with them, which whoever wrote the subscription also knows." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "因为 skip-auth-prefixes，来自 %@ 的设备无需这些凭据。其他设备通过“允许局域网”或监听器访问你的代理时，必须使用这些凭据登录，而订阅的作者也知道这些凭据。"
+          }
+        }
+      }
+    },
     "Diagnostic Bundle" : {
       "localizations" : {
         "zh-Hans" : {
@@ -8706,6 +8766,16 @@
         }
       }
     },
+    "If you turn on Allow LAN or allow listeners other devices can reach, devices at %@ can use your proxy without a password." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "如果你开启“允许局域网”，或允许其他设备可以访问的监听器，来自 %@ 的设备将无需密码即可使用你的代理。"
+          }
+        }
+      }
+    },
     "Ignore TLS Errors" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -9731,6 +9801,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "旧版运行时合并 YAML"
+          }
+        }
+      }
+    },
+    "Let connections from %@ skip the authentication list." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "让来自 %@ 的连接跳过 authentication 列表。"
           }
         }
       }
@@ -13098,6 +13178,16 @@
         }
       }
     },
+    "Open proxy for %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "对 %@ 开放的代理"
+          }
+        }
+      }
+    },
     "Open proxy on your network" : {
       "localizations" : {
         "zh-Hans" : {
@@ -13510,12 +13600,42 @@
         }
       }
     },
+    "Passed through, with no effect on other machines: the core never matches an IPv4-mapped prefix, and this Mac is exempt anyway." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已放行，但对其他机器不起作用：内核从不匹配 IPv4 映射前缀，而本机本来就被豁免。"
+          }
+        }
+      }
+    },
+    "Passed through, with no effect: the profile asks no one for credentials." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已放行，但不起作用：该配置不要求任何人提供凭据。"
+          }
+        }
+      }
+    },
     "Passed through: ClashMax does not manage this key." : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "已放行：ClashMax 不管理这个 key。"
+          }
+        }
+      }
+    },
+    "Passed through: every entry is an address on this Mac, which ClashMax exempts anyway." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已放行：每一项都是本机地址，ClashMax 本来就会豁免它们。"
           }
         }
       }
@@ -15832,6 +15952,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "从 ClashMax 移除 %@。已存储的订阅元数据和应用管理的配置副本将被删除。"
+          }
+        }
+      }
+    },
+    "Remove %@ from skip-auth-prefixes so other machines have to send credentials. A Raw YAML snippet that sets skip-auth-prefixes replaces a subscription's list, and ClashMax keeps apps on this Mac exempt on its own." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从 skip-auth-prefixes 中移除 %@，让其他机器必须提供凭据。设置了 skip-auth-prefixes 的 Raw YAML 片段会替换订阅自带的列表，ClashMax 也会自行保持本机 App 免于认证。"
           }
         }
       }
@@ -18202,6 +18332,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "服务地址"
+          }
+        }
+      }
+    },
+    "Set — but skip-auth-prefixes lets %@ in without credentials" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已设置 —— 但 skip-auth-prefixes 让 %@ 无需凭据即可连接"
           }
         }
       }
@@ -21033,6 +21173,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Geo 数据库本来就是最新的。"
+          }
+        }
+      }
+    },
+    "the mixed port %@ (Allow LAN is on)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "混合端口 %@（已开启“允许局域网”）"
           }
         }
       }

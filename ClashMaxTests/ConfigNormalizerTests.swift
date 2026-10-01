@@ -2109,6 +2109,12 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(partial.prefixes, ["192.168.8.0/24", "::1/128", "127.0.0.0/8"])
     XCTAssertEqual(partial.notes.count, 1)
     XCTAssertTrue(partial.notes[0].contains("(added 127.0.0.0/8 to skip-auth-prefixes)"), partial.notes[0])
+    // The profile's own LAN range stays, and the note does not claim every other machine still
+    // needs the credentials (measured: such a range let a LAN source in without them).
+    XCTAssertTrue(
+      partial.notes[0].hasSuffix("other machines still need its credentials, except sources in 192.168.8.0/24, which the config's own skip-auth-prefixes exempts."),
+      partial.notes[0]
+    )
 
     // A single prefix written as a scalar becomes a list instead of being dropped.
     XCTAssertEqual(try generate("10.0.0.0/8").prefixes, ["10.0.0.0/8", "127.0.0.0/8", "::1/128"])

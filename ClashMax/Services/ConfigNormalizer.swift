@@ -452,9 +452,13 @@ struct ConfigNormalizer {
   /// system proxy broke and an NE Proxy start failed. `skip-auth-prefixes` exempts by source
   /// address only: with it, a `listen: 0.0.0.0` listener (and the mixed port under Allow LAN)
   /// still answered 407 to the Mac's own LAN address without credentials and 200 with them, which
-  /// is what keeps an exposed listener from being an open proxy (ListenerExposure.swift).
+  /// is what keeps an exposed listener from being an open proxy (ListenerExposure.swift). The
+  /// config's own entries are kept as authored; one that reaches past loopback opens that door for
+  /// the devices it covers, and `ListenerExposure` and the C1 audit say so rather than this method
+  /// deciding for the profile.
   private static func exemptLoopbackFromInboundAuthentication(in root: inout [String: Any], notes: inout [String]) {
-    guard ListenerRuntimeFacts.facts(from: root).hasInboundAuthentication else { return }
+    let facts = ListenerRuntimeFacts.facts(from: root)
+    guard facts.hasInboundAuthentication else { return }
     // The config's own prefixes are kept; a lone string becomes a list, anything else would not load.
     let existing: [Any] = switch root["skip-auth-prefixes"] {
     case let list as [Any]: list
@@ -465,8 +469,11 @@ struct ConfigNormalizer {
     let added = loopbackSkipAuthPrefixes.filter { !present.contains($0) }
     guard !added.isEmpty else { return }
     root["skip-auth-prefixes"] = existing + added
+    let otherMachines = facts.skipAuthPrefixesBeyondThisMac.isEmpty
+      ? "other machines still need its credentials"
+      : "other machines still need its credentials, except sources in \(facts.skipAuthPrefixesBeyondThisMac.joined(separator: ", ")), which the config's own skip-auth-prefixes exempts"
     notes.append(
-      "Let apps on this Mac use mixed-port without the config's inbound authentication (added \(added.joined(separator: ", ")) to skip-auth-prefixes); other machines still need its credentials."
+      "Let apps on this Mac use mixed-port without the config's inbound authentication (added \(added.joined(separator: ", ")) to skip-auth-prefixes); \(otherMachines)."
     )
   }
 

@@ -378,6 +378,85 @@ final class CoreRuntimePreflightTests: XCTestCase {
     )
   }
 
+  /// C1, measured on v1.19.31 (2026-10-02): a profile's own `skip-auth-prefixes` entry past loopback
+  /// lets a LAN source through the authenticated listener with no credentials, so the verdict read
+  /// from the same generated config must call it an open proxy. A core that starts asking that
+  /// source for credentials fails here and reopens the rule in docs/ROADMAP.md (C1).
+  func testBundledMihomoLetsAProfilesWidePrefixPastAuthenticationAndTheVerdictSaysSo() async throws {
+    try await assertSkipAuthPrefix("0.0.0.0/0", listen: "0.0.0.0", letsTheLANAddressIn: true, verdict: .authenticationSkipped)
+  }
+
+  /// The other half of the rule: the core unmaps an IPv4 source before matching, so an IPv4-mapped
+  /// prefix lets nobody in, even on a dual-stack listener, and `SkipAuthPrefixes` treats it as
+  /// harmless. A core that starts matching mapped prefixes fails here, and the verdict with it.
+  func testBundledMihomoIgnoresAnIPv4MappedPrefixAndTheVerdictAgrees() async throws {
+    try await assertSkipAuthPrefix("::ffff:0:0/96", listen: "::", letsTheLANAddressIn: false, verdict: .lanExposed)
+  }
+
+  private func assertSkipAuthPrefix(
+    _ prefix: String,
+    listen: String,
+    letsTheLANAddressIn: Bool,
+    verdict expectedCause: ListenerExposureSnapshot.Cause,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) async throws {
+    guard let coreURL = try BundledCoreRequirement.coreURL() else { return }
+    guard let lanAddress = Self.firstNonLoopbackIPv4Address() else {
+      throw XCTSkip("No non-loopback IPv4 address to reach the exposed listener from.")
+    }
+
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxSkipAuthPrefixes-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let (mixedPort, listenerPort, controllerPort) = try Self.threeDistinctFreeLoopbackPorts()
+    let profile = """
+    authentication:
+      - "lan-user:lan-pass"
+    skip-auth-prefixes:
+      - "\(prefix)"
+    listeners:
+      - {name: lan, type: mixed, listen: "\(listen)", port: \(listenerPort)}
+    mode: direct
+    log-level: info
+    proxies: []
+    proxy-groups: []
+    rules: []
+    """
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.mixedPort = mixedPort
+    overrides.externalControllerPort = controllerPort
+    overrides.dnsEnabled = false
+    let generation = try ConfigNormalizer().generateRuntimeConfig(from: profile, overrides: overrides)
+    let root = try XCTUnwrap(Yams.load(yaml: generation.yaml) as? [String: Any])
+    let verdict = ListenerExposureDiagnosticsBuilder.snapshot(for: ListenerExposureInput(facts: ListenerRuntimeFacts.facts(from: root)))
+    XCTAssertEqual(verdict.cause, expectedCause, file: file, line: line)
+
+    let normalizedURL = directory.appendingPathComponent("normalized.yaml")
+    try generation.yaml.write(to: normalizedURL, atomically: true, encoding: .utf8)
+    let core = try FoundationProcessLauncher().launch(
+      executable: coreURL,
+      arguments: ["-f", normalizedURL.path, "-d", directory.path],
+      environment: ["SAFE_PATHS": directory.path],
+      workDirectory: directory
+    )
+    defer { core.terminate() }
+
+    try await SocksProxyReadinessProbe(attempts: 40, delayNanoseconds: 100_000_000, timeout: 0.5)
+      .waitUntilReady(host: "127.0.0.1", port: mixedPort)
+    // nil is `05 00`, no credentials asked; `05 02` asks for them.
+    let expected: SocksGreetingFailure? = letsTheLANAddressIn ? nil : .unexpectedReply([0x05, 0x02])
+    XCTAssertEqual(
+      SocksProxyReadinessProbe.probeGreeting(host: lanAddress, port: listenerPort, timeout: 0.5),
+      expected,
+      "\(prefix) on \(lanAddress):\(listenerPort); core output: \(core.recentOutputTail(maxBytes: 4096))",
+      file: file,
+      line: line
+    )
+  }
+
   private static func firstNonLoopbackIPv4Address() -> String? {
     var interfaces: UnsafeMutablePointer<ifaddrs>?
     guard getifaddrs(&interfaces) == 0, let interfaces else { return nil }

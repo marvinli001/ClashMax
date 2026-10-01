@@ -255,6 +255,118 @@ final class ListenerExposureTests: XCTestCase {
     XCTAssertEqual(snapshot.facts.filter { $0.key == .listener }.count, 2)
   }
 
+  // MARK: skip-auth-prefixes (C1, 2026-10-02)
+
+  /// Measured on v1.19.31: `0.0.0.0/0` and `192.168.0.0/16` let this Mac's own en0 address through
+  /// an authenticated `listen: 0.0.0.0` listener with no credentials, while an IPv4-mapped prefix
+  /// let nobody through. Only those and loopback are no exemption for other machines; anything
+  /// unreadable counts as one.
+  func testEntryScopes() {
+    for entry in ["127.0.0.0/8", "127.0.0.1/32", "127.9.9.9/8", " 127.0.0.1/32 ", "127.0.0.1", "::1/128", "0:0:0:0:0:0:0:1/128", "::1"] {
+      XCTAssertEqual(SkipAuthPrefixes.scope(of: entry), .loopback, entry)
+    }
+    for entry in ["::ffff:0:0/96", "::ffff:192.168.0.0/112", "::ffff:127.0.0.0/104", "::FFFF:7F00:1/128", "::ffff:10.0.0.1"] {
+      XCTAssertEqual(SkipAuthPrefixes.scope(of: entry), .ipv4Mapped, entry)
+    }
+    for entry in [
+      "0.0.0.0/0", "192.168.0.0/16", "192.168.8.65/16", "10.0.0.0/8", "127.0.0.0/7", "192.168.8.65",
+      "::/0", "::1/127", "fe80::/10", "::ffff:0:0/95", "::/80",
+      "localhost", "not-a-prefix", "fe80::1%en0/64", "127.0.0.1/33",
+    ] {
+      XCTAssertEqual(SkipAuthPrefixes.scope(of: entry), .beyondThisMac, entry)
+    }
+  }
+
+  func testParsesTheSkipAuthPrefixesThatReachPastThisMac() {
+    let parsed = facts("""
+    authentication:
+      - "user:password"
+    skip-auth-prefixes:
+      - 0.0.0.0/0
+      - 127.0.0.0/8
+      - "::1/128"
+      - "::ffff:0:0/96"
+    """)
+
+    // The normalizer keys its loopback exemption off the list alone, so this must stay true.
+    XCTAssertTrue(parsed.hasInboundAuthentication)
+    XCTAssertEqual(parsed.skipAuthPrefixesBeyondThisMac, ["0.0.0.0/0"])
+    XCTAssertFalse(parsed.requiresCredentialsFromOtherMachines)
+    // A lone string is one entry, as the normalizer reads it.
+    XCTAssertEqual(
+      facts("authentication: [\"u:p\"]\nskip-auth-prefixes: 192.168.0.0/16").skipAuthPrefixesBeyondThisMac,
+      ["192.168.0.0/16"]
+    )
+  }
+
+  func testEveryAddressPrefixIsSpelledOut() {
+    XCTAssertEqual(
+      SkipAuthPrefixes.describe(["0.0.0.0/0", "10.0.0.0/8", "::/0"]),
+      [
+        String(format: String(localized: "any IPv4 address (%@)"), "0.0.0.0/0"),
+        "10.0.0.0/8",
+        String(format: String(localized: "any IPv6 address (%@)"), "::/0"),
+      ].joined(separator: ", ")
+    )
+  }
+
+  /// Through the real normalizer: the loopback pair it appends must not read as an open door.
+  func testTheLoopbackExemptionClashMaxAddsKeepsAnAuthenticatedListenerAWarning() throws {
+    let snapshot = try snapshot(normalizing: "")
+
+    XCTAssertEqual(snapshot.status, .warn)
+    XCTAssertEqual(snapshot.cause, .lanExposed)
+    XCTAssertEqual(fact(.authentication, in: snapshot), String(localized: "Set — clients must send credentials"))
+  }
+
+  func testAProfilesPrefixPastThisMacMakesAnAuthenticatedListenerAnOpenProxy() throws {
+    let snapshot = try snapshot(normalizing: "skip-auth-prefixes: [192.168.0.0/16]\n")
+
+    XCTAssertEqual(snapshot.status, .fail)
+    XCTAssertEqual(snapshot.cause, .authenticationSkipped)
+    XCTAssertEqual(snapshot.headline, String(format: String(localized: "Open proxy for %@"), "192.168.0.0/16"))
+    XCTAssertEqual(
+      fact(.authentication, in: snapshot),
+      String(format: String(localized: "Set — but skip-auth-prefixes lets %@ in without credentials"), "192.168.0.0/16")
+    )
+    XCTAssertEqual(snapshot.exposedListeners.map(\.name), ["lan-mixed"])
+    XCTAssertEqual(snapshot.recoveryActions.first?.contains("192.168.0.0/16"), true)
+    XCTAssertTrue(snapshot.plainTextLines.joined(separator: "\n").hasPrefix("Inbound Listeners: Fail (authenticationSkipped)"))
+  }
+
+  /// The recovery the verdict offers: a Raw YAML snippet replacing the list closes the exemption,
+  /// and the normalizer still puts this Mac back.
+  func testASnippetReplacingTheListClosesTheExemption() throws {
+    var options = RuntimeConfigOptions.default
+    options.runtimeSnippets = [
+      RuntimeSnippet(name: "Close", payload: .rawYAML(RawYAMLPatchSettings(yaml: "skip-auth-prefixes: []\n"))),
+    ]
+
+    let snapshot = try snapshot(normalizing: "skip-auth-prefixes: [0.0.0.0/0]\n", options: options)
+
+    XCTAssertEqual(snapshot.cause, .lanExposed)
+  }
+
+  private func snapshot(normalizing extraYAML: String, options: RuntimeConfigOptions = .default) throws -> ListenerExposureSnapshot {
+    let generation = try ConfigNormalizer().generateRuntimeConfig(
+      from: """
+      authentication:
+        - "user:password"
+      \(extraYAML)listeners:
+        - {name: lan-mixed, type: mixed, listen: 0.0.0.0, port: 7999}
+      proxies:
+        - {name: Direct, type: direct}
+      proxy-groups:
+        - {name: Proxy, type: select, proxies: [Direct, DIRECT]}
+      rules:
+        - MATCH,DIRECT
+      """,
+      overrides: .defaultForLaunch(secret: "secret-token"),
+      options: options
+    )
+    return ListenerExposureDiagnosticsBuilder.snapshot(for: ListenerExposureInput(facts: facts(generation.yaml)))
+  }
+
   // MARK: Report
 
   func testPlainTextLinesCarryTheVerdictAndTheFix() {

@@ -164,7 +164,7 @@ ClashMax 已经在用的 Mihomo 控制 API 端点，来自
 | **`/configs/geo`** | **2026-08-27 已补齐**——`updateGeoDatabases(timeout:)`，对应「立即更新」动作 | *（原：没有应用内 geo 数据库刷新）* |
 | **`/memory`** | **2026-08-30 已补齐**——`memoryStream()` 复用 `/traffic` 的同一套流式管道，采样存入 `RuntimeDataStore.memorySample`，并在运行中仪表盘上以 **Memory** 指标呈现。两处实测细节写进了代码而不是靠猜：第一帧恒为 `{"inuse":0,"oslimit":0}`，那是握手用的空帧而不是读数，因此 0 样本渲染为 `—`；`oslimit` 在 macOS 上恒为 0（本平台没有 cgroup 上限），因此不画那种永远读作 0 的「占上限百分比」表盘 | *（原：没有内核内存遥测）* |
 | **`tcp-concurrent`、`global-client-fingerprint`、`find-process-mode`、`keep-alive-interval`、`ntp`、`experimental`、`global-ua`、`interface-name`** | **2026-08-29 关闭**——按名字算依然是全仓 0 命中，而且是有意为之：**Raw YAML** 片段载荷（[`RawYAMLPatch.swift`](../ClashMax/Models/RawYAMLPatch.swift)）能够到达它们全部，以及 Mihomo 明天新增的任何 key，应用不需要为此多长一个开关。见 [INV-2](#23-两条不变量) | *（曾经：高级用户会撞到硬天花板；按 INV-2，解法是通用覆盖路径，而不是八个新开关）* |
-| **`listeners`** | **2026-08-30 已作出决定。** 旧条目错了两处：`listeners` 是被*标记*、从未被剥离，而且只在 provider 覆盖 YAML 与 runtime-merge YAML 里被标记（[`CoreModels.swift:744`](../ClashMax/Models/CoreModels.swift#L744)）——普通订阅顶层的 `listeners:` 一直是原封不动地穿过 `ConfigNormalizer`，**并且不带任何标记**，而这才是这个 bug 更糟的那一半。决定写在 [C3](#c3就-listeners-做出决定)：按 [INV-2](#23-两条不变量) 在 L3 经由 Raw YAML 片段支持，条件是它造成的暴露永远不能是无声的。[`ListenerExposureDiagnostics`](../ClashMax/Models/ListenerExposure.swift) 把运行时 YAML 读回来，把「已暴露且没有 `authentication:`」的入站报告为开放代理。导入时的提示已于 2026-10-01 随 [C1](#c1导入时的订阅审计报告) 落地：订阅里其他设备可以访问的监听器，在用户允许之前一律保持关闭 | *（原：入站监听（给局域网其他设备用）不可用；这需要一个明确的决定，而不是一个默认值）* |
+| **`listeners`** | **2026-08-30 已作出决定。** 旧条目错了两处：`listeners` 是被*标记*、从未被剥离，而且只在 provider 覆盖 YAML 与 runtime-merge YAML 里被标记（[`CoreModels.swift:744`](../ClashMax/Models/CoreModels.swift#L744)）——普通订阅顶层的 `listeners:` 一直是原封不动地穿过 `ConfigNormalizer`，**并且不带任何标记**，而这才是这个 bug 更糟的那一半。决定写在 [C3](#c3就-listeners-做出决定)：按 [INV-2](#23-两条不变量) 在 L3 经由 Raw YAML 片段支持，条件是它造成的暴露永远不能是无声的。[`ListenerExposureDiagnostics`](../ClashMax/Models/ListenerExposure.swift) 把运行时 YAML 读回来，把「已暴露且没有 `authentication:`」（或 `skip-auth-prefixes` 条目超出回环，2026-10-02 起）的入站报告为开放代理。导入时的提示已于 2026-10-01 随 [C1](#c1导入时的订阅审计报告) 落地：订阅里其他设备可以访问的监听器，在用户允许之前一律保持关闭 | *（原：入站监听（给局域网其他设备用）不可用；这需要一个明确的决定，而不是一个默认值）* |
 
 ### 3.3 已经建到一半的原生 macOS 优势
 
@@ -718,8 +718,35 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
     `warning`。测试：`ConfigNormalizerTests` 四个、`SubscriptionAuditTests` 两个，以及
     `testBundledMihomoExemptsThisMacFromProfileAuthenticationButNotTheNetwork`——它在真实内核上复现 `05 02`，并检查局域网
     一侧。
-  - **未覆盖：** 配置文件自带的 `skip-auth-prefixes` 只会被合并、不会被评判。列出 `0.0.0.0/0` 的订阅会把网络也一并豁免，
-    而 `ListenerExposure` 仍会认为它暴露的监听器有认证。
+  - **未覆盖（2026-10-02 起见下一条）：** 配置文件自带的 `skip-auth-prefixes` 只会被合并、不会被评判。列出 `0.0.0.0/0`
+    的订阅会把网络也一并豁免，而 `ListenerExposure` 仍会认为它暴露的监听器有认证。
+- **配置文件自带的 `skip-auth-prefixes`——2026-10-02 起会被评判。** 用同样的方式实测（临时的内置内核 v1.19.31、高位端口、
+  `authentication: ["u:p"]`、一个 `listen: 0.0.0.0` 的 mixed 监听器，请求来自这台 Mac 的 `en0` 地址；每个内核结束后都确认
+  已停止、端口已关闭）：
+  - `0.0.0.0/0`、`192.168.0.0/16` 和 `192.168.8.65/16`（主机位会被掩掉）让局域网地址不带凭据就能通过——SOCKS5 `05 00`、
+    HTTP `200`；`10.0.0.0/8` 时它仍是 `407` 和 `05 02`。开启「允许局域网」时，`0.0.0.0/0` 也以同样方式对它开放了 mixed 端口。
+  - 地址族互不覆盖：`::/0` 豁免了 `::1` 和 `en0` 的链路本地地址，但既不豁免 `127.0.0.1` 也不豁免局域网地址；`fe80::/10`
+    豁免了链路本地来源。
+  - 内核在匹配前会把 IPv4 来源去映射：`::ffff:0:0/96` 谁也没有豁免，即使监听器是 `listen: "::"`；单独的
+    `::ffff:127.0.0.0/104` 连 `127.0.0.1` 都还是 `407`。
+  - 不带前缀长度的条目会让整个配置加载失败（`netip.ParsePrefix("192.168.8.65"): no '/'`）。
+  - **规则：** 除非一个条目是回环——`127.0.0.0/8` 之内的 IPv4 前缀，或 `::1/128`——或是 IPv4 映射前缀（`::ffff:0:0/96`
+    之内，因为上面那条去映射行为，内核从不匹配它），否则就算作豁免了其他机器。其余一律算数，连不是前缀的文本也算，因此判断偏向
+    「开放」；不带长度的地址按它所指的那一台主机理解。映射前缀这一条依赖实测的内核行为，所以有内置内核测试固定它。规则只写在
+    一处：[`SkipAuthPrefixes.scope(of:)`](../ClashMax/Models/ListenerExposure.swift)。
+  - **交付的做法：** `ListenerRuntimeFacts.skipAuthPrefixesBeyondThisMac` 记录这些条目，而 `hasInboundAuthentication` 仍只表示
+    「列表非空」——normalizer 的回环豁免依据的就是它，并且保持不变。暴露的监听器若在这样的条目之后，就是 `fail`，原因是新的
+    `authenticationSkipped`：*"对 … 开放的代理"*，点名这些范围（`/0` 会写成「任意 IPv4/IPv6 地址」），恢复建议点名要删掉的
+    条目（设置了 `skip-auth-prefixes` 的 Raw YAML 片段会替换订阅自带的列表，normalizer 仍会把回环加回去）。审计新增一个
+    `skip-auth-prefixes` 条目：被豁免的设备能访问到某个入口——已允许的暴露监听器，或「允许局域网」下的 mixed 端口——时为
+    `danger`，并点名这个入口；什么都访问不到时为 `warning`，说明允许其中任何一个会怎样；只有回环或映射条目、或者没有
+    `authentication` 列表可跳过时为 `info`。`listeners` 和 `authentication` 的后果、以及 normalizer 的日志说明，现在都会点名
+    被豁免的设备，而不再说其他设备一律要登录。测试：`ListenerExposureTests` 六个（三个跑真实的 normalizer，一个证明片段这条
+    恢复路径），`SubscriptionAuditTests` 四个，`ConfigNormalizerTests` 里的日志说明，以及两个检查真实内核和同一份生成配置之判断
+    的内置内核测试：`testBundledMihomoLetsAProfilesWidePrefixPastAuthenticationAndTheVerdictSaysSo`（`0.0.0.0/0`：局域网地址
+    收到 `05 00`，`authenticationSkipped`）和 `testBundledMihomoIgnoresAnIPv4MappedPrefixAndTheVerdictAgrees`
+    （`::` 监听器上的 `::ffff:0:0/96`：`05 02`，`lanExposed`）。还没人亲眼看过——步骤见
+    [`MANUAL_TEST_PLAN.md` 的 C1](MANUAL_TEST_PLAN.md#c1--import-a-subscription-and-read-its-audit-report)。
 - **验收标准：**
   - [x] 在导入时和更新时，给出一份大白话报告：这份订阅试图改什么、ClashMax 覆盖了什么、放行了什么。→ **2026-10-01**：
         报告和面板里分成这三组。导入（订阅或本地 YAML）结束时打开面板；手动和自动更新同样会审计，但从不弹面板——手动更新
@@ -727,7 +754,7 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
         key：控制器及其密钥、CORS 和其他控制器变体、所有入站端口 key、`allow-lan`、`tun`、`dns`（按子 key 区分替换与保留）、
         `sniffer`、顶层 `listeners`、`authentication`、`script`、`external-ui*`、`hosts`，以及 `find-process-mode: off`。
         `SubscriptionAuditTests`（13 个测试，跑的是真实的 normalizer）和 AppModel 集成测试，后者还检查了更新会重新审计且
-        不弹面板。
+        不弹面板。`skip-auth-prefixes` 于 2026-10-02 加入（见上）。
   - [x] 严重级别是可操作的——每个 `danger` 条目都点名具体后果。→ `testEveryDangerItemNamesItsConsequenceAndNoSecretIsKept`
         （并且没有任何秘密值进入存下来的报告）。
   - [ ] 该报告之后仍可从配置文件处进入，而不只在导入时出现一次。已实现：最新一份报告存在配置上
@@ -783,7 +810,8 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
   - [x] 这条决定额外附加的条件：*已经*存在的监听会被读回来并给出判断。
         [`ListenerExposureDiagnostics`](../ClashMax/Models/ListenerExposure.swift) 是一个跑在「内核实际拿
         到的那份运行时 YAML」上的纯分类器——片段写的还是订阅带的，它分不出来，也不需要分。已暴露且没有
-        `authentication:` 的入站是 `fail`，*"局域网上的开放代理"*；带认证的是 `warn`；全部只听回环的是
+        `authentication:` 的入站是 `fail`，*"局域网上的开放代理"*；带认证的是 `warn`——除非有 `skip-auth-prefixes` 条目
+        超出回环，2026-10-02 起这种情况是点名这些范围的 `fail`（[C1](#c1导入时的订阅审计报告)）；全部只听回环的是
         `pass`；并且会点名 `allow-lan` **管不着**什么，因为一个把它关掉的用户完全有理由以为它管得着。以
         Routing 里的 **Inbound Listeners** 面板、以及可复制诊断报告里的一行呈现——是一个持续在那儿的结论，
         而不是一条滚过去就没了的通知。

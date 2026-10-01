@@ -239,6 +239,144 @@ final class SubscriptionAuditTests: XCTestCase {
     XCTAssertFalse(report.needsAttention)
   }
 
+  // MARK: skip-auth-prefixes
+
+  private static let everyIPv4Address = String(format: String(localized: "any IPv4 address (%@)"), "0.0.0.0/0")
+
+  private static let wideOpenListenerSource = """
+  authentication:
+    - "lan-user:lan-pass"
+  skip-auth-prefixes: ["0.0.0.0/0"]
+  listeners:
+    - name: lan-mixed
+      type: mixed
+      listen: 0.0.0.0
+      port: 7999
+  \(nodes)
+  """
+
+  /// Measured on v1.19.31: with `0.0.0.0/0` in the list, a LAN source used the authenticated
+  /// listener with no credentials. Neither the listener nor the authentication item may still say
+  /// that every other device has to sign in.
+  func testAPrefixPastThisMacOpensAnAllowedListenerWithoutAPassword() throws {
+    let report = try audit(Self.wideOpenListenerSource, policy: .allowExposed, overrides: { $0.allowLan = false })
+
+    let endpoint = RuntimeListener(name: "lan-mixed", type: "mixed", listen: "0.0.0.0", port: "7999").summary
+    let prefixes = try XCTUnwrap(item("skip-auth-prefixes", in: report))
+    XCTAssertEqual(prefixes.severity, .danger)
+    XCTAssertEqual(prefixes.disposition, .passedThrough, "ClashMax only appends loopback; the profile's entry runs")
+    XCTAssertEqual(
+      prefixes.attempted,
+      String(format: String(localized: "Let connections from %@ skip the authentication list."), "0.0.0.0/0")
+    )
+    XCTAssertEqual(
+      prefixes.consequence,
+      String(format: String(localized: "Devices at %@ can use your proxy through %@ without a password."), Self.everyIPv4Address, endpoint)
+    )
+    XCTAssertEqual(
+      item("listeners", in: report)?.consequence,
+      String(
+        format: String(localized: "Devices at %@ can use your proxy through %@ without a password, because the profile's skip-auth-prefixes exempts them. Other devices need the credentials in its authentication list."),
+        Self.everyIPv4Address,
+        endpoint
+      )
+    )
+    XCTAssertEqual(
+      item("authentication", in: report)?.consequence,
+      String(
+        format: String(localized: "Devices at %@ skip these credentials because of skip-auth-prefixes. Other devices that reach your proxy, through Allow LAN or a listener, must sign in with them, which whoever wrote the subscription also knows."),
+        Self.everyIPv4Address
+      )
+    )
+    XCTAssertTrue(report.needsAttention)
+  }
+
+  /// Kept off and Allow LAN off: nothing another device can reach is open yet, so the item says
+  /// what allowing either would do — and the confirmation for allowing the listener says it too.
+  func testAPrefixPastThisMacIsAWarningWhileNothingTheNetworkCanReachIsOpen() throws {
+    let report = try audit(Self.wideOpenListenerSource, policy: nil, overrides: { $0.allowLan = false })
+
+    let prefixes = try XCTUnwrap(item("skip-auth-prefixes", in: report))
+    XCTAssertEqual(prefixes.severity, .warning)
+    XCTAssertEqual(
+      prefixes.consequence,
+      String(
+        format: String(localized: "If you turn on Allow LAN or allow listeners other devices can reach, devices at %@ can use your proxy without a password."),
+        Self.everyIPv4Address
+      )
+    )
+    let endpoint = RuntimeListener(name: "lan-mixed", type: "mixed", listen: "0.0.0.0", port: "7999").summary
+    XCTAssertEqual(
+      item("listeners", in: report)?.consequence,
+      String(
+        format: String(localized: "If allowed: %@"),
+        String(
+          format: String(localized: "Devices at %@ can use your proxy through %@ without a password, because the profile's skip-auth-prefixes exempts them. Other devices need the credentials in its authentication list."),
+          Self.everyIPv4Address,
+          endpoint
+        )
+      )
+    )
+  }
+
+  /// Measured on v1.19.31: under Allow LAN the same exemption opened the mixed port, listeners or not.
+  func testAPrefixPastThisMacReachesTheMixedPortUnderAllowLAN() throws {
+    let source = """
+    authentication:
+      - "lan-user:lan-pass"
+    skip-auth-prefixes:
+      - 192.168.0.0/16
+    \(Self.nodes)
+    """
+
+    let report = try audit(source, overrides: { $0.allowLan = true; $0.mixedPort = 17890 })
+
+    let prefixes = try XCTUnwrap(item("skip-auth-prefixes", in: report))
+    XCTAssertEqual(prefixes.severity, .danger)
+    XCTAssertEqual(
+      prefixes.consequence,
+      String(
+        format: String(localized: "Devices at %@ can use your proxy through %@ without a password."),
+        "192.168.0.0/16",
+        String(format: String(localized: "the mixed port %@ (Allow LAN is on)"), "17890")
+      )
+    )
+    XCTAssertTrue(report.needsAttention)
+  }
+
+  func testPrefixesThatNameOnlyThisMacOrHaveNothingToSkipAreInformational() throws {
+    let loopback = try audit("authentication: [\"u:p\"]\nskip-auth-prefixes: [\"127.0.0.0/8\"]\n\(Self.nodes)", overrides: { $0.allowLan = true })
+    let loopbackItem = try XCTUnwrap(item("skip-auth-prefixes", in: loopback))
+    XCTAssertEqual(loopbackItem.severity, .info)
+    XCTAssertEqual(loopbackItem.disposition, .passedThrough, "the normalizer appended ::1/128 and kept the entry")
+    XCTAssertEqual(
+      loopbackItem.outcome,
+      String(localized: "Passed through: every entry is an address on this Mac, which ClashMax exempts anyway.")
+    )
+    XCTAssertFalse(loopback.needsAttention)
+
+    // Measured: the core unmaps IPv4 sources, so a mapped prefix lets nobody in, even under Allow LAN.
+    let mapped = try audit("authentication: [\"u:p\"]\nskip-auth-prefixes: [\"::ffff:0:0/96\", \"127.0.0.0/8\"]\n\(Self.nodes)", overrides: { $0.allowLan = true })
+    let mappedItem = try XCTUnwrap(item("skip-auth-prefixes", in: mapped))
+    XCTAssertEqual(mappedItem.severity, .info)
+    XCTAssertEqual(
+      mappedItem.outcome,
+      String(localized: "Passed through, with no effect on other machines: the core never matches an IPv4-mapped prefix, and this Mac is exempt anyway.")
+    )
+    XCTAssertFalse(mapped.needsAttention)
+
+    let unauthenticated = try audit("skip-auth-prefixes: [\"0.0.0.0/0\"]\n\(Self.nodes)", overrides: { $0.allowLan = true })
+    let unauthenticatedItem = try XCTUnwrap(item("skip-auth-prefixes", in: unauthenticated))
+    XCTAssertEqual(unauthenticatedItem.severity, .info)
+    XCTAssertEqual(
+      unauthenticatedItem.outcome,
+      String(localized: "Passed through, with no effect: the profile asks no one for credentials.")
+    )
+
+    let emptyList = try audit("authentication: [\"u:p\"]\nskip-auth-prefixes: []\n\(Self.nodes)")
+    XCTAssertNil(item("skip-auth-prefixes", in: emptyList), "an empty list exempts nobody")
+  }
+
   // MARK: Sniffer (A1d)
 
   func testSnifferStatesWhatTheSubscriptionWouldChangeAndWhatWasKept() throws {

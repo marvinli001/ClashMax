@@ -471,6 +471,13 @@ so they can be edited between updates: one clean (`proxies`, `proxy-groups`, `ru
    a notification, and still no sheet.
 7. With the system language set to Simplified Chinese, the sheet, the buttons, every item and the
    notification are in Chinese.
+8. Add a fourth profile with `authentication: ["u:p"]`, `skip-auth-prefixes: [0.0.0.0/0]` and a
+   `listen: 0.0.0.0` listener, with Allow LAN off. The `skip-auth-prefixes` row is a Warning that
+   says what allowing the listener or turning on Allow LAN would do, and the listener box says
+   devices at *any IPv4 address (0.0.0.0/0)* can use it without a password. After **Allow…** the
+   row is Danger and names the listener, and Routing → Inbound Listeners shows **Fail**, *Open proxy
+   for any IPv4 address (0.0.0.0/0)*. From another device, a request through the listener with no
+   credentials gets through — the thing the verdict warns about. **Turn Off** the listener afterwards.
 
 ### Sign-off
 

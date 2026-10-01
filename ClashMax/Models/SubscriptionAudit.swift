@@ -215,6 +215,8 @@ enum SubscriptionAuditBuilder {
         return [listenersItem(key: key)]
       case "authentication":
         return [authenticationItem(key: key, value: value)]
+      case "skip-auth-prefixes":
+        return skipAuthPrefixesItem(key: key, value: value)
       case "script":
         return [SubscriptionAuditReport.Item(
           key: key,
@@ -243,6 +245,26 @@ enum SubscriptionAuditBuilder {
 
     private var runtimeKnown: Bool {
       runtime != nil
+    }
+
+    /// Who has to send credentials on an inbound, read from the generated config when there is one.
+    private var inboundGate: ListenerRuntimeFacts {
+      ListenerRuntimeFacts.facts(from: runtime ?? source)
+    }
+
+    /// What another machine can connect to: the listeners that run and are not pinned to loopback,
+    /// and the mixed port while Allow LAN is on.
+    private var networkReachableInbounds: [String] {
+      let listeners = runtime.map { ListenerRuntimeFacts.facts(from: $0).exposedListeners }
+        ?? (listenerPolicy == .allowExposed ? ListenerRuntimeFacts.facts(from: source).exposedListeners : [])
+      var inbounds = listeners.map(\.summary)
+      if runtimeValue("allow-lan").map(SubscriptionAuditBuilder.scalar) == "true" {
+        inbounds.append(String(
+          format: String(localized: "the mixed port %@ (Allow LAN is on)"),
+          runtimeValue("mixed-port").map(SubscriptionAuditBuilder.scalar) ?? "—"
+        ))
+      }
+      return inbounds
     }
 
     private func disposition(for key: String, sourceValue: Any) -> SubscriptionAuditReport.Disposition? {
@@ -410,7 +432,7 @@ enum SubscriptionAuditBuilder {
         sourceFacts.listeners.map(\.summary).joined(separator: "; ")
       )
       let runningExposed = runtimeFacts?.exposedListeners ?? (listenerPolicy == .allowExposed ? exposed : [])
-      let authenticated = runtimeFacts?.hasInboundAuthentication ?? sourceFacts.hasInboundAuthentication
+      let gate = runtimeFacts ?? sourceFacts
       if exposed.isEmpty {
         return SubscriptionAuditReport.Item(
           key: key,
@@ -422,9 +444,17 @@ enum SubscriptionAuditBuilder {
         )
       }
       let ports = exposed.map(\.summary).joined(separator: "; ")
-      let consequence = authenticated
-        ? String(format: String(localized: "Other devices on your network can use your proxy through %@ with the credentials in the profile's authentication list."), ports)
-        : String(format: String(localized: "Anyone on your network can use your proxy through %@ — no password is required."), ports)
+      let consequence = if !gate.hasInboundAuthentication {
+        String(format: String(localized: "Anyone on your network can use your proxy through %@ — no password is required."), ports)
+      } else if gate.requiresCredentialsFromOtherMachines {
+        String(format: String(localized: "Other devices on your network can use your proxy through %@ with the credentials in the profile's authentication list."), ports)
+      } else {
+        String(
+          format: String(localized: "Devices at %@ can use your proxy through %@ without a password, because the profile's skip-auth-prefixes exempts them. Other devices need the credentials in its authentication list."),
+          SkipAuthPrefixes.describe(gate.skipAuthPrefixesBeyondThisMac),
+          ports
+        )
+      }
       if runningExposed.isEmpty {
         return SubscriptionAuditReport.Item(
           key: key,
@@ -471,8 +501,14 @@ enum SubscriptionAuditBuilder {
       } else {
         String(localized: "Passed through.")
       }
+      let exempted = inboundGate.skipAuthPrefixesBeyondThisMac
       let consequence: String? = if gatesThisMac {
         String(localized: "ClashMax's own port asks for these credentials too, so apps using the system proxy get HTTP 407 and stop connecting.")
+      } else if enforced, !exempted.isEmpty {
+        String(
+          format: String(localized: "Devices at %@ skip these credentials because of skip-auth-prefixes. Other devices that reach your proxy, through Allow LAN or a listener, must sign in with them, which whoever wrote the subscription also knows."),
+          SkipAuthPrefixes.describe(exempted)
+        )
       } else if enforced {
         String(localized: "Other devices that reach your proxy, through Allow LAN or a listener, must sign in with these credentials, which whoever wrote the subscription also knows.")
       } else {
@@ -485,6 +521,76 @@ enum SubscriptionAuditBuilder {
         attempted: String(format: String(localized: "Require a username and password on inbound proxies (%lld account(s))."), Int64(count)),
         outcome: outcome,
         consequence: consequence
+      )
+    }
+
+    /// Measured on v1.19.31 (`SkipAuthPrefixes`): an entry past loopback lets the devices it covers
+    /// past the `authentication` list on every inbound — a `listen: 0.0.0.0` listener, and the mixed
+    /// port under Allow LAN. The normalizer keeps the profile's entries and only appends loopback,
+    /// so what decides the severity is whether anything those devices can reach is open.
+    private func skipAuthPrefixesItem(key: String, value: Any) -> [SubscriptionAuditReport.Item] {
+      let entries = SkipAuthPrefixes.entries(value)
+      // An empty list exempts nobody.
+      guard !entries.isEmpty else { return [] }
+      func item(
+        _ severity: ProviderOptionsRisk.Severity,
+        _ disposition: SubscriptionAuditReport.Disposition,
+        outcome: String,
+        consequence: String? = nil
+      ) -> [SubscriptionAuditReport.Item] {
+        [SubscriptionAuditReport.Item(
+          key: key,
+          severity: severity,
+          disposition: disposition,
+          attempted: String(
+            format: String(localized: "Let connections from %@ skip the authentication list."),
+            entries.joined(separator: ", ")
+          ),
+          outcome: outcome,
+          consequence: consequence
+        )]
+      }
+      // Appending loopback makes the lists differ, so "kept" means every authored entry is still there.
+      let kept = runtime.map { Set(SkipAuthPrefixes.entries($0[key])).isSuperset(of: entries) } ?? true
+      guard kept else {
+        return item(.info, .overridden, outcome: String(localized: "Removed by ClashMax."))
+      }
+      let scopes = entries.map(SkipAuthPrefixes.scope(of:))
+      let beyondThisMac = zip(entries, scopes).filter { $1 == .beyondThisMac }.map(\.0)
+      guard !beyondThisMac.isEmpty else {
+        return item(
+          .info,
+          .passedThrough,
+          outcome: scopes.contains(.ipv4Mapped)
+            ? String(localized: "Passed through, with no effect on other machines: the core never matches an IPv4-mapped prefix, and this Mac is exempt anyway.")
+            : String(localized: "Passed through: every entry is an address on this Mac, which ClashMax exempts anyway.")
+        )
+      }
+      guard inboundGate.hasInboundAuthentication else {
+        return item(.info, .passedThrough, outcome: String(localized: "Passed through, with no effect: the profile asks no one for credentials."))
+      }
+      let exempted = SkipAuthPrefixes.describe(beyondThisMac)
+      let reachable = networkReachableInbounds
+      guard !reachable.isEmpty else {
+        return item(
+          .warning,
+          .passedThrough,
+          outcome: String(localized: "Passed through."),
+          consequence: String(
+            format: String(localized: "If you turn on Allow LAN or allow listeners other devices can reach, devices at %@ can use your proxy without a password."),
+            exempted
+          )
+        )
+      }
+      return item(
+        .danger,
+        .passedThrough,
+        outcome: String(localized: "Passed through."),
+        consequence: String(
+          format: String(localized: "Devices at %@ can use your proxy through %@ without a password."),
+          exempted,
+          reachable.joined(separator: "; ")
+        )
       )
     }
 

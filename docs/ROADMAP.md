@@ -190,7 +190,7 @@ Gaps, in priority order:
 | **`/configs/geo`** | **Closed 2026-08-27** — `updateGeoDatabases(timeout:)` behind an Update Now action | *(was: no in-app geo database refresh)* |
 | **`/memory`** | **Closed 2026-08-30** — `memoryStream()` on the same stream plumbing as `/traffic`, kept in `RuntimeDataStore.memorySample` and shown as a **Memory** stat on the running dashboard. Two measured details are in the code rather than assumed: the first frame is always `{"inuse":0,"oslimit":0}` and is a priming tick, not a reading, so a zero sample renders as `—`; and `oslimit` is 0 on macOS, which has no cgroup ceiling, so nothing draws a percentage-of-limit gauge that would always read 0 | *(was: no core memory telemetry)* |
 | **`tcp-concurrent`, `global-client-fingerprint`, `find-process-mode`, `keep-alive-interval`, `ntp`, `experimental`, `global-ua`, `interface-name`** | **Closed 2026-08-29** — still zero occurrences by name, and deliberately so: the **Raw YAML** snippet payload ([`RawYAMLPatch.swift`](../ClashMax/Models/RawYAMLPatch.swift)) reaches all of them, and every key Mihomo ships tomorrow, without the app growing a switch. See [INV-2](#23-two-invariants) | *(was: advanced users hit a hard ceiling; per INV-2 the fix is the generic override path, not eight new toggles)* |
-| **`listeners`** | **Decided 2026-08-30.** The old entry was wrong twice: `listeners` is *flagged*, never stripped, and only inside provider-override and runtime-merge YAML ([`CoreModels.swift:744`](../ClashMax/Models/CoreModels.swift#L744)) — a plain subscription's top-level `listeners:` has always passed through `ConfigNormalizer` untouched **and unflagged**, which is the worse half of the bug. The decision is written in [C3](#c3--decide-the-listeners-question): supported at L3 through the Raw YAML snippet per [INV-2](#23-two-invariants), on the condition that the exposure it creates is never silent. [`ListenerExposureDiagnostics`](../ClashMax/Models/ListenerExposure.swift) reads the runtime YAML back and reports an exposed inbound with no `authentication:` as an open proxy. The import-time prompt landed with [C1](#c1--import-time-subscription-audit-report) on 2026-10-01: a subscription's network-reachable listeners are now kept off until the user allows them | *(was: inbound listeners serving other devices on the LAN are unavailable; needs a deliberate decision, not a default)* |
+| **`listeners`** | **Decided 2026-08-30.** The old entry was wrong twice: `listeners` is *flagged*, never stripped, and only inside provider-override and runtime-merge YAML ([`CoreModels.swift:744`](../ClashMax/Models/CoreModels.swift#L744)) — a plain subscription's top-level `listeners:` has always passed through `ConfigNormalizer` untouched **and unflagged**, which is the worse half of the bug. The decision is written in [C3](#c3--decide-the-listeners-question): supported at L3 through the Raw YAML snippet per [INV-2](#23-two-invariants), on the condition that the exposure it creates is never silent. [`ListenerExposureDiagnostics`](../ClashMax/Models/ListenerExposure.swift) reads the runtime YAML back and reports an exposed inbound with no `authentication:` — or with a `skip-auth-prefixes` entry reaching past loopback (2026-10-02) — as an open proxy. The import-time prompt landed with [C1](#c1--import-time-subscription-audit-report) on 2026-10-01: a subscription's network-reachable listeners are now kept off until the user allows them | *(was: inbound listeners serving other devices on the LAN are unavailable; needs a deliberate decision, not a default)* |
 
 ### 3.3 Native macOS leverage already half-built
 
@@ -926,9 +926,47 @@ A subscription can change your DNS, open listeners, and rebind the external cont
     `ConfigNormalizerTests`, two in `SubscriptionAuditTests`, and
     `testBundledMihomoExemptsThisMacFromProfileAuthenticationButNotTheNetwork`, which reproduces
     the `05 02` against the real core and checks the LAN side.
-  - **Not covered:** a profile's own `skip-auth-prefixes` is merged, not judged. A subscription
-    that lists `0.0.0.0/0` exempts the network as well, and `ListenerExposure` would still call
-    its exposed listener authenticated.
+  - **Not covered (until 2026-10-02, next bullet):** a profile's own `skip-auth-prefixes` is
+    merged, not judged. A subscription that lists `0.0.0.0/0` exempts the network as well, and
+    `ListenerExposure` would still call its exposed listener authenticated.
+- **A profile's own `skip-auth-prefixes` — judged since 2026-10-02.** Probed the same way
+  (throwaway bundled core v1.19.31 on high ports, `authentication: ["u:p"]`, a `listen: 0.0.0.0`
+  mixed listener, requests from this Mac's `en0` address; every core stopped and its ports checked
+  closed afterwards):
+  - `0.0.0.0/0`, `192.168.0.0/16` and `192.168.8.65/16` (host bits are masked) let the LAN address
+    through with no credentials — SOCKS5 `05 00`, HTTP `200` — while `10.0.0.0/8` left it at `407`
+    and `05 02`. Under Allow LAN, `0.0.0.0/0` opened the mixed port to it the same way.
+  - Families do not cross: `::/0` exempted `::1` and the link-local `en0` address but neither
+    `127.0.0.1` nor the LAN address, and `fe80::/10` exempted the link-local source.
+  - The core unmaps an IPv4 source before matching: `::ffff:0:0/96` exempted nobody, even on a
+    `listen: "::"` listener, and `::ffff:127.0.0.0/104` on its own left `127.0.0.1` at `407`.
+  - An entry without a length fails the whole config (`netip.ParsePrefix("192.168.8.65"): no '/'`).
+  - **The rule:** an entry exempts other machines unless it is loopback — an IPv4 prefix inside
+    `127.0.0.0/8`, or `::1/128` — or IPv4-mapped (inside `::ffff:0:0/96`), which the core never
+    matches because of the unmapping above. Anything else counts, text that is not a prefix
+    included, so the verdict errs toward "open"; a bare address is read as the one host it names.
+    The mapped case leans on measured core behavior, so a bundled-core test pins it. It lives in
+    one place, [`SkipAuthPrefixes.scope(of:)`](../ClashMax/Models/ListenerExposure.swift).
+  - **What ships:** `ListenerRuntimeFacts.skipAuthPrefixesBeyondThisMac` carries those entries,
+    while `hasInboundAuthentication` keeps meaning "the list is non-empty" — the normalizer's
+    loopback exemption keys off it and is unchanged. An exposed listener behind such an entry is
+    `fail` with its own cause, `authenticationSkipped`: *"Open proxy for …"* naming the ranges (a
+    `/0` is spelled out as "any IPv4/IPv6 address"), and a recovery naming the entry to remove (a
+    Raw YAML snippet that sets `skip-auth-prefixes` replaces a subscription's list, and the
+    normalizer still puts loopback back). The audit gains a `skip-auth-prefixes` item: `danger`
+    when the exempted devices can reach something — an allowed exposed listener, or the mixed port
+    under Allow LAN — naming it; `warning` with what allowing either would do while nothing is
+    reachable; `info` for loopback-only or mapped entries, or with no `authentication` list to skip. The
+    `listeners` and `authentication` consequences, and the normalizer's log note, now name the
+    exempted devices instead of saying every other device must sign in. Tests: six in
+    `ListenerExposureTests` (three through the real normalizer, one proving the snippet recovery),
+    four in `SubscriptionAuditTests`, the note in `ConfigNormalizerTests`, and two bundled-core
+    tests that check the real core and the verdict on the same generated config:
+    `testBundledMihomoLetsAProfilesWidePrefixPastAuthenticationAndTheVerdictSaysSo` (`0.0.0.0/0`:
+    the LAN address gets `05 00`, `authenticationSkipped`) and
+    `testBundledMihomoIgnoresAnIPv4MappedPrefixAndTheVerdictAgrees` (`::ffff:0:0/96` on a `::`
+    listener: `05 02`, `lanExposed`). Not seen by eye — a step is in
+    [C1 in `MANUAL_TEST_PLAN.md`](MANUAL_TEST_PLAN.md#c1--import-a-subscription-and-read-its-audit-report).
 - **Acceptance criteria:**
   - [x] On import and on update, a plain-language report: what this subscription tried to
         change, what ClashMax overrode, and what it let through. → **2026-10-01**: three groups
@@ -941,6 +979,7 @@ A subscription can change your DNS, open listeners, and rebind the external cont
         `authentication`, `script`, `external-ui*`, `hosts`, and `find-process-mode: off`.
         `SubscriptionAuditTests` (13 tests over the real normalizer) and the AppModel
         integration test, which also checks that an update re-audits without presenting.
+        `skip-auth-prefixes` joined the list on 2026-10-02 (above).
   - [x] Severity is actionable — every `danger` item names the concrete consequence. →
         `testEveryDangerItemNamesItsConsequenceAndNoSecretIsKept` (and no secret value reaches
         the stored report).
@@ -1018,7 +1057,9 @@ A subscription can change your DNS, open listeners, and rebind the external cont
         classifier over the runtime YAML the core was actually handed — snippet-authored or
         subscription-supplied, it cannot tell and does not need to. An exposed inbound with
         no `authentication:` is `fail`, *"Open proxy on your network"*; with authentication
-        it is `warn`; all-loopback is `pass`; and `allow-lan` is reported for what it does
+        it is `warn` — unless a `skip-auth-prefixes` entry reaches past loopback, which is
+        `fail` naming the ranges since 2026-10-02 ([C1](#c1--import-time-subscription-audit-report));
+        all-loopback is `pass`; and `allow-lan` is reported for what it does
         **not** cover, because a user who turned it off has every reason to believe it did.
         Surfaced as an **Inbound Listeners** panel in Routing and as a line in the copyable
         diagnostics report, so it is a standing verdict rather than a notification that
