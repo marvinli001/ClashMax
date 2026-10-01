@@ -97,7 +97,7 @@ xcodegen generate
 xcodebuild test -project ClashMax.xcodeproj -scheme ClashMax -destination 'platform=macOS' -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO
 ```
 
-每次 push 和 pull request 都会在 [CI](.github/workflows/ci.yml) 上跑同一条命令，随后执行 `script/localization_gate.sh` 和一次未签名的 universal Release 构建（含 bundle 结构检查）。仓库不提交 Mihomo 二进制，所以依赖真实内核的测试在 CI 上会显示为 skipped。
+每次 push 和 pull request 都会在 [CI](.github/workflows/ci.yml) 上跑同一条命令，随后执行 `script/localization_gate.sh` 和一次未签名的 universal Release 构建（含 bundle 结构检查）。仓库不提交 Mihomo 二进制，所以两个 CI job 都会先用 `script/install_mihomo_core.sh` 安装固定版本的内核（按 `Resources/Core/mihomo-manifest.json` 里的 sha256 校验），test job 还会设置 `TEST_RUNNER_CLASHMAX_REQUIRE_BUNDLED_CORE=1`，内核缺失时依赖真实内核的测试直接失败而不是跳过。本地没有内核的检出仍然跳过这些测试。
 
 ## 许可证
 

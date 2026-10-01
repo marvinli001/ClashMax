@@ -97,7 +97,7 @@ Then open the generated `ClashMax.xcodeproj`, or run the test command directly:
 xcodebuild test -project ClashMax.xcodeproj -scheme ClashMax -destination 'platform=macOS' -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO
 ```
 
-[CI](.github/workflows/ci.yml) runs that same command on every push and pull request, followed by `script/localization_gate.sh` and an unsigned universal Release build with a bundle-layout check. The bundled Mihomo binaries are not committed, so the tests that exercise the real core report as skipped in CI.
+[CI](.github/workflows/ci.yml) runs that same command on every push and pull request, followed by `script/localization_gate.sh` and an unsigned universal Release build with a bundle-layout check. The bundled Mihomo binary is not committed, so both CI jobs install the pinned core with `script/install_mihomo_core.sh` (verified against the sha256 in `Resources/Core/mihomo-manifest.json`), and the test job sets `TEST_RUNNER_CLASHMAX_REQUIRE_BUNDLED_CORE=1` so the real-core tests fail rather than skip if it is missing. A local checkout without the core still skips them.
 
 ## License
 

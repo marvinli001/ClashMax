@@ -326,7 +326,8 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
         落成了一个 XCTest 而不是 D2 的脚本，因为 D2 还没有脚本：
         [`CoreRuntimePreflightTests.swift`](../ClashMaxTests/CoreRuntimePreflightTests.swift) 里的
         `testBundledMihomoAccepts…Combinations` 用内置内核跑 5 种配置来源 × 3 种路由模式 × 3 种 DNS
-        模式 × 3 种 sniffer 状态。等 D2 有了脚本，这条就搬进去。
+        模式 × 3 种 sniffer 状态。D2（2026-10-01）把它保留为这个 XCTest，改为让 CI 安装并强制要求内核，
+        而不是搬进一个脚本。
   - [ ] `MANUAL_TEST_PLAN.md` 增加端到端条目，并在 A1 宣告完成之前签核：一个走硬编码 IP 的 app → 为它写的
         `DOMAIN-SUFFIX` 规则不触发 → 诊断点名缺失的域名以及本会命中的那条规则 → 按下修复按钮 → 规则现在
         触发了，并在 Connections 行的 chain 中得到确认。
@@ -667,11 +668,34 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
 #### D2——把 Mihomo 升级回归自动化
 
 - **问题：** 今天验证一次内核升级要跨模板与模式手工进行。
+- **实际出的问题（2026-10-01）。** 矩阵早就以 XCTest 的形式存在（A1e），但 `Resources/Core/mihomo` 被
+  gitignore，CI 从不安装它，所以 [`CoreRuntimePreflightTests.swift`](../ClashMaxTests/CoreRuntimePreflightTests.swift)
+  和 [`BundledCoreArchitectureTests.swift`](../ClashMaxTests/BundledCoreArchitectureTests.swift) 里全部 7 个
+  依赖真实内核的测试每次都报 *skipped*。这一项要的回归闸门，在结构上就注定是绿的。
 - **验收标准：**
-  - [ ] 有一个脚本对每一种 生成模板 × 路由模式 × DNS 覆盖 组合运行 `mihomo -t`，并以 `level=error msg=`
-        那一行（而不是通用结尾）作为失败信息。
-  - [ ] 在 CI 中针对内置内核运行。
-  - [ ] 任何一个组合被新内核版本破坏，都会让构建失败，而不是被发布出去。
+  - [x] 有一个脚本对每一种 生成模板 × 路由模式 × DNS 覆盖 组合运行 `mihomo -t`，并以 `level=error msg=`
+        那一行（而不是通用结尾）作为失败信息。→ **2026-10-01**，保留为 XCTest 而没有另写 shell 脚本，因为
+        矩阵要靠 `ConfigNormalizer` 生成配置：
+        `testBundledMihomoAcceptsGeneratedSnifferAcrossRoutingDNSAndTemplateCombinations`（5 种来源，含
+        `minimal`/`global`/`rule` 模板 × 3 种路由模式 × 3 种 DNS 模式 × 3 种 sniffer 状态 = 135 次
+        `mihomo -t`），外加覆盖 `cn-direct` 的 `testBundledMihomoAcceptsGeneratedSnifferOnGeodataBackedTemplate`。
+        内核拒绝时现在经由 `SubscriptionPreflightDiagnosticFormatter` 报告，失败信息以 `msg=` 的值开头，下面
+        保留完整输出。证据：一个拒绝所有 TUN 配置的替身内核产生 46 个失败（45 个 TUN 组合 + 计数断言），每条形如
+        `Bundled core rejected plain-profile/tun/dns-default/sniffer-app-managed: parse tun config error: …`。
+  - [ ] 在 CI 中针对内置内核运行。**2026-10-01 已接好，还没在 GitHub Actions 上实际跑过**（需要 push）。test 与
+        build 两个 job 都会执行 [`script/install_mihomo_core.sh`](../script/install_mihomo_core.sh)，每个
+        asset 都按 [`mihomo-manifest.json`](../Resources/Core/mihomo-manifest.json) 里的 sha256 校验——
+        包括从 `actions/cache` 恢复的那些；缓存里存的是下载包，不是合并后的二进制。test job 设置
+        `TEST_RUNNER_CLASHMAX_REQUIRE_BUNDLED_CORE=1`，xcodebuild 会去掉前缀、以
+        `CLASHMAX_REQUIRE_BUNDLED_CORE` 传给测试进程，`BundledCoreRequirement` 据此把缺内核从 `XCTSkip` 变成
+        `XCTFail`（实测：没有内核 7 个失败；有内核 23/23 通过；不设变量 7 个跳过——没装内核的开发机行为不变）。
+        在全新 DerivedData 上本地复现了整个 job：第二次 xcodebuild（`localization_gate.sh`）干净地重新构建，
+        测试宿主里的 `Core/mihomo` 与安装的内核逐字节一致（`DashboardRuntimeStateTests` 的占位文件根本不会写入），
+        `Sign Nested Core Binaries` 的 `lipo -archs` 检查通过。release build job 的 bundle 检查现在也断言内嵌内核
+        是 `x86_64 arm64`（对本地一份未签名的 universal Release 构建跑过，通过）。master 上第一次绿色运行之后再勾。
+  - [ ] 任何一个组合被新内核版本破坏，都会让构建失败，而不是被发布出去。本地已演示（上面的替身内核）；CI 那一半
+        等上一条。manifest 里的 sha256 错一位时，安装步骤失败并报 `checksum mismatch for <asset>: the manifest
+        expects … but the downloaded asset is …`，在 GitHub Actions 下会标注到 manifest 文件上。
 
 #### D3——补上手工验证的缺口
 

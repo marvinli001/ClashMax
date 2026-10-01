@@ -152,11 +152,33 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
+      # Resources/Core/mihomo is gitignored, so without this step every bundled-core test
+      # reported as skipped and the core-bump regression matrix (ROADMAP D2) never ran here.
+      # Install the pinned core — every asset is checked against the sha256 in mihomo-manifest.json. The
+      # cache holds the downloaded archives, not the merged binary, so a hit skips the
+      # download but never the checksum, and a manifest bump changes the key.
+      - name: Cache Mihomo core downloads
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/mihomo-core-downloads
+          key: mihomo-core-${{ hashFiles('Resources/Core/mihomo-manifest.json') }}
+
+      - name: Install bundled Mihomo core
+        env:
+          MIHOMO_CORE_CACHE_DIR: ${{ runner.temp }}/mihomo-core-downloads
+        run: script/install_mihomo_core.sh
+
       # Same command as README.md, CONTRIBUTING.md, and docs/DEVELOPMENT.md, apart from
-      # the result bundle, so a red CI run reproduces locally verbatim. A fresh clone has
-      # neither the bundled Mihomo binaries nor the workstation-only release runbook, so
-      # the tests that need them report as skipped rather than failing.
+      # the result bundle, so a red CI run reproduces locally verbatim. The workstation-only
+      # release runbook is still absent from a fresh clone, so the test that reads it skips.
       - name: Run tests
+        env:
+          # xcodebuild hands TEST_RUNNER_-prefixed variables to the test process with the
+          # prefix stripped. With the core installed above, a bundled-core test that cannot
+          # find it fails instead of skipping, so a core bump that breaks any generated
+          # template, routing mode, DNS mode or sniffer state fails the build
+          # (BundledCoreRequirement in ClashMaxTests/CoreRuntimePreflightTests.swift).
+          TEST_RUNNER_CLASHMAX_REQUIRE_BUNDLED_CORE: "1"
         run: |
           xcodebuild test \
             -project ClashMax.xcodeproj \
@@ -223,6 +245,21 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
+      # Without the core this job built a bundle that differs from the shipped one in its
+      # largest binary, and the arm64 checks below never saw it. Install the pinned one — every asset is checked against the sha256 in mihomo-manifest.json. The
+      # cache holds the downloaded archives, not the merged binary, so a hit skips the
+      # download but never the checksum, and a manifest bump changes the key.
+      - name: Cache Mihomo core downloads
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/mihomo-core-downloads
+          key: mihomo-core-${{ hashFiles('Resources/Core/mihomo-manifest.json') }}
+
+      - name: Install bundled Mihomo core
+        env:
+          MIHOMO_CORE_CACHE_DIR: ${{ runner.temp }}/mihomo-core-downloads
+        run: script/install_mihomo_core.sh
+
       # Release is the shipping configuration: universal (arm64 + x86_64) and built
       # with optimizations, which the Debug test build does not cover. Signing,
       # notarization, and the release smoke gate stay on the maintainer's machine
@@ -250,6 +287,15 @@ jobs:
           test -f "$app/Contents/Library/LaunchDaemons/io.github.clashmax.ClashMax.Helper.plist"
           test -d "$app/Contents/Library/SystemExtensions/io.github.clashmax.ClashMax.NetworkExtension.systemextension"
           test -f "$app/Contents/Resources/Core/mihomo-manifest.json"
+          test -x "$app/Contents/Resources/Core/mihomo"
+          core_archs="$(lipo -archs "$app/Contents/Resources/Core/mihomo")"
+          echo "core architectures: $core_archs"
+          for arch in arm64 x86_64; do
+            case " $core_archs " in
+              *" $arch "*) ;;
+              *) echo "::error::Embedded Mihomo core is missing the $arch slice"; exit 1 ;;
+            esac
+          done
           # The legacy helper location must stay empty; macOS reads the helper from
           # Contents/Library/LaunchServices.
           test ! -e "$app/Contents/MacOS/ClashMaxHelper"
@@ -273,8 +319,9 @@ jobs:
           app="DerivedData-Release/Build/Products/Release/ClashMax.app"
 
           # The per-architecture cores are superseded by the merged universal one.
-          # CI does not fetch the core, so this only catches a build-phase regression
-          # that re-embeds them; the maintainer-side gate is release_smoke_check.sh.
+          # install_mihomo_core.sh deletes them from the checkout, so this catches a
+          # build-phase regression that re-embeds them; the maintainer-side gate is
+          # release_smoke_check.sh.
           if compgen -G "$app/Contents/Resources/Core/mihomo-darwin-*" > /dev/null; then
             echo "::error::Per-architecture Mihomo cores are embedded; ship the merged universal Core/mihomo instead"
             exit 1

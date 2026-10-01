@@ -47,19 +47,33 @@ final class BundledCoreArchitectureTests: XCTestCase {
     XCTAssertTrue(script.contains("merged core is missing the arm64 slice"))
   }
 
-  /// Only runs on a working copy that has actually fetched the core.
+  /// Skips on a working copy that has not fetched the core; fails on CI, which always fetches it.
   func testCheckedOutCoreIsUniversalAndRunsNativelyOnAppleSilicon() throws {
-    let coreURL = try repositoryRoot()
-      .appendingPathComponent("Resources", isDirectory: true)
-      .appendingPathComponent("Core", isDirectory: true)
-      .appendingPathComponent("mihomo")
-    try XCTSkipUnless(
-      FileManager.default.isExecutableFile(atPath: coreURL.path),
-      "Resources/Core/mihomo is absent; run script/install_mihomo_core.sh"
-    )
+    guard let coreURL = try BundledCoreRequirement.coreURL() else { return }
 
     let architectures = try lipoArchitectures(of: coreURL)
     XCTAssertTrue(architectures.contains("arm64"), "core architectures were \(architectures)")
+    XCTAssertTrue(architectures.contains("x86_64"), "core architectures were \(architectures)")
+  }
+
+  /// ROADMAP D2: the bundled-core matrix is only a regression gate if CI runs it. The core is
+  /// gitignored, so CI has to install it before the tests and has to turn a missing core into a
+  /// failure — otherwise every bundled-core test reports as skipped and a broken bump ships green.
+  func testCIInstallsTheCoreBeforeTestsAndRequiresIt() throws {
+    let workflow = try contents(of: ".github/workflows/ci.yml")
+    let testJob = try XCTUnwrap(workflow.components(separatedBy: "\n  build:\n").first)
+
+    let install = try XCTUnwrap(testJob.range(of: "script/install_mihomo_core.sh"))
+    let runTests = try XCTUnwrap(testJob.range(of: "xcodebuild test"))
+    XCTAssertLessThan(install.lowerBound, runTests.lowerBound)
+    XCTAssertTrue(testJob.contains("TEST_RUNNER_\(BundledCoreRequirement.environmentKey): \"1\""))
+  }
+
+  func testInstallScriptRefusesAnAssetThatDoesNotMatchTheManifest() throws {
+    let script = try contents(of: "script/install_mihomo_core.sh")
+
+    XCTAssertTrue(script.contains(#"if [[ "$actual" != "$checksum" ]]; then"#))
+    XCTAssertTrue(script.contains("checksum mismatch for"))
   }
 
   func testNoIntelOnlyCoreIsLeftInTheWorkingCopy() throws {

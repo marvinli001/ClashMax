@@ -381,7 +381,8 @@ match the user's traffic with nothing surfaced. It joined that set on 2026-08-16
         script, because D2 has no script yet: `testBundledMihomoAccepts…Combinations` in
         [`CoreRuntimePreflightTests.swift`](../ClashMaxTests/CoreRuntimePreflightTests.swift)
         runs the bundled core over 5 config sources × 3 routing modes × 3 DNS modes × 3
-        sniffer states. When D2 gets a script, this moves into it.
+        sniffer states. D2 (2026-10-01) kept it as this XCTest and made CI install the core
+        and require it, instead of moving it into a script.
   - [ ] `MANUAL_TEST_PLAN.md` gains the end-to-end line item, and it is signed off before
         A1 is called done: an app that connects by hardcoded IP → a `DOMAIN-SUFFIX` rule for
         it does not fire → the diagnosis names the missing domain and the rule that would
@@ -830,12 +831,47 @@ interleaved with A/B/C, touching only what the current feature touches.
 #### D2 — Automate Mihomo upgrade regression
 
 - **Problem:** validating a core bump across templates and modes is manual today.
+- **What was actually wrong (2026-10-01).** The matrix already existed as an XCTest (A1e), but
+  `Resources/Core/mihomo` is gitignored and CI never installed it, so all seven bundled-core
+  tests in [`CoreRuntimePreflightTests.swift`](../ClashMaxTests/CoreRuntimePreflightTests.swift)
+  and [`BundledCoreArchitectureTests.swift`](../ClashMaxTests/BundledCoreArchitectureTests.swift)
+  reported as *skipped* on every run. The regression gate this item asks for was green by
+  construction.
 - **Acceptance criteria:**
-  - [ ] A script runs `mihomo -t` over every generated template × routing mode ×
+  - [x] A script runs `mihomo -t` over every generated template × routing mode ×
         DNS-override combination and fails with the `level=error msg=` line, not the
-        generic trailer.
-  - [ ] Runs in CI against the bundled core.
+        generic trailer. → **2026-10-01**, kept as the XCTest rather than a separate shell
+        script, because the matrix needs `ConfigNormalizer` to generate the configs:
+        `testBundledMihomoAcceptsGeneratedSnifferAcrossRoutingDNSAndTemplateCombinations`
+        (5 sources incl. the `minimal`/`global`/`rule` templates × 3 routing modes × 3 DNS
+        modes × 3 sniffer states = 135 `mihomo -t` runs) plus
+        `testBundledMihomoAcceptsGeneratedSnifferOnGeodataBackedTemplate` for `cn-direct`.
+        A rejection now reports through `SubscriptionPreflightDiagnosticFormatter`, so the
+        failure leads with the `msg=` value and keeps the full output below it. Evidence: a
+        stand-in core that rejects every TUN config produced 46 failures (45 TUN combinations
+        + the count check), each reading e.g. `Bundled core rejected
+        plain-profile/tun/dns-default/sniffer-app-managed: parse tun config error: …`.
+  - [ ] Runs in CI against the bundled core. **Wired 2026-10-01, not yet observed on GitHub
+        Actions** (needs a push). Both the test and build jobs run
+        [`script/install_mihomo_core.sh`](../script/install_mihomo_core.sh), which checks every
+        asset against the sha256 in [`mihomo-manifest.json`](../Resources/Core/mihomo-manifest.json)
+        — including assets restored from `actions/cache`, which holds the downloads, not the
+        merged binary. The test job sets `TEST_RUNNER_CLASHMAX_REQUIRE_BUNDLED_CORE=1`;
+        xcodebuild hands it to the test process as `CLASHMAX_REQUIRE_BUNDLED_CORE`, and
+        `BundledCoreRequirement` then turns a missing core into `XCTFail` instead of `XCTSkip`
+        (measured: without the core, 7 failures; with it, 23/23 pass; without the variable,
+        7 skips — a workstation without the core is unchanged). Replayed locally on a fresh
+        DerivedData: the job's second xcodebuild (`localization_gate.sh`) rebuilds cleanly,
+        the test host's `Core/mihomo` is byte-identical to the installed core (the
+        `DashboardRuntimeStateTests` placeholder is never written), and `Sign Nested Core
+        Binaries` passes its `lipo -archs` check. The release build job's bundle checks now
+        also assert the embedded core is `x86_64 arm64` (passed against a local unsigned
+        universal Release build). Tick after the first green run on master.
   - [ ] A new core version that breaks any combination fails the build rather than shipping.
+        Demonstrated locally (the stand-in core above); the CI half waits on the criterion
+        above. A manifest whose sha256 is wrong by one digit fails the install step with
+        `checksum mismatch for <asset>: the manifest expects … but the downloaded asset is
+        …`, annotated on the manifest file under GitHub Actions.
 
 #### D3 — Close the manual-verification gap
 

@@ -17,3 +17,7 @@ without putting an Intel-only component in the bundle.
 The project is GPL-3.0-compatible because the official Mihomo core is GPL-3.0.
 Before distributing a release, refresh the pinned binary here, verify checksums
 against `mihomo-manifest.json`, and make the source/license notices available.
+
+Set `MIHOMO_CORE_CACHE_DIR` to keep the downloaded archives between runs (CI
+points it at an `actions/cache` directory). A cached archive is still checked
+against the manifest before it is used.

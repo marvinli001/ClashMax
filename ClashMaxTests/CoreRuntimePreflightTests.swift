@@ -84,9 +84,7 @@ final class CoreRuntimePreflightTests: XCTestCase {
   }
 
   func testBundledMihomoAcceptsAdvancedProviderRuntimeMaterialization() async throws {
-    guard let coreURL = Self.bundledCoreURL() else {
-      throw XCTSkip("Bundled Mihomo core is unavailable in Resources/Core.")
-    }
+    guard let coreURL = try BundledCoreRequirement.coreURL() else { return }
 
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("ClashMaxAdvancedRuntime-\(UUID().uuidString)", isDirectory: true)
@@ -142,9 +140,7 @@ final class CoreRuntimePreflightTests: XCTestCase {
   /// must not have that problem, and the raw one must (so this test would notice if either
   /// side changed).
   func testBundledMihomoOpensMixedPortWhenTheProfileDeclaresItsOwnInboundPorts() async throws {
-    guard let coreURL = Self.bundledCoreURL() else {
-      throw XCTSkip("Bundled Mihomo core is unavailable in Resources/Core.")
-    }
+    guard let coreURL = try BundledCoreRequirement.coreURL() else { return }
 
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("ClashMaxInboundPortCollision-\(UUID().uuidString)", isDirectory: true)
@@ -291,9 +287,7 @@ final class CoreRuntimePreflightTests: XCTestCase {
   }
 
   func testBundledMihomoAcceptsGeneratedManualSOCKS5Profile() async throws {
-    guard let coreURL = Self.bundledCoreURL() else {
-      throw XCTSkip("Bundled Mihomo core is unavailable in Resources/Core.")
-    }
+    guard let coreURL = try BundledCoreRequirement.coreURL() else { return }
 
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("ClashMaxManualOutboundPreflight-\(UUID().uuidString)", isDirectory: true)
@@ -324,9 +318,7 @@ final class CoreRuntimePreflightTests: XCTestCase {
   }
 
   func testBundledMihomoAcceptsGeneratedProfileUpstreamForNodesAndProviders() async throws {
-    guard let coreURL = Self.bundledCoreURL() else {
-      throw XCTSkip("Bundled Mihomo core is unavailable in Resources/Core.")
-    }
+    guard let coreURL = try BundledCoreRequirement.coreURL() else { return }
 
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("ClashMaxUpstreamPreflight-\(UUID().uuidString)", isDirectory: true)
@@ -599,9 +591,7 @@ final class CoreRuntimePreflightTests: XCTestCase {
   /// download ~13 MB before it can answer (measured 2026-08-15: 2.7s cold, and a hard failure when
   /// offline), which would turn this into a network test. That template gets its own test below.
   func testBundledMihomoAcceptsGeneratedSnifferAcrossRoutingDNSAndTemplateCombinations() async throws {
-    guard let coreURL = Self.bundledCoreURL() else {
-      throw XCTSkip("Bundled Mihomo core is unavailable in Resources/Core.")
-    }
+    guard let coreURL = try BundledCoreRequirement.coreURL() else { return }
 
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("ClashMaxSnifferMatrix-\(UUID().uuidString)", isDirectory: true)
@@ -651,7 +641,7 @@ final class CoreRuntimePreflightTests: XCTestCase {
               try await validator.validate(coreURL: coreURL, configURL: configURL, workDirectory: directory)
               validatedCases += 1
             } catch {
-              XCTFail("Bundled core rejected \(name): \(error)")
+              XCTFail("Bundled core rejected \(name): \(BundledCoreRequirement.rejectionSummary(error))")
             }
             try? FileManager.default.removeItem(at: configURL)
           }
@@ -672,9 +662,7 @@ final class CoreRuntimePreflightTests: XCTestCase {
   /// combination the core cannot validate offline. Kept separate — and skipped rather than failed
   /// when the download is unavailable — so the matrix above stays a pure offline test.
   func testBundledMihomoAcceptsGeneratedSnifferOnGeodataBackedTemplate() async throws {
-    guard let coreURL = Self.bundledCoreURL() else {
-      throw XCTSkip("Bundled Mihomo core is unavailable in Resources/Core.")
-    }
+    guard let coreURL = try BundledCoreRequirement.coreURL() else { return }
 
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("ClashMaxSnifferGeodata-\(UUID().uuidString)", isDirectory: true)
@@ -707,7 +695,7 @@ final class CoreRuntimePreflightTests: XCTestCase {
         if message.contains("can't download") || message.contains("can't initial Geo") {
           throw XCTSkip("Mihomo geodata is unavailable offline, so the cn-direct template cannot be validated here.")
         }
-        XCTFail("Bundled core rejected cn-direct/\(sniffer.name): \(error)")
+        XCTFail("Bundled core rejected cn-direct/\(sniffer.name): \(BundledCoreRequirement.rejectionSummary(error))")
       }
     }
   }
@@ -833,16 +821,58 @@ final class CoreRuntimePreflightTests: XCTestCase {
       expectsSniffing: false
     ),
   ]
+}
 
-  private static func bundledCoreURL() -> URL? {
-    let repositoryRoot = URL(fileURLWithPath: #filePath)
+/// The bundled-core tests are the regression gate for a Mihomo bump (ROADMAP D2): every generated
+/// template × routing mode × DNS mode × sniffer state is handed to the real `mihomo -t`. CI installs
+/// the core with `script/install_mihomo_core.sh` and sets `CLASHMAX_REQUIRE_BUNDLED_CORE=1` —
+/// exported to xcodebuild as `TEST_RUNNER_CLASHMAX_REQUIRE_BUNDLED_CORE`, which xcodebuild hands to
+/// the test process with the prefix stripped — so a missing core there fails instead of skipping. A
+/// skip would let a core that breaks the schema ship green. A workstation without the core still
+/// skips, because `Resources/Core/mihomo` is gitignored.
+enum BundledCoreRequirement {
+  static let environmentKey = "CLASHMAX_REQUIRE_BUNDLED_CORE"
+
+  static var isRequired: Bool {
+    ProcessInfo.processInfo.environment[environmentKey] == "1"
+  }
+
+  static var repositoryCoreURL: URL {
+    URL(fileURLWithPath: #filePath)
       .deletingLastPathComponent()
       .deletingLastPathComponent()
-    let coreURL = repositoryRoot
       .appendingPathComponent("Resources", isDirectory: true)
       .appendingPathComponent("Core", isDirectory: true)
       .appendingPathComponent("mihomo")
-    return FileManager.default.isExecutableFile(atPath: coreURL.path) ? coreURL : nil
+  }
+
+  /// The checked-out core, or `nil` after recording a failure when the core is required but absent.
+  /// Throws `XCTSkip` when it is absent and not required.
+  static func coreURL(file: StaticString = #filePath, line: UInt = #line) throws -> URL? {
+    let url = repositoryCoreURL
+    if FileManager.default.isExecutableFile(atPath: url.path) {
+      return url
+    }
+    let reason = "Bundled Mihomo core is unavailable at Resources/Core/mihomo; run script/install_mihomo_core.sh."
+    guard isRequired else {
+      throw XCTSkip(reason)
+    }
+    XCTFail("\(reason) \(environmentKey)=1 makes a missing core a failure, not a skip.", file: file, line: line)
+    return nil
+  }
+
+  /// A core bump that breaks a combination has to say *why* in the CI log. `mihomo -t` prints the
+  /// cause as a `level=error msg=` line followed by a generic "configuration file … test failed"
+  /// trailer, so the failure names the `msg=` the app's preflight summary would show, then keeps the
+  /// full output for context.
+  static func rejectionSummary(_ error: Error) -> String {
+    guard case let AppError.configValidationFailed(output) = error else {
+      return String(describing: error)
+    }
+    guard let summary = SubscriptionPreflightDiagnosticFormatter.summary(fromFullMessage: output) else {
+      return output
+    }
+    return "\(summary)\n--- mihomo -t output ---\n\(output)"
   }
 }
 
