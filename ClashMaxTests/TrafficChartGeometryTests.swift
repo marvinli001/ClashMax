@@ -75,6 +75,18 @@ final class TrafficChartGeometryTests: XCTestCase {
 
   // MARK: - Stable vertical scale
 
+  func testScrollingAnimationUsesTheNewAxisScaleImmediately() {
+    let ceiling = 20_000
+    let rect = CGRect(x: 0, y: 0, width: 300, height: 100)
+    var series = shape(values: [5_000, 10_000, 5_000, 10_000], newestSequence: 4, head: 3, scale: 1 / Double(ceiling))
+    // SwiftUI interpolates the shape's animation data while a new sample enters. Even halfway
+    // through that scroll, 10 KB/s must occupy half the plot under a 20 KB/s axis.
+    series.animatableData = 3.5
+    XCTAssertEqual(series.path(in: rect).boundingRect.minY, 50, accuracy: 0.001)
+    XCTAssertEqual(series.path(in: rect).boundingRect.maxY, 75, accuracy: 0.001)
+    XCTAssertEqual(series.path(in: rect).boundingRect.maxX, 350, accuracy: 0.001)
+  }
+
   func testCeilingSnapsUpToTheNextRung() {
     XCTAssertEqual(TrafficChartGeometry.niceCeiling(atLeast: 1500), 1500)
     XCTAssertEqual(TrafficChartGeometry.niceCeiling(atLeast: 2000), 2000)

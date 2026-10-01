@@ -123,8 +123,8 @@ final class RoutingEditorState {
   var explanationContext: RuleExplanation?
   var domainVerdictContext: SnifferDiagnosticsSnapshot?
 
-  /// `enabled` is left out: only the list's switch changes it, and that switch writes the store
-  /// directly, so a draft never holds an unsaved `enabled` of its own.
+  /// Saved snippets take `enabled` from the list's live switch. Detached drafts keep their own
+  /// switch until their first save, so they can be prepared without applying to a running core.
   var draftHasUnsavedChanges: Bool {
     if isEditingDetachedDraft {
       return true
@@ -308,7 +308,7 @@ struct RoutingView: View {
         snippetPendingDeletion = nil
       }
     } message: {
-      Text("Remove \(snippetPendingDeletion?.normalizedName ?? "this snippet") from the snippet library. Saving the library reloads the running core when the snippet applied to it.")
+      Text("Remove \(snippetPendingDeletion?.normalizedName ?? String(localized: "this snippet")) from the snippet library. Saving the library reloads the running core when the snippet applied to it.")
     }
     .task {
       await snippetLibrary.waitForLoad()
@@ -466,7 +466,7 @@ struct RoutingView: View {
             subtitle: "\(editor.draftSnippet.payload.displayName) - \(editor.draftSnippet.binding.displayName)",
             isEnabled: editor.draftSnippet.enabled,
             isUnsaved: true,
-            onToggle: nil
+            onToggle: { editor.draftSnippet.enabled = $0 }
           )
           .tag(editor.draftSnippet.id)
         }
@@ -751,10 +751,11 @@ struct RoutingView: View {
     attemptedSave = true
     guard canSave else { return }
     let nextDraft = editor.snippetForSaving(in: snippetLibrary.snippets)
+    let preservesStoredEnabled = !editor.isEditingDetachedDraft
     pendingAction = nil
     Task { @MainActor in
-      if await appModel.saveRuntimeSnippet(nextDraft) {
-        editor.load(nextDraft)
+      if await appModel.saveRuntimeSnippet(nextDraft, preservingStoredEnabled: preservesStoredEnabled) {
+        editor.load(snippetLibrary.snippets.first(where: { $0.id == nextDraft.id }) ?? nextDraft)
         attemptedSave = false
         perform(action)
       }
@@ -1153,16 +1154,15 @@ private struct RuntimeSnippetRow: View {
   /// Not the stored value: the owner shows the requested value while the write is in flight.
   let isEnabled: Bool
   let isUnsaved: Bool
-  /// `nil` for a draft that has never been saved — there is nothing in the library to switch yet.
-  let onToggle: ((Bool) -> Void)?
+  /// A detached row edits only its draft; a saved row changes the library through AppModel.
+  let onToggle: (Bool) -> Void
 
   var body: some View {
     HStack(alignment: .center, spacing: 8) {
-      Toggle("Enabled", isOn: Binding(get: { isEnabled }, set: { onToggle?($0) }))
+      Toggle("Enabled", isOn: Binding(get: { isEnabled }, set: onToggle))
         .labelsHidden()
         .toggleStyle(.switch)
         .controlSize(.mini)
-        .disabled(onToggle == nil)
         .accessibilityLabel(String(format: String(localized: "%@ enabled"), displayName))
 
       VStack(alignment: .leading, spacing: 2) {

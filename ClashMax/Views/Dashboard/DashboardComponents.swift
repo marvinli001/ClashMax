@@ -1,4 +1,3 @@
-import Pow
 import SwiftUI
 
 /// One geometric scale for every rounded surface in the app.

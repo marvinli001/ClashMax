@@ -95,18 +95,11 @@ private struct NetworkExtensionStopCleanupResult {
 }
 
 private extension TunDiagnosticsSnapshot {
-  private static let repairableRoutingIssueIDs: Set<String> = [
-    "interface",
-    "default-route",
-    "route-exclude",
-    "dns-hijack",
-  ]
-
   var repairableRoutingIssue: TunDiagnosticCheck? {
     checks.first { check in
-      check.status == .fail && Self.repairableRoutingIssueIDs.contains(check.id)
+      check.status == .fail && check.suggestedRepair == .routing
     } ?? checks.first { check in
-      check.status == .warn && Self.repairableRoutingIssueIDs.contains(check.id)
+      check.status == .warn && check.suggestedRepair == .routing
     }
   }
 
@@ -253,7 +246,7 @@ struct AppNotice: Equatable, Identifiable {
 /// it; `ProxiesView` consumes and clears it, the same hand-off `RoutingSimulationRequest` uses.
 struct ProxiesPageRequest: Identifiable, Equatable {
   let id: UUID
-  /// The group to select, or `nil` to open the page as the user left it.
+  /// The group to select, or `nil` to show all groups. Either request clears the retained search.
   var groupName: String?
 
   init(id: UUID = UUID(), groupName: String?) {
@@ -1123,6 +1116,11 @@ final class AppModel {
   @ObservationIgnored private var tunRoutingRepairToken: UUID?
   @ObservationIgnored private var streamTasks: [Task<Void, Never>] = []
   @ObservationIgnored private var runtimeStreamToken: UUID?
+  // REST and WebSocket both publish /connections. A refresh started before a stream event must
+  // not replace that newer event (or undo a disconnect's invalidation) when its response arrives.
+  @ObservationIgnored private var connectionReportRevision: UInt64 = 0
+  @ObservationIgnored private var runtimeSnippetMutationInFlight = false
+  @ObservationIgnored private var runtimeSnippetMutationWaiters: [CheckedContinuation<Void, Never>] = []
   @ObservationIgnored private var networkExtensionDiagnosticsTask: Task<Void, Never>?
   @ObservationIgnored private var tunDiagnosticsTask: Task<Void, Never>?
   @ObservationIgnored private var tunDiagnosticsSettleTask: Task<Void, Never>?
@@ -2962,8 +2960,17 @@ final class AppModel {
   }
 
   @discardableResult
-  func saveRuntimeSnippet(_ snippet: RuntimeSnippet) async -> Bool {
+  func saveRuntimeSnippet(_ draft: RuntimeSnippet, preservingStoredEnabled: Bool = false) async -> Bool {
+    await acquireRuntimeSnippetMutation()
+    defer { finishRuntimeSnippetMutation() }
+    guard !Task.isCancelled else { return false }
     await runtimeSnippetLibrary.waitForLoad()
+    var snippet = draft
+    // Resolve this after earlier list toggles have finished, not when the editor starts its task.
+    // Its snapshot may still say enabled=true while a requested disable is being persisted.
+    if preservingStoredEnabled, let stored = runtimeSnippetLibrary.snippets.first(where: { $0.id == draft.id }) {
+      snippet.enabled = stored.enabled
+    }
     if let validationError = snippet.validationError {
       lastError = validationError
       return false
@@ -2986,6 +2993,9 @@ final class AppModel {
 
   @discardableResult
   func deleteRuntimeSnippet(_ snippet: RuntimeSnippet) async -> Bool {
+    await acquireRuntimeSnippetMutation()
+    defer { finishRuntimeSnippetMutation() }
+    guard !Task.isCancelled else { return false }
     await runtimeSnippetLibrary.waitForLoad()
     let proposedSnippets = runtimeSnippetLibrary.snippets.filter { $0.id != snippet.id }
     return await mutateRuntimeSnippetLibrary(
@@ -3000,6 +3010,9 @@ final class AppModel {
 
   @discardableResult
   func setRuntimeSnippet(_ snippet: RuntimeSnippet, enabled: Bool) async -> Bool {
+    await acquireRuntimeSnippetMutation()
+    defer { finishRuntimeSnippetMutation() }
+    guard !Task.isCancelled else { return false }
     await runtimeSnippetLibrary.waitForLoad()
     var proposedSnippets = runtimeSnippetLibrary.snippets
     if let index = proposedSnippets.firstIndex(where: { $0.id == snippet.id }) {
@@ -3021,6 +3034,9 @@ final class AppModel {
 
   @discardableResult
   func moveRuntimeSnippet(fromOffsets source: IndexSet, toOffset destination: Int) async -> Bool {
+    await acquireRuntimeSnippetMutation()
+    defer { finishRuntimeSnippetMutation() }
+    guard !Task.isCancelled else { return false }
     await runtimeSnippetLibrary.waitForLoad()
     var proposedSnippets = runtimeSnippetLibrary.snippets
     moveSnippets(&proposedSnippets, fromOffsets: source, toOffset: destination)
@@ -3105,6 +3121,25 @@ final class AppModel {
         activeProfileID: profileStore.activeProfileID
       )
     )
+  }
+
+  /// Keep preflight, persistence, reload and rollback in one ordered transaction. MainActor alone
+  /// does not serialize an operation across awaits: an older save could otherwise finish after
+  /// the next edit, or its rollback could erase that successful edit.
+  private func acquireRuntimeSnippetMutation() async {
+    if runtimeSnippetMutationInFlight {
+      await withCheckedContinuation { runtimeSnippetMutationWaiters.append($0) }
+    } else {
+      runtimeSnippetMutationInFlight = true
+    }
+  }
+
+  private func finishRuntimeSnippetMutation() {
+    if runtimeSnippetMutationWaiters.isEmpty {
+      runtimeSnippetMutationInFlight = false
+    } else {
+      runtimeSnippetMutationWaiters.removeFirst().resume()
+    }
   }
 
   private func mutateRuntimeSnippetLibrary(
@@ -5603,10 +5638,13 @@ final class AppModel {
         ).preservingKnownDelayStates(knownDelayStates, profileID: profileStore.activeProfileID)
         rules = try await apiClient.rules()
         guard runtimeReloadToken == token, !Task.isCancelled else { return }
+        let connectionRevision = connectionReportRevision
         let connectionsReport = try await apiClient.connections()
         guard runtimeReloadToken == token, !Task.isCancelled else { return }
-        connections = connectionsReport.connections
-        runtimeData.recordTrafficTotals(connectionsReport.totals)
+        if connectionReportRevision == connectionRevision {
+          connections = connectionsReport.connections
+          runtimeData.recordTrafficTotals(connectionsReport.totals)
+        }
         if clearAfterConfirmation, let activeID = profileStore.activeProfileID {
           let confirmed = previewSelections.allSatisfy { groupName, nodeName in
             proxyGroups.first(where: { $0.name == groupName })?.selected == nodeName
@@ -9329,6 +9367,7 @@ final class AppModel {
 
   private func cancelRuntimeStreams() {
     runtimeStreamToken = nil
+    connectionReportRevision &+= 1
     streamTasks.forEach { $0.cancel() }
     streamTasks.removeAll()
   }
@@ -9398,7 +9437,8 @@ final class AppModel {
     while shouldRetryRuntimeStream(token: token) {
       do {
         for try await report in client.connectionStream(interval: 1000) {
-          guard !Task.isCancelled else { return }
+          guard shouldRetryRuntimeStream(token: token) else { return }
+          connectionReportRevision &+= 1
           runtimeData.recordTrafficTotals(report.totals)
           await runtimeData.updateConnections(report.connections)
         }
@@ -9411,6 +9451,7 @@ final class AppModel {
       guard shouldRetryRuntimeStream(token: token) else { return }
       // Same reasoning as the memory stream: the totals of a core that has since been replaced
       // would read as this session's.
+      connectionReportRevision &+= 1
       runtimeData.clearTrafficTotals()
       guard await waitBeforeRuntimeStreamReconnect(token: token) else { return }
     }

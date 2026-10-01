@@ -7,6 +7,39 @@ import XCTest
 /// checked by eye — only the decisions a view makes from data.
 @MainActor
 final class PageSimplificationTests: XCTestCase {
+  func testDashboardNavigationOverridesRetainedProxySearchInEitherLifecycleOrder() {
+    for restoreFirst in [false, true] {
+      var navigation = ProxiesPageNavigationState()
+      if restoreFirst { navigation.restoreSearch("group=Other") }
+      navigation.apply(ProxiesPageRequest(groupName: "Streaming"))
+      navigation.restoreSearch("group=Other")
+
+      XCTAssertEqual(navigation.searchText, "")
+      XCTAssertEqual(navigation.pendingFocusGroupName, "Streaming")
+    }
+  }
+
+  func testViewAllProxyGroupsClearsBothSearchAndAnOlderFocusRequest() {
+    var navigation = ProxiesPageNavigationState()
+    navigation.apply(ProxiesPageRequest(groupName: "Streaming"))
+    navigation.searchText = "JP"
+    navigation.apply(ProxiesPageRequest(groupName: nil))
+    navigation.restoreSearch("group=Other")
+
+    XCTAssertEqual(navigation.searchText, "")
+    XCTAssertNil(navigation.pendingFocusGroupName)
+  }
+
+  func testOrdinaryProxyPageVisitRetainsSearchAndDoesNotOverwriteTyping() {
+    var navigation = ProxiesPageNavigationState()
+    navigation.restoreSearch("JP")
+    XCTAssertEqual(navigation.searchText, "JP")
+    navigation.searchText = "US"
+    navigation.restoreSearch("JP")
+    XCTAssertEqual(navigation.searchText, "US")
+    XCTAssertNil(navigation.pendingFocusGroupName)
+  }
+
   // MARK: - Profiles
 
   func testProfileDetailPaneNeedsBothRoomAndARequest() {

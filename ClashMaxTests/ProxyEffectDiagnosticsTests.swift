@@ -189,6 +189,47 @@ final class ProxyEffectDiagnosticsTests: XCTestCase {
     XCTAssertTrue(presentation.showsDetails)
   }
 
+  func testPassingProxyEffectDetailsCanBeOpenedButStartCollapsed() {
+    let snapshot = ProxyEffectDiagnosticsBuilder.build(
+      ProxyEffectDiagnosticsInput(
+        publicIPInfo: makeInfo(countryCode: "US"),
+        routingMode: .systemProxy,
+        runMode: .rule,
+        systemProxyEnabled: true,
+        currentGroupName: "Proxies",
+        currentNodeName: "US-01",
+        currentNodeType: "vless"
+      )
+    )
+    XCTAssertEqual(snapshot.status, .pass)
+    XCTAssertTrue(PublicIPProxyEffectPresentation(diagnostics: snapshot, isExpanded: false).isCollapsible)
+    XCTAssertFalse(PublicIPProxyEffectPresentation(diagnostics: snapshot, isExpanded: false).showsDetails)
+    XCTAssertTrue(PublicIPProxyEffectPresentation(diagnostics: snapshot, isExpanded: true).showsDetails)
+  }
+
+  func testHistoricalNEErrorsDoNotKeepProxyEffectDegradedForever() {
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    var diagnostics = NetworkExtensionDiagnosticsSnapshot.empty
+    diagnostics.socksHandshakeFailureCount = 20
+    diagnostics.updatedAt = now
+    diagnostics.recentErrors = [NetworkExtensionDiagnosticEvent(date: now, message: "Connection failed")]
+    let input = ProxyEffectDiagnosticsInput(
+      publicIPInfo: makeInfo(countryCode: "US"),
+      routingMode: .neProxy,
+      networkExtensionEnabled: true,
+      networkExtensionDiagnostics: diagnostics,
+      currentNodeName: "US-01",
+      currentNodeType: "vless"
+    )
+    XCTAssertEqual(ProxyEffectDiagnosticsBuilder.build(input, now: now).cause, .networkExtensionDegraded)
+    let recovered = ProxyEffectDiagnosticsBuilder.build(
+      input,
+      now: now.addingTimeInterval(NetworkExtensionDiagnosticsSnapshot.recentErrorDisplayInterval)
+    )
+    XCTAssertEqual(recovered.cause, .proxyConfirmed)
+    XCTAssertEqual(recovered.status, .pass)
+  }
+
   func testCurrentNodeNamedDirectIsReported() {
     let snapshot = ProxyEffectDiagnosticsBuilder.build(
       ProxyEffectDiagnosticsInput(

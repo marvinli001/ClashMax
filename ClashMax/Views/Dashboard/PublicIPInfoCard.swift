@@ -10,7 +10,7 @@ struct PublicIPInfoCard: View {
   var currentNode: ProxyNode?
   var hasMissingSelection = false
   @State private var showsFullIP = false
-  @State private var isDirectModeProxyEffectExpanded = false
+  @State private var isProxyEffectExpanded = false
 
   var body: some View {
     TimelineView(.periodic(from: Date(), by: 5)) { context in
@@ -97,7 +97,7 @@ struct PublicIPInfoCard: View {
       }
     }
     .padding(14)
-    .frame(maxWidth: .infinity, minHeight: isCompact ? 190 : 210, maxHeight: .infinity, alignment: .topLeading)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .dashboardCard()
   }
 
@@ -134,7 +134,7 @@ struct PublicIPInfoCard: View {
     )
     let presentation = PublicIPProxyEffectPresentation(
       diagnostics: diagnostics,
-      isExpanded: isDirectModeProxyEffectExpanded
+      isExpanded: isProxyEffectExpanded
     )
 
     return VStack(alignment: .leading, spacing: isCompact ? 7 : 9) {
@@ -171,10 +171,8 @@ struct PublicIPInfoCard: View {
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .animation(.easeInOut(duration: 0.16), value: presentation.showsDetails)
-    .onChange(of: diagnostics.cause) { _, cause in
-      if cause != .directRunMode {
-        isDirectModeProxyEffectExpanded = false
-      }
+    .onChange(of: diagnostics.cause) { _, _ in
+      isProxyEffectExpanded = false
     }
   }
 
@@ -185,13 +183,13 @@ struct PublicIPInfoCard: View {
   ) -> some View {
     if presentation.isCollapsible {
       Button {
-        isDirectModeProxyEffectExpanded.toggle()
+        isProxyEffectExpanded.toggle()
       } label: {
         proxyEffectHeaderContent(diagnostics, presentation: presentation)
       }
       .buttonStyle(.plain)
       .contentShape(Rectangle())
-      .help(isDirectModeProxyEffectExpanded ? "Collapse proxy effect details" : "Show proxy effect details")
+      .help(isProxyEffectExpanded ? "Collapse proxy effect details" : "Show proxy effect details")
     } else {
       proxyEffectHeaderContent(diagnostics, presentation: presentation)
     }
@@ -393,7 +391,7 @@ struct PublicIPProxyEffectPresentation: Equatable {
   var isExpanded: Bool
 
   var isCollapsible: Bool {
-    diagnostics.status == .warn && diagnostics.cause == .directRunMode
+    diagnostics.status == .pass || (diagnostics.status == .warn && diagnostics.cause == .directRunMode)
   }
 
   var showsDetails: Bool {

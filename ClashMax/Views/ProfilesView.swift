@@ -235,7 +235,7 @@ struct ProfilesView: View {
         profilePendingDeletion = nil
       }
     } message: {
-      Text("Remove \(profilePendingDeletion?.name ?? "this profile") from ClashMax. Stored subscription metadata and the app-managed profile copy will be deleted.")
+      Text("Remove \(profilePendingDeletion?.name ?? String(localized: "this profile")) from ClashMax. Stored subscription metadata and the app-managed profile copy will be deleted.")
     }
     .sheet(isPresented: migrationReportPresented) {
       if let migrationReport {

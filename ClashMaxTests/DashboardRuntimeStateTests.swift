@@ -612,6 +612,57 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(saved.name, "Office (edited)")
   }
 
+  func testDetachedDraftsCanBeSavedDisabledWithoutReloadingTheRunningCore() async throws {
+    let client = RecordingMihomoController(proxyGroupsResponse: [], connectionsResponse: [], testDelayResult: 0)
+    let model = try await makeRunningRuntimeModel(
+      client: client,
+      proxyPortReadinessProbe: RecordingProxyPortReadinessProbe()
+    )
+    let editor = model.routingEditor
+    for draft in [RuntimeSnippet.defaultDNSPatchSnippet, .defaultSnifferSnippet, .defaultRawYAMLSnippet] {
+      editor.beginDetachedDraft(draft)
+      editor.draftSnippet.enabled = false
+      let didSave = await model.saveRuntimeSnippet(editor.snippetForSaving(in: model.runtimeSnippetLibrary.snippets))
+      XCTAssertTrue(didSave)
+      let saved = try XCTUnwrap(model.runtimeSnippetLibrary.snippets.first { $0.id == draft.id })
+      XCTAssertFalse(saved.enabled)
+      XCTAssertTrue(try model.runtimeSnippetLibrary.snippets(applyingTo: XCTUnwrap(model.profileStore.activeProfileID)).isEmpty)
+    }
+    let reloads = await client.reloadRequestPaths()
+    XCTAssertTrue(reloads.isEmpty, "Saving a disabled draft must never briefly apply it to the running core")
+    _ = await model.prepareForTermination()
+  }
+
+  func testSavingDraftWhileItsDisableIsStillPersistingKeepsBothEdits() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let disk = GatedSnippetDiskIO()
+    let library = RuntimeSnippetLibraryStore(paths: paths, diskIO: disk)
+    let model = try AppModel(paths: paths, defaults: Self.makeIsolatedDefaults(), runtimeSnippetLibrary: library)
+    let snippet = RuntimeSnippet(name: "Draft", payload: .rules(RuleOverlaySettings(enabled: true)))
+    let didSeed = await model.saveRuntimeSnippet(snippet)
+    XCTAssertTrue(didSeed)
+    model.routingEditor.load(snippet)
+    model.routingEditor.draftSnippet.name = "Edited"
+
+    await disk.holdNextSave()
+    let disable = Task { await model.setRuntimeSnippet(snippet, enabled: false) }
+    await waitUntil { await disk.isHoldingSave() }
+    let staleDraft = model.routingEditor.snippetForSaving(in: library.snippets)
+    XCTAssertTrue(staleDraft.enabled, "The pending list switch has not reached the store yet")
+    let save = Task { await model.saveRuntimeSnippet(staleDraft, preservingStoredEnabled: true) }
+    await settle()
+    await disk.releaseSave()
+    let didDisable = await disable.value
+    let didSave = await save.value
+    XCTAssertTrue(didDisable)
+    XCTAssertTrue(didSave)
+    let stored = try XCTUnwrap(library.snippets.first)
+    XCTAssertFalse(stored.enabled)
+    XCTAssertEqual(stored.name, "Edited", "An older disk write must not discard the new draft")
+    let persisted = await disk.snapshot()
+    XCTAssertEqual(persisted, library.snippets)
+  }
+
   func testActiveRuntimeSnippetRollsBackWhenReloadFails() async throws {
     let paths = try Self.makeRuntimePaths()
     let configURL = paths.appSupport.appendingPathComponent("profile.yaml")
@@ -4215,6 +4266,51 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertFalse(summary.contains("/"), "No unexplained pass/warn/fail counters")
   }
 
+  func testNEAttentionExpiresTransientErrorsWithoutResettingHistoricalCounters() {
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    var diagnostics = NetworkExtensionDiagnosticsSnapshot.empty
+    diagnostics.socksHandshakeFailureCount = 12
+    diagnostics.recentErrors = [NetworkExtensionDiagnosticEvent(date: now, message: "A connection timed out")]
+    let recent = DashboardNetworkExtensionAttention(diagnostics: diagnostics, dnsError: nil, now: now)
+    XCTAssertTrue(recent.needsAttention)
+    XCTAssertFalse(recent.isError, "A single connection failure is a warning, not a broken extension")
+    XCTAssertEqual(recent.latestError?.message, "A connection timed out")
+
+    let expired = DashboardNetworkExtensionAttention(
+      diagnostics: diagnostics,
+      dnsError: nil,
+      now: now.addingTimeInterval(DashboardNetworkExtensionAttention.recentErrorInterval)
+    )
+    XCTAssertFalse(expired.needsAttention, "An unchanged diagnostics snapshot must expire too")
+    XCTAssertNil(expired.latestError)
+    XCTAssertEqual(diagnostics.socksHandshakeFailureCount, 12, "Status keeps the complete history")
+  }
+
+  func testNEAttentionUsesEventTimeInsteadOfSnapshotTimeOrArrayOrder() {
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    var diagnostics = NetworkExtensionDiagnosticsSnapshot.empty
+    diagnostics.updatedAt = now
+    diagnostics.socksHandshakeFailureCount = 99
+    let current = NetworkExtensionDiagnosticEvent(date: now.addingTimeInterval(-30), message: "Current")
+    diagnostics.recentErrors = [
+      current,
+      NetworkExtensionDiagnosticEvent(date: now.addingTimeInterval(-600), message: "Historical"),
+    ]
+    XCTAssertEqual(DashboardNetworkExtensionAttention(diagnostics: diagnostics, dnsError: nil, now: now).latestError, current)
+    diagnostics.recentErrors.removeFirst()
+    XCTAssertFalse(DashboardNetworkExtensionAttention(diagnostics: diagnostics, dnsError: nil, now: now).needsAttention)
+    diagnostics.recentErrors = []
+    XCTAssertFalse(DashboardNetworkExtensionAttention(diagnostics: diagnostics, dnsError: nil, now: now).needsAttention)
+  }
+
+  func testNEAttentionKeepsUnresolvedDNSFailuresVisible() {
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    let attention = DashboardNetworkExtensionAttention(diagnostics: .empty, dnsError: "DNS restore failed", now: now)
+    XCTAssertTrue(attention.needsAttention)
+    XCTAssertTrue(attention.isError)
+    XCTAssertEqual(attention.dnsError, "DNS restore failed")
+  }
+
   func testNodePickerListsSelectableNodesFilteredLikeTheProxiesPage() {
     let group = ProxyGroup(
       name: "Proxy",
@@ -5558,6 +5654,48 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(model.connections.map(\.id), ["second"])
     XCTAssertEqual(model.runtimeData.trafficTotals, TrafficTotals(upload: 5, download: 6), "A restarted core's totals start over")
 
+    _ = await model.prepareForTermination()
+  }
+
+  func testDelayedRESTConnectionsCannotOverwriteANewerStreamReport() async throws {
+    try await assertDelayedRESTConnectionsRespectStream(disconnect: false)
+  }
+
+  func testDelayedRESTConnectionsCannotRestoreTotalsAfterStreamDisconnect() async throws {
+    try await assertDelayedRESTConnectionsRespectStream(disconnect: true)
+  }
+
+  private func assertDelayedRESTConnectionsRespectStream(disconnect: Bool) async throws {
+    let client = ScriptedRuntimeStreamController()
+    let model = try await makeRunningRuntimeModel(
+      client: client,
+      proxyPortReadinessProbe: RecordingProxyPortReadinessProbe()
+    )
+    model.setLogLevel("debug")
+    await waitUntil {
+      client.subscriptionCounts() == [1, 1, 1] && !model.runtimeDataLoading
+        && model.runtimeSettingsApplyState == .idle
+    }
+    XCTAssertEqual(client.subscriptionCounts(), [1, 1, 1])
+    client.holdNextConnectionRequest()
+    model.reloadRuntimeData()
+    await waitUntil { client.hasHeldConnectionRequest() }
+    XCTAssertTrue(client.hasHeldConnectionRequest())
+
+    let totals = TrafficTotals(upload: 900, download: 12_000)
+    XCTAssertTrue(client.yieldConnections([Self.streamConnection(id: "newer")], totals: totals, subscription: 0))
+    await waitUntil { model.connections.map(\.id) == ["newer"] }
+    XCTAssertEqual(model.runtimeData.trafficTotals, totals)
+    if disconnect {
+      client.finishConnections(subscription: 0)
+      await waitUntil { model.runtimeData.trafficTotals == nil }
+      XCTAssertNil(model.runtimeData.trafficTotals)
+    }
+    client.releaseConnectionRequest()
+    await waitUntil { !model.runtimeDataLoading }
+
+    XCTAssertEqual(model.connections.map(\.id), ["newer"], "A late REST snapshot must not resurrect older connection state")
+    XCTAssertEqual(model.runtimeData.trafficTotals, disconnect ? nil : totals, "A late REST response must respect newer stream events")
     _ = await model.prepareForTermination()
   }
 
@@ -11938,7 +12076,7 @@ final class DashboardRuntimeStateTests: XCTestCase {
 
     XCTAssertTrue(didDelete)
     XCTAssertNil(store.activeProfileID)
-    XCTAssertEqual(model.effectiveRuntimeConfigState, .unavailable("No active profile selected."))
+    XCTAssertEqual(model.effectiveRuntimeConfigState, .unavailable(String(localized: "No active profile selected.")))
     XCTAssertFalse(model.hasLoadedEffectiveRuntimeConfigForActiveProfile)
   }
 
@@ -12721,6 +12859,31 @@ final class DashboardRuntimeStateTests: XCTestCase {
   }
 }
 
+private actor GatedSnippetDiskIO: RuntimeSnippetLibraryDiskIOProviding {
+  private var stored: [RuntimeSnippet] = []
+  private var holdNext = false
+  private var heldSave: CheckedContinuation<Void, Never>?
+
+  func load(from url: URL) async throws -> [RuntimeSnippet] { stored }
+
+  func save(_ snippets: [RuntimeSnippet], to url: URL) async throws {
+    if holdNext {
+      holdNext = false
+      await withCheckedContinuation { heldSave = $0 }
+    }
+    stored = snippets
+  }
+
+  func holdNextSave() { holdNext = true }
+  func isHoldingSave() -> Bool { heldSave != nil }
+  func releaseSave() {
+    heldSave?.resume()
+    heldSave = nil
+  }
+
+  func snapshot() -> [RuntimeSnippet] { stored }
+}
+
 private actor RecordingPublicIPInfoFetcher: PublicIPInfoFetching {
   private let infos: [PublicIPInfo]
   private let delayNanoseconds: UInt64
@@ -12768,6 +12931,25 @@ private final class ScriptedRuntimeStreamController: MihomoAPIControlling, @unch
   private var logLevels: [String] = []
   private var connectionIntervals: [Int] = []
   private var completedConnectionRequests = 0
+  private var shouldHoldNextConnectionRequest = false
+  private var heldConnectionRequest: CheckedContinuation<Void, Never>?
+
+  func holdNextConnectionRequest() {
+    lock.withLock { shouldHoldNextConnectionRequest = true }
+  }
+
+  func hasHeldConnectionRequest() -> Bool {
+    lock.withLock { heldConnectionRequest != nil }
+  }
+
+  func releaseConnectionRequest() {
+    let continuation = lock.withLock {
+      let held = heldConnectionRequest
+      heldConnectionRequest = nil
+      return held
+    }
+    continuation?.resume()
+  }
 
   func updateMode(_ mode: RunMode) async throws {
     try await base.updateMode(mode)
@@ -12796,6 +12978,15 @@ private final class ScriptedRuntimeStreamController: MihomoAPIControlling, @unch
   func connections() async throws -> ConnectionsReport {
     let report = try await base.connections()
     recordCompletedConnectionRequest()
+    await withCheckedContinuation { continuation in
+      let held = lock.withLock {
+        guard shouldHoldNextConnectionRequest else { return false }
+        shouldHoldNextConnectionRequest = false
+        heldConnectionRequest = continuation
+        return true
+      }
+      if !held { continuation.resume() }
+    }
     return report
   }
 

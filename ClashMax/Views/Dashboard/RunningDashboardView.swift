@@ -425,7 +425,7 @@ private struct DashboardMetricCell: View {
         .minimumScaleFactor(0.7)
         // Short and ease-out: the numbers change every second, and a roll that outlasts a fraction
         // of that second reads as lag.
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: metric.value)
+        .animation(reduceMotion || metric.kind == .uptime ? nil : .easeOut(duration: 0.2), value: metric.value)
 
       if let detail = metric.detail {
         Text(detail)
@@ -613,7 +613,7 @@ private struct CurrentProxyRuntimeCard: View {
       }
     }
     .padding(14)
-    .frame(maxWidth: .infinity, minHeight: availableWidth < 460 ? 190 : 210, maxHeight: .infinity, alignment: .topLeading)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .dashboardCard()
     // Measure the node the selector actually uses as soon as the runtime is up (and again when the
     // user picks another one), so the card shows a delay without anyone pressing the button. The
@@ -1009,15 +1009,19 @@ private struct TunDiagnosticsAttentionRow: View {
         detail: dnsRepairError ?? issues.first.map { $0.detail ?? $0.message },
         availableWidth: availableWidth
       ) {
-        Button("Repair DNS") {
-          appModel.repairTunDNS()
+        if dnsRepairError != nil || issues.contains(where: { $0.suggestedRepair == .systemDNS }) {
+          Button("Repair DNS") {
+            appModel.repairTunDNS()
+          }
+          .disabled(!appModel.canRepairTunDNS)
         }
-        .disabled(!appModel.canRepairTunDNS)
 
-        Button("Repair Routing") {
-          appModel.repairTunRouting()
+        if issues.contains(where: { $0.suggestedRepair == .routing }) {
+          Button("Repair Routing") {
+            appModel.repairTunRouting()
+          }
+          .disabled(!appModel.canRepairTunRouting)
         }
-        .disabled(!appModel.canRepairTunRouting)
 
         if appModel.hasResidualSystemProxy {
           Button("Disable System Proxy") {
@@ -1039,42 +1043,51 @@ private struct TunDiagnosticsAttentionRow: View {
   }
 }
 
-/// The NE counterpart of `TunDiagnosticsAttentionRow`: nothing while the extension reports no
-/// errors, one row naming the latest problem when it does.
+/// Connection errors are recent events, not a persistent failure of the whole extension. The
+/// cumulative counters and older events remain available in Status; DNS repair errors persist.
+struct DashboardNetworkExtensionAttention {
+  static let recentErrorInterval = NetworkExtensionDiagnosticsSnapshot.recentErrorDisplayInterval
+
+  let dnsError: String?
+  let latestError: NetworkExtensionDiagnosticEvent?
+
+  init(diagnostics: NetworkExtensionDiagnosticsSnapshot, dnsError: String?, now: Date) {
+    self.dnsError = dnsError
+    latestError = diagnostics.latestRecentError(now: now)
+  }
+
+  var needsAttention: Bool { dnsError != nil || latestError != nil }
+  var isError: Bool { dnsError != nil }
+}
+
+/// The NE counterpart of `TunDiagnosticsAttentionRow`. The clock expires transient warnings even
+/// when an idle extension has stopped publishing new diagnostics.
 private struct NetworkExtensionAttentionRow: View {
   @Environment(AppModel.self) private var appModel
   let availableWidth: CGFloat
 
   var body: some View {
-    let diagnostics = appModel.networkExtensionController.diagnostics
-    let dnsError = appModel.networkExtensionSystemDNSState.errorMessage
-    let lastError = diagnostics.recentErrors.last
-    let socksFailures = diagnostics.socksHandshakeFailureCount
-    if dnsError != nil || lastError != nil || socksFailures > 0 {
-      DashboardAttentionRow(
-        isError: true,
-        title: title(dnsError: dnsError, socksFailures: socksFailures),
-        detail: dnsError ?? lastError.map(eventSummary),
-        availableWidth: availableWidth
-      ) {
-        Button("Show in Status") {
-          appModel.selectedSection = .status
+    TimelineView(.periodic(from: Date(), by: 5)) { context in
+      let attention = DashboardNetworkExtensionAttention(
+        diagnostics: appModel.networkExtensionController.diagnostics,
+        dnsError: appModel.networkExtensionSystemDNSState.errorMessage,
+        now: context.date
+      )
+      if attention.needsAttention {
+        DashboardAttentionRow(
+          isError: attention.isError,
+          title: attention.dnsError != nil
+            ? String(localized: "NE system DNS repair needed")
+            : String(localized: "NE Proxy reported an error"),
+          detail: attention.dnsError ?? attention.latestError.map(eventSummary),
+          availableWidth: availableWidth
+        ) {
+          Button("Show in Status") {
+            appModel.selectedSection = .status
+          }
         }
       }
     }
-  }
-
-  private func title(dnsError: String?, socksFailures: Int) -> String {
-    if dnsError != nil {
-      return String(localized: "NE system DNS repair needed")
-    }
-    if socksFailures > 0 {
-      return String.localizedStringWithFormat(
-        NSLocalizedString("NE Proxy: %lld SOCKS handshake failures", comment: ""),
-        Int64(socksFailures)
-      )
-    }
-    return String(localized: "NE Proxy reported an error")
   }
 
   private func eventSummary(_ event: NetworkExtensionDiagnosticEvent) -> String {
@@ -1482,12 +1495,19 @@ struct StatusView: View {
       ))
     }
     if showsTunDiagnostics, let issue = appModel.tunDiagnostics.primaryIssue {
+      var actions: [StatusAttentionItem.Action] = []
+      if issue.suggestedRepair == .systemDNS, appModel.canRepairTunDNS {
+        actions.append(.repairTunDNS)
+      } else if issue.suggestedRepair == .routing, appModel.canRepairTunRouting {
+        actions.append(.repairTunRouting)
+      }
+      actions.append(.showSection(.tun))
       items.append(StatusAttentionItem(
         id: "tun-\(issue.id)",
         title: issue.title,
         message: issue.detail ?? issue.message,
         isError: issue.status == .fail,
-        actions: appModel.canRepairTunRouting ? [.repairTunRouting, .showSection(.tun)] : [.showSection(.tun)]
+        actions: actions
       ))
     }
     if let dnsError = appModel.networkExtensionSystemDNSState.errorMessage {

@@ -43,8 +43,7 @@ struct TrafficChartGeometry: Equatable {
   /// A coarse 1/2/5 ladder holds the scale still for longer, but it can park the
   /// ceiling at twice the peak and leave the curve crawling along the bottom half
   /// of the plot. No two rungs here are more than 25% apart, so the peak always
-  /// reaches at least 80% of the plot height, and a rescale — eased in over half a
-  /// second — is a small nudge rather than a jump.
+  /// reaches at least 80% of the plot height. The axis and series adopt a new rung together.
   private static let ceilingSteps = [4, 5, 6, 7, 8, 10, 12, 14, 16, 20, 24, 28, 32, 40]
 
   /// Rounds up to the next rung so the vertical scale only changes on a real
@@ -107,8 +106,8 @@ struct TrafficChartGeometry: Equatable {
 
 /// One traffic series as a smoothed curve anchored to sample sequence numbers.
 ///
-/// `head` is the sequence number currently sitting at the right edge and `scale` is `1 / ceiling`;
-/// both are the animatable data. The sample values themselves never animate — see
+/// `head` is the sequence number currently sitting at the right edge and is the animatable data.
+/// `scale` is `1 / ceiling` and changes immediately with the axis. The sample values never animate — see
 /// `TrafficChartGeometry` for why that is the point. Points to the right of `head` (the sample
 /// that is still sliding in) and left of the window are drawn and left to the view's clip.
 ///
@@ -127,12 +126,9 @@ struct TrafficSeriesShape: Shape {
   /// Keeps the newest point's round cap inside the clip instead of cutting it in half.
   var edgeInset: CGFloat = 2
 
-  var animatableData: AnimatablePair<Double, Double> {
-    get { AnimatablePair(head, scale) }
-    set {
-      head = newValue.first
-      scale = newValue.second
-    }
+  var animatableData: Double {
+    get { head }
+    set { head = newValue }
   }
 
   func path(in rect: CGRect) -> Path {
@@ -205,7 +201,6 @@ struct TrafficSparkline: View {
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var head: Double = 0
-  @State private var scale: Double = 1 / Double(TrafficChartGeometry.minimumCeiling)
 
   var body: some View {
     let geometry = TrafficChartGeometry(samples: samples, sampleCount: sampleCount)
@@ -250,16 +245,6 @@ struct TrafficSparkline: View {
         head = Double(next)
       }
     }
-    .onChange(of: geometry.ceiling, initial: true) { previous, next in
-      let target = 1 / Double(next)
-      guard previous != next, !reduceMotion else {
-        scale = target
-        return
-      }
-      withAnimation(.easeInOut(duration: 0.5)) {
-        scale = target
-      }
-    }
   }
 
   private func series(_ values: [Double], in geometry: TrafficChartGeometry, isClosed: Bool = false) -> TrafficSeriesShape {
@@ -268,7 +253,9 @@ struct TrafficSparkline: View {
       newestSequence: geometry.newestSequence,
       slotCount: slotCount,
       head: head,
-      scale: scale,
+      // The axis already describes this ceiling. Interpolating a separate scale makes the curve
+      // report the wrong values for half a second whenever the ceiling changes.
+      scale: 1 / Double(geometry.ceiling),
       smoothing: smoothing,
       isClosed: isClosed
     )

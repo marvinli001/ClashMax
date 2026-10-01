@@ -1,5 +1,18 @@
 import Foundation
 
+extension NetworkExtensionDiagnosticsSnapshot {
+  static let recentErrorDisplayInterval: TimeInterval = 180
+
+  /// Counters are session history. Only the event's own timestamp says whether an error is recent;
+  /// `updatedAt` also moves when healthy traffic updates the snapshot.
+  func latestRecentError(now: Date) -> NetworkExtensionDiagnosticEvent? {
+    recentErrors.filter {
+      let age = now.timeIntervalSince($0.date)
+      return age >= 0 && age < Self.recentErrorDisplayInterval
+    }.max { $0.date < $1.date }
+  }
+}
+
 /// Pure, view-agnostic classification of "is the proxy actually taking over outbound traffic?".
 ///
 /// This answers issue #13: the runtime can report "running" while the public IP still resolves to
@@ -140,7 +153,7 @@ struct ProxyEffectDiagnosticsInput: Equatable, Sendable {
 }
 
 enum ProxyEffectDiagnosticsBuilder {
-  static func build(_ input: ProxyEffectDiagnosticsInput) -> ProxyEffectDiagnosticsSnapshot {
+  static func build(_ input: ProxyEffectDiagnosticsInput, now: Date = Date()) -> ProxyEffectDiagnosticsSnapshot {
     let probeHost = input.probeHost.trimmingCharacters(in: .whitespacesAndNewlines)
     let trace = ruleProbe(host: probeHost, rules: input.runtimeRules)
     // Only a rule the local simulator actually matched yields a policy. When the walk stops at a
@@ -248,7 +261,7 @@ enum ProxyEffectDiagnosticsBuilder {
     }
     if input.routingMode == .neProxy,
        input.networkExtensionEnabled,
-       let neIssue = networkExtensionIssue(input.networkExtensionDiagnostics)
+       let neIssue = input.networkExtensionDiagnostics.latestRecentError(now: now)?.message
     {
       return make(
         status: .warn,
@@ -427,19 +440,6 @@ enum ProxyEffectDiagnosticsBuilder {
       return "\(group) / \(name)"
     }
     return name
-  }
-
-  private static func networkExtensionIssue(_ diagnostics: NetworkExtensionDiagnosticsSnapshot) -> String? {
-    if let last = diagnostics.recentErrors.last {
-      return last.message
-    }
-    if diagnostics.socksHandshakeFailureCount > 0 {
-      return String(
-        format: String(localized: "SOCKS handshake failures: %lld"),
-        Int64(diagnostics.socksHandshakeFailureCount)
-      )
-    }
-    return nil
   }
 }
 

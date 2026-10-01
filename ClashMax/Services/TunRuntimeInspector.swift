@@ -34,12 +34,28 @@ enum TunDiagnosticStatus: String, Codable, Equatable, Sendable {
   }
 }
 
+enum TunDiagnosticRepair: Equatable {
+  case systemDNS
+  case routing
+}
+
 struct TunDiagnosticCheck: Codable, Equatable, Identifiable, Sendable {
   var id: String
   var title: String
   var status: TunDiagnosticStatus
   var message: String
   var detail: String?
+
+  /// A recovery must address the check that failed. In particular, restoring macOS DNS does not
+  /// repair Mihomo's DNS hijack, and an external probe failure alone does not justify a restart.
+  var suggestedRepair: TunDiagnosticRepair? {
+    guard status == .warn || status == .fail else { return nil }
+    switch id {
+    case "system-dns": return .systemDNS
+    case "interface", "default-route", "route-exclude", "dns-hijack": return .routing
+    default: return nil
+    }
+  }
 
   init(
     id: String,

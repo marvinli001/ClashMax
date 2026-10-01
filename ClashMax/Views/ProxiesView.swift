@@ -18,6 +18,26 @@ enum ProxyNodeSelectionPolicy {
   }
 }
 
+/// Entry requests win over the retained filter, regardless of whether SwiftUI runs `.task` or
+/// `.onAppear` first. Ordinary sidebar visits still restore the user's search.
+struct ProxiesPageNavigationState {
+  var searchText = ""
+  /// Kept until the requested group appears in the asynchronous resolved snapshot.
+  var pendingFocusGroupName: String?
+  private var hasAppliedRequest = false
+
+  mutating func restoreSearch(_ retainedSearchText: String) {
+    guard !hasAppliedRequest, searchText.isEmpty else { return }
+    searchText = retainedSearchText
+  }
+
+  mutating func apply(_ request: ProxiesPageRequest) {
+    hasAppliedRequest = true
+    searchText = ""
+    pendingFocusGroupName = request.groupName
+  }
+}
+
 struct ProxiesView: View {
   @Environment(AppModel.self) private var appModel
   @Environment(RuntimeDataStore.self) private var runtimeData
@@ -25,7 +45,8 @@ struct ProxiesView: View {
   // Owned by AppModel so the resolved snapshot survives tab switches; a fresh
   // per-page instance made every return to this page repaint from empty.
   private let searchCoordinator: ProxySearchCoordinator
-  @State private var searchText = ""
+  @State private var navigation = ProxiesPageNavigationState()
+  private var searchText: String { navigation.searchText }
   /// Browsing selection for the group navigator. Changing it never changes which node a group uses.
   @State private var selectedGroupID: ProxyGroup.ID?
   /// Browsing selection inside the node list. Using a node is a separate, explicit action.
@@ -34,10 +55,6 @@ struct ProxiesView: View {
   @State private var customDelayURLPopoverPresented = false
   @State private var providersPopoverPresented = false
   @State private var scrollToCurrentNodeRequest = 0
-  /// A group the dashboard asked to open (`AppModel.proxiesPageRequest`) that the resolved snapshot
-  /// does not list yet. Held until it does, so a first visit that is still resolving does not fall
-  /// back to the default group and forget the request.
-  @State private var pendingFocusGroupName: String?
 
   /// `initialSelectedGroupID` / `initialSelectedNodeID` seed the browsing selection for previews and
   /// fixture renders; the app always starts from the default selection.
@@ -104,15 +121,12 @@ struct ProxiesView: View {
         )
       }
     }
-    .searchable(text: $searchText, placement: .toolbar, prompt: Text("Search"))
+    .searchable(text: $navigation.searchText, placement: .toolbar, prompt: Text("Search"))
     .task {
       // Returning to the page: the coordinator outlives the view, so restore the
       // search field from the retained snapshot instead of showing a filtered
       // list under an empty field.
-      let retainedSearchText = searchCoordinator.snapshot.searchText
-      if searchText.isEmpty, !retainedSearchText.isEmpty {
-        searchText = retainedSearchText
-      }
+      navigation.restoreSearch(searchCoordinator.snapshot.searchText)
       // First population: build the snapshot off-main so the initial paint of a large config
       // doesn't block the main thread. On re-entry this recomputes with the same input and
       // the coordinator's equality gate publishes nothing, so the retained snapshot stays up.
@@ -419,17 +433,18 @@ struct ProxiesView: View {
   /// Takes the dashboard's "open this group" request. A search that hides the group would bounce the
   /// selection straight back to the first match, so it is cleared first.
   private func consumeProxiesPageRequest(displayedGroups groups: [ProxyGroup]) {
-    guard let request = appModel.consumeProxiesPageRequest(), let groupName = request.groupName else { return }
-    if !searchText.isEmpty, !groups.contains(where: { $0.name == groupName }) {
-      searchText = ""
-    }
-    pendingFocusGroupName = groupName
+    guard let request = appModel.consumeProxiesPageRequest() else { return }
+    navigation.apply(request)
+    // Even an empty local field can have a retained filtered snapshot behind it on re-entry.
+    searchCoordinator.submit(makeSearchInput(searchText: ""), reason: .initial)
     selectDefaultGroupIfNeeded(from: groups)
   }
 
   private func selectDefaultGroupIfNeeded(from groups: [ProxyGroup]) {
-    if let pendingFocusGroupName, let group = groups.first(where: { $0.name == pendingFocusGroupName }) {
-      self.pendingFocusGroupName = nil
+    if let pendingFocusGroupName = navigation.pendingFocusGroupName,
+       let group = groups.first(where: { $0.name == pendingFocusGroupName })
+    {
+      navigation.pendingFocusGroupName = nil
       if selectedGroupID != group.id {
         selectedGroupID = group.id
       }

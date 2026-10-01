@@ -387,6 +387,19 @@ final class LocalizationTests: XCTestCase {
     let zhBundle = try XCTUnwrap(Bundle(path: zhPath))
 
     XCTAssertEqual(zhBundle.localizedString(forKey: "Select a profile to start ClashMax", value: nil, table: nil), "选择配置后即可启动 ClashMax")
+    for (key, translation) in [
+      ("No active profile selected.", "尚未选择配置。"),
+      ("this profile", "此配置"),
+      ("this snippet", "此片段"),
+      ("TUN Interface", "TUN 接口"),
+      ("TUN Route", "TUN 路由"),
+      ("Route Exclude", "路由排除"),
+      ("Helper PID", "辅助进程 PID"),
+      ("External TCP", "外部 TCP 连通性"),
+      ("External UDP", "外部 UDP 连通性"),
+    ] {
+      XCTAssertEqual(zhBundle.localizedString(forKey: key, value: nil, table: nil), translation)
+    }
     XCTAssertEqual(zhBundle.localizedString(forKey: "No selection", value: nil, table: nil), "未选择")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Download", value: nil, table: nil), "下载")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Upload", value: nil, table: nil), "上传")

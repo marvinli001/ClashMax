@@ -93,7 +93,6 @@
 "Never"
 "No Change"
 "No DNS changes"
-"No active profile selected."
 "No profiles selected"
 "No saved network policies"
 "No saved policy matches %@."

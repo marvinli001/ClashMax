@@ -2,6 +2,25 @@
 import XCTest
 
 final class TunRuntimeInspectorTests: XCTestCase {
+  func testSuggestedRepairTargetsOnlyTheFailedSubsystem() {
+    func check(_ id: String, _ status: TunDiagnosticStatus = .warn) -> TunDiagnosticCheck {
+      TunDiagnosticCheck(id: id, title: id, status: status, message: "Test")
+    }
+
+    XCTAssertEqual(check("system-dns").suggestedRepair, .systemDNS)
+    for id in ["interface", "default-route", "route-exclude", "dns-hijack"] {
+      XCTAssertEqual(check(id).suggestedRepair, .routing)
+      XCTAssertEqual(check(id, .fail).suggestedRepair, .routing)
+    }
+    for id in ["controller", "helper-pid", "external-tcp", "external-udp", "system-proxy"] {
+      XCTAssertNil(check(id).suggestedRepair, "This fault does not justify a TUN routing restart: \(id)")
+    }
+    for status in [TunDiagnosticStatus.pass, .info, .skipped] {
+      XCTAssertNil(check("default-route", status).suggestedRepair)
+      XCTAssertNil(check("system-dns", status).suggestedRepair)
+    }
+  }
+
   func testInspectorReportsPassingDataPlaneChecks() async {
     let runner = RecordingCommandRunner(outputs: [
       "/usr/bin/curl -fsS --max-time 2 -H Authorization: Bearer secret http://127.0.0.1:9097/version": #"{"version":"v1.19.24"}"#,
