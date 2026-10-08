@@ -739,6 +739,130 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(try JSONDecoder().decode(TunSettings.self, from: stored).stack, .mips)
   }
 
+  func testMipsTunWritesTypedCongestionController() throws {
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.tunEnabled = true
+    overrides.tunSettings.stack = .mips
+
+    for controller in TunCongestionController.allCases {
+      overrides.tunSettings.congestionController = controller
+      let output = try ConfigNormalizer().runtimeConfig(from: Self.minimalProfileSource, overrides: overrides)
+      let root = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+      let tun = try XCTUnwrap(root["tun"] as? [String: Any])
+      XCTAssertEqual(tun["congestion-controller"] as? String, controller.rawValue)
+    }
+  }
+
+  func testOtherTunStacksDoNotWriteStoredCongestionController() throws {
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.tunEnabled = true
+    overrides.tunSettings.congestionController = .bbr
+
+    for stack in [TunStack.mixed, .system, .gvisor] {
+      overrides.tunSettings.stack = stack
+      let output = try ConfigNormalizer().runtimeConfig(from: Self.minimalProfileSource, overrides: overrides)
+      let root = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+      let tun = try XCTUnwrap(root["tun"] as? [String: Any])
+      XCTAssertNil(tun["congestion-controller"], stack.rawValue)
+    }
+  }
+
+  func testDisabledTunDoesNotWriteStoredCongestionController() throws {
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.tunEnabled = false
+    overrides.tunSettings.stack = .mips
+    overrides.tunSettings.congestionController = .bbr
+
+    let output = try ConfigNormalizer().runtimeConfig(from: Self.minimalProfileSource, overrides: overrides)
+    let root = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let tun = try XCTUnwrap(root["tun"] as? [String: Any])
+    XCTAssertNil(tun["congestion-controller"])
+  }
+
+  func testNilTunCongestionControllerLeavesCoreDefaultUnset() throws {
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.tunEnabled = true
+    overrides.tunSettings.stack = .mips
+
+    let output = try ConfigNormalizer().runtimeConfig(from: Self.minimalProfileSource, overrides: overrides)
+    let root = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let tun = try XCTUnwrap(root["tun"] as? [String: Any])
+    XCTAssertNil(tun["congestion-controller"])
+  }
+
+  func testTunCongestionControllerPreservesProfileUnlessAMipsOverrideIsSelected() throws {
+    let source = Self.minimalProfileSource + "\ntun:\n  congestion-controller: ReNo\n"
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.tunEnabled = true
+    overrides.tunSettings.stack = .mips
+
+    func controllerValue() throws -> String? {
+      let output = try ConfigNormalizer().runtimeConfig(from: source, overrides: overrides)
+      let root = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+      let tun = try XCTUnwrap(root["tun"] as? [String: Any])
+      return tun["congestion-controller"] as? String
+    }
+
+    XCTAssertEqual(try controllerValue(), "ReNo", "Nil inherits the profile verbatim")
+    overrides.tunSettings.congestionController = .bbr
+    XCTAssertEqual(try controllerValue(), "bbr")
+    overrides.tunSettings.stack = .mixed
+    XCTAssertEqual(try controllerValue(), "ReNo", "An inactive Mips setting cannot override the profile")
+    overrides.tunSettings.stack = .mips
+    overrides.tunEnabled = false
+    XCTAssertEqual(try controllerValue(), "ReNo", "Disabled TUN preserves profile fields")
+  }
+
+  func testTunCongestionControllerRoundTripsThroughStoredSettings() throws {
+    for controller in [nil] + TunCongestionController.allCases.map(Optional.some) {
+      var settings = TunSettings.default
+      settings.stack = .mips
+      settings.congestionController = controller
+      let stored = try JSONEncoder().encode(settings)
+      XCTAssertEqual(try JSONDecoder().decode(TunSettings.self, from: stored), settings)
+    }
+  }
+
+  func testTunSettingsDecodeLegacyJSONWithoutCongestionController() throws {
+    let legacy = Data(#"{"stack":"mips","device":"utun9","mtu":1400}"#.utf8)
+    let decoded = try JSONDecoder().decode(TunSettings.self, from: legacy)
+    XCTAssertEqual(decoded.stack, .mips)
+    XCTAssertEqual(decoded.device, "utun9")
+    XCTAssertEqual(decoded.mtu, 1400)
+    XCTAssertNil(decoded.congestionController)
+    XCTAssertEqual(try JSONDecoder().decode(TunSettings.self, from: Data("{}".utf8)), .default)
+    XCTAssertEqual(TunSettings.default.stack, .mixed, "Default-stack changes require a separate decision")
+  }
+
+  func testTunSettingsIgnoreInvalidStoredCongestionControllerWithoutLosingOtherSettings() throws {
+    let stored = Data(#"{"stack":"mips","mtu":1400,"congestionController":"bogus"}"#.utf8)
+    let decoded = try JSONDecoder().decode(TunSettings.self, from: stored)
+    XCTAssertEqual(decoded.stack, .mips)
+    XCTAssertEqual(decoded.mtu, 1400)
+    XCTAssertNil(decoded.congestionController)
+  }
+
+  func testRawYAMLSnippetCanOverrideTypedTunCongestionController() throws {
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.tunEnabled = true
+    overrides.tunSettings.stack = .mips
+    overrides.tunSettings.congestionController = .bbr
+    var options = RuntimeConfigOptions.default
+    options.runtimeSnippets = [RuntimeSnippet(
+      name: "Advanced TUN",
+      payload: .rawYAML(RawYAMLPatchSettings(yaml: "tun:\n  congestion-controller: bbr3\n"))
+    )]
+
+    let output = try ConfigNormalizer().runtimeConfig(
+      from: Self.minimalProfileSource,
+      overrides: overrides,
+      options: options
+    )
+    let root = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    let tun = try XCTUnwrap(root["tun"] as? [String: Any])
+    XCTAssertEqual(tun["congestion-controller"] as? String, "bbr3")
+  }
+
   func testRuntimeConfigPreservesProfileRouteExcludeAddressWhenTunSettingsAreDefault() throws {
     let source = """
     proxies:

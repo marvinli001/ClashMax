@@ -228,6 +228,7 @@ enum RawYAMLPatchPolicy {
     "tun": [
       "auto-detect-interface",
       "auto-route",
+      "congestion-controller",
       "device",
       "dns-hijack",
       "enable",

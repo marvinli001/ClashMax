@@ -134,6 +134,79 @@ final class CoreRuntimePreflightTests: XCTestCase {
     try await validator.validate(coreURL: coreURL, configURL: configURL, workDirectory: directory)
   }
 
+  /// This only proves parser acceptance of the generated key. Mihomo's `-t` does not validate the
+  /// controller value or build the Mips stack; those remain typed-model and live-TUN checks.
+  func testBundledMihomoAcceptsGeneratedMipsTunWithBBR() async throws {
+    guard let coreURL = try BundledCoreRequirement.coreURL() else { return }
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxMipsCongestion-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.tunEnabled = true
+    overrides.tunSettings.stack = .mips
+    overrides.tunSettings.congestionController = .bbr
+    let runtimeYAML = try ConfigNormalizer().runtimeConfig(
+      from: Self.syntheticPreflightClashConfig,
+      overrides: overrides
+    )
+    let root = try XCTUnwrap(Yams.load(yaml: runtimeYAML) as? [String: Any])
+    let tun = try XCTUnwrap(root["tun"] as? [String: Any])
+    XCTAssertEqual(tun["stack"] as? String, "mips")
+    XCTAssertEqual(tun["congestion-controller"] as? String, "bbr")
+    let configURL = directory.appendingPathComponent("runtime.yaml")
+    try runtimeYAML.write(to: configURL, atomically: true, encoding: .utf8)
+
+    try await MihomoRuntimeConfigValidator(timeout: 30).validate(
+      coreURL: coreURL,
+      configURL: configURL,
+      workDirectory: directory
+    )
+  }
+
+  func testTunCongestionDisplayReadsInheritedAndPatchedRuntimeValues() async throws {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxTunDisplay-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("runtime.yaml")
+    let missing = await TunCongestionControllerConfigReader.value(at: url)
+    XCTAssertNil(missing)
+
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.tunEnabled = true
+    overrides.tunSettings.stack = .mips
+    for (suffix, expected) in [("", "cubic"), ("\ntun:\n  congestion-controller: ReNo\n", "reno")] {
+      let yaml = try ConfigNormalizer().runtimeConfig(
+        from: Self.syntheticPreflightClashConfig + suffix,
+        overrides: overrides
+      )
+      try yaml.write(to: url, atomically: true, encoding: .utf8)
+      let value = await TunCongestionControllerConfigReader.value(at: url)
+      XCTAssertEqual(value, expected)
+    }
+
+    overrides.tunSettings.congestionController = .bbr
+    var options = RuntimeConfigOptions.default
+    options.runtimeSnippets = [RuntimeSnippet(
+      name: "TUN override",
+      payload: .rawYAML(RawYAMLPatchSettings(yaml: "tun:\n  congestion-controller: bbr3\n"))
+    )]
+    let patched = try ConfigNormalizer().runtimeConfig(
+      from: Self.syntheticPreflightClashConfig,
+      overrides: overrides,
+      options: options
+    )
+    try patched.write(to: url, atomically: true, encoding: .utf8)
+    let value = await TunCongestionControllerConfigReader.value(at: url)
+    XCTAssertEqual(value, "bbr3", "The running value must include the last raw patch")
+
+    try "tun:\n  stack: mixed\n  congestion-controller: bbr\n".write(to: url, atomically: true, encoding: .utf8)
+    let inactive = await TunCongestionControllerConfigReader.value(at: url)
+    XCTAssertNil(inactive)
+  }
+
   /// Issue #33, measured against the bundled core rather than assumed: a profile that declares
   /// `port:` equal to ClashMax's `mixed-port` makes Mihomo open a plain HTTP listener first and fail
   /// the mixed one, and the SOCKS5 probe then hangs on the HTTP listener. The normalized config

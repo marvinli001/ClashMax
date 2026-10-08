@@ -244,6 +244,11 @@ struct ConfigNormalizer {
         root["dns"] = dns
       }
       tun["stack"] = settings.stack.rawValue
+      // Leave a profile's value alone unless the user explicitly selects a Mips override.
+      // Other stacks ignore this key; switching away must not write a stored Mips choice.
+      if settings.stack == .mips, let congestionController = settings.congestionController {
+        tun["congestion-controller"] = congestionController.rawValue
+      }
       tun["device"] = settings.normalizedDevice
       tun["auto-route"] = settings.autoRoute
       tun["strict-route"] = settings.strictRoute

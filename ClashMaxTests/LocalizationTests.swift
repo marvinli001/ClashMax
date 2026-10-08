@@ -205,6 +205,25 @@ final class LocalizationTests: XCTestCase {
     )
   }
 
+  func testStringCatalogProvidesTunCongestionControlKeysInBothLanguages() throws {
+    let bundle = try XCTUnwrap(Bundle(identifier: AppConstants.bundleIdentifier))
+    let enBundle = try XCTUnwrap(Bundle(path: XCTUnwrap(bundle.path(forResource: "en", ofType: "lproj"))))
+    let zhBundle = try XCTUnwrap(Bundle(path: XCTUnwrap(bundle.path(forResource: "zh-Hans", ofType: "lproj"))))
+    let translations = [
+      ("TCP Congestion Control", "TCP 拥塞控制"),
+      ("Default (cubic)", "默认（cubic）"),
+      ("Default keeps the profile's value, or uses cubic when unset.", "默认沿用配置文件的值；未设置时使用 cubic。"),
+      (
+        "TCP congestion control applies only to Mips. Mips is Mihomo's own userspace stack, unrelated to CPU architecture.",
+        "TCP 拥塞控制仅对 Mips 生效。Mips 是 Mihomo 自己的用户态协议栈，与 CPU 架构无关。"
+      ),
+    ]
+    for (key, translation) in translations {
+      XCTAssertEqual(enBundle.localizedString(forKey: key, value: nil, table: nil), key)
+      XCTAssertEqual(zhBundle.localizedString(forKey: key, value: nil, table: nil), translation)
+    }
+  }
+
   /// The sniffer strings are added by hand (the CLI build never refreshes the catalog), so this is
   /// the gate that catches an English-only sniffer editor shipping to a Chinese user (roadmap A1b).
   func testSimplifiedChineseStringCatalogProvidesSnifferKeys() throws {

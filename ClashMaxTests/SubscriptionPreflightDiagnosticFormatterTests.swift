@@ -84,6 +84,38 @@ final class SubscriptionPreflightDiagnosticFormatterTests: XCTestCase {
     XCTAssertEqual(summary, "yaml: line 4: could not find expected ':'")
   }
 
+  /// Captured from the bundled v1.19.32 with synthetic load-balance groups; only the temporary
+  /// path in the trailer is normalized. The core's indices vary between runs, even for one YAML.
+  func testSummaryPreservesLoadBalanceHashKeyFailuresAndFullCoreOutput() {
+    let samples = [
+      (
+        """
+        time="2026-10-08T18:46:04.486751000+13:00" level=info msg="Start initial configuration in progress"
+        time="2026-10-08T18:46:04.487331000+13:00" level=error msg="proxy group[0]: unsupported hash-key: round-robin does not hash"
+        configuration file /tmp/runtime.yaml test failed
+        """,
+        "proxy group[0]: unsupported hash-key: round-robin does not hash"
+      ),
+      (
+        """
+        time="2026-10-08T18:46:04.500808000+13:00" level=info msg="Start initial configuration in progress"
+        time="2026-10-08T18:46:04.500886000+13:00" level=error msg="proxy group[0]: unsupported hash-key: bogus"
+        configuration file /tmp/runtime.yaml test failed
+        """,
+        "proxy group[0]: unsupported hash-key: bogus"
+      ),
+      (
+        #"time="2026-10-08T18:46:41.665248000+13:00" level=error msg="proxy group[2]: unsupported hash-key: round-robin does not hash""#,
+        "proxy group[2]: unsupported hash-key: round-robin does not hash"
+      ),
+    ]
+
+    for (output, expected) in samples {
+      XCTAssertEqual(SubscriptionPreflightDiagnosticFormatter.summary(fromFullMessage: output), expected)
+      XCTAssertEqual(SubscriptionPreflightDiagnosticFormatter.fullDiagnostic(fromFullMessage: output), output)
+    }
+  }
+
   func testSummaryPrefersLastFailureLineWhenMultipleErrors() {
     let output = """
     time="t1" level=error msg="first problem"

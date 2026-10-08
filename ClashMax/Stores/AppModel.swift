@@ -1013,6 +1013,10 @@ final class AppModel {
   /// come from the file because `GET /configs` carries no `dns` key at all.
   private(set) var activeDNSFacts: DNSRuntimeFacts?
   @ObservationIgnored private var activeDNSFactsTask: Task<Void, Never>?
+  /// Read from the applied YAML so a profile value or raw snippet is shown instead of the picker
+  /// default. Nil means the read is pending or unavailable, not that the core is using cubic.
+  private(set) var activeTunCongestionController: String?
+  @ObservationIgnored private var activeTunCongestionControllerTask: Task<Void, Never>?
   /// The `listeners` and `authentication` blocks of the config the core is running. `nil` means
   /// "not read yet"; the exposure verdict reports that as unknown rather than as "nothing is
   /// listening" (roadmap C3). It has to come from the file because `GET /configs` carries no
@@ -8906,6 +8910,7 @@ final class AppModel {
     lastRuntimeConfigAppliedAt = Date()
     refreshActiveSnifferSettings(from: materialization.runtimeConfigURL)
     refreshActiveDNSFacts(from: materialization.runtimeConfigURL)
+    refreshActiveTunCongestionController(from: materialization.runtimeConfigURL)
     refreshActiveListenerFacts(from: materialization.runtimeConfigURL)
     refreshActiveFindProcessMode(from: materialization.runtimeConfigURL)
     refreshGeoDatabaseInventory()
@@ -8938,6 +8943,9 @@ final class AppModel {
     activeDNSFactsTask?.cancel()
     activeDNSFactsTask = nil
     activeDNSFacts = nil
+    activeTunCongestionControllerTask?.cancel()
+    activeTunCongestionControllerTask = nil
+    activeTunCongestionController = nil
     activeListenerFactsTask?.cancel()
     activeListenerFactsTask = nil
     activeListenerFacts = nil
@@ -8975,6 +8983,16 @@ final class AppModel {
       let facts = await ActiveDNSConfigReader.facts(at: url)
       guard !Task.isCancelled, let self else { return }
       activeDNSFacts = facts
+    }
+  }
+
+  private func refreshActiveTunCongestionController(from url: URL) {
+    activeTunCongestionControllerTask?.cancel()
+    activeTunCongestionController = nil
+    activeTunCongestionControllerTask = Task { @MainActor [weak self] in
+      let value = await TunCongestionControllerConfigReader.value(at: url)
+      guard !Task.isCancelled, let self else { return }
+      activeTunCongestionController = value
     }
   }
 

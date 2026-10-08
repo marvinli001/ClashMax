@@ -99,6 +99,12 @@ final class RawYAMLPatchTests: XCTestCase {
     XCTAssertEqual(settings.overriddenManagedKeyPaths, ["tun"])
   }
 
+  func testTunCongestionControllerOverrideIsAllowedAndReported() {
+    let settings = RawYAMLPatchSettings(yaml: "tun:\n  congestion-controller: bbr3\n")
+    XCTAssertNil(settings.validationError)
+    XCTAssertEqual(settings.overriddenManagedKeyPaths, ["tun.congestion-controller"])
+  }
+
   func testSummaryNamesTheKeysAndTruncatesLongPatches() {
     let short = RawYAMLPatchSettings(yaml: "ntp: {}\ntcp-concurrent: true\n")
     XCTAssertEqual(short.summary, "ntp, tcp-concurrent")

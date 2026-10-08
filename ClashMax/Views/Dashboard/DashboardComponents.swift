@@ -474,6 +474,25 @@ private struct TunSettingsPopover: View {
             }
             .pickerStyle(.segmented)
 
+            if settings.stack == .mips {
+              Picker("TCP Congestion Control", selection: $settings.congestionController) {
+                Text("Default (cubic)").tag(nil as TunCongestionController?)
+                ForEach(TunCongestionController.allCases) { controller in
+                  Text(controller.rawValue).tag(Optional(controller))
+                }
+              }
+              .pickerStyle(.menu)
+
+              Text("Default keeps the profile's value, or uses cubic when unset.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            Text("TCP congestion control applies only to Mips. Mips is Mihomo's own userspace stack, unrelated to CPU architecture.")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .fixedSize(horizontal: false, vertical: true)
+
             TextField("Device", text: $settings.device)
             Toggle("Auto Route", isOn: $settings.autoRoute)
             Toggle("Strict Route", isOn: $settings.strictRoute)

@@ -5322,12 +5322,32 @@
         }
       }
     },
+    "Default (cubic)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认（cubic）"
+          }
+        }
+      }
+    },
     "Default Bypass" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "默认绕过"
+          }
+        }
+      }
+    },
+    "Default keeps the profile's value, or uses cubic when unset." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认沿用配置文件的值；未设置时使用 cubic。"
           }
         }
       }
@@ -20603,6 +20623,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "TCP 桥接"
+          }
+        }
+      }
+    },
+    "TCP Congestion Control" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TCP 拥塞控制"
+          }
+        }
+      }
+    },
+    "TCP congestion control applies only to Mips. Mips is Mihomo's own userspace stack, unrelated to CPU architecture." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TCP 拥塞控制仅对 Mips 生效。Mips 是 Mihomo 自己的用户态协议栈，与 CPU 架构无关。"
           }
         }
       }

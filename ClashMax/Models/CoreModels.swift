@@ -3576,6 +3576,17 @@ enum TunStack: String, Codable, CaseIterable, Identifiable, Sendable {
   }
 }
 
+/// Mihomo v1.19.32 only uses this setting with Mips. `-t` does not validate it, so app-owned
+/// choices must stay within this set; nil in `TunSettings` leaves the profile/core default alone.
+enum TunCongestionController: String, Codable, CaseIterable, Identifiable, Sendable {
+  case cubic
+  case reno
+  case bbr
+  case bbr3
+
+  var id: String { rawValue }
+}
+
 struct TunDNSFallbackFilter: Codable, Equatable, Sendable {
   var geoIP: Bool?
   var geoIPCode: String?
@@ -4084,6 +4095,7 @@ struct TunSettings: Codable, Equatable, Sendable {
   static let defaultSystemDNSServers = NetworkExtensionRoutingSettings.defaultSystemDNSServers
 
   var stack: TunStack
+  var congestionController: TunCongestionController?
   var device: String
   var autoRoute: Bool
   var strictRoute: Bool
@@ -4099,6 +4111,7 @@ struct TunSettings: Codable, Equatable, Sendable {
 
   private enum CodingKeys: String, CodingKey {
     case stack
+    case congestionController
     case device
     case autoRoute
     case strictRoute
@@ -4126,9 +4139,11 @@ struct TunSettings: Codable, Equatable, Sendable {
     fakeIPRange: String = Self.defaultFakeIPRange,
     systemDNSOverrideEnabled: Bool = true,
     systemDNSServers: [String] = Self.defaultSystemDNSServers,
-    dns: TunDNSSettings = .default
+    dns: TunDNSSettings = .default,
+    congestionController: TunCongestionController? = nil
   ) {
     self.stack = stack
+    self.congestionController = congestionController
     self.device = device
     self.autoRoute = autoRoute
     self.strictRoute = strictRoute
@@ -4199,6 +4214,11 @@ struct TunSettings: Codable, Equatable, Sendable {
         TunDNSSettings.self,
         forKey: .dns,
         default: defaults.dns
+      ),
+      congestionController: container.decodeDefault(
+        TunCongestionController?.self,
+        forKey: .congestionController,
+        default: nil
       )
     )
   }

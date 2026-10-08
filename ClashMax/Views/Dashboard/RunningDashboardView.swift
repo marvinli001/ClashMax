@@ -1720,6 +1720,9 @@ struct StatusView: View {
     let diagnostics = appModel.tunDiagnostics
     LabeledContent("Helper", value: helperPIDText)
     LabeledContent("Stack", value: tun.stack.displayName)
+    if tun.stack == .mips {
+      LabeledContent("TCP Congestion Control", value: appModel.activeTunCongestionController ?? String(localized: "Unknown"))
+    }
     LabeledContent("Checks", value: diagnosticCounterText(diagnostics))
     LabeledContent("Device", value: tun.normalizedDevice)
     LabeledContent("Last Check", value: diagnostics.updatedAt == Date.distantPast

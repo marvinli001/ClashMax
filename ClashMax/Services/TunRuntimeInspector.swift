@@ -1,5 +1,22 @@
 import Darwin
 import Foundation
+import Yams
+
+/// Reads the applied config, including inherited and raw-snippet values. This is a display fact;
+/// it never turns a profile string into an app-owned setting or writes it back.
+enum TunCongestionControllerConfigReader {
+  static func value(at url: URL) async -> String? {
+    await Task.detached(priority: .utility) {
+      guard let text = try? String(contentsOf: url, encoding: .utf8),
+            let root = (try? Yams.load(yaml: text)) as? [String: Any],
+            let tun = root["tun"] as? [String: Any],
+            (tun["stack"] as? String)?.lowercased() == "mips"
+      else { return nil }
+      let value = (tun["congestion-controller"] as? String)?.lowercased() ?? ""
+      return value.isEmpty ? TunCongestionController.cubic.rawValue : value
+    }.value
+  }
+}
 
 enum TunDiagnosticStatus: String, Codable, Equatable, Sendable {
   case pass
