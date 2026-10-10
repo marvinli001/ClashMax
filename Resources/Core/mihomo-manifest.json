@@ -1,17 +1,17 @@
 {
   "upstream": "https://github.com/MetaCubeX/mihomo",
-  "version": "v1.19.31",
+  "version": "v1.19.32",
   "license": "GPL-3.0",
   "artifact": "mihomo",
   "artifactNote": "The assets below are merged into a single universal Resources/Core/mihomo by script/install_mihomo_core.sh.",
   "assets": [
     {
-      "name": "mihomo-darwin-arm64-v1.19.31.gz",
-      "sha256": "d131f44b3deb2a8356f7ac75048ad67a10d53243323951c4f3cda7b672922963"
+      "name": "mihomo-darwin-arm64-v1.19.32.gz",
+      "sha256": "3312a6780652c622890fd4357c6a853bbf865464fd047ac7b7f52dab8de18652"
     },
     {
-      "name": "mihomo-darwin-amd64-v1.19.31.gz",
-      "sha256": "3546681ebef3415e5dcbe7210a61aa80748136e95e6552768fd883df345508ed"
+      "name": "mihomo-darwin-amd64-v1.19.32.gz",
+      "sha256": "b7de9fc46af2ca985ecfb302a6362170e04ff2023dee1e82addc54133e669bc9"
     }
   ]
 }
