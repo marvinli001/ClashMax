@@ -23,9 +23,10 @@
 The xhttp share-link header conversion and the mieru, OpenVPN, anytls, sing-mux,
 h2, MSS, and EasyTier fixes are internal core changes and need no App adapter.
 
-## Default-stack decision pending
+## Default-stack decision
 
-Recommendation: keep `.mixed` for new installations for this update. Mips first
+Confirmed by Marvin on 2026-10-08 and reaffirmed on 2026-10-10: keep `.mixed` for
+new installations for this update. Mips first
 appeared in v1.19.31 and became the upstream default in v1.19.32, but ClashMax has
 not yet completed real helper-mode TUN acceptance on it. Passing `mihomo -t` proves
 config parsing only. After the four-stack live matrix below passes, a separate
@@ -48,9 +49,10 @@ this control. Substituting the YAML's Nth group would misidentify the failure.
 The formatter therefore preserves the core's index and full output. Regression
 tests use the captured hash-key errors, with only temporary trailer paths replaced.
 
-## Authorized live helper-mode TUN checklist
+## Live helper-mode TUN checklist
 
-**Status: NOT RUN.** Ask Marvin to authorize live network changes before starting.
+**Status on 2026-10-10: NOT RUN. Marvin deferred live testing for this update.**
+Retain this checklist for a future explicitly authorized run.
 Marvin enters administrator passwords and performs macOS helper approval. Do not
 change signing, entitlements, the App Group, or generated project settings.
 
