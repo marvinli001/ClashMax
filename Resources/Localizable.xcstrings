@@ -7303,6 +7303,7 @@
       }
     },
     "External TCP" : {
+      "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -7313,6 +7314,7 @@
       }
     },
     "External UDP" : {
+      "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -8438,6 +8440,7 @@
       }
     },
     "Helper PID" : {
+      "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -11174,6 +11177,7 @@
       }
     },
     "NE Proxy: %lld SOCKS handshake failures" : {
+      "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -16843,6 +16847,7 @@
       }
     },
     "Route Exclude" : {
+      "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -19259,6 +19264,7 @@
       }
     },
     "SOCKS handshake failures: %lld" : {
+      "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -21754,7 +21760,7 @@
         }
       }
     },
-    "This Snippet" : {
+    "this snippet" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -21764,7 +21770,7 @@
         }
       }
     },
-    "this snippet" : {
+    "This Snippet" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -22251,6 +22257,7 @@
       }
     },
     "TUN Interface" : {
+      "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -22337,6 +22344,7 @@
       }
     },
     "TUN Route" : {
+      "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
