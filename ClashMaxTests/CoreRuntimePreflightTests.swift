@@ -165,6 +165,50 @@ final class CoreRuntimePreflightTests: XCTestCase {
     )
   }
 
+  /// Mihomo v1.19.33 `tun.dns-mode`: `-t` waves every value through and the core only refuses a bad
+  /// one when the TUN listener starts (measured: "Start TUN listening error: invalid dns-mode: …",
+  /// controller up, no utun). This pins both halves, so a future core that starts validating it, or
+  /// a normalizer change that stops doing so, shows up here.
+  func testBundledMihomoPreflightPassesInvalidTunDNSModeThatTheNormalizerRefuses() async throws {
+    guard let coreURL = try BundledCoreRequirement.coreURL() else { return }
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClashMaxTunDNSMode-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.tunEnabled = true
+    overrides.tunSettings.systemDNSOverrideEnabled = false
+    let validator = MihomoRuntimeConfigValidator(timeout: 30)
+
+    for value in ["\"\"", "disabled", "native", "hijack"] {
+      let runtimeYAML = try ConfigNormalizer().runtimeConfig(
+        from: Self.syntheticPreflightClashConfig + "\ntun:\n  dns-mode: \(value)\n",
+        overrides: overrides
+      )
+      let configURL = directory.appendingPathComponent("valid.yaml")
+      try runtimeYAML.write(to: configURL, atomically: true, encoding: .utf8)
+      try await validator.validate(coreURL: coreURL, configURL: configURL, workDirectory: directory)
+    }
+
+    let bogusProfile = Self.syntheticPreflightClashConfig + "\ntun:\n  dns-mode: bogus\n"
+    XCTAssertThrowsError(try ConfigNormalizer().runtimeConfig(from: bogusProfile, overrides: overrides)) { error in
+      XCTAssertTrue(String(describing: error).contains(#"Invalid TUN dns-mode "bogus""#), String(describing: error))
+    }
+
+    // The same config with the value the normalizer refused, written past it: the core's own
+    // preflight accepts it.
+    let validYAML = try ConfigNormalizer().runtimeConfig(from: Self.syntheticPreflightClashConfig, overrides: overrides)
+    var root = try XCTUnwrap(Yams.load(yaml: validYAML) as? [String: Any])
+    var tun = try XCTUnwrap(root["tun"] as? [String: Any])
+    XCTAssertEqual(tun["enable"] as? Bool, true)
+    tun["dns-mode"] = "bogus"
+    root["tun"] = tun
+    let bogusURL = directory.appendingPathComponent("bogus.yaml")
+    try Yams.dump(object: root).write(to: bogusURL, atomically: true, encoding: .utf8)
+    try await validator.validate(coreURL: coreURL, configURL: bogusURL, workDirectory: directory)
+  }
+
   func testTunCongestionDisplayReadsInheritedAndPatchedRuntimeValues() async throws {
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("ClashMaxTunDisplay-\(UUID().uuidString)", isDirectory: true)

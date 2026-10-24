@@ -491,6 +491,14 @@ believing the user when they say their rules do not work.
     profile, because that branch was written first. It now compares the two timestamps and
     reports whichever happened **later** — the state the table is actually in, rather than a
     cause the user has already moved past.
+- **False negative, fixed 2026-10-24:** the baseline was fed from *every* runtime apply,
+  including a hot reload (`PUT /configs`), on the assumption that a reload empties the table.
+  It never did: `hub/executor` hands the reloaded resolver the old host mapper
+  (`ResolverEnhancer.PatchFrom` → `fakeip.Pool.CloneFrom`), and since v1.19.33 (`e4dd968d`) the
+  allocation cursor is carried over too. A subscription update reloads the running core right
+  after the fetch, so the reload always landed later than `profileContentFetchedAt` and the
+  `profileReloaded` warning could not fire in the one situation it exists for. The baseline is
+  now `coreLaunchedAt`, set only when a new core process starts (start or helper restart).
 - **Gap:** never run by hand against a real captive portal or a real subscription update.
 
 #### A4 — Connection route replay
@@ -616,6 +624,47 @@ believing the user when they say their rules do not work.
     batch, cancel semantics, every node ending with a state on screen, and the Copy
     Diagnostics counts. The transport is where the time goes and it is now a known quantity;
     the four UI observations still need a person at the keyboard.
+
+#### A7 — TUN `dns-mode` (Mihomo v1.19.33)
+
+**Status: shipped 2026-10-24.** ClashMax validates the value, owns it while its own System DNS
+override is on, and reports what the core holds.
+
+- **Measured, not read off the changelog.** A root v1.19.33 core with TUN on, every value
+  (unset, `disabled`, `native`, `hijack`) against ClashMax's System DNS override on and off,
+  with `scutil --dns`, `networksetup -getdnsservers` and the inspector's `dig` probe taken
+  before, while running, after `PATCH tun.enable=false` and after the stop:
+
+  | Observation | Evidence |
+  | --- | --- |
+  | `native` and `hijack` are identical on macOS | both add resolver #1 `198.18.0.2`, `Supplemental`, `order 1`, under `State:/Network/Service/sing-tun-<random>/DNS`; `hijack`'s extra interception is Linux/Windows only in sing-tun 0.4.28 |
+  | They never touch what `networksetup` reads | `-getdnsservers` unchanged in every `native`/`hijack` run |
+  | Cleanup is complete on every stop path | key gone after `PATCH tun.enable=false`, after SIGTERM, and after **SIGKILL** (a temporary SystemConfiguration value dies with the process) |
+  | With the override on they stack | resolver #1 is the core's `198.18.0.2`, the override's `114.114.114.114` sits behind it; each is restored independently |
+  | `-t` accepts any value | `dns-mode: bogus` and `Native` both "test is successful" |
+  | A bad value surfaces only at TUN start | `Start TUN listening error: invalid dns-mode: bogus`; the controller stays up, no utun |
+  | `GET /configs` always carries the key | `"dns-mode": ""` when unset (not omitted, unlike the PATCH struct) |
+  | `PATCH /configs` changes the reported value only | the running listener is not re-created: no resolver appears or disappears |
+
+- **Policy:** with the System DNS override on (the default) the normalizer pins
+  `dns-mode: disabled`, so one owner describes the resolver macOS actually uses. With it off
+  the profile's value passes through. A raw YAML snippet still has the last word and is
+  reported as overriding the managed key `tun.dns-mode`.
+- **Acceptance criteria:**
+  - [x] `ConfigNormalizer` refuses anything but `""`/`disabled`/`native`/`hijack` on the final
+        map whenever TUN is on, naming the exact lowercase value when only case or whitespace
+        is wrong.
+  - [x] Bundled-core gate pins both halves: `-t` passes `bogus`, the normalizer refuses it.
+  - [x] Diagnostics report and bundle carry `TUN DNS: … / dns-mode: <value|default>`;
+        Dashboard shows a `TUN dns-mode` row.
+- **Found on the way, not changed:** with the override off and the resolver on the LAN (here
+  the router, `192.168.8.1`), DNS bypasses the tunnel entirely — the router's subnet is never
+  routed into utun — so in fake-ip mode the `dns-hijack` check warns, and its suggested
+  repair (a routing repair / helper restart) cannot fix it. `native` fixes exactly this case.
+- **Decided 2026-10-25 (Marvin): keep ClashMax's own `networksetup` override; do not switch
+  to `native`.** Measured in `native`'s favour, for the record: it restores itself on every stop
+  path including a crash, where the `networksetup` override depends on ClashMax's snapshot
+  surviving.
 
 ---
 

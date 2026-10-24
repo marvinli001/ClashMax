@@ -20,6 +20,7 @@ protocol MihomoAPIControlling: Sendable {
   func closeConnection(id: String) async throws
   func closeAllConnections() async throws
   func setTunEnabled(_ enabled: Bool) async throws
+  func tunDNSMode() async throws -> String?
   func reloadConfig(path: String, force: Bool) async throws
   func restart(configPath: String?) async throws
   func trafficStream() -> AsyncThrowingStream<TrafficSample, Error>
@@ -120,6 +121,14 @@ struct MihomoAPIClient: Sendable {
     )
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     _ = try await data(for: request)
+  }
+
+  /// `tun.dns-mode` as the running core reports it, nil when `GET /configs` leaves it out (the
+  /// controller omits an unset value, and cores before v1.19.33 never send it).
+  func tunDNSMode() async throws -> String? {
+    let tun = try await configs()["tun"] as? [String: Any]
+    guard let mode = tun?[TunDNSMode.configKey] as? String, !mode.isEmpty else { return nil }
+    return mode
   }
 
   func restart(configPath: String? = nil) async throws {

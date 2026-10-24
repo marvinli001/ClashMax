@@ -293,7 +293,7 @@ enum DiagnosticBundleBuilder {
       report.listenerExposure?.plainTextLines ?? ["Listener Exposure: not evaluated"]
     )
 
-    var dns = ["TUN DNS: \(report.tunSystemDNS) / \(report.tunDNSMode)"]
+    var dns = [report.tunDNSLine]
     dns += input.dnsOverride?.plainTextLines
       ?? ["DNS Override: unknown — the effective config could not be generated"]
     dns += input.dnsResolution?.plainTextLines

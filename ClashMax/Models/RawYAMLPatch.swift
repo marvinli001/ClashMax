@@ -231,6 +231,7 @@ enum RawYAMLPatchPolicy {
       "congestion-controller",
       "device",
       "dns-hijack",
+      "dns-mode",
       "enable",
       "mtu",
       "route-exclude-address",

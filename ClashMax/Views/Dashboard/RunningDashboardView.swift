@@ -1645,11 +1645,20 @@ struct StatusView: View {
     LabeledContent("Routing", value: appModel.proxyRoutingMode.displayName)
     LabeledContent("TUN DNS Mode", value: tun.dnsFakeIPEnabled ? String(localized: "Fake IP") : String(localized: "Profile"))
     LabeledContent("TUN System DNS", value: tun.systemDNSOverrideEnabled ? appModel.tunSystemDNSState.displayName : String(localized: "Off"))
+    LabeledContent("TUN dns-mode", value: tunCoreDNSModeLabel)
     LabeledContent("DNS Hijack", value: tun.normalizedDNSHijack.joined(separator: ", "))
     LabeledContent("Fake IP Range", value: tun.dnsFakeIPEnabled ? tun.normalizedFakeIPRange : String(localized: "Off"))
     LabeledContent("Nameserver", value: summarized(tun.dns.nameserver))
     LabeledContent("Fallback", value: summarized(tun.dns.fallback))
     LabeledContent("NE System DNS", value: appModel.networkExtensionSystemDNSState.displayName)
+  }
+
+  /// The core's own value names a config key, so it stays verbatim; only "default" is translated.
+  private var tunCoreDNSModeLabel: String {
+    guard appModel.tunEnabled, let mode = appModel.activeTunDNSMode else {
+      return String(localized: "Default")
+    }
+    return mode
   }
 
   @ViewBuilder
