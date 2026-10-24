@@ -405,6 +405,12 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
     ClashMax 本来也观察不到本地配置文件的就地修改。
   - 当配置文件和网络两边都构成失效时，构建器永远报配置文件，纯粹因为那个分支写在前面。现在它会比较两个时间戳，
     报**更晚**发生的那一个——那才是表当前所处的状态，否则点名的是一个用户早已越过的原因。
+- **一处漏报，2026-10-24 已修：** 基线原本取自**每一次**运行时应用，包括热重载（`PUT /configs`），
+  前提是重载会清空这张表。它从来不会：`hub/executor` 把旧的 host mapper 交给重载后的解析器
+  （`ResolverEnhancer.PatchFrom` → `fakeip.Pool.CloneFrom`），从 v1.19.33（`e4dd968d`）起连分配游标也一并继承。
+  订阅更新在抓取后会立刻重载正在运行的内核，所以重载时间总是晚于 `profileContentFetchedAt`，
+  `profileReloaded` 警告恰恰在它存在的那个场景里永远不会出现。现在基线改为 `coreLaunchedAt`，
+  只在新内核进程启动（启动或 helper 重启）时写入。
 - **缺口：** 从未针对真实的门户认证网络或真实的订阅更新人工验证过。
 
 #### A4——连接路径回放
@@ -494,6 +500,36 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
   - **仍未实测：** 同一次运行*走应用 UI 的部分*——批次跑动时的滚动流畅度、取消语义、屏幕上每个节点都要有
     终态、以及 Copy Diagnostics 的计数。时间开销在传输层，而传输层现在已是已知量；这四项 UI 观察仍然需要
     有人坐在键盘前。
+
+#### A7——TUN `dns-mode`（Mihomo v1.19.33）
+
+**状态：2026-10-24 已上线。** ClashMax 校验这个值；自家的系统 DNS 覆盖开着时由 ClashMax 接管；诊断里报告内核实际持有的值。
+
+- **实测而非照抄更新日志。** 以 root 运行 v1.19.33 内核开 TUN，每个取值（不设、`disabled`、`native`、`hijack`）分别与
+  ClashMax 系统 DNS 覆盖开/关组合，在启动前、运行中、`PATCH tun.enable=false` 之后、停止之后各取一次
+  `scutil --dns`、`networksetup -getdnsservers` 和诊断器的 `dig` 探测：
+
+  | 观察 | 证据 |
+  | --- | --- |
+  | macOS 上 `native` 与 `hijack` 完全相同 | 两者都新增 resolver #1 `198.18.0.2`、`Supplemental`、`order 1`，键为 `State:/Network/Service/sing-tun-<随机>/DNS`；sing-tun 0.4.28 里 `hijack` 的额外拦截只在 Linux/Windows 生效 |
+  | 不碰 `networksetup` 读到的设置 | 每次 `native`/`hijack` 运行中 `-getdnsservers` 都不变 |
+  | 每条停止路径都清理干净 | `PATCH tun.enable=false`、SIGTERM、**SIGKILL** 之后键都消失（SystemConfiguration 临时值随进程消亡） |
+  | 覆盖开着时两者叠加 | resolver #1 是内核的 `198.18.0.2`，覆盖写入的 `114.114.114.114` 排在其后；两边各自恢复 |
+  | `-t` 接受任意值 | `dns-mode: bogus` 和 `Native` 都显示 "test is successful" |
+  | 非法值要到 TUN 启动才暴露 | `Start TUN listening error: invalid dns-mode: bogus`；控制器仍在线，没有 utun |
+  | `GET /configs` 总是带这个键 | 不设时为 `"dns-mode": ""`（不会省略，省略的是 PATCH 结构体） |
+  | `PATCH /configs` 只改报告值 | 正在运行的监听器不会重建：解析器既不出现也不消失 |
+
+- **策略：** 系统 DNS 覆盖开着时（默认），normalizer 固定写 `dns-mode: disabled`，由一个所有者描述 macOS 实际在用的解析器；
+  覆盖关闭时原样透传配置文件的值。Raw YAML 片段仍拥有最后决定权，并被报告为覆盖了托管键 `tun.dns-mode`。
+- **验收标准：**
+  - [x] TUN 开启时，`ConfigNormalizer` 在最终配置上拒绝 `""`/`disabled`/`native`/`hijack` 之外的任何值；只是大小写或空白不对时，文案直接给出正确的小写值。
+  - [x] bundled-core 闸门同时钉住两半：`-t` 放行 `bogus`，normalizer 拦下它。
+  - [x] 诊断报告与诊断包带上 `TUN DNS: … / dns-mode: <值|default>`；Dashboard 新增 `TUN dns-mode` 一行。
+- **顺带发现，未改动：** 覆盖关闭且解析器在局域网内（这里是路由器 `192.168.8.1`）时，DNS 完全绕过隧道——路由器所在子网从不进 utun——
+  于是 fake-ip 模式下 `dns-hijack` 检查会报 warn，而它建议的修复（路由修复 / 重启 helper）修不好这个问题。`native` 恰好修的就是这种情况。
+- **待 Marvin 决定：** `native` 可以替代 ClashMax 自己的 `networksetup` 覆盖。实测对它有利的一点：包括崩溃在内的每条停止路径它都能自行恢复，
+  而 `networksetup` 覆盖要靠 ClashMax 的快照幸存下来。尚未改动。
 
 ---
 
