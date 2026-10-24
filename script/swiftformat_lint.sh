@@ -231,6 +231,17 @@ else
     printf '%s violations in total.\n' "$count"
   elif [ "$count" -gt 0 ]; then
     printf '%s\n' "$diagnostics"
+  elif [ "$status" -ne 0 ]; then
+    # No per-line diagnostics but a failure: SwiftFormat rejected the config or
+    # its arguments (e.g. an unknown rule under --unknown-options error).
+    # SwiftFormat repeats the error once per file, hence the sort -u.
+    errors="$(printf '%s\n' "$output" | grep '^error:' | sort -u || true)"
+    if [ -n "$errors" ]; then
+      printf '%s\n' "$errors" >&2
+    else
+      printf '%s\n' "$output" >&2
+    fi
+    exit 2
   fi
 fi
 

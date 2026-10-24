@@ -13,11 +13,16 @@
 
 # Pinned so a stale local binary cannot disagree with CI about what is legal.
 # script/swiftformat_lint.sh parses this line; CI installs exactly this version.
---minversion 0.63.0
+--minversion 0.64.1
 
 # Matches SWIFT_VERSION in project.yml. Keeps SwiftFormat from applying
 # rewrites that need a newer language mode than the project builds with.
 --swiftversion 6.0
+
+# A misspelled or renamed rule/option is an error, not a silent no-op. 0.64
+# renamed privateStateVariables and replaced redundantViewBuilder; without this a
+# `--disable` naming a rule that no longer exists would just stop disabling it.
+--unknown-options error
 
 
 # MARK: - House style (measured against the existing tree)
@@ -104,6 +109,28 @@
 # and it degrades where the parameter had no constraint to speak of --
 # `<T>` becomes `some Any`.
 --disable opaqueGenericParameters
+
+# Added in 0.64, enabled by default. Each merges statements a human wrote
+# separately: `repeatedGuard` folds consecutive `guard … else { continue }` into
+# one condition list (129 sites, 58 in AppModel alone, where each guard is its
+# own reviewable precondition), `nestedIf` folds `if a { if b { … } }` into
+# `if a, b`. Same control-flow restructuring as conditionalAssignment above.
+--disable repeatedGuard
+--disable nestedIf
+
+# Added in 0.64, enabled by default. Hoisting `@MainActor` from every member
+# onto the extension is an isolation change, not a formatting one: it also
+# isolates every member added to that extension later.
+--disable extensionAttributes
+
+# Left at their 0.64 defaults (off), so no line here: redundantOverload deletes
+# overloads, forWhere turns a filter-shaped `if` into a `where` clause (or back),
+# commonTypos renames identifiers, privateSwiftUIDynamicProperties (the renamed
+# privateStateVariables) and preferStructSwiftTestingSuites change declarations,
+# and wrapClosureBodies / wrapDoBodies / wrapSingleLineStrings are the same
+# single-line-body expansion disabled above. contentBuilder (which replaced
+# redundantViewBuilder) and redundantEnumerated stay on: they only remove
+# redundant tokens.
 
 
 # MARK: - Excluded paths
