@@ -23,11 +23,16 @@ final class BundledCoreArchitectureTests: XCTestCase {
   /// after an incremental build, and the placeholder core that
   /// `DashboardRuntimeStateTests` writes into the test host on a checkout without
   /// `Resources/Core/mihomo` — which then failed the next build's arm64 check.
-  func testEmbedStepMirrorsTheSourceCoreDirectoryInsteadOfMergingIntoIt() throws {
+  /// Copying the whole source directory has its own trap: a stray Finder/iCloud
+  /// "mihomo 2" rode into the 1.1.4 archive unsigned and failed notarization.
+  func testEmbedStepRebuildsTheCoreDirectoryFromTheDeclaredFilesOnly() throws {
     let projectYAML = try contents(of: "project.yml")
+    let copyMetadata = #"cp "$SRCROOT/Resources/Core/README.md" "$SRCROOT/Resources/Core/mihomo-manifest.json" "$core_resources/""#
 
     XCTAssertTrue(projectYAML.contains(#"rm -rf "$core_resources""#))
-    XCTAssertTrue(projectYAML.contains(#"cp -R "$SRCROOT/Resources/Core/." "$core_resources/""#))
+    XCTAssertTrue(projectYAML.contains(copyMetadata))
+    XCTAssertTrue(projectYAML.contains(#"cp "$SRCROOT/Resources/Core/mihomo" "$core_resources/""#))
+    XCTAssertFalse(projectYAML.contains(#"cp -R "$SRCROOT/Resources/Core/."#))
   }
 
   func testBuildFailsWhenTheEmbeddedCoreHasNoARM64Slice() throws {
