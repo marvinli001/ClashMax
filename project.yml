@@ -160,9 +160,14 @@ targets:
           # and how the placeholder "mihomo" that the AppModel tests write into the
           # test host — on any checkout that has no core — survives to fail the next
           # build's arm64 check.
+          # Copy only the declared inputs: a stray "mihomo 2" (a Finder/iCloud
+          # duplicate) once rode along unsigned and failed notarization.
           rm -rf "$core_resources"
           mkdir -p "$core_resources"
-          cp -R "$SRCROOT/Resources/Core/." "$core_resources/"
+          cp "$SRCROOT/Resources/Core/README.md" "$SRCROOT/Resources/Core/mihomo-manifest.json" "$core_resources/"
+          if [ -f "$SRCROOT/Resources/Core/mihomo" ]; then
+            cp "$SRCROOT/Resources/Core/mihomo" "$core_resources/"
+          fi
       - name: Embed Network Extension
         basedOnDependencyAnalysis: false
         inputFiles:
