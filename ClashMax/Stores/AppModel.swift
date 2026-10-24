@@ -1050,10 +1050,12 @@ final class AppModel {
   var dnsResolutionQueryType: DNSQueryType = .a
   private(set) var dnsResolutionOutcome: DNSResolutionOutcome = .idle
   @ObservationIgnored private var dnsResolutionTask: Task<Void, Never>?
-  /// When the core was last handed a config. The fake-ip table is empty at that moment (Mihomo's
-  /// `profile.store-fake-ip` defaults to off and ClashMax never turns it on), so it is the baseline
-  /// every later invalidating event is compared against.
-  private(set) var lastRuntimeConfigAppliedAt: Date?
+  /// When a core process last started on a ClashMax config. A new process starts with an empty
+  /// fake-ip table (Mihomo's `profile.store-fake-ip` defaults to off and ClashMax never turns it
+  /// on), so it is the baseline every later invalidating event is compared against. A hot reload
+  /// is deliberately not one: Mihomo clones the old table into the reloaded config, and since
+  /// v1.19.33 its allocation cursor too, so a reload empties nothing.
+  private(set) var lastCoreLaunchAt: Date?
   private(set) var lastFakeIPFlushAt: Date?
   private(set) var lastNetworkEnvironmentChangeAt: Date?
   private(set) var fakeIPFlushInFlight = false
@@ -2017,9 +2019,9 @@ final class AppModel {
       tunSystemDNS: tunSystemDNSState.displayName,
       networkExtensionSystemDNS: networkExtensionSystemDNSState.displayName,
       tunDNSMode: tunSettings.dnsFakeIPEnabled ? "fake-ip" : "profile",
+      tunCoreDNSMode: tunCoreDNSModeDisplayName,
       ruleOverlaySummary: ruleOverlaySettings.summary,
       helperDetail: tunHelperStatusDetail,
-      tunCoreDNSMode: tunCoreDNSModeDisplayName,
       tunDiagnostics: tunDiagnostics,
       networkExtensionDiagnostics: networkExtensionController.diagnostics,
       readinessIssue: readinessIssue,
@@ -3575,7 +3577,7 @@ final class AppModel {
     }
     let runtimeConfig = materialization.runtimeConfigURL
     try await apiClient.reloadConfig(path: runtimeConfig.path, force: true)
-    activateRuntimeArtifacts(materialization)
+    activateRuntimeArtifacts(materialization, coreLaunched: false)
     appendAppLog(level: "info", message: "\(logMessage) \(runtimeConfig.path).")
     reloadRuntimeData()
   }
@@ -3905,7 +3907,7 @@ final class AppModel {
       tunEnabled = true
       runtimeOwner = .tunnel
       tunLaunchInFlight = false
-      activateRuntimeArtifacts(materialization)
+      activateRuntimeArtifacts(materialization, coreLaunched: true)
       refreshTunDiagnostics(includeExternal: true, runtimeOverrides: startSnapshot.overrides)
       scheduleTunDiagnosticsSettlePass(runtimeOverrides: startSnapshot.overrides)
       let coreStopResult = await coreController.stop()
@@ -3921,7 +3923,7 @@ final class AppModel {
         api: startSnapshot.overrides.endpoint,
         proxyPort: startSnapshot.overrides.mixedPort
       )
-      activateRuntimeArtifacts(materialization)
+      activateRuntimeArtifacts(materialization, coreLaunched: true)
       runtimeOwner = .user
       publishStartupDiagnostics()
     }
@@ -4451,7 +4453,7 @@ final class AppModel {
     let materialization = try await materializeNonTunRuntimeConfig(target)
     let runtimeConfig = materialization.runtimeConfigURL
     try await currentClient.reloadConfig(path: runtimeConfig.path, force: true)
-    activateRuntimeArtifacts(materialization)
+    activateRuntimeArtifacts(materialization, coreLaunched: false)
     recordAppliedRuntimeSettingsSnapshot(target)
     appendAppLog(level: "info", message: "\(reason): Mihomo reloaded \(runtimeConfig.path).")
 
@@ -4600,7 +4602,7 @@ final class AppModel {
     let materialization = try await materializeNonTunRuntimeConfig()
     let runtimeConfig = materialization.runtimeConfigURL
     try await apiClient.reloadConfig(path: runtimeConfig.path, force: true)
-    activateRuntimeArtifacts(materialization)
+    activateRuntimeArtifacts(materialization, coreLaunched: false)
     appendAppLog(level: "info", message: "IPv6 setting updated: Mihomo reloaded \(runtimeConfig.path).")
   }
 
@@ -4682,7 +4684,7 @@ final class AppModel {
     )
     let runtimeConfig = materialization.runtimeConfigURL
     try await apiClient.reloadConfig(path: runtimeConfig.path, force: true)
-    activateRuntimeArtifacts(materialization)
+    activateRuntimeArtifacts(materialization, coreLaunched: false)
     appendAppLog(level: "debug", message: "\(logMessage) preview runtime reloaded \(runtimeConfig.path).")
     reloadRuntimeData()
   }
@@ -5785,9 +5787,9 @@ final class AppModel {
       return
     }
 
+    refreshActiveTunDNSMode()
     let runtimeOverrides = runtimeOverrides ?? currentRuntimeOverrides
     let api = runtimeOverrides.endpoint
-    refreshActiveTunDNSMode()
     let settings = runtimeOverrides.tunSettings
     let dnsState = tunSystemDNSState
     let helperClient = helperClient
@@ -5868,8 +5870,6 @@ final class AppModel {
   private func clearTunDiagnostics() {
     tunDiagnostics = .empty
     residualSystemProxyEntries = []
-  }
-
     activeTunDNSModeTask?.cancel()
     activeTunDNSModeTask = nil
     activeTunDNSMode = nil
@@ -5887,6 +5887,8 @@ final class AppModel {
       guard !Task.isCancelled, let self else { return }
       activeTunDNSMode = value
     }
+  }
+
   private func stopTunDiagnostics(clear: Bool) {
     tunDiagnosticsTask?.cancel()
     tunDiagnosticsTask = nil
@@ -7136,12 +7138,12 @@ final class AppModel {
         runtimeOverrides: effectiveOverrides,
         reason: reason
       )
-      activateRuntimeArtifacts(materialization)
+      activateRuntimeArtifacts(materialization, coreLaunched: true)
       didRestartHelper = true
     } else if let apiClient {
       do {
         try await apiClient.reloadConfig(path: runtimeConfig.path, force: true)
-        activateRuntimeArtifacts(materialization)
+        activateRuntimeArtifacts(materialization, coreLaunched: false)
         appendAppLog(level: "info", message: "\(reason): Mihomo reloaded \(runtimeConfig.path).")
       } catch is CancellationError {
         throw CancellationError()
@@ -7156,7 +7158,7 @@ final class AppModel {
           runtimeOverrides: effectiveOverrides,
           reason: reason
         )
-        activateRuntimeArtifacts(materialization)
+        activateRuntimeArtifacts(materialization, coreLaunched: true)
         didRestartHelper = true
       }
     } else {
@@ -7167,7 +7169,7 @@ final class AppModel {
         runtimeOverrides: effectiveOverrides,
         reason: reason
       )
-      activateRuntimeArtifacts(materialization)
+      activateRuntimeArtifacts(materialization, coreLaunched: true)
       didRestartHelper = true
     }
     didRestartHelper = try await verifyRunningTunFacts(
@@ -7544,7 +7546,7 @@ final class AppModel {
       if let apiClient {
         do {
           try await apiClient.reloadConfig(path: runtimeConfig.path, force: true)
-          activateRuntimeArtifacts(materialization)
+          activateRuntimeArtifacts(materialization, coreLaunched: false)
           appendAppLog(level: "info", message: "TUN routing repair reloaded \(runtimeConfig.path).")
         } catch is CancellationError {
           throw CancellationError()
@@ -7559,7 +7561,7 @@ final class AppModel {
             runtimeOverrides: runtimeOverrides,
             reason: "TUN routing repair"
           )
-          activateRuntimeArtifacts(materialization)
+          activateRuntimeArtifacts(materialization, coreLaunched: true)
           didRestartHelper = true
         }
       } else {
@@ -7569,7 +7571,7 @@ final class AppModel {
           runtimeOverrides: runtimeOverrides,
           reason: "TUN routing repair"
         )
-        activateRuntimeArtifacts(materialization)
+        activateRuntimeArtifacts(materialization, coreLaunched: true)
         didRestartHelper = true
       }
 
@@ -7587,7 +7589,7 @@ final class AppModel {
           runtimeOverrides: runtimeOverrides,
           reason: "TUN routing repair"
         )
-        activateRuntimeArtifacts(materialization)
+        activateRuntimeArtifacts(materialization, coreLaunched: true)
         didRestartHelper = true
         let postRestartSnapshot = await routingSnapshotConfirmedByDataPlane(
           inspectTunRuntimeNow(
@@ -7626,9 +7628,9 @@ final class AppModel {
       return .empty
     }
     stopTunDiagnostics(clear: false)
+    refreshActiveTunDNSMode()
     let helperStatus = await liveTunHelperStatus(using: helperClient)
     tunHelperPID = helperStatus.pid
-    refreshActiveTunDNSMode()
     let runtimeOverrides = runtimeOverrides ?? currentRuntimeOverrides
     let servedPorts: Set<Int> = [runtimeOverrides.mixedPort]
     let snapshot = await tunRuntimeInspector.inspect(
@@ -8094,7 +8096,7 @@ final class AppModel {
         api: previewOverrides.endpoint,
         proxyPort: previewOverrides.mixedPort
       )
-      activateRuntimeArtifacts(materialization)
+      activateRuntimeArtifacts(materialization, coreLaunched: true)
       try Task.checkCancellation()
       apiClient = client
       try Task.checkCancellation()
@@ -8943,9 +8945,13 @@ final class AppModel {
     activeRuntimeConfigMaterialization?.artifactURLs ?? []
   }
 
-  private func activateRuntimeArtifacts(_ materialization: RuntimeConfigMaterializationResult) {
+  /// `coreLaunched` is true when this config came with a new core process (start or helper
+  /// restart) and false for a hot reload into the running one.
+  private func activateRuntimeArtifacts(_ materialization: RuntimeConfigMaterializationResult, coreLaunched: Bool) {
     activeRuntimeConfigMaterialization = materialization
-    lastRuntimeConfigAppliedAt = Date()
+    if coreLaunched {
+      lastCoreLaunchAt = Date()
+    }
     refreshActiveSnifferSettings(from: materialization.runtimeConfigURL)
     refreshActiveDNSFacts(from: materialization.runtimeConfigURL)
     refreshActiveTunCongestionController(from: materialization.runtimeConfigURL)
@@ -8990,7 +8996,7 @@ final class AppModel {
     dnsResolutionTask?.cancel()
     dnsResolutionTask = nil
     dnsResolutionOutcome = .idle
-    lastRuntimeConfigAppliedAt = nil
+    lastCoreLaunchAt = nil
     lastFakeIPFlushAt = nil
   }
 
@@ -9121,7 +9127,7 @@ final class AppModel {
     FakeIPDiagnosticsBuilder.snapshot(for: FakeIPDiagnosticsInput(
       isCoreRunning: isCoreRunning,
       dnsFacts: activeDNSFacts,
-      runtimeAppliedAt: lastRuntimeConfigAppliedAt,
+      coreLaunchedAt: lastCoreLaunchAt,
       lastFlushAt: lastFakeIPFlushAt,
       networkChangedAt: lastNetworkEnvironmentChangeAt,
       profileContentFetchedAt: profileStore.activeProfile?.subscriptionMetadata?.lastFetchedAt

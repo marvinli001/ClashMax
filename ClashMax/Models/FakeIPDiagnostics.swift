@@ -93,9 +93,10 @@ struct FakeIPDiagnosticsInput: Equatable, Sendable {
   /// `nil` while the applied runtime config has not been read back yet. Reported as "unknown"
   /// rather than collapsed into "not fake-ip", which would be a guess.
   var dnsFacts: DNSRuntimeFacts?
-  /// When the core last came up or hot-reloaded a config — the moment its fake-ip table was empty
-  /// and therefore known good.
-  var runtimeAppliedAt: Date?
+  /// When the core process last started — the moment its fake-ip table was empty and therefore
+  /// known good. Not a hot reload: Mihomo carries the table (and, since v1.19.33, its allocation
+  /// cursor) over into the reloaded config, so a reload leaves every stale entry in place.
+  var coreLaunchedAt: Date?
   /// When ClashMax last flushed the table itself.
   var lastFlushAt: Date?
   /// When the network path or Wi-Fi network last changed.
@@ -113,14 +114,14 @@ struct FakeIPDiagnosticsInput: Equatable, Sendable {
   init(
     isCoreRunning: Bool = true,
     dnsFacts: DNSRuntimeFacts? = nil,
-    runtimeAppliedAt: Date? = nil,
+    coreLaunchedAt: Date? = nil,
     lastFlushAt: Date? = nil,
     networkChangedAt: Date? = nil,
     profileContentFetchedAt: Date? = nil
   ) {
     self.isCoreRunning = isCoreRunning
     self.dnsFacts = dnsFacts
-    self.runtimeAppliedAt = runtimeAppliedAt
+    self.coreLaunchedAt = coreLaunchedAt
     self.lastFlushAt = lastFlushAt
     self.networkChangedAt = networkChangedAt
     self.profileContentFetchedAt = profileContentFetchedAt
@@ -205,7 +206,7 @@ enum FakeIPDiagnosticsBuilder {
     // The table is known good from the later of "the core started with an empty one" and "we
     // emptied it ourselves". Anything after that moment can have left entries pointing at answers
     // that are no longer right.
-    let knownGoodAt = [input.runtimeAppliedAt, input.lastFlushAt].compactMap(\.self).max()
+    let knownGoodAt = [input.coreLaunchedAt, input.lastFlushAt].compactMap(\.self).max()
     if let lastFlushAt = input.lastFlushAt {
       facts.append(FakeIPDiagnosticsSnapshot.Fact(
         key: .lastFlush,

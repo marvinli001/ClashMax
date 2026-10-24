@@ -99,7 +99,7 @@ final class FakeIPDiagnosticsTests: XCTestCase {
     let snapshot = FakeIPDiagnosticsBuilder.snapshot(
       for: FakeIPDiagnosticsInput(
         dnsFacts: dnsFacts(),
-        runtimeAppliedAt: minutesAgo(5),
+        coreLaunchedAt: minutesAgo(5),
         networkChangedAt: minutesAgo(30),
         profileContentFetchedAt: minutesAgo(90)
       ),
@@ -116,7 +116,7 @@ final class FakeIPDiagnosticsTests: XCTestCase {
     let snapshot = FakeIPDiagnosticsBuilder.snapshot(
       for: FakeIPDiagnosticsInput(
         dnsFacts: dnsFacts(),
-        runtimeAppliedAt: minutesAgo(60),
+        coreLaunchedAt: minutesAgo(60),
         networkChangedAt: minutesAgo(2)
       ),
       now: now
@@ -132,7 +132,7 @@ final class FakeIPDiagnosticsTests: XCTestCase {
     let snapshot = FakeIPDiagnosticsBuilder.snapshot(
       for: FakeIPDiagnosticsInput(
         dnsFacts: dnsFacts(),
-        runtimeAppliedAt: minutesAgo(60),
+        coreLaunchedAt: minutesAgo(60),
         networkChangedAt: minutesAgo(10),
         profileContentFetchedAt: minutesAgo(2)
       ),
@@ -150,7 +150,7 @@ final class FakeIPDiagnosticsTests: XCTestCase {
     let snapshot = FakeIPDiagnosticsBuilder.snapshot(
       for: FakeIPDiagnosticsInput(
         dnsFacts: dnsFacts(),
-        runtimeAppliedAt: minutesAgo(60),
+        coreLaunchedAt: minutesAgo(60),
         networkChangedAt: minutesAgo(2),
         profileContentFetchedAt: minutesAgo(10)
       ),
@@ -167,7 +167,7 @@ final class FakeIPDiagnosticsTests: XCTestCase {
     let snapshot = FakeIPDiagnosticsBuilder.snapshot(
       for: FakeIPDiagnosticsInput(
         dnsFacts: dnsFacts(),
-        runtimeAppliedAt: minutesAgo(60),
+        coreLaunchedAt: minutesAgo(60),
         profileContentFetchedAt: nil
       ),
       now: now
@@ -182,7 +182,7 @@ final class FakeIPDiagnosticsTests: XCTestCase {
   func testFlushingClearsAnEarlierInvalidation() {
     let input = FakeIPDiagnosticsInput(
       dnsFacts: dnsFacts(),
-      runtimeAppliedAt: minutesAgo(60),
+      coreLaunchedAt: minutesAgo(60),
       lastFlushAt: minutesAgo(1),
       networkChangedAt: minutesAgo(5),
       profileContentFetchedAt: minutesAgo(4)
@@ -194,13 +194,14 @@ final class FakeIPDiagnosticsTests: XCTestCase {
     XCTAssertNotNil(snapshot.facts.first { $0.key == .lastFlush })
   }
 
-  /// A core that hot-reloaded a config started from an empty table, so a *later* restart also
-  /// clears an earlier network change without anybody pressing the button.
-  func testRuntimeReapplyAfterANetworkChangeIsAlreadyKnownGood() {
+  /// A new core process starts from an empty table, so a *later* restart also clears an earlier
+  /// network change without anybody pressing the button. (A hot reload does not: Mihomo clones the
+  /// old table into the reloaded config, so AppModel never reports a reload as a launch.)
+  func testCoreRestartAfterANetworkChangeIsAlreadyKnownGood() {
     let snapshot = FakeIPDiagnosticsBuilder.snapshot(
       for: FakeIPDiagnosticsInput(
         dnsFacts: dnsFacts(),
-        runtimeAppliedAt: minutesAgo(1),
+        coreLaunchedAt: minutesAgo(1),
         networkChangedAt: minutesAgo(3)
       ),
       now: now
@@ -222,7 +223,7 @@ final class FakeIPDiagnosticsTests: XCTestCase {
 
   func testMissingFakeIPRangeSimplyOmitsTheFact() {
     let snapshot = FakeIPDiagnosticsBuilder.snapshot(
-      for: FakeIPDiagnosticsInput(dnsFacts: dnsFacts(fakeIPRange: nil), runtimeAppliedAt: minutesAgo(5)),
+      for: FakeIPDiagnosticsInput(dnsFacts: dnsFacts(fakeIPRange: nil), coreLaunchedAt: minutesAgo(5)),
       now: now
     )
 
@@ -236,7 +237,7 @@ final class FakeIPDiagnosticsTests: XCTestCase {
     let snapshot = FakeIPDiagnosticsBuilder.snapshot(
       for: FakeIPDiagnosticsInput(
         dnsFacts: dnsFacts(),
-        runtimeAppliedAt: minutesAgo(60),
+        coreLaunchedAt: minutesAgo(60),
         networkChangedAt: minutesAgo(2)
       ),
       now: now
