@@ -254,6 +254,18 @@ struct ConfigNormalizer {
       tun["strict-route"] = settings.strictRoute
       tun["auto-detect-interface"] = settings.autoDetectInterface
       tun["dns-hijack"] = settings.normalizedDNSHijack
+      // Mihomo v1.19.33 `tun.dns-mode`, measured 2026-10-24 with a root core and every value against
+      // the System DNS override on and off. `native`/`hijack` add a supplemental resolver at the TUN
+      // address (order 1) without touching what `networksetup` reads, and it disappears on a TUN
+      // disable, a normal stop and a SIGKILL alike, so the two never fight over a restore. They do
+      // stack, though: with both on, the core's resolver shadows the servers the override wrote, and
+      // the System DNS row would describe a resolver macOS is not using. So while the override is on
+      // ClashMax stays the single owner and pins `disabled`. With it off the profile's value is left
+      // alone (unset is `disabled` on macOS); there `native` is what routes a LAN resolver's queries
+      // through TUN at all, because the router's subnet is never routed into the tunnel.
+      if settings.systemDNSOverrideEnabled {
+        tun[TunDNSMode.configKey] = TunDNSMode.disabled.rawValue
+      }
       tun["mtu"] = settings.normalizedMTU
       let profileRouteExcludeAddresses = try normalizedRouteExcludeCIDRs(from: tun["route-exclude-address"])
       let routeExcludeAddresses = TunSettings.normalizedRouteExcludeCIDRs(
@@ -355,6 +367,13 @@ struct ConfigNormalizer {
     // creates the mixed listener), so that collision is refused with the reason rather than
     // started into a core whose mixed-port never opens.
     try validateListenersAvoidAppPorts(root["listeners"], mixedPort: overrides.mixedPort, controllerPort: overrides.externalControllerPort)
+    // Checked on the final map because a profile, the legacy merge and a raw patch can each set it,
+    // and only here because `mihomo -t` waves every value through: without this a typo passes
+    // preflight and TUN then fails to start. A disabled TUN never reads the key, so an inert value
+    // there is not worth refusing a system-proxy start over.
+    if let finalTun = root["tun"] as? [String: Any], finalTun["enable"] as? Bool == true {
+      _ = try TunDNSMode.validated(finalTun[TunDNSMode.configKey])
+    }
 
     if options.manualProxyEndpoint != nil || options.upstreamProxyEndpoint != nil {
       try validateReservedOutboundProxyNames(

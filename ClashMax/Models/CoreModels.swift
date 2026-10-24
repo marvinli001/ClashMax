@@ -3587,6 +3587,65 @@ enum TunCongestionController: String, Codable, CaseIterable, Identifiable, Senda
   var id: String { rawValue }
 }
 
+/// `tun.dns-mode`, added in Mihomo v1.19.33 (sing-tun 0.4.28). On macOS an unset value means
+/// `disabled`; `native` registers the TUN address as a supplemental resolver for every domain
+/// through a temporary SystemConfiguration key that lives only as long as the core process, and
+/// `hijack` does exactly the same on macOS (its extra interception is Linux/Windows only). Both
+/// were measured identical, and fully undone by a stop or a SIGKILL. It is a different layer from
+/// ClashMax's own `networksetup -setdnsservers` override; ConfigNormalizer decides which one owns
+/// the system resolver.
+///
+/// `-t` accepts any string here; the core rejects anything else only when the TUN listener
+/// starts ("invalid dns-mode: …"), so a bad value passes preflight and then TUN never comes up.
+/// The match is exact: case and surrounding whitespace are not forgiven.
+enum TunDNSMode: String, CaseIterable, Sendable {
+  case disabled
+  case native
+  case hijack
+
+  static let configKey = "dns-mode"
+
+  /// How the diagnostics name an unset value (`""`, null or no key): the core's default.
+  static let unsetDisplayName = "default"
+
+  /// The mode a config value selects, nil when it is unset. Throws the reason for any value the
+  /// core would refuse when the TUN listener starts.
+  static func validated(_ value: Any?) throws -> TunDNSMode? {
+    switch value {
+    case nil, is NSNull:
+      return nil
+    case let string as String:
+      if string.isEmpty {
+        return nil
+      }
+      if let mode = TunDNSMode(rawValue: string) {
+        return mode
+      }
+      let folded = string.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+      if let mode = TunDNSMode(rawValue: folded) {
+        throw NormalizerError.invalidProfile(
+          "Invalid TUN dns-mode \"\(string)\": Mihomo only accepts the exact lowercase value. Use \"\(mode.rawValue)\"."
+        )
+      }
+      throw NormalizerError.invalidProfile(invalidValueMessage(string))
+    default:
+      throw NormalizerError.invalidProfile(invalidValueMessage(String(describing: value!)))
+    }
+  }
+
+  /// The diagnostics label for what `GET /configs` reports (the key is omitted when unset).
+  static func displayName(forCoreValue value: String?) -> String {
+    guard let value, !value.isEmpty else { return unsetDisplayName }
+    return value
+  }
+
+  private static func invalidValueMessage(_ value: String) -> String {
+    "Invalid TUN dns-mode \"\(value)\": use disabled, native or hijack, or leave it unset. Mihomo's preflight accepts any value here, but TUN would fail to start with it."
+  }
+
+  private typealias NormalizerError = ConfigNormalizer.NormalizerError
+}
+
 struct TunDNSFallbackFilter: Codable, Equatable, Sendable {
   var geoIP: Bool?
   var geoIPCode: String?

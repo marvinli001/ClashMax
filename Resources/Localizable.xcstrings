@@ -22133,6 +22133,16 @@
         }
       }
     },
+    "TUN dns-mode" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TUN dns-mode"
+          }
+        }
+      }
+    },
     "TUN Helper" : {
       "localizations" : {
         "base" : {

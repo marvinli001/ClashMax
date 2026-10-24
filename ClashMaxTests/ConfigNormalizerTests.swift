@@ -863,6 +863,93 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(tun["congestion-controller"] as? String, "bbr3")
   }
 
+  private func runtimeTun(
+    profileTunYAML: String?,
+    tunEnabled: Bool = true,
+    systemDNSOverride: Bool,
+    rawYAMLPatch: String? = nil
+  ) throws -> [String: Any] {
+    let source = Self.minimalProfileSource + (profileTunYAML.map { "\ntun:\n\($0)\n" } ?? "")
+    var overrides = RuntimeOverrides.defaultForLaunch(secret: "secret-token")
+    overrides.tunEnabled = tunEnabled
+    overrides.tunSettings.systemDNSOverrideEnabled = systemDNSOverride
+    var options = RuntimeConfigOptions.default
+    if let rawYAMLPatch {
+      options.runtimeSnippets = [RuntimeSnippet(
+        name: "Advanced TUN",
+        payload: .rawYAML(RawYAMLPatchSettings(yaml: rawYAMLPatch))
+      )]
+    }
+    let output = try ConfigNormalizer().runtimeConfig(from: source, overrides: overrides, options: options)
+    let root = try XCTUnwrap(Yams.load(yaml: output) as? [String: Any])
+    return try XCTUnwrap(root["tun"] as? [String: Any])
+  }
+
+  func testTunDNSModeIsPinnedDisabledWhileClashMaxOwnsSystemDNS() throws {
+    for profileValue in [nil, "native", "hijack", "disabled", "\"\""] {
+      let tun = try runtimeTun(
+        profileTunYAML: profileValue.map { "  dns-mode: \($0)" },
+        systemDNSOverride: true
+      )
+      XCTAssertEqual(tun["dns-mode"] as? String, "disabled", String(describing: profileValue))
+    }
+    XCTAssertTrue(TunSettings.default.systemDNSOverrideEnabled, "The default TUN setup pins disabled")
+  }
+
+  func testTunDNSModeKeepsTheProfileValueWhenTheOverrideIsOff() throws {
+    for value in ["native", "hijack", "disabled"] {
+      let tun = try runtimeTun(profileTunYAML: "  dns-mode: \(value)", systemDNSOverride: false)
+      XCTAssertEqual(tun["dns-mode"] as? String, value)
+    }
+    XCTAssertNil(try runtimeTun(profileTunYAML: nil, systemDNSOverride: false)["dns-mode"], "Unset stays unset")
+    XCTAssertEqual(try runtimeTun(profileTunYAML: "  dns-mode: \"\"", systemDNSOverride: false)["dns-mode"] as? String, "")
+  }
+
+  func testInvalidTunDNSModeIsRefusedBeforePreflight() throws {
+    let cases: [(yaml: String, expected: String)] = [
+      ("bogus", #"Invalid TUN dns-mode "bogus": use disabled, native or hijack"#),
+      ("Native", #"Invalid TUN dns-mode "Native": Mihomo only accepts the exact lowercase value. Use "native"."#),
+      ("HIJACK", #"Use "hijack"."#),
+      ("\" native \"", #"Invalid TUN dns-mode " native ": Mihomo only accepts the exact lowercase value. Use "native"."#),
+      ("1", #"Invalid TUN dns-mode "1""#),
+      ("true", #"Invalid TUN dns-mode "true""#),
+    ]
+    for (yaml, expected) in cases {
+      XCTAssertThrowsError(try runtimeTun(profileTunYAML: "  dns-mode: \(yaml)", systemDNSOverride: false), yaml) { error in
+        guard case let ConfigNormalizer.NormalizerError.invalidProfile(message) = error else {
+          return XCTFail("Expected invalidProfile, got \(error)")
+        }
+        XCTAssertTrue(message.contains(expected), "\(yaml): \(message)")
+      }
+    }
+  }
+
+  func testInvalidProfileTunDNSModeIsHarmlessWhenOverriddenOrTunIsOff() throws {
+    XCTAssertEqual(
+      try runtimeTun(profileTunYAML: "  dns-mode: bogus", systemDNSOverride: true)["dns-mode"] as? String,
+      "disabled",
+      "The override replaces the profile value before validation"
+    )
+    let disabledTun = try runtimeTun(profileTunYAML: "  dns-mode: bogus", tunEnabled: false, systemDNSOverride: false)
+    XCTAssertEqual(disabledTun["dns-mode"] as? String, "bogus", "A disabled TUN never reads the key")
+  }
+
+  func testRawYAMLSnippetTunDNSModeHasTheLastWordAndIsValidated() throws {
+    let patched = try runtimeTun(profileTunYAML: nil, systemDNSOverride: true, rawYAMLPatch: "tun:\n  dns-mode: native\n")
+    XCTAssertEqual(patched["dns-mode"] as? String, "native")
+    XCTAssertThrowsError(
+      try runtimeTun(profileTunYAML: nil, systemDNSOverride: true, rawYAMLPatch: "tun:\n  dns-mode: Hijack\n")
+    ) { error in
+      XCTAssertTrue(String(describing: error).contains(#"Use "hijack"."#), String(describing: error))
+    }
+  }
+
+  func testTunDNSModeDisplayNamesTheCoreDefault() {
+    XCTAssertEqual(TunDNSMode.displayName(forCoreValue: nil), "default")
+    XCTAssertEqual(TunDNSMode.displayName(forCoreValue: ""), "default")
+    XCTAssertEqual(TunDNSMode.displayName(forCoreValue: "native"), "native")
+  }
+
   func testRuntimeConfigPreservesProfileRouteExcludeAddressWhenTunSettingsAreDefault() throws {
     let source = """
     proxies:

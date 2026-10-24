@@ -8297,6 +8297,23 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertEqual(statusCount, 0)
   }
 
+  func testTunDiagnosticsReportTheCoreDNSModeFromTheController() async throws {
+    let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
+    let model = try await makeRunningTunnelModel(client: client, helperTransport: ReadyTunnelHelperTransport())
+    XCTAssertTrue(model.runtimeDiagnosticsReport().tunDNSLine.hasSuffix("/ dns-mode: default"), "Unread reads as the core default")
+
+    await client.setTunDNSModeResponse("native")
+    model.refreshTunDiagnostics(includeExternal: false)
+    await waitUntil { model.activeTunDNSMode == "native" }
+    XCTAssertTrue(model.runtimeDiagnosticsReport().tunDNSLine.hasSuffix("/ dns-mode: native"))
+    XCTAssertTrue(model.runtimeDiagnosticsReport().plainText.contains("dns-mode: native"))
+
+    await client.setTunDNSModeResponse(nil)
+    model.refreshTunDiagnostics(includeExternal: false)
+    await waitUntil { model.activeTunDNSMode == nil }
+    XCTAssertEqual(model.tunCoreDNSModeDisplayName, "default", "An unset core value is named, not left blank")
+  }
+
   func testTunStopStillRefreshesHelperStatusDetail() async throws {
     let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
     let helperTransport = ReadyTunnelHelperTransport()
@@ -13235,6 +13252,10 @@ private final class ScriptedRuntimeStreamController: MihomoAPIControlling, @unch
     try await base.setTunEnabled(enabled)
   }
 
+  func tunDNSMode() async throws -> String? {
+    try await base.tunDNSMode()
+  }
+
   func reloadConfig(path: String, force: Bool) async throws {
     try await base.reloadConfig(path: path, force: force)
   }
@@ -13518,6 +13539,7 @@ private actor RecordingMihomoController: MihomoAPIControlling {
   private var reloadRequests: [(path: String, force: Bool)] = []
   private var restartRequests: [String?] = []
   private var tunEnabledUpdates: [Bool] = []
+  private var tunDNSModeResponse: String?
   private var ipv6Updates: [Bool] = []
 
   init(
@@ -13894,6 +13916,14 @@ private actor RecordingMihomoController: MihomoAPIControlling {
       throw AppError.helperResponse(setTunEnabledFailureMessage)
     }
     tunEnabledUpdates.append(enabled)
+  }
+
+  func tunDNSMode() async throws -> String? {
+    tunDNSModeResponse
+  }
+
+  func setTunDNSModeResponse(_ value: String?) {
+    tunDNSModeResponse = value
   }
 
   func reloadConfig(path: String, force: Bool) async throws {
