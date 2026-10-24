@@ -528,8 +528,8 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
   - [x] 诊断报告与诊断包带上 `TUN DNS: … / dns-mode: <值|default>`；Dashboard 新增 `TUN dns-mode` 一行。
 - **顺带发现，未改动：** 覆盖关闭且解析器在局域网内（这里是路由器 `192.168.8.1`）时，DNS 完全绕过隧道——路由器所在子网从不进 utun——
   于是 fake-ip 模式下 `dns-hijack` 检查会报 warn，而它建议的修复（路由修复 / 重启 helper）修不好这个问题。`native` 恰好修的就是这种情况。
-- **待 Marvin 决定：** `native` 可以替代 ClashMax 自己的 `networksetup` 覆盖。实测对它有利的一点：包括崩溃在内的每条停止路径它都能自行恢复，
-  而 `networksetup` 覆盖要靠 ClashMax 的快照幸存下来。尚未改动。
+- **2026-10-25 已决定（Marvin）：保留 ClashMax 自己的 `networksetup` 覆盖，不改用 `native`。** 留档备查，实测对 `native` 有利的一点：
+  包括崩溃在内的每条停止路径它都能自行恢复，而 `networksetup` 覆盖要靠 ClashMax 的快照幸存下来。
 
 ---
 

@@ -661,9 +661,10 @@ override is on, and reports what the core holds.
   the router, `192.168.8.1`), DNS bypasses the tunnel entirely — the router's subnet is never
   routed into utun — so in fake-ip mode the `dns-hijack` check warns, and its suggested
   repair (a routing repair / helper restart) cannot fix it. `native` fixes exactly this case.
-- **Open decision for Marvin:** `native` could replace ClashMax's own `networksetup`
-  override. Measured in its favour: it restores itself on every stop path including a crash,
-  where the `networksetup` override depends on ClashMax's snapshot surviving. Not done.
+- **Decided 2026-10-25 (Marvin): keep ClashMax's own `networksetup` override; do not switch
+  to `native`.** Measured in `native`'s favour, for the record: it restores itself on every stop
+  path including a crash, where the `networksetup` override depends on ClashMax's snapshot
+  surviving.
 
 ---
 
