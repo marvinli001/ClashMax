@@ -164,7 +164,7 @@ private struct LaunchControlDeck: View {
     VStack(alignment: .leading, spacing: compact ? 12 : 14) {
       if compact {
         VStack(alignment: .leading, spacing: 12) {
-          profileControl
+          profileControl(fillsWidth: true)
           HStack(alignment: .bottom, spacing: 20) {
             modeControl
             mixedPortControl
@@ -173,7 +173,7 @@ private struct LaunchControlDeck: View {
         }
       } else {
         HStack(alignment: .bottom, spacing: 30) {
-          profileControl
+          profileControl(fillsWidth: false)
           modeControl
           mixedPortControl
         }
@@ -198,8 +198,12 @@ private struct LaunchControlDeck: View {
     .dashboardCard()
   }
 
-  private var profileControl: some View {
-    VStack(alignment: .leading, spacing: 6) {
+  // The picker takes the column's width rather than its content's: a `.fixedSize()` menu grows with
+  // the profile name and pushes into the Mode control, so long names truncate here and show in full
+  // in the menu and the tooltip.
+  @ViewBuilder
+  private func profileControl(fillsWidth: Bool) -> some View {
+    let content = VStack(alignment: .leading, spacing: 6) {
       Text("Profile")
         .font(.caption2)
         .foregroundStyle(.secondary)
@@ -215,12 +219,17 @@ private struct LaunchControlDeck: View {
       .pickerStyle(.menu)
       .labelsHidden()
       .controlSize(.regular)
-      .fixedSize()
       .disabled(appModel.profileStore.profiles.isEmpty)
-      .frame(width: DashboardLayoutMetrics.launchProfileControlWidth, alignment: .leading)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .help(appModel.profileStore.activeProfile?.name ?? "")
       .dashboardMatchedGeometry(id: "profile-control", in: namespace, reduceMotion: reduceMotion)
     }
-    .frame(width: DashboardLayoutMetrics.launchProfileControlWidth, alignment: .leading)
+
+    if fillsWidth {
+      content.frame(maxWidth: .infinity, alignment: .leading)
+    } else {
+      content.frame(width: DashboardLayoutMetrics.launchProfileControlWidth, alignment: .leading)
+    }
   }
 
   private var profilePickerBinding: Binding<Profile.ID?> {
