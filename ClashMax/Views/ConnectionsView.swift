@@ -696,6 +696,10 @@ struct ConnectionsView: View {
     if mode == .active, !runtimeData.connectionRecords.isEmpty {
       return String(localized: "Recently closed connections are kept under History.")
     }
+    // Stopped, nothing will arrive on its own: say what to do rather than "will appear here".
+    if !appModel.isCoreRunning {
+      return String(localized: "Start ClashMax to see the connections apps make through it.")
+    }
     return String(localized: "Connections will appear here after apps send traffic through ClashMax.")
   }
 

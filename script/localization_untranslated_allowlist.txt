@@ -126,7 +126,6 @@
 "Start runtime automatically for this policy"
 "Stop the core before restoring a backup."
 "Subscription Update Failed"
-"Succeeded"
 "System Proxy on"
 "System Proxy unchanged"
 "System Proxy was changed externally: %@"

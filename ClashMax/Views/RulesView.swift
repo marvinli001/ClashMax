@@ -109,6 +109,7 @@ struct RulesView: View {
         Text(rule.policy.isEmpty ? "-" : rule.policy)
           .fontWeight(.medium)
           .lineLimit(1)
+          .help(rule.policy)
       }
       .width(min: 88, ideal: 120)
 
@@ -117,6 +118,7 @@ struct RulesView: View {
           Text(rule.providerName ?? "-")
             .foregroundStyle(.secondary)
             .lineLimit(1)
+            .help(rule.providerName ?? "")
         }
         .width(min: 90, ideal: 120)
       }

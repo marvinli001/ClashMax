@@ -143,6 +143,7 @@ struct MenuBarView: View {
           ))
           .labelsHidden()
           .toggleStyle(.switch)
+          .accessibilityLabel(systemProxyToggleTitle)
         }
         .disabled(appModel.proxyRoutingMode != .systemProxy)
         .help(
@@ -657,6 +658,7 @@ struct MenuBarHeader: View {
           .font(.caption)
           .foregroundStyle(.secondary)
           .lineLimit(1)
+          .help(profileName)
 
         Text(String(format: String(localized: "Owner: %@"), ownerName))
           .font(.caption2)
@@ -785,6 +787,8 @@ struct MenuBarControlRow<Control: View>: View {
         .lineLimit(1)
         .truncationMode(.tail)
         .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        // Group names get about 120pt here; the tooltip is the only way to read a truncated one.
+        .help(title)
 
       control
         .controlSize(.small)
@@ -808,6 +812,7 @@ struct MenuBarGroupSelectionLabel: View {
     Text(selectedNode)
       .lineLimit(1)
       .truncationMode(.middle)
+      .help(selectedNode)
   }
 }
 

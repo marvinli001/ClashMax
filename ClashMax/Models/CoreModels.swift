@@ -6596,10 +6596,10 @@ struct SubscriptionMetadata: Codable, Equatable, Sendable {
     guard let traffic else { return nil }
     let used = (traffic.upload ?? 0) + (traffic.download ?? 0)
     if let total = traffic.total, total > 0 {
-      return "\(TrafficSample.formatBytes(used)) used of \(TrafficSample.formatBytes(total))"
+      return String(localized: "\(TrafficSample.formatBytes(used)) used of \(TrafficSample.formatBytes(total))")
     }
     guard used > 0 else { return nil }
-    return "\(TrafficSample.formatBytes(used)) used"
+    return String(localized: "\(TrafficSample.formatBytes(used)) used")
   }
 }
 

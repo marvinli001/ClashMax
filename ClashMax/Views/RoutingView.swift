@@ -1170,6 +1170,7 @@ private struct RuntimeSnippetRow: View {
           Text(displayName)
             .lineLimit(1)
             .truncationMode(.tail)
+            .help(displayName)
           if isUnsaved {
             Text("Unsaved")
               .font(.caption2.weight(.medium))
@@ -1914,7 +1915,7 @@ private struct RoutingEffectiveConfigTool: View {
       RoutingWorkspaceNotice(
         title: "Not Generated",
         systemImage: "doc.badge.clock",
-        message: "Refresh to preview the redacted final runtime YAML and its diff."
+        message: String(localized: "Refresh to preview the redacted final runtime YAML and its diff.")
       )
     case .loading:
       HStack(spacing: 8) {
@@ -1934,7 +1935,7 @@ private struct RoutingEffectiveConfigTool: View {
       RoutingWorkspaceNotice(
         title: "Not Generated",
         systemImage: "doc.badge.clock",
-        message: "Refresh to preview the redacted final runtime YAML and its diff."
+        message: String(localized: "Refresh to preview the redacted final runtime YAML and its diff.")
       )
     }
   }
@@ -2707,8 +2708,8 @@ private struct RuntimeDNSPatchEditor: View {
     }
   }
 
-  private func optionalBoolPicker(_ title: String, value: Binding<Bool?>) -> some View {
-    RoutingOptionalBoolPicker(title: title, value: value)
+  private func optionalBoolPicker(_ title: LocalizedStringResource, value: Binding<Bool?>) -> some View {
+    RoutingOptionalBoolPicker(title: String(localized: title), value: value)
   }
 
   private func textArea(_ placeholder: String, text: Binding<String>, minHeight: CGFloat) -> some View {
@@ -3121,7 +3122,9 @@ private struct RoutingWorkspaceNotice: View {
       VStack(alignment: .leading, spacing: 2) {
         Text(title)
           .font(.callout.weight(.medium))
-        Text(LocalizedStringKey(message))
+        // Verbatim: the message is usually a core or library error, and a `LocalizedStringKey`
+        // would render `[A] ... [B]` or `_x_` spans in it as Markdown.
+        Text(verbatim: message)
           .font(.caption)
           .foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)

@@ -84,7 +84,8 @@ struct PublicIPInfoCard: View {
         )
       }
 
-      if let message = state.errorMessage {
+      // The placeholder above already carries the error when there is no address to show.
+      if let message = state.errorMessage, state.info != nil || state.isLoading {
         Label(message, systemImage: "exclamationmark.triangle.fill")
           .font(.caption)
           .foregroundStyle(.orange)
@@ -151,7 +152,9 @@ struct PublicIPInfoCard: View {
 
         if !diagnostics.facts.isEmpty {
           LazyVGrid(columns: detailColumns, alignment: .leading, spacing: isCompact ? 5 : 7) {
-            ForEach(Array(diagnostics.facts.prefix(4).enumerated()), id: \.offset) { _, fact in
+            // Every fact: the base four are always present, so a cap of four dropped the one fact a
+            // warning adds (the matched rule, the TUN or NE issue) — the one that explains it.
+            ForEach(Array(diagnostics.facts.enumerated()), id: \.offset) { _, fact in
               PublicIPInfoDetail(title: fact.title, value: fact.value)
             }
           }
@@ -412,6 +415,7 @@ private struct PublicIPInfoDetail: View {
         .font(.system(.caption, design: .rounded).weight(.semibold))
         .lineLimit(1)
         .minimumScaleFactor(0.68)
+        .help(value)
     }
     .frame(maxWidth: .infinity, alignment: .leading)
   }

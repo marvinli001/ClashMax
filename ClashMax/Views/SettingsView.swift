@@ -955,6 +955,8 @@ private struct GlobalShortcutBindingRow: View {
       .toggleStyle(.switch)
       .disabled(binding.shortcut == nil)
       .help("Enable global shortcut")
+      // Fourteen identical switches: VoiceOver needs the action each one controls.
+      .accessibilityLabel(action.displayName)
     }
     .font(.caption)
   }
@@ -2169,6 +2171,7 @@ private struct RuleOverlayEditableRuleRow: View {
         .labelsHidden()
         .pickerStyle(.menu)
         .frame(width: 128)
+        .help(rule.kind.displayName)
 
         if rule.kind == .subRule {
           SubRuleConditionPicker(condition: $rule.value)
@@ -2176,20 +2179,31 @@ private struct RuleOverlayEditableRuleRow: View {
         } else if rule.kind.requiresValue {
           TextField(LocalizedStringKey(rule.kind.valuePlaceholder), text: $rule.value)
             .textFieldStyle(.roundedBorder)
-            .frame(minWidth: 96)
+            .frame(minWidth: 80)
         }
 
         TextField(LocalizedStringKey(rule.kind.policyPlaceholder), text: $rule.policy)
           .textFieldStyle(.roundedBorder)
-          .frame(width: 92)
+          .frame(minWidth: 72, idealWidth: 92, maxWidth: 120)
+      }
+
+      // The checkbox and row buttons share the preview line: on one line with the fields, an
+      // IP-CIDR row needed ~560pt and ran past the 460pt profile editor sheet.
+      HStack(spacing: 8) {
+        Text(rule.runtimeRule)
+          .font(.system(.caption2, design: .monospaced))
+          .foregroundStyle(rule.validationError == nil ? Color.secondary : Color.orange)
+          .lineLimit(1)
+          .truncationMode(.middle)
+          .help(rule.runtimeRule)
+          .frame(maxWidth: .infinity, alignment: .leading)
 
         if rule.kind.allowsNoResolve {
           Toggle("No Resolve", isOn: $rule.noResolve)
             .toggleStyle(.checkbox)
+            .controlSize(.small)
             .fixedSize()
         }
-
-        Spacer(minLength: 4)
 
         RuleOverlayRowButtons(
           canMoveUp: canMoveUp,
@@ -2200,12 +2214,6 @@ private struct RuleOverlayEditableRuleRow: View {
           onDelete: onDelete
         )
       }
-
-      Text(rule.runtimeRule)
-        .font(.system(.caption2, design: .monospaced))
-        .foregroundStyle(rule.validationError == nil ? Color.secondary : Color.orange)
-        .lineLimit(1)
-        .truncationMode(.middle)
     }
     .padding(.horizontal, 8)
     .padding(.vertical, 6)
@@ -2772,13 +2780,13 @@ private struct ExternalControlSettingsRow: View {
   private func saveDashboardProfile() {
     let trimmedName = dashboardNameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmedName.isEmpty else {
-      dashboardError = "Dashboard name cannot be empty."
+      dashboardError = String(localized: "Dashboard name cannot be empty.")
       return
     }
     guard let url = URL(string: dashboardURLDraft.trimmingCharacters(in: .whitespacesAndNewlines)),
           ["http", "https"].contains(url.scheme?.lowercased() ?? "")
     else {
-      dashboardError = "Dashboard URL must start with http or https."
+      dashboardError = String(localized: "Dashboard URL must start with http or https.")
       return
     }
     let profile = ExternalDashboardProfile(
@@ -3050,7 +3058,7 @@ private struct ExternalControlSettingsSheet: View {
     }
   }
 
-  private func copyButton(value: String, isEnabled: Bool, help: String) -> some View {
+  private func copyButton(value: String, isEnabled: Bool, help: LocalizedStringResource) -> some View {
     Button {
       NSPasteboard.general.clearContents()
       NSPasteboard.general.setString(value, forType: .string)
@@ -3060,7 +3068,8 @@ private struct ExternalControlSettingsSheet: View {
     }
     .buttonStyle(.borderless)
     .disabled(!isEnabled || value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-    .help(help)
+    .help(Text(help))
+    .accessibilityLabel(Text(help))
   }
 }
 

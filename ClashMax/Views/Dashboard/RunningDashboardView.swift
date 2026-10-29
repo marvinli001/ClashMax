@@ -536,7 +536,7 @@ enum DashboardProxySelectionState {
   }
 
   static func typeLabel(for node: ProxyNode?) -> String {
-    guard let type = node?.type, !type.isEmpty else { return "Proxy" }
+    guard let type = node?.type, !type.isEmpty else { return String(localized: "Proxy") }
     switch type.lowercased() {
     case "hysteria2":
       return "Hysteria2"
@@ -547,9 +547,11 @@ enum DashboardProxySelectionState {
     case "zerotier":
       return "ZeroTier"
     case "direct":
-      return "Direct"
+      return String(localized: "Direct")
     default:
-      return type.capitalized
+      // The core reports adapter types in their own casing (`URLTest`, `WireGuard`, `AnyTLS`);
+      // `capitalized` would flatten those to "Urltest". Only an all-lowercase type gets a capital.
+      return type.contains(where: \.isUppercase) ? type : type.capitalized
     }
   }
 }
@@ -670,6 +672,7 @@ private struct CurrentProxyRuntimeCard: View {
           .foregroundStyle(.secondary)
           .lineLimit(1)
       }
+      .help(Text(verbatim: "\(node.name)\n\(group.name)"))
 
       Spacer(minLength: 12)
 
@@ -2058,7 +2061,12 @@ private struct ProxyGroupsRuntimeCard: View {
       if groups.isEmpty, isLoading {
         ClashMaxSkeletonList(rows: 4, showsLeadingIcon: false, trailingWidth: 58)
       } else if groups.isEmpty {
-        DashboardEmptyRuntimeView(title: "Waiting for runtime data", symbolName: "hourglass")
+        // Loading has settled, so nothing is on its way: say so instead of an hourglass that never ends.
+        DashboardEmptyRuntimeView(
+          title: "No proxy groups",
+          symbolName: "point.3.connected.trianglepath.dotted",
+          message: String(localized: "Refresh runtime data or check the active profile's proxy-groups.")
+        )
       } else {
         let summary = DashboardProxyGroupsSummary(groups: groups)
         VStack(spacing: 0) {
@@ -2106,7 +2114,9 @@ private struct DashboardProxyGroupRow: View {
           .truncationMode(.tail)
         Spacer(minLength: 8)
         if let node, node.resolvedDelayState != .unknown {
+          // Never compressed: squeezed by a long group name, the pill's text wrapped one glyph per line.
           DashboardDelayBadge(state: node.resolvedDelayState)
+            .fixedSize()
         }
         Image(systemName: "chevron.right")
           .font(.caption2.weight(.semibold))
@@ -2123,7 +2133,8 @@ private struct DashboardProxyGroupRow: View {
     }
     .buttonStyle(.plain)
     .onHover { isHovered = $0 }
-    .help(Text("Show \(group.name) in Proxies"))
+    .help(Text(verbatim: "\(group.name) · \(group.selected ?? String(localized: "No selection"))\n")
+      + Text("Show \(group.name) in Proxies"))
   }
 }
 
