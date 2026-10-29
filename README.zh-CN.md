@@ -4,6 +4,7 @@
 
 <div align="center">
   <h1>ClashMax</h1>
+  <p><a href="https://t.me/darkfiber_labs"><img alt="加入 ClashMax Telegram 交流群" src="https://img.shields.io/badge/-%E5%8A%A0%E5%85%A5%20Telegram%20%E4%BA%A4%E6%B5%81%E7%BE%A4-26A5E4?style=for-the-badge&logo=telegram&logoColor=white" height="40"></a></p>
   <p><a href="README.md">English</a> | <strong>简体中文</strong></p>
   <p>面向 macOS 的原生 Mihomo 代理客户端，聚焦配置管理、运行控制、代理组、连接、规则、日志和系统集成。</p>
   <p>
@@ -12,7 +13,6 @@
     <img alt="Swift" src="https://img.shields.io/badge/Swift-6.0-F05138?logo=swift&logoColor=white">
     <img alt="Mihomo" src="https://img.shields.io/badge/core-Mihomo%20v1.19.33-2f6fed">
     <img alt="License" src="https://img.shields.io/badge/license-GPL--3.0-2563eb">
-    <a href="https://t.me/darkfiber_labs"><img alt="Telegram" src="https://img.shields.io/badge/Telegram-%E4%BA%A4%E6%B5%81%E7%BE%A4-26A5E4?logo=telegram&logoColor=white"></a>
   </p>
 </div>
 

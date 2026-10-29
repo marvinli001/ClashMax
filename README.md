@@ -4,6 +4,7 @@
 
 <div align="center">
   <h1>ClashMax</h1>
+  <p><a href="https://t.me/darkfiber_labs"><img alt="Join the ClashMax Telegram community" src="https://img.shields.io/badge/-Join%20Telegram%20Community-26A5E4?style=for-the-badge&logo=telegram&logoColor=white" height="40"></a></p>
   <p><strong>English</strong> | <a href="README.zh-CN.md">简体中文</a></p>
   <p>A native Mihomo proxy client for macOS, focused on profile management, runtime control, proxy groups, connections, rules, logs, and system integration.</p>
   <p>
@@ -12,7 +13,6 @@
     <img alt="Swift" src="https://img.shields.io/badge/Swift-6.0-F05138?logo=swift&logoColor=white">
     <img alt="Mihomo" src="https://img.shields.io/badge/core-Mihomo%20v1.19.33-2f6fed">
     <img alt="License" src="https://img.shields.io/badge/license-GPL--3.0-2563eb">
-    <a href="https://t.me/darkfiber_labs"><img alt="Telegram" src="https://img.shields.io/badge/Telegram-Community%20Group-26A5E4?logo=telegram&logoColor=white"></a>
   </p>
 </div>
 
