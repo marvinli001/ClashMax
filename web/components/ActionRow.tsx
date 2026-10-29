@@ -3,7 +3,7 @@
 import type { SiteContent } from '@/lib/content'
 import { LINKS } from '@/lib/site'
 import { useRelease } from './ReleaseProvider'
-import { MarkDownload, MarkReport, MarkSource } from './Symbology'
+import { MarkCommunity, MarkDownload, MarkReport, MarkSource } from './Symbology'
 import styles from './ActionRow.module.css'
 
 /**
@@ -24,6 +24,10 @@ export function ActionRow({ content }: { content: SiteContent }) {
       >
         <MarkDownload size={18} />
         {content.hero.primaryCta}
+      </a>
+      <a className="pill pill--community" href={LINKS.telegram} target="_blank" rel="noopener">
+        <MarkCommunity size={18} />
+        {content.hero.communityCta}
       </a>
       <a className="pill" href={LINKS.repo}>
         <MarkSource size={18} />

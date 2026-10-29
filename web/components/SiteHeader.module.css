@@ -53,6 +53,32 @@
   text-decoration: underline;
 }
 
+/* The group link is the one header item that stays at every width, so it
+   carries the control shape rather than a bare text link. */
+.community {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  height: 2rem;
+  padding-inline: 0.75rem;
+  border-radius: var(--r-control);
+  border: 1px solid var(--airway);
+  color: var(--airway);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.community:hover {
+  background: var(--airway);
+  color: #fff;
+}
+
+@media (prefers-color-scheme: dark) {
+  .community:hover { color: #08111f; }
+}
+
 @media (max-width: 599px) {
   .links { gap: 0.875rem; }
   .link { display: none; }

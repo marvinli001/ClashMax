@@ -66,6 +66,8 @@ export interface SiteContent {
     skipToContent: string
     languageLabel: string
     repo: string
+    /** Short label for the Telegram group link in the header. */
+    community: string
   }
 
   hero: {
@@ -77,6 +79,7 @@ export interface SiteContent {
     primaryCtaAria: string
     secondaryCta: string
     tertiaryCta: string
+    communityCta: string
   }
 
   plate: {
@@ -194,6 +197,7 @@ export interface SiteContent {
     body: string
     cta: string
     alt: string
+    community: string
   }
 
   footer: {
@@ -202,6 +206,7 @@ export interface SiteContent {
     source: string
     issues: string
     discussions: string
+    community: string
     security: string
     core: string
     note: string

@@ -24,6 +24,7 @@ export const zh: SiteContent = {
     skipToContent: '跳到内容',
     languageLabel: '语言',
     repo: '仓库',
+    community: 'TG 交流群',
   },
 
   hero: {
@@ -35,6 +36,7 @@ export const zh: SiteContent = {
     primaryCtaAria: '下载最新 ClashMax DMG',
     secondaryCta: 'GitHub',
     tertiaryCta: '提交 Issue',
+    communityCta: '加入 TG 交流群',
   },
 
   plate: {
@@ -114,7 +116,7 @@ export const zh: SiteContent = {
       { label: '路径', detail: '当前节点，以及走系统代理还是 TUN' },
     ],
     app: {
-      status: '运行中 v1.19.30',
+      status: '运行中 v1.19.33',
       stop: '停止',
       pills: [
         { label: '配置', value: 'Home' },
@@ -323,9 +325,10 @@ export const zh: SiteContent = {
   close: {
     heading: '开源、早期、欢迎直接挑问题。',
     body:
-      'ClashMax 因为分发并控制 Mihomo，保持 GPL-3.0 兼容边界。可复现 bug 请直接发到 GitHub Issues。',
+      'ClashMax 因为分发并控制 Mihomo，保持 GPL-3.0 兼容边界。可复现 bug 请直接发到 GitHub Issues；安装使用问题和版本动态在 Telegram 交流群。',
     cta: '下载 DMG',
     alt: '反馈问题',
+    community: '加入 Telegram 交流群',
   },
 
   footer: {
@@ -334,6 +337,7 @@ export const zh: SiteContent = {
     source: '源码',
     issues: 'Issues',
     discussions: '讨论区',
+    community: 'Telegram 交流群',
     security: '安全策略',
     core: 'Mihomo 内核',
     note: '原生 macOS Mihomo 客户端。',

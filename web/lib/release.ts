@@ -9,15 +9,15 @@ import { LINKS } from './site'
  * they are the values a visitor sees when the API is rate-limited or blocked.
  */
 export const FALLBACK_RELEASE = {
-  appVersion: 'v1.0.23',
-  appBuild: '29',
-  appPublishedAt: '2026-08-22T06:09:38Z',
+  appVersion: 'v1.1.4',
+  appBuild: '34',
+  appPublishedAt: '2026-10-24T11:41:20Z',
   appDownloadURL: LINKS.releases,
   appZipURL: LINKS.releases,
   appReleaseURL: LINKS.releases,
   primaryAsset: 'DMG',
-  mihomoVersion: 'v1.19.30',
-  mihomoPublishedAt: '2026-08-16T10:11:34Z',
+  mihomoVersion: 'v1.19.33',
+  mihomoPublishedAt: '2026-10-21T16:56:13Z',
   mihomoURL: LINKS.mihomoReleases,
 } as const
 

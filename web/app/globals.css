@@ -329,6 +329,19 @@ a:hover { text-decoration-color: currentColor; }
   .pill--primary:hover { color: #08111f; }
 }
 
+/* Second-loudest control: the Telegram group, outlined in the airway hue so
+   it reads before the neutral pills without competing with the download. */
+.pill--community {
+  border-color: var(--airway);
+  color: var(--airway);
+  font-weight: 600;
+}
+
+.pill--community:hover {
+  border-color: var(--airway-deep);
+  color: var(--airway-deep);
+}
+
 .pill svg { flex: none; }
 
 /* --- Foreign material --------------------------------------------------

@@ -57,6 +57,14 @@ export const MarkReport = (p: MarkProps) => (
   </Mark>
 )
 
+/** Community: a paper plane on its own track, the Telegram group's mark redrawn on the chart grid. */
+export const MarkCommunity = (p: MarkProps) => (
+  <Mark {...p}>
+    <path d="M21 3.5 3 10.5l6.5 2.5L12 20.5l3.25-4.75L19 18.5 21 3.5Z" />
+    <path d="M9.5 13 21 3.5" />
+  </Mark>
+)
+
 /** Chart surfaces, one per page in the app. Same grid, same stroke. */
 
 export const MarkDashboard = (p: MarkProps) => (

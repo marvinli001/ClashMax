@@ -25,6 +25,7 @@ export const en: SiteContent = {
     skipToContent: 'Skip to content',
     languageLabel: 'Language',
     repo: 'Repository',
+    community: 'Telegram group',
   },
 
   hero: {
@@ -36,6 +37,7 @@ export const en: SiteContent = {
     primaryCtaAria: 'Download the latest ClashMax DMG',
     secondaryCta: 'GitHub',
     tertiaryCta: 'Open Issue',
+    communityCta: 'Join Telegram group',
   },
 
   plate: {
@@ -115,7 +117,7 @@ export const en: SiteContent = {
       { label: 'Path', detail: 'The current node, and whether system proxy or TUN carries it' },
     ],
     app: {
-      status: 'Running v1.19.30',
+      status: 'Running v1.19.33',
       stop: 'Stop',
       pills: [
         { label: 'Profile', value: 'Home' },
@@ -335,9 +337,10 @@ export const en: SiteContent = {
   close: {
     heading: 'Open source, early, and direct about issues.',
     body:
-      'ClashMax is GPL-3.0 compatible because it distributes and controls Mihomo. Reproducible bugs belong in GitHub Issues.',
+      'ClashMax is GPL-3.0 compatible because it distributes and controls Mihomo. Reproducible bugs belong in GitHub Issues; setup questions and release news live in the Telegram group.',
     cta: 'Download DMG',
     alt: 'Report issue',
+    community: 'Join the Telegram group',
   },
 
   footer: {
@@ -346,6 +349,7 @@ export const en: SiteContent = {
     source: 'Source',
     issues: 'Issues',
     discussions: 'Discussions',
+    community: 'Telegram group',
     security: 'Security policy',
     core: 'Mihomo core',
     note: 'Native macOS Mihomo client.',

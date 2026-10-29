@@ -3,7 +3,7 @@
 import type { SiteContent } from '@/lib/content'
 import { LINKS } from '@/lib/site'
 import { useRelease } from './ReleaseProvider'
-import { MarkDownload } from './Symbology'
+import { MarkCommunity, MarkDownload } from './Symbology'
 import styles from './Close.module.css'
 
 export function Close({ content }: { content: SiteContent }) {
@@ -30,6 +30,10 @@ export function Close({ content }: { content: SiteContent }) {
             >
               <MarkDownload size={18} />
               {close.cta}
+            </a>
+            <a className="pill pill--community" href={LINKS.telegram} target="_blank" rel="noopener">
+              <MarkCommunity size={18} />
+              {close.community}
             </a>
             <a className={styles.alt} href={LINKS.issues}>
               {close.alt}

@@ -31,6 +31,11 @@ export function SiteFooter({ content }: { content: SiteContent }) {
               <a href={LINKS.discussions}>{footer.discussions}</a>
             </li>
             <li>
+              <a href={LINKS.telegram} target="_blank" rel="noopener">
+                {footer.community}
+              </a>
+            </li>
+            <li>
               <a href={LINKS.security}>{footer.security}</a>
             </li>
             <li>
