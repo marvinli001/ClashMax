@@ -42,6 +42,12 @@ export interface SiteContent {
     description: string
     /** Short name for the browser tab / og:site_name. */
     siteName: string
+    /** Search phrases this locale's readers actually type, for <meta name="keywords">. */
+    keywords: string[]
+    /** One-line category for structured data, in this locale. */
+    category: string
+    /** Feature list for the SoftwareApplication record; each item is a claim the page makes. */
+    featureList: string[]
   }
 
   nav: {
@@ -164,6 +170,17 @@ export interface SiteContent {
     heading: string
     body: string
     steps: { title: string; detail: string }[]
+  }
+
+  /**
+   * Questions people ask before installing, answered in full sentences.
+   * Rendered visibly and mirrored into FAQPage structured data and llms.txt,
+   * so search engines and answer engines quote the same text a visitor reads.
+   */
+  faq: {
+    heading: string
+    body: string
+    items: { question: string; answer: string }[]
   }
 
   close: {

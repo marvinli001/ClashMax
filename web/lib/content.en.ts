@@ -3,10 +3,9 @@ import type { SiteContent } from './content'
 /**
  * English copy.
  *
- * The voice is the incumbent page's own: flat declarative sentences, technical
- * nouns, no metaphor. Every heading, boundary, and surface description below is
- * either lifted verbatim from docs/index.html or written to sit beside those
- * lines without a seam. The chart is the visual world; it does not get to talk.
+ * Product-documentation voice: short declarative sentences, technical nouns,
+ * no casual phrasing, and no meta commentary about the page itself (no
+ * "redrawn from the app", no "the page states"). The chart does not get to talk.
  */
 export const en: SiteContent = {
   locale: 'en',
@@ -15,62 +14,87 @@ export const en: SiteContent = {
   otherLocaleName: '简体中文',
 
   meta: {
-    title: 'ClashMax - Native macOS Mihomo Client',
+    title: 'ClashMax - Native Mihomo (Clash Meta) Client for macOS',
     description:
-      'ClashMax is a native macOS Mihomo proxy client with profiles, proxy groups, rules, logs, system proxy, and TUN controls.',
+      'Free, open-source (GPL-3.0) Mihomo / Clash Meta client for macOS 15 and later, built in SwiftUI. Profiles, subscriptions, proxy groups, rules, connections, logs, system proxy, and TUN mode.',
     siteName: 'ClashMax',
+    keywords: [
+      'ClashMax',
+      'Mihomo client',
+      'Mihomo GUI',
+      'Clash Meta',
+      'Clash for Mac',
+      'macOS proxy client',
+      'ClashX alternative',
+      'Clash Verge alternative',
+      'TUN mode',
+      'system proxy',
+      'SwiftUI',
+      'open source',
+    ],
+    category: 'Network proxy client',
+    featureList: [
+      'Import Clash and Mihomo YAML profiles and subscriptions',
+      'Proxy group switching and delay tests',
+      'Live connections, rules, and logs',
+      'System proxy mode with automatic restore',
+      'TUN mode through a privileged helper',
+      'Menu bar controls',
+      'Migration from ClashX, Clash Verge, and FlClash',
+      'Bundled Mihomo core with in-app updates',
+    ],
   },
 
   nav: {
     skipToContent: 'Skip to content',
     languageLabel: 'Language',
     repo: 'Repository',
-    community: 'Telegram group',
+    community: 'Telegram',
   },
 
   hero: {
     headline: 'macOS control',
     headlineTail: 'for Mihomo.',
     subtext:
-      'A native client for the Mihomo core. Profiles, proxy groups, rules, logs, system proxy, and TUN controls, on macOS 15 and later.',
+      'A native SwiftUI client for the Mihomo core. Profiles, proxy groups, rules, logs, system proxy, and TUN mode on macOS 15 and later.',
     primaryCta: 'Download DMG',
     primaryCtaAria: 'Download the latest ClashMax DMG',
     secondaryCta: 'GitHub',
-    tertiaryCta: 'Open Issue',
-    communityCta: 'Join Telegram group',
+    tertiaryCta: 'Report an Issue',
+    communityCta: 'Join Telegram',
   },
 
   shot: {
     alt: 'The ClashMax Home page while the core runs: status, live traffic, current node, public IP, and proxy groups.',
-    caption: 'Home, running, in the app as it ships. Sample profile and nodes.',
+    caption: 'Home, core running. Sample profile and nodes.',
   },
 
   strip: {
-    live: 'GitHub live',
-    fallback: 'Local fallback',
-    checking: 'Checking GitHub',
-    appVersion: 'ClashMax release',
+    live: 'Live',
+    fallback: 'Offline data',
+    checking: 'Syncing',
+    appVersion: 'ClashMax version',
     appBuild: 'Build',
     core: 'Mihomo core',
-    platform: 'Platform',
+    platform: 'Requires',
     platformValue: 'macOS 15+',
-    platformNote: 'SwiftUI app, GPL-3.0 boundary',
-    released: 'Published',
-    coreReleased: 'Latest upstream release',
+    platformNote: 'SwiftUI · GPL-3.0',
+    released: 'Released',
+    coreReleased: 'Upstream release',
     releaseNotes: 'Release notes',
-    buildNote: 'Read from the current release channel',
+    buildNote: 'Current release channel',
   },
 
   dashboard: {
-    heading: 'The first screen is the proxy client.',
+    heading: 'The first screen is the console.',
     body:
-      'Start, stop, switch modes, inspect TUN and helper readiness, and recover system proxy state without guessing what the app is doing.',
+      'Start and stop the core, switch modes, check TUN and helper readiness, and recover system proxy state.',
     figure: 'FIG. 1',
-    caption: 'The Dashboard with the core running and system proxy on, redrawn from the app.',
+    caption: 'Dashboard schematic: core running, system proxy on.',
     callouts: [
-      { label: 'Runtime', detail: 'Core status, active profile, and the run control' },
-      { label: 'Traffic', detail: 'Upload and download per second, sampled from the core' },
-      { label: 'Path', detail: 'The current node, and whether system proxy or TUN carries it' },
+      { label: 'Runtime', detail: 'Core status, active profile, and run control' },
+      { label: 'Traffic', detail: 'Upload and download rates sampled from the core' },
+      { label: 'Path', detail: 'Current node and active path: system proxy or TUN' },
     ],
     app: {
       status: 'Running v1.19.33',
@@ -120,15 +144,15 @@ export const en: SiteContent = {
   },
 
   config: {
-    heading: 'Source profiles stay untouched. Runtime config is app-managed.',
+    heading: 'Source profiles stay read-only. Runtime config is app-managed.',
     body:
-      'ClashMax keeps original YAML profiles intact, then generates runtime YAML for ports, controller auth, DNS, TUN, and launch mode.',
+      'Before launch, ClashMax derives runtime YAML from the source profile and injects ports, controller auth, DNS, TUN, and run mode.',
     sourceLabel: 'Profile source',
     sourceNote:
-      'Subscriptions and local YAML remain readable, recoverable, and separate from launch-time wiring.',
+      'Subscriptions and local YAML are stored apart from launch-time values.',
     runtimeLabel: 'Managed launch',
-    runtimeNote: 'The app writes the values Mihomo needs without mutating the user profile.',
-    injected: 'Managed runtime values',
+    runtimeNote: 'Only the fields Mihomo needs at launch are written. The source profile is never modified.',
+    injected: 'Managed fields',
     injectedKeys: [
       { key: 'external-controller', value: '127.0.0.1' },
       { key: 'secret', value: 'generated per run' },
@@ -140,56 +164,56 @@ export const en: SiteContent = {
   },
 
   legend: {
-    heading: 'Eight surfaces ship in the app.',
-    body: 'Dashboard, Profiles, Proxies, Connections, Rules, Logs, Settings, and the macOS menu bar.',
+    heading: 'Eight surfaces.',
+    body: 'Dashboard, Profiles, Proxies, Connections, Rules, Logs, Settings, and the menu bar.',
     entries: [
       {
         symbol: 'dashboard',
         name: 'Dashboard',
-        detail: 'Start, stop, switch modes, and inspect TUN and helper readiness',
+        detail: 'Start, stop, switch modes, check TUN and helper readiness',
       },
       {
         symbol: 'profiles',
         name: 'Profiles',
-        detail: 'Local files and subscription URLs keep clear ownership and update paths',
+        detail: 'Import, update, and switch local YAML and subscriptions',
       },
       {
         symbol: 'proxies',
         name: 'Proxies',
-        detail: 'Switch proxy groups, run latency checks, and read provider health state',
+        detail: 'Proxy group selection, latency tests, provider health',
       },
       {
         symbol: 'connections',
         name: 'Connections',
-        detail: 'Review sessions, destinations, matched rules, upload and download',
+        detail: 'Sessions, destinations, matched rules, traffic',
       },
       {
         symbol: 'rules',
         name: 'Rules',
-        detail: 'Trace why traffic went direct, proxied, or rejected without opening raw config',
+        detail: 'The rule behind every direct, proxied, or rejected request',
       },
       {
         symbol: 'logs',
         name: 'Logs',
-        detail: 'Mihomo logs sit near runtime controls for config and network debugging',
+        detail: 'Live Mihomo logs for config and network diagnosis',
       },
       {
         symbol: 'settings',
         name: 'Settings',
-        detail: 'Ports, DNS, TUN, launch behaviour, and updates',
+        detail: 'Ports, DNS, TUN, launch at login, updates',
       },
       {
         symbol: 'menubar',
         name: 'Menu bar',
-        detail: 'Check status and run quick controls from the macOS menu bar',
+        detail: 'Status and quick controls',
       },
     ],
   },
 
   replicas: {
-    heading: 'Groups are quick to scan. Traffic is inspectable.',
+    heading: 'Groups at a glance. Traffic, line by line.',
     body:
-      'Both panels are rebuilt in HTML from the app’s own layout, labels, and states, so they stay legible at any size.',
+      'Node latency, current selection, matched rules, and outbound chains.',
     tabs: [
       { id: 'proxies', label: 'Proxies' },
       { id: 'connections', label: 'Connections' },
@@ -197,12 +221,11 @@ export const en: SiteContent = {
     figures: {
       proxies: {
         figure: 'FIG. 2',
-        caption: 'Proxies: a selector group with per-node delay, redrawn from the app.',
+        caption: 'Proxies: a selector group with per-node latency.',
       },
       connections: {
         figure: 'FIG. 3',
-        caption:
-          'Connections: open connections with the rule that matched each one, redrawn from the app.',
+        caption: 'Connections: open connections and their matched rules.',
       },
     },
     proxies: {
@@ -230,73 +253,120 @@ export const en: SiteContent = {
   },
 
   restricted: {
-    heading: 'Security-sensitive behavior is not vague.',
+    heading: 'Explicit security boundaries.',
     body:
-      'A proxy client touches local networking, so the page states the same boundaries the app enforces.',
+      'Every operation that touches local networking runs within a defined constraint.',
     boundaries: [
       {
         title: 'Local controller',
         detail:
-          'Mihomo controller access is bound to 127.0.0.1 by default and protected with Bearer auth.',
+          'The Mihomo controller binds to 127.0.0.1 and requires Bearer auth.',
       },
       {
         title: 'Per-run secret',
         detail:
-          'Each launch generates a fresh controller secret instead of relying on a shared static credential.',
+          'Each launch generates a new controller secret. No static credentials.',
       },
       {
         title: 'Helper boundary',
         detail:
-          'User-mode owns normal system proxy. The privileged helper owns TUN and validates app-owned core and config paths.',
+          'User mode manages the system proxy. A privileged helper manages TUN and validates core and config paths.',
       },
       {
         title: 'Single bundled core',
         detail:
-          'Only the bundled Mihomo core runs. Another core channel would need a manifest, hash checks, and helper allowlisting first.',
+          'Only the bundled Mihomo core runs. Any additional core channel requires a manifest, hash verification, and helper allowlisting.',
       },
       {
         title: 'Keychain credentials',
         detail:
-          'Subscription URLs are stored per profile ID in the Keychain, never in the runtime YAML.',
+          'Subscription URLs are stored in the Keychain by profile ID and never written to runtime YAML.',
       },
       {
-        title: 'GPL-3.0 boundary',
+        title: 'GPL-3.0 license',
         detail:
-          'ClashMax distributes and controls Mihomo, so it keeps a GPL-3.0 compatible licensing boundary.',
+          'ClashMax distributes and controls Mihomo under a GPL-3.0 compatible license.',
       },
     ],
   },
 
   approach: {
-    heading: 'Install takes four steps.',
-    body: 'From the release page to a running core.',
+    heading: 'Install in four steps.',
+    body: 'From download to a running core.',
     steps: [
-      { title: 'Download the DMG', detail: 'Take ClashMax-X.Y.Z.dmg from the latest release.' },
+      { title: 'Download the DMG', detail: 'Get ClashMax-X.Y.Z.dmg from the latest release.' },
       {
-        title: 'Drag to Applications',
+        title: 'Move to Applications',
         detail:
-          'Installing into /Applications is required for helper approval and the experimental Network Extension.',
+          'Required for helper approval and the experimental Network Extension.',
       },
       {
         title: 'Import a profile',
         detail:
-          'Open a local Clash or Mihomo YAML file, or add a subscription, then start the runtime from the Dashboard.',
+          'Import a local Clash or Mihomo YAML file or a subscription URL, then start the core from the Dashboard.',
       },
       {
-        title: 'Approve the prompt',
+        title: 'Grant permissions',
         detail:
-          'TUN mode and NE Proxy each need their macOS approval before they can run. System proxy mode does not.',
+          'TUN mode and NE Proxy each require macOS approval. System proxy mode does not.',
+      },
+    ],
+  },
+
+  faq: {
+    heading: 'FAQ.',
+    body: 'Features, compatibility, migration, and updates.',
+    items: [
+      {
+        question: 'What is ClashMax?',
+        answer:
+          'ClashMax is a free graphical client for the Mihomo (Clash Meta) core, built in SwiftUI for macOS 15 and later. It imports Clash and Mihomo YAML profiles and subscriptions, runs a bundled Mihomo core, and provides proxy groups, connections, rules, logs, system proxy, TUN mode, and menu bar controls.',
+      },
+      {
+        question: 'Is ClashMax free and open source?',
+        answer:
+          'Yes. ClashMax is free and licensed under GPL-3.0. Source, releases, and issues are public on GitHub. No account. No telemetry.',
+      },
+      {
+        question: 'Which Macs does it run on?',
+        answer:
+          'macOS 15 or later, on Apple Silicon and Intel. Each release bundles the matching stable Mihomo core; no separate core installation is required.',
+      },
+      {
+        question: 'Can profiles be migrated from ClashX, Clash Verge, or FlClash?',
+        answer:
+          'Yes. In Profiles, choose Add > Import from Other Client and select that client\'s config folder. ClashMax reads its profiles and subscriptions and presents a migration report before applying changes. Clash and Mihomo YAML files and subscription URLs import directly.',
+      },
+      {
+        question: 'How is ClashMax different from Clash Verge Rev or Clash Party?',
+        answer:
+          'Clash Verge Rev and Clash Party are cross-platform clients built on web technology (Tauri and Electron). ClashMax is a native SwiftUI app for macOS only, focused on traceable core behavior: the rule a host matches, why traffic bypasses the proxy, and the runtime YAML a change produces before it is applied.',
+      },
+      {
+        question: 'Does ClashMax modify the original profile?',
+        answer:
+          'No. Imported YAML stays unchanged. Before each launch, ClashMax writes a separate runtime YAML with ports, the local controller, a per-launch secret, DNS, TUN, and run mode.',
+      },
+      {
+        question: 'How do system proxy and TUN mode differ?',
+        answer:
+          'System proxy sets the macOS HTTP, HTTPS, and SOCKS proxy for apps that honor it, requires no additional approval, and is restored when the core stops. TUN mode routes all traffic, including apps that ignore the system proxy, through a privileged helper that requires one-time macOS approval.',
+      },
+      {
+        question: 'How does ClashMax update?',
+        answer:
+          'The app checks for and installs updates through Sparkle; releases are published on GitHub Releases. First installs use the DMG from the release page.',
       },
     ],
   },
 
   close: {
-    heading: 'Open source, early, and direct about issues.',
+    heading: 'Open source. Actively developed.',
     body:
-      'ClashMax is GPL-3.0 compatible because it distributes and controls Mihomo. Reproducible bugs belong in GitHub Issues; setup questions and release news live in the Telegram group.',
+      'Distributed under a GPL-3.0 compatible license. File reproducible bugs in GitHub Issues; setup questions and release news are in the Telegram group.',
     cta: 'Download DMG',
-    alt: 'Report issue',
-    community: 'Join the Telegram group',
+    alt: 'Report an issue',
+    community: 'Join Telegram',
   },
 
   footer: {

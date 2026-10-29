@@ -114,7 +114,8 @@ const CONTRACT = `<!--
                   the app icon, restricted magenta reserved for verdicts.
   STORY           See the console -> read the live edition -> read the dashboard ->
                   learn the source YAML is untouched -> tour the surfaces ->
-                  read the boundaries out loud -> install in four steps.
+                  read the boundaries out loud -> install in four steps ->
+                  answer the questions asked before installing.
   FIRST VIEWPORT  The console itself: a capture of the running Home page from
                   the shipping app, matted on one plate beside the headline,
                   with a light and a dark take that follow the system.
@@ -128,8 +129,9 @@ const CONTRACT = `<!--
                   it reproduces.
   FINISH          Live release figures settle with instrument damping rather
                   than blinking in. Both locales are real prerendered
-                  documents with their own lang, metadata, hreflang pair, and
-                  screenshot.
+                  documents with their own lang, metadata, hreflang pair,
+                  screenshot, and JSON-LD; robots.txt, sitemap.xml and
+                  llms.txt are generated from the same content records.
   SEED            2369b4de
 -->`;
 

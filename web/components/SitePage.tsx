@@ -9,8 +9,10 @@ import { Legend } from './Legend'
 import { Replicas } from './Replicas'
 import { Restricted } from './Restricted'
 import { Approach } from './Approach'
+import { Faq } from './Faq'
 import { Close } from './Close'
 import { SiteFooter } from './SiteFooter'
+import { StructuredData } from './StructuredData'
 
 /**
  * One sheet, read top to bottom, in whichever language was authored for it.
@@ -20,6 +22,7 @@ import { SiteFooter } from './SiteFooter'
 export function SitePage({ content }: { content: SiteContent }) {
   return (
     <ReleaseProvider>
+      <StructuredData content={content} />
       <a className="skip" href="#main">
         {content.nav.skipToContent}
       </a>
@@ -33,6 +36,7 @@ export function SitePage({ content }: { content: SiteContent }) {
         <Replicas content={content} />
         <Restricted content={content} />
         <Approach content={content} />
+        <Faq content={content} />
         <Close content={content} />
       </main>
       <SiteFooter content={content} />

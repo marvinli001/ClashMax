@@ -3,9 +3,8 @@ import type { SiteContent } from './content'
 /**
  * 中文文案。
  *
- * 与英文一样，语气取自旧站 docs/index.html 自己的 translations.zh：陈述句、技术
- * 名词、不用比喻。能对上的整句直接沿用旧站原文，新增的句子按同一套语气写，保证
- * 两边读起来是同一个人写的。中文是独立的一份记录，不是英文的译文。
+ * 产品文档语气：短陈述句、技术名词、书面用语。不写口语，不写解释页面自身的元
+ * 说明（例如"照 app 重画""页面也写清"）。中文是独立的一份记录，不是英文的译文。
  */
 export const zh: SiteContent = {
   locale: 'zh',
@@ -14,62 +13,87 @@ export const zh: SiteContent = {
   otherLocaleName: 'English',
 
   meta: {
-    title: 'ClashMax - 原生 macOS Mihomo 客户端',
+    title: 'ClashMax - 原生 macOS Mihomo (Clash Meta) 客户端',
     description:
-      'ClashMax 是原生 macOS Mihomo 代理客户端，提供配置、代理组、规则、日志、系统代理和 TUN 控制。',
+      '免费开源（GPL-3.0）的 macOS Mihomo / Clash Meta 客户端，基于 SwiftUI 构建，支持 macOS 15 及以上。提供配置与订阅管理、代理组、规则、连接、日志、系统代理与 TUN 模式。',
     siteName: 'ClashMax',
+    keywords: [
+      'ClashMax',
+      'Mihomo 客户端',
+      'Clash Meta',
+      'Clash Mac 客户端',
+      'macOS 代理客户端',
+      'Mac 代理软件',
+      'ClashX 替代',
+      'Clash Verge 替代',
+      'TUN 模式',
+      '系统代理',
+      '订阅',
+      '开源',
+    ],
+    category: '网络代理客户端',
+    featureList: [
+      '导入 Clash / Mihomo YAML 配置和订阅',
+      '代理组切换与延迟测试',
+      '实时连接、规则和日志',
+      '系统代理模式，停止后自动还原',
+      '通过特权 helper 运行 TUN 模式',
+      '菜单栏控制',
+      '从 ClashX、Clash Verge、FlClash 迁移',
+      '内置 Mihomo 内核与应用内更新',
+    ],
   },
 
   nav: {
     skipToContent: '跳到内容',
     languageLabel: '语言',
     repo: '仓库',
-    community: 'TG 交流群',
+    community: 'Telegram',
   },
 
   hero: {
     headline: '原生 macOS',
-    headlineTail: '控制 Mihomo',
+    headlineTail: 'Mihomo 客户端',
     subtext:
-      'Mihomo 内核的原生客户端。配置、代理组、规则、日志、系统代理和 TUN 控制，支持 macOS 15 及以上。',
+      '基于 SwiftUI 构建的 Mihomo 图形客户端。集成配置管理、代理组、规则、日志、系统代理与 TUN 模式，支持 macOS 15 及以上。',
     primaryCta: '下载 DMG',
     primaryCtaAria: '下载最新 ClashMax DMG',
     secondaryCta: 'GitHub',
     tertiaryCta: '提交 Issue',
-    communityCta: '加入 TG 交流群',
+    communityCta: '加入 Telegram 群组',
   },
 
   shot: {
     alt: 'ClashMax 首页，内核运行中：运行状态、实时流量、当前节点、公网 IP 和代理组。',
-    caption: '运行中的首页，取自发布版 app 本身。配置和节点是示例数据。',
+    caption: '首页，内核运行中。配置与节点为示例数据。',
   },
 
   strip: {
-    live: 'GitHub 实时',
-    fallback: '本地 fallback',
-    checking: '正在检查 GitHub',
-    appVersion: 'ClashMax 发布',
+    live: '实时',
+    fallback: '离线数据',
+    checking: '同步中',
+    appVersion: 'ClashMax 版本',
     appBuild: '构建号',
     core: 'Mihomo 内核',
-    platform: '平台',
+    platform: '系统要求',
     platformValue: 'macOS 15+',
-    platformNote: 'SwiftUI app, GPL-3.0 边界',
-    released: '发布时间',
-    coreReleased: '最新上游 release',
+    platformNote: 'SwiftUI · GPL-3.0',
+    released: '发布于',
+    coreReleased: '上游发布于',
     releaseNotes: '发布说明',
-    buildNote: '来自当前 release channel',
+    buildNote: '当前发布通道',
   },
 
   dashboard: {
-    heading: '第一屏就是代理客户端。',
+    heading: '启动即进入控制台。',
     body:
-      '启动、停止、切换模式、检查 TUN/helper ready 状态，并在系统代理异常时给出恢复路径。',
+      '启停内核、切换代理模式、检查 TUN 与 helper 就绪状态，系统代理异常时提供恢复操作。',
     figure: '图 1',
-    caption: '内核运行中、系统代理已开启的 Dashboard，照 app 重画。',
+    caption: 'Dashboard 示意：内核运行中，系统代理已启用。',
     callouts: [
-      { label: '运行控制', detail: '内核状态、当前配置，以及启停控制' },
-      { label: '流量', detail: '来自内核采样的每秒上下行' },
-      { label: '路径', detail: '当前节点，以及走系统代理还是 TUN' },
+      { label: '运行控制', detail: '内核状态、当前配置与启停控制' },
+      { label: '流量', detail: '内核实时采样的上下行速率' },
+      { label: '路径', detail: '当前节点与接管方式：系统代理或 TUN' },
     ],
     app: {
       status: '运行中 v1.19.33',
@@ -119,75 +143,75 @@ export const zh: SiteContent = {
   },
 
   config: {
-    heading: '原始 profile 保持不动，运行态配置由应用托管。',
+    heading: '原始配置只读，运行配置由应用托管。',
     body:
-      'ClashMax 保留原始 YAML，在启动前生成 runtime YAML，用来写入端口、controller auth、DNS、TUN 和运行模式。',
+      '启动前基于原始 YAML 生成运行配置，注入端口、控制器鉴权、DNS、TUN 与运行模式。',
     sourceLabel: '配置来源',
-    sourceNote: '订阅和本地 YAML 保持可读、可恢复，并与启动时注入的配置分开。',
+    sourceNote: '订阅与本地 YAML 独立保存，不受启动注入影响。',
     runtimeLabel: '托管启动',
-    runtimeNote: '应用只写 Mihomo 启动需要的值，不改写用户 profile。',
-    injected: '托管运行态值',
+    runtimeNote: '仅写入 Mihomo 启动所需字段，原始配置保持不变。',
+    injected: '托管字段',
     injectedKeys: [
       { key: 'external-controller', value: '127.0.0.1' },
       { key: 'secret', value: '每次启动生成' },
-      { key: 'mixed-port', value: '由 app 管理' },
+      { key: 'mixed-port', value: '应用管理' },
       { key: 'mode', value: 'rule / global / direct' },
-      { key: 'dns', value: 'app 覆写' },
-      { key: 'tun', value: '由 helper 持有' },
+      { key: 'dns', value: '应用覆写' },
+      { key: 'tun', value: 'helper 管理' },
     ],
   },
 
   legend: {
-    heading: 'app 里有八个界面。',
-    body: 'Dashboard、配置、代理、连接、规则、日志、设置，以及 macOS 菜单栏。',
+    heading: '八个功能界面。',
+    body: 'Dashboard、配置、代理、连接、规则、日志、设置与菜单栏。',
     entries: [
       {
         symbol: 'dashboard',
         name: 'Dashboard',
-        detail: '启动、停止、切换模式，检查 TUN/helper ready 状态',
+        detail: '启停内核、切换模式、检查 TUN 与 helper 状态',
       },
       {
         symbol: 'profiles',
         name: '配置',
-        detail: '本地文件和订阅 URL 有清晰归属，也有明确更新路径',
+        detail: '本地 YAML 与订阅链接的导入、更新与切换',
       },
       {
         symbol: 'proxies',
         name: '代理',
-        detail: '切换代理组、执行延迟测试，读取 provider 健康状态',
+        detail: '代理组切换、延迟测试与 Provider 健康状态',
       },
       {
         symbol: 'connections',
         name: '连接',
-        detail: '查看会话、目标地址、规则命中、上传与下载',
+        detail: '会话、目标地址、命中规则与上下行流量',
       },
       {
         symbol: 'rules',
         name: '规则',
-        detail: '看清流量为什么直连、代理或拒绝，不必先打开原始配置',
+        detail: '追溯每条请求直连、代理或拒绝的规则依据',
       },
       {
         symbol: 'logs',
         name: '日志',
-        detail: 'Mihomo 日志靠近运行控制，便于排查配置和网络问题',
+        detail: '实时 Mihomo 日志，用于配置与网络排障',
       },
       {
         symbol: 'settings',
         name: '设置',
-        detail: '端口、DNS、TUN、开机启动、更新',
+        detail: '端口、DNS、TUN、开机启动与更新',
       },
       {
         symbol: 'menubar',
         name: '菜单栏',
-        detail: '从 macOS 菜单栏查看状态并执行快速控制',
+        detail: '运行状态与快捷控制',
       },
     ],
   },
 
   replicas: {
-    heading: '代理组快速可扫，流量可检查。',
+    heading: '代理组一览可读，连接逐条可查。',
     body:
-      '这两块是照 app 自己的布局、文案和状态用 HTML 重画的，缩放到任何尺寸都还看得清。',
+      '节点延迟、当前选择、命中规则与出站链路。',
     tabs: [
       { id: 'proxies', label: '代理' },
       { id: 'connections', label: '连接' },
@@ -195,11 +219,11 @@ export const zh: SiteContent = {
     figures: {
       proxies: {
         figure: '图 2',
-        caption: '代理页：一个 selector 组，带每个节点的延迟，照 app 重画。',
+        caption: '代理：Selector 组及各节点延迟。',
       },
       connections: {
         figure: '图 3',
-        caption: '连接页：活动连接和各自命中的规则，照 app 重画。',
+        caption: '连接：活动连接及其命中规则。',
       },
     },
     proxies: {
@@ -227,64 +251,111 @@ export const zh: SiteContent = {
   },
 
   restricted: {
-    heading: '安全敏感行为不说空话。',
-    body: '代理客户端会触碰本机网络设置，所以页面也写清应用实际执行的边界。',
+    heading: '明确的安全边界。',
+    body: '涉及本机网络的每项操作均在既定约束内执行。',
     boundaries: [
       {
         title: '本地控制面',
-        detail: 'Mihomo controller 默认绑定 127.0.0.1，并使用 Bearer auth 保护访问。',
+        detail: 'Mihomo 控制器绑定 127.0.0.1，并启用 Bearer 鉴权。',
       },
       {
         title: '每次启动密钥',
-        detail: '每次启动生成新的 controller secret，避免依赖共享静态凭据。',
+        detail: '每次启动生成新的控制器密钥，不使用静态凭据。',
       },
       {
         title: 'Helper 边界',
         detail:
-          '用户态负责普通系统代理；privileged helper 负责 TUN，并校验 app-owned core/config paths。',
+          '系统代理由用户态进程管理；TUN 由特权 helper 管理，并校验内核与配置路径。',
       },
       {
-        title: '只跑内置内核',
-        detail: '只运行内置的 Mihomo 内核。要开新的内核通道，得先有清单、哈希校验和 helper 白名单。',
+        title: '仅运行内置内核',
+        detail: '仅运行应用内置的 Mihomo 内核。新增内核通道须具备清单、哈希校验与 helper 白名单。',
       },
       {
-        title: 'Keychain 凭据',
-        detail: '订阅链接按配置 ID 存进 Keychain，不会写进运行时 YAML。',
+        title: '钥匙串凭据',
+        detail: '订阅链接按配置 ID 存储于钥匙串，不写入运行配置。',
       },
       {
-        title: 'GPL-3.0 边界',
-        detail: 'ClashMax 分发并控制 Mihomo，因此保持 GPL-3.0 兼容的许可边界。',
+        title: 'GPL-3.0 许可',
+        detail: '分发并控制 Mihomo，遵循 GPL-3.0 兼容许可。',
       },
     ],
   },
 
   approach: {
-    heading: '安装分四步。',
-    body: '从 release 页面到内核跑起来。',
+    heading: '四步完成安装。',
+    body: '从下载到内核运行。',
     steps: [
-      { title: '下载 DMG', detail: '从最新 release 里取 ClashMax-X.Y.Z.dmg。' },
+      { title: '下载 DMG', detail: '从最新 Release 获取 ClashMax-X.Y.Z.dmg。' },
       {
-        title: '拖进 Applications',
-        detail: '必须装到 /Applications，helper 授权和实验性的 Network Extension 都依赖这个位置。',
+        title: '移入应用程序',
+        detail: '须安装至 /Applications，helper 授权与实验性 Network Extension 依赖此路径。',
       },
       {
         title: '导入配置',
-        detail: '打开本地 Clash / Mihomo YAML 文件，或添加订阅，然后在 Dashboard 启动运行时。',
+        detail: '导入本地 Clash / Mihomo YAML 或订阅链接，在 Dashboard 启动内核。',
       },
       {
-        title: '同意系统弹窗',
-        detail: 'TUN 模式和 NE Proxy 各自需要对应的 macOS 授权才能跑。系统代理模式不需要。',
+        title: '授予系统权限',
+        detail: 'TUN 模式与 NE Proxy 需分别获得 macOS 授权；系统代理模式无需授权。',
+      },
+    ],
+  },
+
+  faq: {
+    heading: '常见问题。',
+    body: '功能、兼容性、迁移与更新。',
+    items: [
+      {
+        question: 'ClashMax 是什么？',
+        answer:
+          'ClashMax 是 Mihomo（Clash Meta）内核的免费图形客户端，基于 SwiftUI 构建，支持 macOS 15 及以上。支持导入 Clash / Mihomo YAML 配置与订阅，内置 Mihomo 内核，提供代理组、连接、规则、日志、系统代理、TUN 模式与菜单栏控制。',
+      },
+      {
+        question: 'ClashMax 是否免费、开源？',
+        answer:
+          '免费，基于 GPL-3.0 协议开源。源码、版本与 Issue 均公开于 GitHub。无需账号，不收集遥测数据。',
+      },
+      {
+        question: '支持哪些 Mac？',
+        answer:
+          'macOS 15 及以上，支持 Apple Silicon 与 Intel。每个版本内置对应的稳定版 Mihomo 内核，无需单独安装或更新。',
+      },
+      {
+        question: '能否从 ClashX、Clash Verge 或 FlClash 迁移？',
+        answer:
+          '支持。在配置页选择“添加”>“从其他客户端导入”，指定对应客户端的配置目录。ClashMax 读取其中的配置与订阅并生成迁移报告，确认后写入。Clash / Mihomo YAML 文件与订阅链接可直接导入。',
+      },
+      {
+        question: 'ClashMax 与 Clash Verge Rev、Clash Party 有何区别？',
+        answer:
+          'Clash Verge Rev 与 Clash Party 是基于 Web 技术（Tauri、Electron）的跨平台客户端。ClashMax 是仅面向 macOS 的原生 SwiftUI 应用，侧重内核行为的可追溯性：域名命中的规则、流量未经代理的原因，以及变更生效前生成的运行配置。',
+      },
+      {
+        question: 'ClashMax 是否修改原始配置？',
+        answer:
+          '不修改。导入的 YAML 保持原样。每次启动前，ClashMax 另行生成运行配置，注入端口、本地控制器、单次启动密钥、DNS、TUN 与运行模式。',
+      },
+      {
+        question: '系统代理与 TUN 模式有何区别？',
+        answer:
+          '系统代理设置 macOS 的 HTTP、HTTPS 与 SOCKS 代理，仅对遵循系统代理的应用生效，无需额外授权，内核停止后自动还原。TUN 模式经特权 helper 接管全部流量，包括不遵循系统代理的应用，首次使用需在 macOS 中授权。',
+      },
+      {
+        question: 'ClashMax 如何更新？',
+        answer:
+          '应用通过 Sparkle 自动检查并安装更新，版本发布于 GitHub Releases。首次安装使用 Release 页面提供的 DMG。',
       },
     ],
   },
 
   close: {
-    heading: '开源、早期、欢迎直接挑问题。',
+    heading: '开源，持续迭代。',
     body:
-      'ClashMax 因为分发并控制 Mihomo，保持 GPL-3.0 兼容边界。可复现 bug 请直接发到 GitHub Issues；安装使用问题和版本动态在 Telegram 交流群。',
+      '基于 GPL-3.0 兼容许可分发。缺陷报告请提交至 GitHub Issues；使用交流与版本动态见 Telegram 群组。',
     cta: '下载 DMG',
-    alt: '反馈问题',
-    community: '加入 Telegram 交流群',
+    alt: '提交 Issue',
+    community: '加入 Telegram 群组',
   },
 
   footer: {
@@ -293,7 +364,7 @@ export const zh: SiteContent = {
     source: '源码',
     issues: 'Issues',
     discussions: '讨论区',
-    community: 'Telegram 交流群',
+    community: 'Telegram 群组',
     security: '安全策略',
     core: 'Mihomo 内核',
     note: '原生 macOS Mihomo 客户端。',

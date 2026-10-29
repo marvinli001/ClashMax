@@ -1,0 +1,35 @@
+/* Two columns of question and answer, ruled like the boundaries list but
+   without its hatch: these are not limits, only what people ask first. */
+.list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: clamp(1.5rem, 4vw, 3.5rem);
+  border-top: 1px solid var(--hair-strong);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  padding: 1.125rem 0 1.25rem;
+  border-bottom: 1px solid var(--hair-faint);
+}
+
+.question {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+.answer {
+  margin: 0.4375rem 0 0;
+  max-width: 62ch;
+  font-size: 0.875rem;
+  line-height: 1.55;
+  color: var(--ink-2);
+  text-wrap: pretty;
+}
+
+@media (max-width: 767px) { .list { grid-template-columns: 1fr; } }
