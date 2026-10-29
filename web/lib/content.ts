@@ -12,7 +12,6 @@ export type Locale = 'en' | 'zh'
 
 export const LOCALES: Locale[] = ['en', 'zh']
 
-/** Three clearances a request can receive. Matches Mihomo's own vocabulary. */
 /** A label with the value the app shows beside it. */
 export interface Readout {
   label: string
@@ -22,25 +21,8 @@ export interface Readout {
 /** Which mark the Dashboard metric tile carries. */
 export type MetricMark = 'down' | 'up' | 'network' | 'rules'
 
+/** Three clearances a request can receive. Matches Mihomo's own vocabulary. */
 export type Clearance = 'proxy' | 'direct' | 'reject'
-
-export interface Rule {
-  /** The value the rule matches on, short enough to letter onto the chart. */
-  short: string
-  /** The full rule line, in real Clash rule syntax. */
-  full: string
-}
-
-export interface Destination {
-  /** Host as the visitor would type it. */
-  host: string
-  /** Index into `ruleSet`. Rules are evaluated in order, so this is also the
-   *  number of boundaries the request crosses before it is decided. */
-  ruleIndex: number
-  clearance: Clearance
-  /** What the clearance means for this host, one short line. */
-  note: string
-}
 
 export interface LegendEntry {
   symbol: 'dashboard' | 'profiles' | 'proxies' | 'connections' | 'rules' | 'logs' | 'settings' | 'menubar'
@@ -82,18 +64,10 @@ export interface SiteContent {
     communityCta: string
   }
 
-  plate: {
-    /** Accessible name for the routing chart. */
-    label: string
-    /** Instruction above the destination picker. */
-    pick: string
-    origin: string
-    matched: string
-    clearanceNames: Record<Clearance, string>
+  /** The app screenshot beside the hero. */
+  shot: {
+    alt: string
     caption: string
-    /** The rule set, in evaluation order. */
-    ruleSet: Rule[]
-    destinations: Destination[]
   }
 
   strip: {

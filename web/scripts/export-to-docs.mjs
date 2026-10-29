@@ -112,13 +112,12 @@ const CONTRACT = `<!--
                   are waypoints, DIRECT / PROXY / REJECT are three clearances.
                   Chart-paper ground, overprinted hairlines, airway blue from
                   the app icon, restricted magenta reserved for verdicts.
-  STORY           Trace a request -> read the live edition -> see the console ->
+  STORY           See the console -> read the live edition -> read the dashboard ->
                   learn the source YAML is untouched -> tour the surfaces ->
                   read the boundaries out loud -> install in four steps.
-  FIRST VIEWPORT  One plate, not a card grid: the routing chart, operated.
-                  Pick a destination and the chart draws the request out of
-                  127.0.0.1, across the boundary that matches it, into its
-                  clearance.
+  FIRST VIEWPORT  The console itself: a capture of the running Home page from
+                  the shipping app, matted on one plate beside the headline,
+                  with a light and a dark take that follow the system.
   FORM            Everything drawn, nothing rendered. No shadow, no glass, no
                   glow anywhere in the stylesheet. Colour is rationed to
                   clearances; state reads in line form first, hue second.
@@ -127,11 +126,10 @@ const CONTRACT = `<!--
                   replicas - mats in behind one hairline and a numbered figure
                   caption, and speaks macOS inside the mat because that is what
                   it reproduces.
-  FINISH          One authored motion moment: the route draws itself along its
-                  own path when a destination changes. Live release figures
-                  settle with instrument damping rather than blinking in.
-                  Both locales are real prerendered documents with their own
-                  lang, metadata, and hreflang pair.
+  FINISH          Live release figures settle with instrument damping rather
+                  than blinking in. Both locales are real prerendered
+                  documents with their own lang, metadata, hreflang pair, and
+                  screenshot.
   SEED            2369b4de
 -->`;
 

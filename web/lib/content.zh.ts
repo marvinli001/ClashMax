@@ -39,53 +39,9 @@ export const zh: SiteContent = {
     communityCta: '加入 TG 交流群',
   },
 
-  plate: {
-    label: '规则路径预览：选一个目标地址，看哪条规则决定它',
-    pick: '选一个目标地址',
-    origin: '127.0.0.1',
-    matched: '命中规则',
-    clearanceNames: { proxy: 'PROXY', direct: 'DIRECT', reject: 'REJECT' },
-    caption:
-      '规则自上而下依次判定，第一条命中的决定去向。这里描的是一份常见规则集，你自己的配置会不一样。',
-    ruleSet: [
-      { short: '192.168/16', full: 'IP-CIDR,192.168.0.0/16,DIRECT,no-resolve' },
-      { short: 'doubleclick', full: 'DOMAIN-SUFFIX,doubleclick.net,REJECT' },
-      { short: 'apple.com', full: 'DOMAIN-SUFFIX,apple.com,DIRECT' },
-      { short: 'github.com', full: 'DOMAIN-SUFFIX,github.com,PROXY' },
-      { short: 'MATCH', full: 'MATCH,PROXY' },
-    ],
-    destinations: [
-      {
-        host: 'github.com',
-        ruleIndex: 3,
-        clearance: 'proxy',
-        note: '前三条都没命中，第四条命中。从 PROXY 组当前选中的节点出去。',
-      },
-      {
-        host: 'time.apple.com',
-        ruleIndex: 2,
-        clearance: 'direct',
-        note: '在代理规则之前就命中，绕开隧道，走物理网卡。',
-      },
-      {
-        host: '192.168.1.1',
-        ruleIndex: 0,
-        clearance: 'direct',
-        note: '内网地址段，第一条规则就判完，不进隧道。',
-      },
-      {
-        host: 'ads.doubleclick.net',
-        ruleIndex: 1,
-        clearance: 'reject',
-        note: '连接建立之前就被拒绝。',
-      },
-      {
-        host: 'weather.internal',
-        ruleIndex: 4,
-        clearance: 'proxy',
-        note: '上面都没命中，交给最后的 MATCH 兜底。',
-      },
-    ],
+  shot: {
+    alt: 'ClashMax 首页，内核运行中：运行状态、实时流量、当前节点、公网 IP 和代理组。',
+    caption: '运行中的首页，取自发布版 app 本身。配置和节点是示例数据。',
   },
 
   strip: {

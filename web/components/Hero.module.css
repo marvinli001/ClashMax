@@ -4,12 +4,14 @@
 
 .grid {
   display: grid;
-  /* Wide enough that the three-control action row stays on one line and that
-     the headline's first clause survives whole at the display cap; the chart
-     takes the rest. */
+  /* Headline on the left, lede and actions on the right, both resting on one
+     baseline; the screenshot takes the full frame below them. The left track
+     is wide enough that the headline's first clause survives whole at the
+     display cap. */
   grid-template-columns: minmax(0, 31rem) minmax(0, 1fr);
-  gap: clamp(2rem, 5vw, 4.5rem);
-  align-items: start;
+  column-gap: clamp(2rem, 5vw, 4.5rem);
+  row-gap: clamp(2rem, 4vw, 3.25rem);
+  align-items: end;
 }
 
 .title {
@@ -47,8 +49,10 @@
   letter-spacing: -0.01em;
 }
 
+.lede { min-width: 0; }
+
 .sub {
-  margin: 1.5rem 0 0;
+  margin: 0;
   max-width: 34ch;
   font-size: clamp(1.0625rem, 1.35vw, 1.1875rem);
   line-height: 1.55;
@@ -60,7 +64,29 @@
   margin-top: clamp(1.75rem, 3vw, 2.5rem);
 }
 
+/* The screenshot is foreign material: matted on the plate behind one hairline
+   and captioned, like the redrawn figures further down. */
+.shot {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: clamp(0.625rem, 1.4vw, 1rem);
+}
+
+.image {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.caption {
+  margin-top: 0.75rem;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+
 @media (max-width: 1023px) {
-  .grid { grid-template-columns: 1fr; }
+  .grid { grid-template-columns: 1fr; row-gap: 1.5rem; }
   .sub { max-width: 52ch; }
+  .shot { margin-top: 0.5rem; }
 }

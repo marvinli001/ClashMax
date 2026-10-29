@@ -40,53 +40,9 @@ export const en: SiteContent = {
     communityCta: 'Join Telegram group',
   },
 
-  plate: {
-    label: 'Rule path preview: pick a destination to see which rule decides it',
-    pick: 'Pick a destination',
-    origin: '127.0.0.1',
-    matched: 'Matched rule',
-    clearanceNames: { proxy: 'PROXY', direct: 'DIRECT', reject: 'REJECT' },
-    caption:
-      'Rules are evaluated in order, top to bottom, and the first match decides the path. This is a conventional rule set; your own profile will differ.',
-    ruleSet: [
-      { short: '192.168/16', full: 'IP-CIDR,192.168.0.0/16,DIRECT,no-resolve' },
-      { short: 'doubleclick', full: 'DOMAIN-SUFFIX,doubleclick.net,REJECT' },
-      { short: 'apple.com', full: 'DOMAIN-SUFFIX,apple.com,DIRECT' },
-      { short: 'github.com', full: 'DOMAIN-SUFFIX,github.com,PROXY' },
-      { short: 'MATCH', full: 'MATCH,PROXY' },
-    ],
-    destinations: [
-      {
-        host: 'github.com',
-        ruleIndex: 3,
-        clearance: 'proxy',
-        note: 'Three rules pass, the fourth matches. Out through the selected node in the PROXY group.',
-      },
-      {
-        host: 'time.apple.com',
-        ruleIndex: 2,
-        clearance: 'direct',
-        note: 'Matched before the proxy rules, so it skips the tunnel and uses the physical interface.',
-      },
-      {
-        host: '192.168.1.1',
-        ruleIndex: 0,
-        clearance: 'direct',
-        note: 'Private address space, decided by the first rule and kept off the tunnel.',
-      },
-      {
-        host: 'ads.doubleclick.net',
-        ruleIndex: 1,
-        clearance: 'reject',
-        note: 'Rejected before the connection opens.',
-      },
-      {
-        host: 'weather.internal',
-        ruleIndex: 4,
-        clearance: 'proxy',
-        note: 'Nothing above matches, so the final MATCH rule decides.',
-      },
-    ],
+  shot: {
+    alt: 'The ClashMax Home page while the core runs: status, live traffic, current node, public IP, and proxy groups.',
+    caption: 'Home, running, in the app as it ships. Sample profile and nodes.',
   },
 
   strip: {
