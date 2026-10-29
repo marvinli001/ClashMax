@@ -947,10 +947,13 @@ final class AppModel {
     appendAppLog(level: "warn", message: logMessage ?? message)
   }
 
-  private(set) var currentNetwork: WiFiNetworkSnapshot = .notChecked
+  /// The current network and the saved per-SSID policies applied when it changes. The members
+  /// below are facades over it so views and tests keep reading them from here.
+  let networkPolicy: NetworkPolicyCoordinator
+  var currentNetwork: WiFiNetworkSnapshot { networkPolicy.currentNetwork }
   var currentNetworkSSID: String? { currentNetwork.ssid }
-  private(set) var networkPolicyStatusMessage: String?
-  private(set) var lastAppliedNetworkPolicyID: NetworkPolicyRule.ID?
+  var networkPolicyStatusMessage: String? { networkPolicy.networkPolicyStatusMessage }
+  var lastAppliedNetworkPolicyID: NetworkPolicyRule.ID? { networkPolicy.lastAppliedNetworkPolicyID }
   private(set) var backupRestoreStatusMessage: String?
   private(set) var pendingBackupRestorePreview: BackupRestorePreview?
   var outboundProxyEndpoints: [OutboundProxyEndpoint] { outboundProxyEndpointsCoordinator.endpoints }
@@ -1134,11 +1137,7 @@ final class AppModel {
   @ObservationIgnored private var connectionCloseTokens: [ConnectionSnapshot.ID: UUID] = [:]
   @ObservationIgnored private var closeAllConnectionsTask: Task<Void, Never>?
   @ObservationIgnored private var closeAllConnectionsToken: UUID?
-  @ObservationIgnored private var networkPolicyApplyTask: Task<NetworkPolicyApplyOutcome, Never>?
-  @ObservationIgnored private var networkPolicyApplyToken: UUID?
-  @ObservationIgnored private var networkPolicyRestoreSnapshot: NetworkPolicyRestoreSnapshot?
-  @ObservationIgnored private var networkEnvironmentTask: Task<Void, Never>?
-  @ObservationIgnored private var networkEnvironmentDebounceTask: Task<Void, Never>?
+  private var networkPolicyRestoreSnapshot: NetworkPolicyRestoreSnapshot? { networkPolicy.networkPolicyRestoreSnapshot }
   @ObservationIgnored private var runtimeReloadTask: Task<Void, Never>?
   @ObservationIgnored private var runtimeReloadToken: UUID?
   @ObservationIgnored private var runtimeReloadPending = false
@@ -1162,10 +1161,6 @@ final class AppModel {
   @ObservationIgnored private var residualSystemProxyDisableTask: Task<Void, Never>?
   @ObservationIgnored private var publishedNetworkExtensionDiagnosticEventIDs: Set<String> = []
   private let externalDashboardSecretStore: any SecretStoring
-  private let currentNetworkProvider: any CurrentNetworkProviding
-  private let networkEnvironmentMonitor: (any NetworkEnvironmentMonitoring)?
-  /// `nil` in tests, where no `CLLocationManager` should be created.
-  @ObservationIgnored private let wiFiLocationAuthorization: WiFiLocationAuthorization?
   private let globalShortcutManager: GlobalShortcutManager
   private let backupRestoreService = BackupRestoreService()
   @ObservationIgnored private var providerSideLoadPreflightRunner: any ProviderSideLoadPreflightRunning = MihomoProviderSideLoadPreflightRunner()
@@ -1247,9 +1242,6 @@ final class AppModel {
     self.paths = paths
     self.delayStateCacheTTL = delayStateCacheTTL
     self.externalDashboardSecretStore = externalDashboardSecretStore
-    self.currentNetworkProvider = currentNetworkProvider
-    self.networkEnvironmentMonitor = networkEnvironmentMonitor ?? NetworkEnvironmentMonitor(currentNetworkProvider: currentNetworkProvider)
-    self.wiFiLocationAuthorization = wiFiLocationAuthorization
     globalShortcutManager = GlobalShortcutManager(registrar: globalShortcutRegistrar ?? KeyboardShortcutsRegistrar())
     self.providerSideLoadPreflightRunner = providerSideLoadPreflightRunner
     self.bundledCoreURLProvider = bundledCoreURLProvider ?? Self.resolveBundledCoreURL
@@ -1279,6 +1271,12 @@ final class AppModel {
       defaults: defaults
     )
     settings = PersistedSettingsStore(loginItemService: loginItemService, defaults: defaults)
+    networkPolicy = NetworkPolicyCoordinator(
+      settings: settings,
+      currentNetworkProvider: currentNetworkProvider,
+      networkEnvironmentMonitor: networkEnvironmentMonitor ?? NetworkEnvironmentMonitor(currentNetworkProvider: currentNetworkProvider),
+      wiFiLocationAuthorization: wiFiLocationAuthorization
+    )
     profileCoordinator.configureRuntimeHooks(
       automaticSubscriptionUpdatesEnabled: { [weak self] in
         self?.settings.subscriptionFetchSettings.automaticUpdatesEnabled ?? false
@@ -1360,11 +1358,35 @@ final class AppModel {
     installGlobalShortcuts(settings.globalShortcutSettings)
     schedulePreviewRuntimeStartIfReady(profilePreviewGroups: proxyPreview.profilePreviewGroups)
     handleCoreStatusChange(coreController.status)
-    // Granting Location access is what makes CWInterface.ssid() readable, so the SSID has to be
-    // re-read the moment authorization flips rather than on the next network change (issue #26).
-    wiFiLocationAuthorization?.onStatusChange = { [weak self] _ in
-      self?.handleWiFiLocationAuthorizationChange()
-    }
+    networkPolicy.configureRuntimeHooks(
+      isRunning: { [weak self] in self?.isRunning ?? false },
+      startInFlight: { [weak self] in self?.startInFlight ?? false },
+      canStopRuntime: { [weak self] in self?.canStopRuntime ?? false },
+      proxyRoutingMode: { [weak self] in self?.proxyRoutingMode ?? .systemProxy },
+      systemProxyEnabled: { [weak self] in self?.systemProxyEnabled ?? false },
+      setProxyRoutingMode: { [weak self] mode, preserveRestoreSnapshot in
+        self?.setProxyRoutingMode(mode, preserveNetworkPolicyRestoreSnapshotOnRestart: preserveRestoreSnapshot)
+      },
+      startRuntimeAndWait: { [weak self] in
+        self?.startFromNetworkPolicy()
+        await self?.waitForRuntimeStartAttempt()
+      },
+      applySystemProxyEnabledState: { [weak self] enabled in
+        try await self?.applySystemProxyEnabledState(enabled)
+      },
+      stopRuntime: { [weak self] in
+        guard let self else { return NetworkPolicyRuntimeStopResult(succeeded: true) }
+        let result = await stopRuntimeCoordinated()
+        handleStopResult(result)
+        return NetworkPolicyRuntimeStopResult(succeeded: result.succeeded, userFacingMessage: result.userFacingMessage)
+      },
+      setLastError: { [weak self] message in self?.lastError = message },
+      publishNotice: { [weak self] notice in self?.appNotice = notice },
+      publishWarningNotice: { [weak self] message in self?.publishWarningNotice(message) },
+      appendAppLog: { [weak self] level, message in self?.appendAppLog(level: level, message: message) },
+      recordNetworkEnvironmentChange: { [weak self] in self?.runtimeDiagnostics.recordNetworkEnvironmentChange() }
+    )
+    networkPolicy.observeWiFiLocationAuthorization()
     recoverDanglingSystemProxyIfNeeded()
     recoverDanglingManagedDNSIfNeeded()
     outboundProxyEndpointsCoordinator.startLoad()
@@ -4658,318 +4680,41 @@ final class AppModel {
   }
 
   func refreshCurrentNetworkPolicyState() {
-    wiFiLocationAuthorization?.refresh()
-    let snapshot = currentNetworkProvider.currentNetwork()
-    currentNetwork = snapshot
-    networkPolicyStatusMessage = NetworkPolicyStatusPresenter.message(
-      for: snapshot,
-      matchedRule: snapshot.ssid.flatMap(networkPolicySettings.matchingRule(ssid:))
-    )
+    networkPolicy.refreshCurrentNetworkPolicyState()
   }
 
   /// Runs the recovery action the Network Policies panel is currently offering.
-  ///
-  /// Raises the macOS location prompt when it can still appear, and otherwise deep-links into
-  /// Privacy & Security → Location Services.
   func resolveCurrentNetworkSSIDAvailability() {
-    guard let wiFiLocationAuthorization else { return }
-    switch currentNetwork.recoveryAction {
-    case .requestLocationAuthorization:
-      if !wiFiLocationAuthorization.requestAuthorizationIfPossible() {
-        wiFiLocationAuthorization.openLocationSettings()
-      }
-      appendAppLog(level: "info", message: "Requested Location Services access to read the Wi-Fi SSID.")
-    case .openLocationSettings:
-      wiFiLocationAuthorization.openLocationSettings()
-    case .none:
-      refreshCurrentNetworkPolicyState()
-    }
-  }
-
-  private func handleWiFiLocationAuthorizationChange() {
-    let previous = currentNetwork
-    refreshCurrentNetworkPolicyState()
-    guard previous.isBlockedByLocationAuthorization, currentNetwork.ssid != nil else { return }
-    appendAppLog(
-      level: "info",
-      message: "Location Services access granted; Wi-Fi SSID is now readable."
-    )
-    handleNetworkEnvironmentMayHaveChanged(reason: "location-authorization")
+    networkPolicy.resolveCurrentNetworkSSIDAvailability()
   }
 
   func applyMatchingNetworkPolicyForCurrentNetwork() {
-    applyMatchingNetworkPolicyForCurrentNetwork(trigger: "manual")
+    networkPolicy.applyMatchingNetworkPolicyForCurrentNetwork()
   }
 
   func handleNetworkEnvironmentMayHaveChanged(reason: String) {
-    guard networkPolicySettings.autoApplyEnabled else {
-      networkPolicyStatusMessage = String(localized: "Automatic network policy application is off.")
-      return
-    }
-    guard !networkPolicySettings.rules.isEmpty else { return }
-    scheduleNetworkEnvironmentPolicyApply(reason: reason)
+    networkPolicy.handleNetworkEnvironmentMayHaveChanged(reason: reason)
   }
 
   func startNetworkEnvironmentMonitoring() {
-    guard networkEnvironmentTask == nil, let networkEnvironmentMonitor else { return }
-    // Saved policies are keyed by SSID, so auto-apply is dead without Location access. Prompt only
-    // when there is actually a policy to match, so users who never configured one are never asked.
-    if networkPolicySettings.autoApplyEnabled, !networkPolicySettings.rules.isEmpty {
-      wiFiLocationAuthorization?.requestAuthorizationIfPossible()
-    }
-    networkEnvironmentMonitor.start()
-    networkEnvironmentTask = Task { @MainActor [weak self, networkEnvironmentMonitor] in
-      for await event in networkEnvironmentMonitor.events {
-        guard let self, !Task.isCancelled else { return }
-        currentNetwork = event.network.ssid == nil && event.network.unavailableReason == nil
-          ? currentNetworkProvider.currentNetwork()
-          : event.network
-        appendAppLog(
-          level: "info",
-          message: "Network environment changed via \(event.reason): path=\(event.pathStatus), ssid=\(currentNetwork.ssid ?? currentNetwork.unavailableReason?.rawValue ?? "none")"
-        )
-        // Stamped here rather than inside `handleNetworkEnvironmentMayHaveChanged`, which returns
-        // early when auto-apply is off: the fake-ip table goes stale on a network change whether or
-        // not a policy is waiting to be applied (roadmap A3).
-        runtimeDiagnostics.recordNetworkEnvironmentChange()
-        handleNetworkEnvironmentMayHaveChanged(reason: event.reason)
-      }
-    }
+    networkPolicy.startNetworkEnvironmentMonitoring()
   }
 
   func stopNetworkEnvironmentMonitoring() {
-    networkEnvironmentDebounceTask?.cancel()
-    networkEnvironmentDebounceTask = nil
-    networkEnvironmentTask?.cancel()
-    networkEnvironmentTask = nil
-    networkEnvironmentMonitor?.stop()
+    networkPolicy.stopNetworkEnvironmentMonitoring()
   }
 
   func applyNetworkPolicy(_ rule: NetworkPolicyRule) {
-    clearNetworkPolicyRestoreSnapshotForUserChange()
-    applyNetworkPolicy(rule, trigger: "manual", matchedSSID: nil)
+    networkPolicy.applyNetworkPolicy(rule)
   }
 
-  /// Applies the current network's policy and returns the outcome, awaited. The fire-and-forget
-  /// `applyMatchingNetworkPolicyForCurrentNetwork()` reports through the Settings status line; a
-  /// Shortcuts action has nowhere to read that from, so it waits for this instead (roadmap B3).
+  /// Applies the current network's policy and returns the outcome, awaited (roadmap B3).
   func applyMatchingNetworkPolicyForCurrentNetworkAndWait() async -> NetworkPolicyApplyOutcome {
-    switch applyMatchingNetworkPolicyForCurrentNetwork(trigger: "manual") {
-    case let .finished(outcome):
-      return outcome
-    case let .pending(task):
-      return await task.value
-    }
-  }
-
-  @discardableResult
-  private func applyMatchingNetworkPolicyForCurrentNetwork(trigger: String) -> NetworkPolicyApplyDispatch {
-    let snapshot = currentNetworkProvider.currentNetwork()
-    currentNetwork = snapshot
-    guard let ssid = snapshot.ssid else {
-      let message = NetworkPolicyStatusPresenter.unavailableMessage(snapshot.unavailableReason)
-      networkPolicyStatusMessage = message
-      // A permission gap means the network is *unknown*, not that the user left the previous one.
-      // Restoring here would silently undo the routing the last matched policy set up (issue #26).
-      guard !snapshot.isBlockedByLocationAuthorization else {
-        appendAppLog(
-          level: "warn",
-          message: "Skipped network policy matching via \(trigger): \(snapshot.unavailableReason?.rawValue ?? "unknown")."
-        )
-        if trigger == "manual" {
-          publishWarningNotice(message)
-        }
-        return .finished(.failed(message))
-      }
-      if let restore = restoreNetworkPolicyStateIfNeeded(reason: message) {
-        return .pending(restore)
-      }
-      if trigger == "manual" {
-        appNotice = AppNotice(message: message, tone: .info)
-      }
-      return .finished(.nothingToApply(message))
-    }
-    guard let rule = networkPolicySettings.matchingRule(ssid: ssid) else {
-      let message = String(format: String(localized: "No saved policy matches %@."), ssid)
-      networkPolicyStatusMessage = message
-      if let restore = restoreNetworkPolicyStateIfNeeded(reason: message) {
-        return .pending(restore)
-      }
-      if trigger == "manual" {
-        appNotice = AppNotice(message: message, tone: .info)
-      }
-      return .finished(.nothingToApply(message))
-    }
-    return .pending(applyNetworkPolicy(rule, trigger: trigger, matchedSSID: ssid))
-  }
-
-  private func scheduleNetworkEnvironmentPolicyApply(reason: String) {
-    networkEnvironmentDebounceTask?.cancel()
-    networkEnvironmentDebounceTask = Task { @MainActor [weak self] in
-      do {
-        try await Task.sleep(nanoseconds: 650_000_000)
-      } catch {
-        return
-      }
-      guard let self, !Task.isCancelled else { return }
-      applyMatchingNetworkPolicyForCurrentNetwork(trigger: reason)
-    }
-  }
-
-  @discardableResult
-  private func applyNetworkPolicy(
-    _ rule: NetworkPolicyRule,
-    trigger: String,
-    matchedSSID: String?
-  ) -> Task<NetworkPolicyApplyOutcome, Never> {
-    networkPolicyApplyTask?.cancel()
-    let token = UUID()
-    networkPolicyApplyToken = token
-    let task = Task { @MainActor [weak self] () -> NetworkPolicyApplyOutcome in
-      guard let self else { return .cancelled }
-      defer {
-        if self.networkPolicyApplyToken == token {
-          self.networkPolicyApplyTask = nil
-          self.networkPolicyApplyToken = nil
-        }
-      }
-      guard !Task.isCancelled else { return .cancelled }
-      return await applyNetworkPolicyRule(rule, trigger: trigger, matchedSSID: matchedSSID)
-    }
-    networkPolicyApplyTask = task
-    return task
-  }
-
-  private func applyNetworkPolicyRule(
-    _ rule: NetworkPolicyRule,
-    trigger: String,
-    matchedSSID: String?
-  ) async -> NetworkPolicyApplyOutcome {
-    if let validationError = rule.validationError {
-      networkPolicyStatusMessage = validationError
-      publishWarningNotice(validationError)
-      return .failed(validationError)
-    }
-
-    let automatic = trigger != "manual"
-    let policyStartedRuntime = rule.autoStartRuntime && !isRunning && !startInFlight
-    if automatic, networkPolicySettings.unmatchedBehavior == .restorePreviousState, networkPolicyRestoreSnapshot == nil {
-      networkPolicyRestoreSnapshot = NetworkPolicyRestoreSnapshot(
-        policyID: rule.id,
-        ssid: matchedSSID ?? rule.ssid,
-        proxyRoutingMode: proxyRoutingMode,
-        systemProxyEnabled: systemProxyEnabled,
-        runtimeWasRunning: isRunning || startInFlight || canStopRuntime,
-        policyStartedRuntime: policyStartedRuntime
-      )
-    }
-
-    setProxyRoutingMode(
-      rule.proxyRoutingMode,
-      preserveNetworkPolicyRestoreSnapshotOnRestart: automatic
-    )
-    if rule.autoStartRuntime, !isRunning, !startInFlight {
-      startFromNetworkPolicy()
-      await waitForRuntimeStartAttempt()
-    }
-    if rule.proxyRoutingMode == .systemProxy, rule.enableSystemProxy {
-      do {
-        try await applySystemProxyEnabledState(true)
-      } catch {
-        let message = UserFacingError.message(for: error)
-        networkPolicyStatusMessage = message
-        lastError = message
-        return .failed(message)
-      }
-    }
-    guard !Task.isCancelled else { return .cancelled }
-
-    lastAppliedNetworkPolicyID = rule.id
-    let message: String
-    if let matchedSSID {
-      message = String(
-        format: String(localized: "Applied %@ for %@."),
-        rule.name,
-        matchedSSID
-      )
-    } else {
-      message = String(format: String(localized: "Applied %@."), rule.name)
-    }
-    networkPolicyStatusMessage = message
-    appNotice = AppNotice(message: message, tone: .success)
-    appendAppLog(
-      level: "info",
-      message: "Applied network policy \(rule.name) via \(trigger): \(rule.proxyRoutingMode.rawValue), autoStart=\(rule.autoStartRuntime)"
-    )
-    return .applied(message)
-  }
-
-  /// Schedules the restore of the state a matched policy replaced, or returns `nil` when there is
-  /// nothing to restore.
-  @discardableResult
-  private func restoreNetworkPolicyStateIfNeeded(reason: String) -> Task<NetworkPolicyApplyOutcome, Never>? {
-    guard networkPolicySettings.unmatchedBehavior == .restorePreviousState,
-          let snapshot = networkPolicyRestoreSnapshot
-    else { return nil }
-    networkPolicyApplyTask?.cancel()
-    let token = UUID()
-    networkPolicyApplyToken = token
-    let task = Task { @MainActor [weak self] () -> NetworkPolicyApplyOutcome in
-      guard let self else { return .cancelled }
-      defer {
-        if self.networkPolicyApplyToken == token {
-          self.networkPolicyApplyTask = nil
-          self.networkPolicyApplyToken = nil
-        }
-      }
-      return await restoreNetworkPolicyState(snapshot, reason: reason)
-    }
-    networkPolicyApplyTask = task
-    return task
-  }
-
-  private func restoreNetworkPolicyState(
-    _ snapshot: NetworkPolicyRestoreSnapshot,
-    reason: String
-  ) async -> NetworkPolicyApplyOutcome {
-    setProxyRoutingMode(
-      snapshot.proxyRoutingMode,
-      preserveNetworkPolicyRestoreSnapshotOnRestart: true
-    )
-    do {
-      if systemProxyEnabled != snapshot.systemProxyEnabled {
-        try await applySystemProxyEnabledState(snapshot.systemProxyEnabled)
-      }
-      if snapshot.policyStartedRuntime, !snapshot.runtimeWasRunning, canStopRuntime {
-        let result = await stopRuntimeCoordinated()
-        handleStopResult(result)
-        guard result.succeeded else {
-          networkPolicyStatusMessage = result.userFacingMessage
-          lastError = result.userFacingMessage
-          return .failed(result.userFacingMessage ?? String(localized: "ClashMax could not stop the runtime."))
-        }
-      }
-      networkPolicyRestoreSnapshot = nil
-      lastAppliedNetworkPolicyID = nil
-      let message = String(
-        format: String(localized: "%@ Restored previous network state after leaving %@."),
-        reason,
-        snapshot.ssid
-      )
-      networkPolicyStatusMessage = message
-      appNotice = AppNotice(message: message, tone: .info)
-      appendAppLog(level: "info", message: "Restored network policy state after leaving \(snapshot.ssid).")
-      return .restored(message)
-    } catch {
-      let message = UserFacingError.message(for: error)
-      networkPolicyStatusMessage = message
-      lastError = message
-      return .failed(message)
-    }
+    await networkPolicy.applyMatchingNetworkPolicyForCurrentNetworkAndWait()
   }
 
   private func clearNetworkPolicyRestoreSnapshotForUserChange() {
-    networkPolicyRestoreSnapshot = nil
+    networkPolicy.clearNetworkPolicyRestoreSnapshotForUserChange()
   }
 
   private func waitForRuntimeStartAttempt() async {
