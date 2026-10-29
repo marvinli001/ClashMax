@@ -836,14 +836,18 @@ private struct CurrentSystemProxySummary: View {
 }
 
 private struct OptionalBoolPicker: View {
-  let title: String
+  // Resources, not Strings: `Picker(String)` / `Text(String)` skip the catalog, so these titles
+  // stayed English in zh-Hans although they are translated.
+  let title: LocalizedStringResource
   @Binding var value: Bool?
 
   var body: some View {
-    Picker(title, selection: selection) {
+    Picker(selection: selection) {
       Text("Inherit").tag(0)
       Text("On").tag(1)
       Text("Off").tag(2)
+    } label: {
+      Text(title)
     }
     .pickerStyle(.segmented)
   }
@@ -933,7 +937,7 @@ private struct CompactIntegerStepperField: View {
 }
 
 private struct EditableStringList: View {
-  let title: String
+  let title: LocalizedStringResource
   let placeholder: String
   @Binding var values: [String]
   @Binding var draft: String
@@ -971,7 +975,7 @@ private struct EditableStringList: View {
 }
 
 private struct EditableKeyValueList: View {
-  let title: String
+  let title: LocalizedStringResource
   let keyPlaceholder: String
   let valuePlaceholder: String
   @Binding var values: [String: String]
@@ -1010,6 +1014,8 @@ private struct EditableKeyValueList: View {
                   .font(.system(size: 9, weight: .bold))
               }
               .buttonStyle(.plain)
+              .help(Text("Remove \(key)"))
+              .accessibilityLabel(Text("Remove \(key)"))
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
@@ -1084,6 +1090,8 @@ private struct WrappingTokenList: View {
                     .font(.system(size: 9, weight: .bold))
                 }
                 .buttonStyle(.plain)
+                .help(Text("Remove \(value)"))
+                .accessibilityLabel(Text("Remove \(value)"))
               }
             }
             .padding(.horizontal, 8)
@@ -1143,6 +1151,7 @@ struct DashboardStatusPill: View {
           .font(.callout.weight(.medium))
           .lineLimit(1)
           .minimumScaleFactor(0.72)
+          .help(value)
       }
     }
   }
@@ -1190,7 +1199,9 @@ struct DashboardEmptyRuntimeView: View {
           .font(.caption)
           .foregroundStyle(.tertiary)
           .multilineTextAlignment(.center)
-          .lineLimit(2)
+          // Recovery copy names the node and group, so two lines cut off the instruction itself.
+          .lineLimit(4)
+          .help(message)
       }
     }
     .frame(maxWidth: .infinity, minHeight: 128)

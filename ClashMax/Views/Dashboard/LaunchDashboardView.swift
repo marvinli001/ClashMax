@@ -76,6 +76,7 @@ struct LaunchDashboardView: View {
           .foregroundStyle(.secondary)
           .lineLimit(1)
           .minimumScaleFactor(0.72)
+          .help(appModel.profileStore.activeProfile?.name ?? "")
           .dashboardMatchedGeometry(id: "profile-summary", in: namespace, reduceMotion: reduceMotion)
       }
     }

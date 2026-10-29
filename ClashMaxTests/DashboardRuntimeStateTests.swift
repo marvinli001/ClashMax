@@ -4840,6 +4840,25 @@ final class DashboardRuntimeStateTests: XCTestCase {
     }
   }
 
+  /// Every other adapter type: the core's own casing survives (`capitalized` read "Urltest",
+  /// "Wireguard", "Anytls"), and only an all-lowercase profile type gains a capital.
+  func testDashboardTypeLabelKeepsCoreAdapterCasing() {
+    let expectations = [
+      "URLTest": "URLTest",
+      "WireGuard": "WireGuard",
+      "ShadowsocksR": "ShadowsocksR",
+      "AnyTLS": "AnyTLS",
+      "LoadBalance": "LoadBalance",
+      "Shadowsocks": "Shadowsocks",
+      "trojan": "Trojan",
+      "vless": "VLESS",
+    ]
+    for (type, label) in expectations {
+      let node = ProxyNode(name: "node", type: type, delay: nil, isSelectable: true)
+      XCTAssertEqual(DashboardProxySelectionState.typeLabel(for: node), label, type)
+    }
+  }
+
   func testDashboardCurrentNodeDoesNotFallBackToDirectWhenSelectedNodeMissing() throws {
     // Issue #14: a provider-backed selection (韩国 SK…) is configured, but the raw runtime group only
     // carries the unexpanded provider placeholder + DIRECT, so the named node is absent. The dashboard
