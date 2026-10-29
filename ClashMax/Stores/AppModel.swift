@@ -953,10 +953,16 @@ final class AppModel {
   private(set) var lastAppliedNetworkPolicyID: NetworkPolicyRule.ID?
   private(set) var backupRestoreStatusMessage: String?
   private(set) var pendingBackupRestorePreview: BackupRestorePreview?
-  private(set) var outboundProxyEndpoints: [OutboundProxyEndpoint] = []
-  private(set) var outboundProxyEndpointSecretStates: [UUID: OutboundProxyEndpointSecretState] = [:]
-  private(set) var outboundProxyEndpointTestStates: [UUID: OutboundProxyEndpointTestState] = [:]
-  private(set) var outboundProxyEndpointLoadError: String?
+  var outboundProxyEndpoints: [OutboundProxyEndpoint] { outboundProxyEndpointsCoordinator.endpoints }
+  var outboundProxyEndpointSecretStates: [UUID: OutboundProxyEndpointSecretState] {
+    outboundProxyEndpointsCoordinator.secretStates
+  }
+
+  var outboundProxyEndpointTestStates: [UUID: OutboundProxyEndpointTestState] {
+    outboundProxyEndpointsCoordinator.testStates
+  }
+
+  var outboundProxyEndpointLoadError: String? { outboundProxyEndpointsCoordinator.loadError }
   var updatingProfileIDs: Set<Profile.ID> { profileCoordinator.updatingProfileIDs }
   var profileOperationMessage: String? { profileCoordinator.message }
   var profilePreviewGroups: [ProxyGroup] {
@@ -991,6 +997,9 @@ final class AppModel {
   let systemProxy: SystemProxyCoordinator
   let profileStore: ProfileStore
   let outboundProxyEndpointStore: OutboundProxyEndpointStore
+  /// The endpoint list, secret and test states over `outboundProxyEndpointStore`; the members above
+  /// are facades over it so views and tests keep reading them from here.
+  let outboundProxyEndpointsCoordinator: OutboundProxyEndpointsCoordinator
   let providerAnalytics: ProviderAnalyticsStore
   let coreController: CoreProcessController
   var systemProxyController: SystemProxyController { systemProxy.controller }
@@ -1130,7 +1139,6 @@ final class AppModel {
   @ObservationIgnored private var networkPolicyRestoreSnapshot: NetworkPolicyRestoreSnapshot?
   @ObservationIgnored private var networkEnvironmentTask: Task<Void, Never>?
   @ObservationIgnored private var networkEnvironmentDebounceTask: Task<Void, Never>?
-  @ObservationIgnored private var outboundProxyEndpointLoadTask: Task<Void, Never>?
   @ObservationIgnored private var runtimeReloadTask: Task<Void, Never>?
   @ObservationIgnored private var runtimeReloadToken: UUID?
   @ObservationIgnored private var runtimeReloadPending = false
@@ -1248,6 +1256,7 @@ final class AppModel {
     self.profileStore = profileStore ?? ProfileStore(paths: paths)
     self.outboundProxyEndpointStore = outboundProxyEndpointStore
       ?? OutboundProxyEndpointStore(manifestURL: paths.outboundProxyEndpointManifestURL)
+    outboundProxyEndpointsCoordinator = OutboundProxyEndpointsCoordinator(store: self.outboundProxyEndpointStore)
     self.runtimeSnippetLibrary = runtimeSnippetLibrary ?? RuntimeSnippetLibraryStore(paths: paths)
     self.providerAnalytics = providerAnalytics ?? ProviderAnalyticsStore(paths: paths)
     proxyPreview = ProxyPreviewStore(defaults: defaults)
@@ -1358,9 +1367,7 @@ final class AppModel {
     }
     recoverDanglingSystemProxyIfNeeded()
     recoverDanglingManagedDNSIfNeeded()
-    outboundProxyEndpointLoadTask = Task { @MainActor [weak self] in
-      await self?.refreshOutboundProxyEndpoints()
-    }
+    outboundProxyEndpointsCoordinator.startLoad()
     let needsManifestRefresh = self.profileStore.activeProfileID == nil
     refreshProfilePreview()
     loadPreviewSelectionsForActiveProfile()
@@ -1383,31 +1390,11 @@ final class AppModel {
   }
 
   func waitForOutboundProxyEndpointLoad() async {
-    await outboundProxyEndpointLoadTask?.value
+    await outboundProxyEndpointsCoordinator.waitForLoad()
   }
 
   func refreshOutboundProxyEndpoints() async {
-    do {
-      let endpoints = try await outboundProxyEndpointStore.endpoints()
-      var secretStates: [UUID: OutboundProxyEndpointSecretState] = [:]
-      for endpoint in endpoints {
-        secretStates[endpoint.id] = try await outboundProxyEndpointStore.resolve(id: endpoint.id).secretState
-      }
-      outboundProxyEndpoints = endpoints
-      outboundProxyEndpointSecretStates = secretStates
-      for endpoint in endpoints where outboundProxyEndpointTestStates[endpoint.id] == nil {
-        outboundProxyEndpointTestStates[endpoint.id] = .untested
-      }
-      outboundProxyEndpointTestStates = outboundProxyEndpointTestStates.filter { entry in
-        endpoints.contains(where: { $0.id == entry.key })
-      }
-      outboundProxyEndpointLoadError = nil
-    } catch {
-      outboundProxyEndpoints = []
-      outboundProxyEndpointSecretStates = [:]
-      outboundProxyEndpointTestStates = [:]
-      outboundProxyEndpointLoadError = UserFacingError.message(for: error)
-    }
+    await outboundProxyEndpointsCoordinator.refresh()
   }
 
   @discardableResult
@@ -1416,9 +1403,7 @@ final class AppModel {
     password: String?
   ) async -> Bool {
     do {
-      try await outboundProxyEndpointStore.add(endpoint, password: password)
-      await refreshOutboundProxyEndpoints()
-      outboundProxyEndpointTestStates[endpoint.id] = .untested
+      try await outboundProxyEndpointsCoordinator.add(endpoint, password: password)
       lastError = nil
       return true
     } catch {
@@ -1612,7 +1597,7 @@ final class AppModel {
       }
 
       await refreshOutboundProxyEndpoints()
-      outboundProxyEndpointTestStates[endpoint.id] = .untested
+      outboundProxyEndpointsCoordinator.markUntested(endpoint.id)
       resetEffectiveRuntimeConfigPreviewIfNeeded(invalidatedProfileID: profileStore.activeProfileID)
       lastError = nil
       return true
@@ -1634,9 +1619,7 @@ final class AppModel {
           "This proxy endpoint is still used by: \(names). Remove those bindings first."
         )
       }
-      try await outboundProxyEndpointStore.delete(id: endpointID)
-      await refreshOutboundProxyEndpoints()
-      outboundProxyEndpointTestStates[endpointID] = nil
+      try await outboundProxyEndpointsCoordinator.delete(id: endpointID)
       lastError = nil
       return true
     } catch {
@@ -1646,32 +1629,13 @@ final class AppModel {
   }
 
   func testOutboundProxyEndpoint(_ endpointID: UUID) async {
-    outboundProxyEndpointTestStates[endpointID] = .testing
-    do {
-      let endpoint = try await outboundProxyEndpointStore.resolve(id: endpointID)
-      let configuration = try SubscriptionProxySessionFactory.configuration(
-        for: endpoint,
-        timeout: 10
-      )
-      let session = URLSession(configuration: configuration)
-      defer { session.finishTasksAndInvalidate() }
-      var request = URLRequest(url: AppConstants.defaultDelayTestURL)
-      request.timeoutInterval = 10
-      let (_, response) = try await session.data(for: request)
-      guard let httpResponse = response as? HTTPURLResponse,
-            (200...299).contains(httpResponse.statusCode)
-      else {
-        throw URLError(.badServerResponse)
-      }
-      outboundProxyEndpointTestStates[endpointID] = .ready
-      lastError = nil
-    } catch {
-      let message = String(localized: "Connection test failed. You can still save this endpoint for offline use.")
-      outboundProxyEndpointTestStates[endpointID] = .unreachable(message)
+    if let message = await outboundProxyEndpointsCoordinator.test(endpointID) {
       publishWarningNotice(
         message,
         logMessage: "Outbound proxy connection test failed during transport."
       )
+    } else {
+      lastError = nil
     }
   }
 
