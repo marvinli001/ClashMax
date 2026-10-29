@@ -478,6 +478,7 @@ struct ProfilesView: View {
           Text(ProfileStatusSummary.usageText(for: profile) ?? "")
             .foregroundStyle(.secondary)
             .lineLimit(1)
+            .help(ProfileStatusSummary.usageText(for: profile) ?? "")
         }
         .width(min: 120, ideal: 200)
       }
@@ -2776,7 +2777,7 @@ private struct ProfileNumberStepperField: View {
 
   private func updateValidation(for text: String) {
     guard let parsed = parsedDraft(text), range.contains(parsed) else {
-      validationError = "Enter \(range.lowerBound)-\(range.upperBound) seconds."
+      validationError = String(localized: "Enter \(range.lowerBound)-\(range.upperBound) seconds.")
       return
     }
     validationError = nil

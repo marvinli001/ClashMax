@@ -460,6 +460,7 @@ struct StatusStripContent: View {
         .lineLimit(1)
         .minimumScaleFactor(0.78)
         .frame(minWidth: 0, alignment: .leading)
+        .help(profileName)
 
       Text(proxyRoutingStatus)
         .foregroundStyle(.secondary)
@@ -489,6 +490,7 @@ struct StatusStripContent: View {
           .lineLimit(1)
           .minimumScaleFactor(0.78)
           .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+          .help(profileName)
 
         Text(proxyRoutingStatus)
           .foregroundStyle(.secondary)
@@ -534,6 +536,7 @@ private struct AppNoticeToast: View {
           .font(.caption.weight(.semibold))
       }
       .buttonStyle(.borderless)
+      .help("Dismiss")
       .accessibilityLabel("Dismiss")
     }
     .padding(.horizontal, 14)

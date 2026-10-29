@@ -803,6 +803,36 @@ final class LocalizationTests: XCTestCase {
     )
   }
 
+  /// Copy the 2026-10-29 UI patrol moved off verbatim `String` paths (`Picker(String)`,
+  /// `Text(String)`, plain literals assigned to error state), which a Chinese system showed in English.
+  func testSimplifiedChineseStringCatalogProvidesUIPatrolKeys() throws {
+    let bundle = try XCTUnwrap(Bundle(identifier: AppConstants.bundleIdentifier))
+    let zhPath = try XCTUnwrap(bundle.path(forResource: "zh-Hans", ofType: "lproj"))
+    let zhBundle = try XCTUnwrap(Bundle(path: zhPath))
+    let expectedTranslations = [
+      "Custom Bypass": "自定义绕过",
+      "Geosite": "Geosite",
+      "Succeeded": "成功",
+      "Respect": "遵循规则",
+      "System Hosts": "系统 Hosts",
+      "Prefer H3": "优先 H3",
+      "Copy listen address": "复制监听地址",
+      "Copy API secret": "复制 API 密钥",
+      "Start ClashMax to see the connections apps make through it.": "启动 ClashMax 后，这里会列出应用经由它发出的连接。",
+    ]
+    for (key, value) in expectedTranslations {
+      XCTAssertEqual(zhBundle.localizedString(forKey: key, value: nil, table: nil), value, key)
+    }
+
+    func format(_ key: String) -> String {
+      zhBundle.localizedString(forKey: key, value: nil, table: nil)
+    }
+    XCTAssertEqual(String(format: format("Remove %@"), "1.1.1.1"), "移除 1.1.1.1")
+    XCTAssertEqual(String(format: format("%@ used of %@"), "1 GB", "100 GB"), "已用 1 GB，共 100 GB")
+    XCTAssertEqual(String(format: format("%@ used"), "1 GB"), "已用 1 GB")
+    XCTAssertEqual(String(format: format("Enter %lld-%lld seconds."), Int64(5), Int64(60)), "请输入 5-60 秒。")
+  }
+
   /// Geo database maintenance (roadmap B5), the fake-ip flush action (A3) and the whole-group
   /// delay probe (A6) all shipped their user-facing copy at once. The geo panel is the one that
   /// matters most here: its whole job is to say out loud that a database has silently gone stale,

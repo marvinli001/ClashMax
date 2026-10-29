@@ -597,6 +597,7 @@ private struct ProxyGroupNodePane: View {
       Text(group.name)
         .font(.headline)
         .lineLimit(1)
+        .help(group.name)
       Text(headerSubtitle)
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -683,6 +684,7 @@ private struct ProxyNodeRow: View {
         .foregroundStyle(node.isSelectable ? .primary : .secondary)
         .lineLimit(1)
         .truncationMode(.middle)
+        .help(node.name)
 
       Spacer(minLength: 12)
 
@@ -777,6 +779,7 @@ private struct ProxyNodeDetailBar: View {
         .font(.callout.weight(.semibold))
         .lineLimit(1)
         .truncationMode(.middle)
+        .help(node.name)
       Text(detailLine)
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -1194,23 +1197,27 @@ private struct ProxyDelayBatchProgressStrip: View {
       ProxyDelayBatchMetric(
         text: "\(progress.succeeded)",
         systemImage: "checkmark.circle.fill",
-        color: .green
+        color: .green,
+        meaning: "Succeeded"
       )
       ProxyDelayBatchMetric(
         text: "\(progress.timedOut)",
         systemImage: ProxyDelayFailureKind.timeout.systemImage,
-        color: .orange
+        color: .orange,
+        meaning: "Timeout"
       )
       ProxyDelayBatchMetric(
         text: "\(progress.failed)",
         systemImage: ProxyDelayFailureKind.other.systemImage,
-        color: .orange
+        color: .orange,
+        meaning: "Failed"
       )
       if progress.cancelled > 0 {
         ProxyDelayBatchMetric(
           text: "\(progress.cancelled)",
           systemImage: ProxyDelayFailureKind.cancelled.systemImage,
-          color: .orange
+          color: .orange,
+          meaning: "Cancelled"
         )
       }
     }
@@ -1317,12 +1324,16 @@ private struct ProxyDelayBatchMetric: View {
   let text: String
   let systemImage: String
   let color: Color
+  /// What the count counts: three bare orange numbers are otherwise told apart by glyph alone.
+  var meaning: LocalizedStringResource?
 
   var body: some View {
     Label(text, systemImage: systemImage)
       .font(.caption.monospacedDigit())
       .foregroundStyle(color)
       .lineLimit(1)
+      .help(meaning.map { Text($0) } ?? Text(verbatim: ""))
+      .accessibilityLabel(meaning.map { Text(verbatim: "\(String(localized: $0)) \(text)") } ?? Text(verbatim: text))
   }
 }
 
@@ -1371,15 +1382,18 @@ private struct ProxyProviderList: View {
                 }
               }
               Spacer(minLength: 12)
+              // Two bare dates side by side read as a range; each one names what it is.
               if let expireAt = provider.subscriptionInfo?.expireAt {
-                Text(expireAt, style: .date)
+                Text("Expires \(expireAt.formatted(date: .abbreviated, time: .omitted))")
                   .font(.caption)
                   .foregroundStyle(.secondary)
+                  .lineLimit(1)
               }
               if let updatedAt = provider.updatedAt {
-                Text(updatedAt, style: .date)
+                Text("Updated \(updatedAt.formatted(date: .abbreviated, time: .omitted))")
                   .font(.caption)
                   .foregroundStyle(.secondary)
+                  .lineLimit(1)
               }
               Button {
                 appModel.updateProxyProvider(provider)
@@ -1422,7 +1436,7 @@ private struct ProxyProviderList: View {
 
   private func providerSubtitle(_ provider: ProxyProvider) -> String {
     let vehicle = provider.vehicleType.map { " \($0)" } ?? ""
-    return "\(provider.type)\(vehicle) - \(provider.proxies.count) nodes"
+    return "\(provider.type)\(vehicle) - " + String(localized: "\(provider.proxies.count) nodes")
   }
 }
 

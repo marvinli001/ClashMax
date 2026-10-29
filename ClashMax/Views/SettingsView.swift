@@ -955,6 +955,8 @@ private struct GlobalShortcutBindingRow: View {
       .toggleStyle(.switch)
       .disabled(binding.shortcut == nil)
       .help("Enable global shortcut")
+      // Fourteen identical switches: VoiceOver needs the action each one controls.
+      .accessibilityLabel(action.displayName)
     }
     .font(.caption)
   }
@@ -2772,13 +2774,13 @@ private struct ExternalControlSettingsRow: View {
   private func saveDashboardProfile() {
     let trimmedName = dashboardNameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmedName.isEmpty else {
-      dashboardError = "Dashboard name cannot be empty."
+      dashboardError = String(localized: "Dashboard name cannot be empty.")
       return
     }
     guard let url = URL(string: dashboardURLDraft.trimmingCharacters(in: .whitespacesAndNewlines)),
           ["http", "https"].contains(url.scheme?.lowercased() ?? "")
     else {
-      dashboardError = "Dashboard URL must start with http or https."
+      dashboardError = String(localized: "Dashboard URL must start with http or https.")
       return
     }
     let profile = ExternalDashboardProfile(
@@ -3050,7 +3052,7 @@ private struct ExternalControlSettingsSheet: View {
     }
   }
 
-  private func copyButton(value: String, isEnabled: Bool, help: String) -> some View {
+  private func copyButton(value: String, isEnabled: Bool, help: LocalizedStringResource) -> some View {
     Button {
       NSPasteboard.general.clearContents()
       NSPasteboard.general.setString(value, forType: .string)
@@ -3060,7 +3062,8 @@ private struct ExternalControlSettingsSheet: View {
     }
     .buttonStyle(.borderless)
     .disabled(!isEnabled || value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-    .help(help)
+    .help(Text(help))
+    .accessibilityLabel(Text(help))
   }
 }
 
