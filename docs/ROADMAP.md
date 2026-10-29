@@ -776,11 +776,14 @@ cannot copy cheaply.
         (`@IntentParameterDependency`); System Proxy and TUN take Turn On / Turn Off / Toggle.
         TUN is a routing mode in ClashMax, so turning it off means System Proxy routing.
         Group and node identifiers resolve without the core, so a saved shortcut run while
-        ClashMax is stopped reaches its own error instead of a missing-parameter prompt. Ten
-        App Shortcuts, the `AppShortcutsProvider` maximum.
+        ClashMax is stopped reaches its own error instead of a missing-parameter prompt. Nine
+        App Shortcuts since 2026-10-29 (the `AppShortcutsProvider` maximum is ten): Toggle TUN
+        gave up its slot because Set Routing Mode already covers it — `setTun` resolves to
+        `setRoutingMode(.tun / .systemProxy)` — and the action stays in Shortcuts.app, so
+        shortcuts built on it keep working. Only its Siri/Spotlight phrases are gone.
   - [ ] Intent for: activate scenario. **Waits on [B2](#b2--scenarios-generalize-networkpolicyrule)**,
-        which has no scenario model yet, and needs an App Shortcut slot — all ten are taken, so
-        one existing shortcut has to give way (the intent itself can exist without a slot).
+        which has no scenario model yet. Its App Shortcut slot is reserved (2026-10-29, freed by
+        Toggle TUN), guarded by `testAppShortcutsKeepASlotFreeForTheScenarioIntent`.
   - [x] Each intent reports success or a specific failure; none silently no-op. → **2026-10-01**.
         The behavior lives in [`ClashMaxIntentExecutor`](../ClashMax/App/ClashMaxIntentExecutor.swift),
         which returns a result sentence or throws a `ClashMaxIntentError` naming the cause. A

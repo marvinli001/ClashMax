@@ -610,10 +610,12 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
         （系统代理 / TUN / NE 代理）；配置、代理组和节点是 `AppEntity`，节点列表取自同一个动作里已选的组
         （`@IntentParameterDependency`）；系统代理和 TUN 都接受 开启 / 关闭 / 切换。在 ClashMax 里 TUN 是一种路由
         模式，所以关闭 TUN 意味着回到系统代理路由。组和节点的标识符不依赖内核就能解析，所以 ClashMax 停止时运行
-        一个已保存的快捷指令，会走到它自己的报错，而不是弹出"缺少参数"。共 10 个 App Shortcut，正好是
-        `AppShortcutsProvider` 的上限。
-  - [ ] 提供 intent：激活场景。**依赖 [B2](#b2场景化推广-networkpolicyrule)**，B2 还没有场景模型；而且需要一个
-        App Shortcut 名额——10 个已经用满，届时得让出一个（intent 本身可以不占名额）。
+        一个已保存的快捷指令，会走到它自己的报错，而不是弹出"缺少参数"。自 2026-10-29 起共 9 个 App Shortcut
+        （`AppShortcutsProvider` 上限是 10）：开关 TUN 让出了名额，因为设置路由模式已经覆盖它——`setTun` 就是
+        `setRoutingMode(.tun / .systemProxy)`。这个动作仍在快捷指令 App 里，基于它的快捷指令照常可用，只是少了
+        Siri/聚焦搜索短语。
+  - [ ] 提供 intent：激活场景。**依赖 [B2](#b2场景化推广-networkpolicyrule)**，B2 还没有场景模型。它的 App Shortcut
+        名额已经预留（2026-10-29，由开关 TUN 让出），由 `testAppShortcutsKeepASlotFreeForTheScenarioIntent` 守住。
   - [x] 每个 intent 都报告成功或具体失败；不允许任何一个静默空转。→ **2026-10-01**。行为集中在
         [`ClashMaxIntentExecutor`](../ClashMax/App/ClashMaxIntentExecutor.swift)，它要么返回一句结果，要么抛出
         写明原因的 `ClashMaxIntentError`。在运行中的内核上启动、停止、重启、切换路由或切换配置，都会等生命周期稳定

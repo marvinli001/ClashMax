@@ -103,6 +103,20 @@ final class NetworkExtensionProjectConfigurationTests: XCTestCase {
     XCTAssertTrue(appIntents.contains("AppShortcutsProvider"))
   }
 
+  /// `AppShortcutsProvider` caps out at ten. One slot stays free for "Activate scenario"
+  /// (roadmap B2/B3); TUN gave it up because Set Routing Mode covers it, but the action remains.
+  func testAppShortcutsKeepASlotFreeForTheScenarioIntent() throws {
+    let appIntents = try String(
+      contentsOf: projectRoot().appendingPathComponent("ClashMax/App/ClashMaxAppIntents.swift"),
+      encoding: .utf8
+    )
+
+    XCTAssertEqual(appIntents.components(separatedBy: "AppShortcut(").count - 1, 9)
+    XCTAssertFalse(appIntents.contains("intent: SetClashMaxTunIntent()"))
+    XCTAssertTrue(appIntents.contains("struct SetClashMaxTunIntent: AppIntent"))
+    XCTAssertTrue(appIntents.contains("intent: SetClashMaxRoutingModeIntent()"))
+  }
+
   func testRunScriptVerifiesEmbeddedSystemExtensionWithoutResigning() throws {
     let root = try projectRoot()
     let projectYAML = try String(

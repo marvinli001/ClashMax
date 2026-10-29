@@ -344,8 +344,10 @@ struct ApplyClashMaxNetworkPolicyIntent: AppIntent {
   }
 }
 
-/// `AppShortcutsProvider` takes at most ten shortcuts; these ten are all of them. "Activate
-/// scenario" (roadmap B3) waits on B2 and would need one of these slots.
+/// `AppShortcutsProvider` takes at most ten shortcuts. Nine are used: Toggle ClashMax TUN has no
+/// App Shortcut because Set ClashMax Routing Mode already covers it (turning TUN off is switching
+/// to System Proxy), so its slot is kept free for "Activate scenario" (roadmap B2/B3). The TUN
+/// action itself is still in Shortcuts.app, and shortcuts already built on it keep working.
 struct ClashMaxAppShortcuts: AppShortcutsProvider {
   static var appShortcuts: [AppShortcut] {
     AppShortcut(
@@ -392,15 +394,6 @@ struct ClashMaxAppShortcuts: AppShortcutsProvider {
       ],
       shortTitle: "Routing Mode",
       systemImageName: "arrow.triangle.branch"
-    )
-    AppShortcut(
-      intent: SetClashMaxTunIntent(),
-      phrases: [
-        "Toggle TUN in \(.applicationName)",
-        "Switch TUN in \(.applicationName)",
-      ],
-      shortTitle: "TUN",
-      systemImageName: "point.topleft.down.curvedto.point.bottomright.up"
     )
     AppShortcut(
       intent: SelectClashMaxProfileIntent(),
