@@ -135,13 +135,13 @@ L1 的修复按钮和 L2 的意图表单，必须写入 L3 用户手工编辑的
 
 ## 3. ClashMax 的现状
 
-### 3.1 规模，2026-08-30 实测
+### 3.1 规模，2026-10-29 实测
 
 | 结论 | 如何核对 |
 | --- | --- |
-| 101 个源文件，约 6.81 万行，覆盖 app、helper、Network Extension、共享代码 | `find ClashMax Shared ClashMaxHelper ClashMaxNetworkExtension -name '*.swift' \| wc -l` |
-| 52 个测试文件，约 4.28 万行，1358 个 XCTest 用例 + 5 个 Swift Testing 用例 | `grep -rhoE 'func test[A-Za-z0-9_]*' ClashMaxTests \| sort -u \| wc -l` |
-| `en` 与 `zh-Hans` 各 1530 个本地化 key | [`Resources/Localizable.xcstrings`](../Resources/Localizable.xcstrings) |
+| 108 个源文件，约 7.41 万行，覆盖 app、helper、Network Extension、共享代码 | `find ClashMax Shared ClashMaxHelper ClashMaxNetworkExtension -name '*.swift' \| wc -l` |
+| 57 个测试文件，约 4.94 万行，1608 个 XCTest 用例 + 5 个 Swift Testing 用例 | `grep -rhoE 'func test[A-Za-z0-9_]*' ClashMaxTests \| sort -u \| wc -l` |
+| `en` 与 `zh-Hans` 各 1897 个本地化 key | [`Resources/Localizable.xcstrings`](../Resources/Localizable.xcstrings) |
 | 测试在公开 CI 中运行 | [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) |
 
 ### 3.2 Mihomo 能力覆盖缺口
@@ -874,8 +874,8 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
 
 #### D1——拆解 `AppModel`
 
-- **问题：** [`AppModel.swift`](../ClashMax/Stores/AppModel.swift) 有 **8845 行**；
-  [`SettingsView.swift`](../ClashMax/Views/SettingsView.swift) 有 **3085 行**。本路线图中的每个功能，落到
+- **问题：** [`AppModel.swift`](../ClashMax/Stores/AppModel.swift) 有 **10354 行**；
+  [`SettingsView.swift`](../ClashMax/Views/SettingsView.swift) 有 **3167 行**。本路线图中的每个功能，落到
   那里都要交一笔税。
 - **时机：** Observation 迁移刚完成，因此失效边界目前是被充分理解的。这种理解会衰减。
 - **验收标准：**
@@ -966,6 +966,6 @@ host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
 ## 7. 如何修改本文
 
 - **§2 的原则具有规范效力。** 修改它们需要在本文中写下理由，而不是在某个 pull request 里开一次性例外。
-- **§3 的缺口是带日期的结论。** 引用前请重新核实。§3.1 已于 2026-08-30 重新实测；§3.2 的每一行都带着它
+- **§3 的缺口是带日期的结论。** 引用前请重新核实。§3.1 已于 2026-10-29 重新实测；§3.2 的每一行都带着它
   的状态被核实的日期。
 - **§4 的主线是一个队列，不是合同。** 可以自由重排；但不要悄悄丢弃某一项——把它移到 §6 并说明理由。

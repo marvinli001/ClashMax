@@ -161,13 +161,13 @@ is **done** — shipping a dedicated toggle for it is a regression in L1 quality
 
 ## 3. Where ClashMax Stands Today
 
-### 3.1 Scale, as verified on 2026-08-30
+### 3.1 Scale, as verified on 2026-10-29
 
 | Claim | How to check |
 | --- | --- |
-| 101 source files, ~68.1k lines across app, helper, Network Extension, shared code | `find ClashMax Shared ClashMaxHelper ClashMaxNetworkExtension -name '*.swift' \| wc -l` |
-| 52 test files, ~42.8k lines, 1358 XCTest cases + 5 Swift Testing cases | `grep -rhoE 'func test[A-Za-z0-9_]*' ClashMaxTests \| sort -u \| wc -l` |
-| 1530 localized keys in `en` and `zh-Hans` | [`Resources/Localizable.xcstrings`](../Resources/Localizable.xcstrings) |
+| 108 source files, ~74.1k lines across app, helper, Network Extension, shared code | `find ClashMax Shared ClashMaxHelper ClashMaxNetworkExtension -name '*.swift' \| wc -l` |
+| 57 test files, ~49.4k lines, 1608 XCTest cases + 5 Swift Testing cases | `grep -rhoE 'func test[A-Za-z0-9_]*' ClashMaxTests \| sort -u \| wc -l` |
+| 1897 localized keys in `en` and `zh-Hans` | [`Resources/Localizable.xcstrings`](../Resources/Localizable.xcstrings) |
 | Tests run in public CI | [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) |
 
 ### 3.2 Mihomo coverage gaps
@@ -1142,8 +1142,8 @@ interleaved with A/B/C, touching only what the current feature touches.
 
 #### D1 — Decompose `AppModel`
 
-- **Problem:** [`AppModel.swift`](../ClashMax/Stores/AppModel.swift) is **8845 lines**;
-  [`SettingsView.swift`](../ClashMax/Views/SettingsView.swift) is **3085 lines**. Every
+- **Problem:** [`AppModel.swift`](../ClashMax/Stores/AppModel.swift) is **10354 lines**;
+  [`SettingsView.swift`](../ClashMax/Views/SettingsView.swift) is **3167 lines**. Every
   feature in this roadmap pays a tax to land there.
 - **Timing:** the Observation migration just completed, so the invalidation boundaries are
   currently well understood. That understanding decays.
@@ -1262,6 +1262,6 @@ Stated so they do not get relitigated:
 - The **principles in §2 are normative.** Changing them requires a written reason here, not
   a one-off exception in a pull request.
 - The **gaps in §3 are dated claims.** Re-verify before citing them. §3.1 was re-measured on
-  2026-08-30; every row in §3.2 carries the date its state was verified.
+  2026-10-29; every row in §3.2 carries the date its state was verified.
 - The **tracks in §4 are a queue, not a contract.** Reorder freely; do not silently drop an
   item — move it to §6 with a reason.
