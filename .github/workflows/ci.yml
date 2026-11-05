@@ -25,8 +25,8 @@ env:
   # what "formatted" means. This must match the --minversion line in
   # .swiftformat, which the install step asserts. The checksum is for that
   # release's swiftformat_linux.zip, so bump both in the same commit.
-  SWIFTFORMAT_VERSION: "0.64.1"
-  SWIFTFORMAT_LINUX_SHA256: "a291dd7e1e563562565ca18193da0c1aa0578b45973335d827e214b2d2d769ec"
+  SWIFTFORMAT_VERSION: "0.64.5"
+  SWIFTFORMAT_LINUX_SHA256: "56c50d955903cfedbe28996a70e7551a873cdb6dfa5e416d9332925c455ab365"
 
 jobs:
   hygiene:

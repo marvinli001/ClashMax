@@ -79,11 +79,11 @@ struct DiagnosticBundleVersions: Equatable, Sendable {
 
   private static var processArchitecture: String {
     #if arch(arm64)
-      return "arm64"
+      "arm64"
     #elseif arch(x86_64)
-      return "x86_64"
+      "x86_64"
     #else
-      return "unknown"
+      "unknown"
     #endif
   }
 
