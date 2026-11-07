@@ -1,17 +1,23 @@
+import Pow
 import SwiftUI
 
 struct CoreVisualView: View {
+  @Environment(\.scenePhase) private var scenePhase
   let state: DashboardRuntimeState
   let reduceMotion: Bool
 
   var body: some View {
-    if state.isVisualActive {
-      ActiveCorePowerSymbol(state: state, reduceMotion: reduceMotion)
-        .transition(.opacity.combined(with: .scale(scale: 0.92)))
-    } else {
-      RestingCoreSymbol(state: state, reduceMotion: reduceMotion)
-        .transition(.opacity)
+    Group {
+      if state.isVisualActive {
+        ActiveCorePowerSymbol(state: state, reduceMotion: reduceMotion)
+          .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.92)))
+      } else {
+        RestingCoreSymbol(state: state, reduceMotion: reduceMotion)
+          .transition(.opacity)
+      }
     }
+    .changeEffect(.ping(shape: Circle(), style: Color.accentColor.opacity(0.5), count: 1),
+                  value: state.isRunning, isEnabled: state.isRunning && !reduceMotion && scenePhase != .background)
   }
 }
 
@@ -69,6 +75,7 @@ private struct RestingCoreSymbol: View {
 /// not a blurred circle, so nothing here needs an offscreen blur pass.
 private struct ActiveCorePowerSymbol: View {
   @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.scenePhase) private var scenePhase
   let state: DashboardRuntimeState
   let reduceMotion: Bool
 
@@ -79,6 +86,8 @@ private struct ActiveCorePowerSymbol: View {
       ZStack {
         if breathes {
           BreathingCoreHalo(tint: tint, side: side)
+            .transition(.opacity)
+          StartingCoreRing(side: side)
             .transition(.opacity)
         } else {
           CoreHalo(tint: tint, side: side, intensity: 0.30)
@@ -96,7 +105,7 @@ private struct ActiveCorePowerSymbol: View {
           .shadow(color: tint.opacity(colorScheme == .dark ? 0.55 : 0.40), radius: side * 0.08)
       }
       .frame(width: proxy.size.width, height: proxy.size.height)
-      // Starting → running settles once: the breathing halo fades out and the tint turns green.
+      // The busy ring settles into a still power mark only after the runtime actually starts.
       .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: state.isStarting)
     }
     .aspectRatio(1, contentMode: .fit)
@@ -106,11 +115,27 @@ private struct ActiveCorePowerSymbol: View {
   }
 
   private var breathes: Bool {
-    state.isStarting && !reduceMotion
+    state.isStarting && !reduceMotion && scenePhase != .background
   }
 
   private var tint: Color {
-    state.isStarting ? .cyan : .green
+    .accentColor
+  }
+}
+
+private struct StartingCoreRing: View {
+  let side: CGFloat
+  @State private var rotates = false
+
+  var body: some View {
+    Circle().trim(from: 0.05, to: 0.32)
+      .stroke(Color.accentColor.opacity(0.65), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+      .frame(width: side * 0.94, height: side * 0.94)
+      .rotationEffect(.degrees(rotates ? 360 : 0))
+      .onAppear {
+        withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) { rotates = true }
+      }
+      .accessibilityHidden(true)
   }
 }
 

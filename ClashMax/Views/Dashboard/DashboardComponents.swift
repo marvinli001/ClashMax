@@ -25,7 +25,7 @@ enum DashboardLayoutMetrics {
   static let launchMixedPortControlWidth: CGFloat = 104
   static let launchStartButtonWidth: CGFloat = 156
   static let dashboardGridSpacing: CGFloat = 12
-  static let runningPairColumnsBreakpoint: CGFloat = 700
+  static let runningPairColumnsBreakpoint: CGFloat = 800
 
   static func pagePadding(for width: CGFloat) -> CGFloat {
     width < 760 ? 14 : 18
@@ -303,8 +303,8 @@ private struct NetworkExtensionSettingsPopover: View {
         }
         .disabled(!appModel.canRepairNetworkExtensionDNS)
         Spacer()
-        Button("Cancel", action: onCancel)
-        Button("Save", action: onSave)
+        Button(String(localized: "Cancel"), action: onCancel)
+        Button(String(localized: "Save"), action: onSave)
           .keyboardShortcut(.defaultAction)
           .disabled(settings.validationError != nil)
       }
@@ -461,7 +461,7 @@ private struct TunSettingsPopover: View {
       HStack {
         popoverHeader("TUN Settings", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
         Spacer()
-        Button("Reset Defaults", action: onReset)
+        Button(String(localized: "Reset Defaults"), action: onReset)
       }
 
       ScrollView(.vertical) {
@@ -956,7 +956,7 @@ private struct EditableStringList: View {
         TextField(placeholder, text: $draft)
           .textFieldStyle(.roundedBorder)
           .onSubmit(add)
-        Button("Add", action: add)
+        Button(String(localized: "Add"), action: add)
           .disabled(!validator(draft))
       }
     }
@@ -1031,7 +1031,7 @@ private struct EditableKeyValueList: View {
         TextField(valuePlaceholder, text: $valueDraft)
           .textFieldStyle(.roundedBorder)
           .onSubmit(add)
-        Button("Add", action: add)
+        Button(String(localized: "Add"), action: add)
           .disabled(!canAdd)
       }
     }
@@ -1117,12 +1117,13 @@ private func localizedDashboardText(_ value: String) -> String {
   NSLocalizedString(value, comment: "")
 }
 
+@MainActor
 private func popoverActions(onCancel: @escaping () -> Void, onSave: @escaping () -> Void, saveDisabled: Bool) -> some View {
   HStack {
     Spacer()
-    Button("Cancel", action: onCancel)
+    Button(String(localized: "Cancel"), action: onCancel)
       .keyboardShortcut(.cancelAction)
-    Button("Save", action: onSave)
+    Button(String(localized: "Save"), action: onSave)
       .keyboardShortcut(.defaultAction)
       .disabled(saveDisabled)
   }
@@ -1249,11 +1250,9 @@ struct DashboardCardModifier: ViewModifier {
 
   func body(content: Content) -> some View {
     let shape = SurfaceRadius.shape(SurfaceRadius.card)
-    let isDark = colorScheme == .dark
     content
       .background(.cardSurface, in: shape)
       .overlay(shape.strokeBorder(.separator, lineWidth: 1))
-      .shadow(color: .black.opacity(isDark ? 0.16 : 0.04), radius: isDark ? 16 : 10, y: isDark ? 8 : 2)
   }
 }
 

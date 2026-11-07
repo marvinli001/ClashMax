@@ -245,16 +245,16 @@ struct QuickRuleSheet: View {
   private var footer: some View {
     HStack(spacing: 10) {
       if case .done = phase {
-        Button("Open in Routing") {
+        Button(String(localized: "Open in Routing")) {
           appModel.selectedSection = .routing
           dismiss()
         }
         Spacer()
-        Button("Done") { dismiss() }
+        Button(String(localized: "Done")) { dismiss() }
           .keyboardShortcut(.defaultAction)
       } else {
         Spacer()
-        Button("Cancel", role: .cancel) { dismiss() }
+        Button(String(localized: "Cancel"), role: .cancel) { dismiss() }
           .keyboardShortcut(.cancelAction)
         Button {
           apply()

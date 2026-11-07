@@ -4,13 +4,16 @@ import SwiftUI
 struct ContentView: View {
   @Environment(AppModel.self) private var appModel
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var inspectorRequest: WorkspaceInspectorRequest?
+  @State private var inspectorWidth: CGFloat = 320
 
   var body: some View {
     // @Environment does not vend bindings; @Bindable wraps the tracked reference so
     // `$appModel.selectedSection` still resolves.
     @Bindable var appModel = appModel
     return NavigationSplitView {
-      SidebarView(selection: $appModel.selectedSection)
+      SidebarView(selection: $appModel.selectedSection, hasRuntimeIssue: appModel.readinessIssue != nil || appModel.lastError != nil)
+        .navigationSplitViewColumnWidth(min: 200, ideal: 214, max: 240)
     } detail: {
       VStack(spacing: 0) {
         StatusStrip()
@@ -21,9 +24,9 @@ struct ContentView: View {
         // sidebar's rows off screen; the window could only be recovered by quitting. GeometryReader
         // always reports the size it was proposed no matter what it contains, which pins the column
         // to the window, and the clip keeps a page that still overflows contained inside it.
-        GeometryReader { _ in
+        GeometryReader { geometry in
           detail
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
         }
         .clipped()
         // Transient notices (a copied report, a delay test that failed, a helper that answered
@@ -42,7 +45,7 @@ struct ContentView: View {
               .transition(reduceMotion ? .opacity : .offset(y: -10).combined(with: .opacity))
           }
         }
-        .animation(.spring(duration: 0.28, bounce: 0), value: appModel.appNotice?.id)
+        .animation(.easeOut(duration: reduceMotion ? 0.16 : 0.2), value: appModel.appNotice?.id)
         // Each notice leaves when its own time is up, counted from when it was posted — not from
         // when this window happened to show it. Dismissed by id, so a notice that times out never
         // takes a newer one down with it.
@@ -57,13 +60,8 @@ struct ContentView: View {
         }
       }
       .toolbar {
-        // Deliberately the default placement, not `.navigation`: `.navigation` sits
-        // *before* the window title and pushes the app name off the leading edge.
-        // The title owns the leading edge, these global runtime controls own the
-        // trailing side, and they are the only things in here — per-page controls
-        // stay inside the page (see `AdaptivePage.pageActionBar`) so they never read
-        // as an extension of the run-mode picker.
-        ToolbarItemGroup {
+        // Global runtime controls stay separate from each page's actions.
+        ToolbarItemGroup(placement: .primaryAction) {
           RunModePicker(selection: Binding(
             get: { appModel.overrides.mode },
             set: { appModel.requestMode($0) }
@@ -83,18 +81,31 @@ struct ContentView: View {
         }
       }
     }
+    .environment(\.workspaceInspectorOccupiedWidth, inspectorRequest?.isPresented == true ? inspectorWidth : 0)
+    .onPreferenceChange(WorkspaceInspectorPreference.self) { inspectorRequest = $0 }
+    .inspector(isPresented: Binding(
+      get: { inspectorRequest?.isPresented ?? false },
+      set: { inspectorRequest?.setPresented($0) }
+    )) {
+      VStack(alignment: .leading, spacing: 0) {
+        if let inspectorRequest { inspectorRequest.content }
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      .inspectorColumnWidth(min: inspectorRequest?.section == .connections ? 300 : 280, ideal: inspectorRequest?.idealWidth ?? 320, max: 340)
+      .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { inspectorWidth = $0 }
+    }
     .alert(
       Text("Error"),
       isPresented: errorAlertPresented,
       presenting: appModel.pendingErrorAlert
     ) { alert in
-      Button("Copy") {
+      Button(String(localized: "Copy")) {
         copyErrorAlert(alert)
       }
-      Button("Show Logs") {
+      Button(String(localized: "Show Logs")) {
         appModel.selectedSection = .logs
       }
-      Button("OK", role: .cancel) {}
+      Button(String(localized: "OK"), role: .cancel) {}
     } message: { alert in
       Text(alert.message)
     }
@@ -252,7 +263,7 @@ private struct InitialTunHelperPromptSheet: View {
 
       HStack {
         Spacer()
-        Button("Later", action: onLater)
+        Button(String(localized: "Later"), action: onLater)
           .keyboardShortcut(.cancelAction)
 
         Button {
@@ -376,50 +387,36 @@ struct StatusStrip: View {
   @Environment(AppModel.self) private var appModel
 
   var body: some View {
-    StatusStripContent(
-      statusSummary: NSLocalizedString(appModel.statusSummary, comment: ""),
-      statusSymbol: statusSymbol,
-      statusStyle: statusStyle,
-      profileName: appModel.profileStore.activeProfile?.name ?? String(localized: "No Profile"),
-      proxyRoutingStatus: proxyRoutingStatus,
-      readinessIssue: appModel.readinessIssue
-    )
-  }
-
-  private var statusSymbol: String {
-    if appModel.isRunning {
-      return "checkmark.circle.fill"
-    }
-    switch appModel.coreController.status {
-    case .running:
-      return "checkmark.circle.fill"
-    case .starting, .restarting:
-      return "clock.arrow.circlepath"
-    case .crashed:
-      return "exclamationmark.triangle.fill"
-    case .stopped:
-      return "stop.circle"
-    }
-  }
-
-  private var statusStyle: Color {
-    if appModel.isRunning {
-      return .green
-    }
-    switch appModel.coreController.status {
-    case .running:
-      return .green
-    case .crashed:
-      return .red
-    case .starting, .restarting:
-      return .orange
-    case .stopped:
-      return .secondary
+    let runtime = MenuBarRuntimePresentation(appModel: appModel)
+    HStack(spacing: 4) {
+      StatusStripContent(
+        statusSummary: runtime.title,
+        statusSymbol: runtime.symbolName,
+        statusStyle: runtime.tint,
+        profileName: appModel.profileStore.activeProfile?.name ?? String(localized: "No Profile"),
+        proxyRoutingStatus: proxyRoutingStatus,
+        readinessIssue: appModel.readinessIssue
+      )
+      if appModel.readinessIssue != nil || appModel.lastError != nil {
+        Button {
+          appModel.selectedSection = .status
+        } label: {
+          Image(systemName: "arrow.up.right.circle")
+        }
+        .buttonStyle(.borderless)
+        .help("Show runtime diagnostics")
+        .accessibilityLabel("Show runtime diagnostics")
+        .padding(.trailing, 14)
+      }
     }
   }
 
   private var proxyRoutingStatus: String {
-    let isActive = appModel.systemProxyEnabled || appModel.tunEnabled || appModel.networkExtensionEnabled
+    let isActive = switch appModel.proxyRoutingMode {
+    case .systemProxy: appModel.systemProxyEnabled
+    case .tun: appModel.tunEnabled
+    case .neProxy: appModel.networkExtensionEnabled
+    }
     let format = isActive ? String(localized: "%@ On") : String(localized: "%@ Ready")
     return String(format: format, appModel.proxyRoutingMode.displayName)
   }
@@ -560,15 +557,24 @@ private struct AppNoticeToast: View {
 
 private extension View {
   /// Liquid Glass on macOS 26; the same rounded material surface the system uses below it.
-  @ViewBuilder
   func toastSurface() -> some View {
+    modifier(ToastSurfaceModifier())
+  }
+}
+
+private struct ToastSurfaceModifier: ViewModifier {
+  @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+  func body(content: Content) -> some View {
     let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
-    if #available(macOS 26, *) {
-      glassEffect(.regular, in: shape)
+    if reduceTransparency {
+      content.background(Color(nsColor: .controlBackgroundColor), in: shape)
+        .overlay(shape.strokeBorder(.separator))
+    } else if #available(macOS 26, *) {
+      content.glassEffect(.regular, in: shape)
     } else {
-      background(.regularMaterial, in: shape)
-        .overlay(shape.strokeBorder(.separator, lineWidth: 1))
-        .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
+      content.background(.regularMaterial, in: shape)
+        .overlay(shape.strokeBorder(.separator))
     }
   }
 }

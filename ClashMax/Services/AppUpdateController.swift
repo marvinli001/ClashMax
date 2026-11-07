@@ -17,8 +17,13 @@ final class AppUpdateController: NSObject {
   /// every client, including ones predating this delegate, still sees them.
   static let appleSiliconUpdateChannel = "apple-silicon"
 
-  override init() {
+  override convenience init() {
+    self.init(startsUpdater: true)
+  }
+
+  init(startsUpdater: Bool) {
     super.init()
+    guard startsUpdater else { return }
     if Self.hasConfiguredPublicKey {
       let controller = SPUStandardUpdaterController(
         startingUpdater: true,

@@ -36,7 +36,7 @@ struct SubscriptionAuditSheet: View {
       Divider()
       HStack {
         Spacer()
-        Button("Done") {
+        Button(String(localized: "Done")) {
           dismiss()
         }
         .keyboardShortcut(.defaultAction)
@@ -141,16 +141,16 @@ struct SubscriptionAuditSheet: View {
           ProgressView().controlSize(.small)
         }
         if policy == .allowExposed {
-          Button("Turn Off") {
+          Button(String(localized: "Turn Off")) {
             setListenerPolicy(.blockExposed)
           }
         } else {
           if policy == nil {
-            Button("Keep Off") {
+            Button(String(localized: "Keep Off")) {
               setListenerPolicy(.blockExposed)
             }
           }
-          Button("Allow…") {
+          Button(String(localized: "Allow…")) {
             confirmsAllowingOpenProxy = true
           }
         }
@@ -163,10 +163,10 @@ struct SubscriptionAuditSheet: View {
       "Allow listeners other devices can reach?",
       isPresented: $confirmsAllowingOpenProxy
     ) {
-      Button("Allow") {
+      Button(String(localized: "Allow")) {
         setListenerPolicy(.allowExposed)
       }
-      Button("Cancel", role: .cancel) {}
+      Button(String(localized: "Cancel"), role: .cancel) {}
     } message: {
       Text(report.items.first(where: { $0.key.lowercased() == "listeners" })?.consequence ?? "")
     }

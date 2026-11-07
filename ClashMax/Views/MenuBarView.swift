@@ -56,13 +56,15 @@ struct MenuBarView: View {
             .font(.system(.callout, design: .rounded).weight(.semibold))
             .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.borderedProminent)
+        .modifier(RuntimePrimaryActionStyle(canStop: appModel.canStopRuntime))
         .buttonBorderShape(.roundedRectangle)
         .controlSize(.regular)
         .disabled(primaryActionDisabled)
         .help(runtime.detail ?? primaryActionTitle)
 
-        MenuBarStatusMessage(runtime: runtime)
+        if !runtime.showsTraffic {
+          MenuBarStatusMessage(runtime: runtime)
+        }
       }
 
       Divider()
@@ -155,61 +157,37 @@ struct MenuBarView: View {
 
       Divider()
 
-      VStack(spacing: 5) {
-        HStack(spacing: 5) {
-          Button {
-            appModel.updateActiveSubscription()
-          } label: {
-            MenuBarFooterButtonLabel(title: "Update Subscription", systemImage: "arrow.triangle.2.circlepath")
-          }
-          .disabled(!(appModel.profileStore.activeProfile?.isSubscription ?? false))
-
-          Button {
-            appModel.updateAllSubscriptions()
-          } label: {
-            MenuBarFooterButtonLabel(title: "Update All", systemImage: "arrow.triangle.2.circlepath.circle")
-          }
-          .disabled(!appModel.profileStore.profiles.contains(where: \.isSubscription))
+      HStack(spacing: 8) {
+        Button {
+          AppDelegate.showMainWindow()
+        } label: {
+          Label("Open Main Window", systemImage: "macwindow")
+            .frame(maxWidth: .infinity)
         }
-
-        HStack(spacing: 5) {
-          Button {
-            appModel.testDelayForAllProxyGroups()
-          } label: {
-            MenuBarFooterButtonLabel(title: "Test All", systemImage: "waveform.path.ecg")
-          }
-          .disabled(!appModel.canControlRuntimeProxies || appModel.visibleProxyGroups.isEmpty)
-
-          Button {
+        Menu {
+          Button(String(localized: "Update Subscription")) { appModel.updateActiveSubscription() }
+            .disabled(!(appModel.profileStore.activeProfile?.isSubscription ?? false))
+          Button(String(localized: "Update All")) { appModel.updateAllSubscriptions() }
+            .disabled(!appModel.profileStore.profiles.contains(where: \.isSubscription))
+          Button(String(localized: "Test All Groups")) { appModel.testDelayForAllProxyGroups() }
+            .disabled(!appModel.canControlRuntimeProxies || appModel.visibleProxyGroups.isEmpty)
+          Button(String(localized: "Update Providers")) {
             appModel.updateAllProxyProviders()
             appModel.updateAllRuleProviders()
-          } label: {
-            MenuBarFooterButtonLabel(title: "Providers", systemImage: "shippingbox")
           }
           .disabled(!appModel.canControlRuntimeProxies)
+          Divider()
+          CheckForUpdatesButton(updateController: appUpdateController)
+          Divider()
+          Button(String(localized: "Quit")) { NSApp.terminate(nil) }
+        } label: {
+          Label("More", systemImage: "ellipsis")
         }
-
-        HStack(spacing: 5) {
-          CheckForUpdatesButton(updateController: appUpdateController, fillsWidth: true)
-
-          Button {
-            AppDelegate.showMainWindow()
-          } label: {
-            MenuBarFooterButtonLabel(title: "Open Main Window", systemImage: "macwindow")
-          }
-        }
-
-        HStack(spacing: 5) {
-          Button {
-            NSApp.terminate(nil)
-          } label: {
-            MenuBarFooterButtonLabel(title: "Quit", systemImage: "power")
-          }
-        }
+        .menuIndicator(.hidden)
+        .fixedSize()
       }
       .buttonStyle(.bordered)
       .controlSize(.small)
-      .font(.caption)
     }
     .padding(MenuBarPanelLayout.padding)
     .frame(width: MenuBarPanelLayout.width)
@@ -837,7 +815,7 @@ private extension AppModel {
   }
 }
 
-private extension RuntimeOwner {
+extension RuntimeOwner {
   var menuBarDisplayName: String {
     switch self {
     case .stopped:

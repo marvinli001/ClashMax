@@ -3,6 +3,84 @@ import KeyboardShortcuts
 import SwiftUI
 import UniformTypeIdentifiers
 
+enum SettingsCategory: String, CaseIterable, Identifiable {
+  case general, shortcuts, runtime, subscriptions, system, maintenance
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .general: String(localized: "General")
+    case .shortcuts: String(localized: "Shortcuts")
+    case .runtime: String(localized: "Runtime & Network")
+    case .subscriptions: String(localized: "Subscriptions & Rules")
+    case .system: String(localized: "System Integration")
+    case .maintenance: String(localized: "Maintenance")
+    }
+  }
+
+  var symbolName: String {
+    switch self {
+    case .general: "switch.2"
+    case .shortcuts: "keyboard"
+    case .runtime: "network"
+    case .subscriptions: "arrow.triangle.2.circlepath"
+    case .system: "checkmark.shield"
+    case .maintenance: "wrench.and.screwdriver"
+    }
+  }
+}
+
+struct SettingsSearchEntry: Identifiable, Equatable {
+  let category: SettingsCategory
+  let title: String
+  var localizedTitle: String { NSLocalizedString(title, comment: "") }
+  var id: String { category.rawValue + ":" + title }
+
+  static let all: [SettingsSearchEntry] = [
+    .init(category: .general, title: "Appearance"),
+    .init(category: .general, title: "Language"),
+    .init(category: .general, title: "Menu Bar Traffic Speed"),
+    .init(category: .general, title: "Launch at Login"),
+    .init(category: .general, title: "Silent Start"),
+    .init(category: .general, title: "Login Item Status"),
+    .init(category: .shortcuts, title: "Shortcuts"),
+    .init(category: .runtime, title: "Mixed Port"),
+    .init(category: .runtime, title: "Controller Port"),
+    .init(category: .runtime, title: "Allow LAN"),
+    .init(category: .runtime, title: "IPv6"),
+    .init(category: .runtime, title: "Enable DNS Override"),
+    .init(category: .runtime, title: "Delay Test Mode"),
+    .init(category: .runtime, title: "Log Level"),
+    .init(category: .runtime, title: "Unified Delay"),
+    .init(category: .subscriptions, title: "User Agent"),
+    .init(category: .subscriptions, title: "Request Timeout"),
+    .init(category: .subscriptions, title: "Use Local Clash Proxy"),
+    .init(category: .subscriptions, title: "Use System Proxy"),
+    .init(category: .subscriptions, title: "Ignore TLS Errors"),
+    .init(category: .subscriptions, title: "Automatic Updates"),
+    .init(category: .subscriptions, title: "Default Subscription Interval"),
+    .init(category: .subscriptions, title: "Background Check Interval"),
+    .init(category: .subscriptions, title: "Retry Backoff Cap"),
+    .init(category: .subscriptions, title: "Notify Update Failures"),
+    .init(category: .subscriptions, title: "Rule Overlay"),
+    .init(category: .subscriptions, title: "Geo Databases"),
+    .init(category: .system, title: "Proxy Routing"),
+    .init(category: .system, title: "Network Policies"),
+    .init(category: .system, title: "TUN Helper"),
+    .init(category: .system, title: "System Extension"),
+    .init(category: .system, title: "NE Diagnostics"),
+    .init(category: .system, title: "Transparent Proxy Status"),
+    .init(category: .maintenance, title: "Local Backup"),
+    .init(category: .maintenance, title: "App Package"),
+    .init(category: .maintenance, title: "Bundled Core"),
+  ]
+
+  static func matches(_ query: String) -> [SettingsSearchEntry] {
+    let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    return all.filter { $0.localizedTitle.localizedCaseInsensitiveContains(query) || $0.title.localizedCaseInsensitiveContains(query) || $0.category.title.localizedCaseInsensitiveContains(query) }
+  }
+}
+
 struct SettingsView: View {
   @Environment(AppModel.self) private var appModel
   @Environment(PersistedSettingsStore.self) private var settings
@@ -16,7 +94,10 @@ struct SettingsView: View {
   @State private var isBackupExportPresented = false
   @State private var isBackupRestorePresented = false
   /// Fourteen bindings most people never touch; folded until asked for, so the page stays short.
-  @State private var isShortcutsExpanded = false
+  @State private var isShortcutsExpanded = true
+  @State private var category: SettingsCategory = .general
+  @State private var settingsSearch = ""
+  @State private var searchTarget: SettingsSearchEntry?
 
   init(bundledCoreInfo: BundledCoreInfo = BundledCoreInfo()) {
     self.bundledCoreInfo = bundledCoreInfo
@@ -41,510 +122,21 @@ struct SettingsView: View {
   }
 
   var body: some View {
-    // @Environment does not vend bindings; @Bindable wraps the tracked reference so the
-    // `$settings.*` bindings below still resolve.
-    @Bindable var settings = settings
-    return AdaptivePage(title: "Settings") {
+    AdaptivePage(title: "Settings") {
       EmptyView()
     } content: {
-      Form {
-        Section("General") {
-          SettingsToggleRow(
-            "Menu Bar Traffic Speed",
-            description: "Show live upload and download speeds next to the menu bar icon.",
-            isOn: Binding(
-              get: { appModel.menuBarTrafficSpeedVisible },
-              set: { appModel.setMenuBarTrafficSpeedVisible($0) }
-            )
-          )
-          .help("Turning this off leaves only the ClashMax icon in the menu bar. Traffic monitoring and the menu bar panel's traffic chart are unaffected.")
-          SettingsControlRow("Appearance", description: "Choose the app color scheme.") {
-            Picker("Appearance", selection: $settings.appTheme) {
-              ForEach(AppTheme.allCases) { theme in
-                Text(theme.displayName).tag(theme)
-              }
+      HStack(alignment: .top, spacing: 0) {
+        settingsNavigation
+          .frame(width: 184)
+        Divider()
+        ScrollViewReader { proxy in
+          settingsForm
+            .task(id: searchTarget?.id) {
+              guard let searchTarget else { return }
+              await Task.yield()
+              proxy.scrollTo(searchTarget.title, anchor: .top)
             }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .frame(width: 220, alignment: .trailing)
-          }
-          SettingsControlRow(
-            "Language",
-            description: String(
-              format: String(localized: "Current app language: %@. Change per-app language in macOS Language & Region, then reopen ClashMax if needed."),
-              AppLocalization.currentLanguageDisplayName
-            )
-          ) {
-            Button {
-              AppLocalization.openLanguageAndRegionSettings()
-            } label: {
-              Label("Open Language & Region", systemImage: "globe")
-            }
-            .help("Open System Settings > General > Language & Region.")
-          }
         }
-
-        Section("Backup & Restore") {
-          SettingsControlRow("Local Backup", description: backupRestoreDescription) {
-            HStack(spacing: 8) {
-              Button {
-                isBackupExportPresented = true
-              } label: {
-                Label("Export", systemImage: "square.and.arrow.up")
-              }
-
-              Button {
-                isBackupRestorePresented = true
-              } label: {
-                Label("Restore", systemImage: "arrow.clockwise")
-              }
-              .disabled(appModel.isCoreRunning)
-              .help("Stop the core before restoring a backup.")
-            }
-          }
-        }
-
-        Section("Updates") {
-          UpdateVersionRow(
-            title: "App Package",
-            description: appUpdateController.statusMessage,
-            version: appUpdateController.versionSummary
-          ) {
-            CheckForUpdatesButton(updateController: appUpdateController)
-          }
-
-          UpdateVersionRow(
-            title: "Bundled Core",
-            description: bundledCoreInfo.statusMessage,
-            version: bundledCoreInfo.versionSummary
-          )
-        }
-
-        Section("Launch") {
-          SettingsToggleRow(
-            "Launch at Login",
-            description: "Register ClashMax as a macOS login item.",
-            isOn: Binding(
-              get: { settings.launchSettings.launchAtLogin },
-              set: { appModel.setLaunchAtLogin($0) }
-            )
-          )
-
-          SettingsToggleRow(
-            "Silent Start",
-            description: "Start at login without showing the main window; ClashMax stays in the menu bar.",
-            isOn: Binding(
-              get: { settings.launchSettings.silentStart },
-              set: { appModel.setSilentStart($0) }
-            )
-          )
-          .help("Applies to login-item startup only. Opening ClashMax yourself always shows the main window.")
-
-          SettingsControlRow("Login Item Status", description: settings.launchSettings.statusMessage) {
-            Button {
-              appModel.openLoginItemsSettings()
-            } label: {
-              Label("Open Login Items", systemImage: "gearshape")
-            }
-            .help("Open System Settings > General > Login Items & Extensions.")
-          }
-        }
-
-        Section(isExpanded: $isShortcutsExpanded) {
-          GlobalShortcutSettingsView(
-            settings: $settings.globalShortcutSettings,
-            registrationStatus: appModel.shortcutRegistrationStatus
-          )
-        } header: {
-          Text("Shortcuts")
-        }
-
-        Section("Runtime") {
-          PortControl(
-            title: "Mixed Port",
-            description: "HTTP and SOCKS inbound port used by Mihomo.",
-            value: Binding(
-              get: { settings.overrides.mixedPort },
-              set: { appModel.setMixedPort($0) }
-            )
-          )
-          PortControl(
-            title: "Controller Port",
-            description: "Local controller API port bound to 127.0.0.1.",
-            value: Binding(
-              get: { settings.externalControllerSettings.port },
-              set: { port in
-                var controllerSettings = settings.externalControllerSettings
-                controllerSettings.port = port
-                _ = appModel.updateExternalControllerSettings(controllerSettings)
-              }
-            )
-          )
-          SettingsToggleRow(
-            "Allow LAN",
-            description: "Allow devices on this LAN to use the proxy port.",
-            isOn: Binding(
-              get: { settings.overrides.allowLan },
-              set: { appModel.setAllowLAN($0) }
-            )
-          )
-          SettingsToggleRow(
-            "IPv6",
-            description: "Enable Mihomo IPv6 support in the runtime profile.",
-            isOn: Binding(
-              get: { appModel.ipv6Enabled },
-              set: { appModel.setIPv6Enabled($0) }
-            )
-          )
-          SettingsToggleRow(
-            "Enable DNS Override",
-            description: "Write app-managed DNS options into the runtime profile.",
-            isOn: Binding(
-              get: { settings.overrides.dnsEnabled ?? false },
-              set: { appModel.setDNSOverrideEnabled($0) }
-            )
-          )
-          SettingsControlRow("Delay Test Mode", description: settings.delayTestSettings.mode.description) {
-            Picker(
-              "Delay Test Mode",
-              selection: Binding(
-                get: { settings.delayTestSettings.mode },
-                set: { newValue in
-                  var delaySettings = settings.delayTestSettings
-                  delaySettings.mode = newValue
-                  appModel.updateDelayTestSettings(delaySettings)
-                }
-              )
-            ) {
-              ForEach(DelayTestMode.allCases) { mode in
-                Text(mode.displayName).tag(mode)
-              }
-            }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            .frame(width: 180, alignment: .trailing)
-          }
-          SettingsToggleRow(
-            "Unified Delay",
-            description: "Measure a second handshake and report that one, so the figure excludes first-connection setup. Mihomo URL mode has the core do it; Ping mode sends the second probe from ClashMax.",
-            isOn: Binding(
-              get: { settings.delayTestSettings.unifiedDelay },
-              set: { newValue in
-                var delaySettings = settings.delayTestSettings
-                delaySettings.unifiedDelay = newValue
-                appModel.updateDelayTestSettings(delaySettings)
-              }
-            )
-          )
-          ExternalControlSettingsRow()
-          SettingsControlRow("Log Level", description: "Runtime logging verbosity.") {
-            Picker("Log Level", selection: Binding(
-              get: { settings.overrides.logLevel },
-              set: { appModel.setLogLevel($0) }
-            )) {
-              Text("Info").tag("info")
-              Text("Warning").tag("warning")
-              Text("Error").tag("error")
-              Text("Debug").tag("debug")
-            }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            .frame(width: 120, alignment: .trailing)
-          }
-          if let message = appModel.runtimeSettingsApplyStatusMessage {
-            Text(message)
-              .font(.caption)
-              .foregroundStyle(.secondary)
-              .frame(maxWidth: .infinity, alignment: .leading)
-          }
-        }
-
-        Section("Subscriptions") {
-          SettingsControlRow(
-            "User Agent",
-            description: "Client identity sent when fetching subscription profiles."
-          ) {
-            TextField(
-              "User Agent",
-              text: Binding(
-                get: { settings.subscriptionFetchSettings.userAgent },
-                set: { settings.subscriptionFetchSettings.userAgent = $0 }
-              )
-            )
-            .textFieldStyle(.roundedBorder)
-            .frame(width: 220, alignment: .trailing)
-          }
-          SettingsControlRow(
-            "Request Timeout",
-            description: "Network timeout used for each subscription fetch attempt."
-          ) {
-            NumberStepperField(
-              accessibilityLabel: "Request Timeout",
-              value: Binding(
-                get: { settings.subscriptionFetchSettings.timeoutSeconds },
-                set: { settings.subscriptionFetchSettings.timeoutSeconds = $0 }
-              ),
-              range: SubscriptionFetchSettings.minimumTimeoutSeconds...SubscriptionFetchSettings.maximumTimeoutSeconds,
-              step: 5
-            )
-          }
-          SettingsToggleRow(
-            "Use Local Clash Proxy",
-            description: "Retry failed direct fetches through ClashMax's current mixed-port on 127.0.0.1.",
-            isOn: $settings.subscriptionFetchSettings.useLocalClashProxy
-          )
-          SettingsToggleRow(
-            "Use System Proxy",
-            description: "Retry failed subscription fetches through the current macOS proxy settings.",
-            isOn: $settings.subscriptionFetchSettings.useSystemProxy
-          )
-          SettingsToggleRow(
-            "Ignore TLS Errors",
-            description: "Allow subscription servers with invalid certificates. Use only for trusted panels.",
-            isOn: $settings.subscriptionFetchSettings.allowsInsecureTLS
-          )
-          SettingsToggleRow(
-            "Automatic Updates",
-            description: "Refresh subscriptions using per-profile policy, remote metadata, and the global fallback interval.",
-            isOn: $settings.subscriptionFetchSettings.automaticUpdatesEnabled
-          )
-          SettingsControlRow(
-            "Default Subscription Interval",
-            description: "Fallback interval used when a subscription does not publish profile-update-interval."
-          ) {
-            NumberStepperField(
-              accessibilityLabel: "Default Subscription Interval",
-              value: Binding(
-                get: { settings.subscriptionFetchSettings.defaultUpdateIntervalMinutes },
-                set: { settings.subscriptionFetchSettings.defaultUpdateIntervalMinutes = SubscriptionUpdatePolicy.normalizedInterval($0) }
-              ),
-              range: SubscriptionUpdatePolicy.minimumIntervalMinutes...SubscriptionUpdatePolicy.maximumIntervalMinutes,
-              step: 60
-            )
-          }
-          SettingsControlRow(
-            "Background Check Interval",
-            description: "How often ClashMax wakes to check whether any subscription is due."
-          ) {
-            NumberStepperField(
-              accessibilityLabel: "Background Check Interval",
-              value: Binding(
-                get: { settings.subscriptionFetchSettings.backgroundCheckIntervalMinutes },
-                set: { settings.subscriptionFetchSettings.backgroundCheckIntervalMinutes = SubscriptionUpdatePolicy.normalizedInterval($0) }
-              ),
-              range: SubscriptionUpdatePolicy.minimumIntervalMinutes...SubscriptionUpdatePolicy.maximumIntervalMinutes,
-              step: 30
-            )
-          }
-          SettingsControlRow(
-            "Retry Backoff Cap",
-            description: "Maximum delay after repeated subscription update failures."
-          ) {
-            NumberStepperField(
-              accessibilityLabel: "Retry Backoff Cap",
-              value: Binding(
-                get: { settings.subscriptionFetchSettings.retryCapMinutes },
-                set: { settings.subscriptionFetchSettings.retryCapMinutes = SubscriptionUpdatePolicy.normalizedInterval($0) }
-              ),
-              range: SubscriptionUpdatePolicy.minimumIntervalMinutes...SubscriptionUpdatePolicy.maximumIntervalMinutes,
-              step: 30
-            )
-          }
-          SettingsToggleRow(
-            "Notify Update Failures",
-            description: "Show a macOS notification when automatic subscription refresh fails.",
-            isOn: $settings.subscriptionFetchSettings.notifyOnUpdateFailure
-          )
-        }
-
-        Section("Rules") {
-          if appModel.lastRuntimeApplyOutcome != nil {
-            RuntimeApplyOutcomeBanner()
-              .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
-          }
-          SettingsControlRow("Rule Overlay", description: settings.ruleOverlaySettings.summary) {
-            Button {
-              isRuleOverlayPresented = true
-            } label: {
-              Label("Configure", systemImage: "slider.horizontal.3")
-            }
-            .popover(isPresented: $isRuleOverlayPresented, arrowEdge: .bottom) {
-              RuleOverlayDraftPopover(
-                baseline: settings.ruleOverlaySettings,
-                pendingSummary: appModel.runtimeApplyMode(for: .rules).pendingSummary,
-                isApplying: isApplyingRuleOverlay,
-                errorMessage: ruleOverlayApplyError
-              ) { draft in
-                applyGlobalRuleOverlay(draft)
-              }
-              .frame(width: 560)
-              .padding(18)
-            }
-          }
-
-          // Geo data is what GEOSITE/GEOIP rules match against, so it belongs with the rules rather
-          // than with the network plumbing (roadmap B5).
-          SettingsControlRow("Geo Databases", description: settings.geoDatabaseSettings.summary) {
-            Button {
-              isGeoDatabasePresented = true
-            } label: {
-              Label("Configure", systemImage: "globe")
-            }
-            .popover(isPresented: $isGeoDatabasePresented, arrowEdge: .bottom) {
-              GeoDatabaseSettingsPopover(
-                baseline: settings.geoDatabaseSettings,
-                diagnosis: appModel.geoDatabaseDiagnostics,
-                isUpdating: appModel.geoDatabaseUpdateInFlight,
-                canUpdateNow: appModel.canUpdateGeoDatabases,
-                updateStatusMessage: appModel.geoDatabaseUpdateStatusMessage,
-                onUpdateNow: { appModel.updateGeoDatabases() },
-                onSave: { draft in
-                  guard appModel.updateGeoDatabaseSettings(draft) else { return }
-                  isGeoDatabasePresented = false
-                }
-              )
-              .frame(width: 560)
-              .padding(18)
-              .task {
-                appModel.refreshGeoDatabaseInventory()
-              }
-            }
-          }
-        }
-
-        Section("System") {
-          SettingsControlRow("Proxy Routing", description: "Routing mode used when the core starts.") {
-            Picker("Proxy Routing", selection: Binding(
-              get: { settings.proxyRoutingMode },
-              set: { appModel.requestProxyRoutingMode($0) }
-            )) {
-              ForEach(ProxyRoutingMode.allCases) { mode in
-                Label(mode.displayName, systemImage: mode.symbolName).tag(mode)
-              }
-            }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            .frame(width: 180, alignment: .trailing)
-            .help("Start uses this routing mode.")
-          }
-
-          SettingsControlRow("Network Policies", description: settings.networkPolicySettings.summary) {
-            Button {
-              isNetworkPoliciesPresented = true
-            } label: {
-              Label("Configure", systemImage: "wifi.router")
-            }
-            .popover(isPresented: $isNetworkPoliciesPresented, arrowEdge: .bottom) {
-              NetworkPolicySettingsPopover(
-                settings: $settings.networkPolicySettings,
-                currentNetwork: appModel.currentNetwork,
-                statusMessage: appModel.networkPolicyStatusMessage,
-                lastAppliedPolicyID: appModel.lastAppliedNetworkPolicyID,
-                onRefresh: {
-                  appModel.refreshCurrentNetworkPolicyState()
-                },
-                onApplyCurrent: {
-                  appModel.applyMatchingNetworkPolicyForCurrentNetwork()
-                },
-                onApplyRule: { rule in
-                  appModel.applyNetworkPolicy(rule)
-                },
-                onResolveSSIDAvailability: {
-                  appModel.resolveCurrentNetworkSSIDAvailability()
-                }
-              )
-              .frame(width: 560)
-              .padding(18)
-              .onAppear {
-                appModel.refreshCurrentNetworkPolicyState()
-              }
-            }
-          }
-
-          if settings.proxyRoutingMode == .tun {
-            SettingsControlRow("TUN Helper Status", description: appModel.tunHelperPreparationState.message) {
-              ViewThatFits(in: .horizontal) {
-                helperActionButtons
-                helperActionButtonRows
-              }
-            }
-            .onAppear {
-              appModel.refreshHelperRegistrationStatus()
-            }
-          } else if settings.proxyRoutingMode == .neProxy {
-            SettingsControlRow(
-              "TUN Helper",
-              description: "NE Proxy mode does not touch the privileged TUN helper."
-            ) {
-              Image(systemName: "checkmark.shield")
-                .foregroundStyle(.secondary)
-            }
-          } else {
-            SettingsControlRow(
-              "TUN Helper",
-              description: "System Proxy mode does not need a privileged helper. Switch to TUN if you want VPN-style routing for non-HTTP traffic."
-            ) {
-              Image(systemName: "checkmark.shield")
-                .foregroundStyle(.secondary)
-            }
-          }
-        }
-
-        if settings.proxyRoutingMode == .neProxy {
-          Section("NE Proxy") {
-            SettingsControlRow("System Extension", description: appModel.networkExtensionController.statusMessage) {
-              ViewThatFits(in: .horizontal) {
-                networkExtensionActionButtons
-                networkExtensionActionButtonRows
-              }
-            }
-            .onAppear {
-              appModel.refreshNetworkExtensionStatus()
-            }
-
-            SettingsControlRow(
-              "Transparent Proxy Status",
-              description: appModel.networkExtensionController.tunnelStatusMessage
-            ) {
-              Label(
-                appModel.networkExtensionController.vpnStatus.displayName,
-                systemImage: networkExtensionStatusSymbol
-              )
-              .foregroundStyle(appModel.networkExtensionController.vpnStatus.isActive ? .green : .secondary)
-            }
-
-            SettingsControlRow(
-              "NE Diagnostics",
-              description: networkExtensionDiagnosticsSummary
-            ) {
-              Button {
-                appModel.refreshNetworkExtensionStatus()
-              } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
-              }
-            }
-
-            if let error = appModel.networkExtensionController.recentError {
-              Text(error)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(3)
-            }
-
-            if let error = appModel.networkExtensionSystemDNSState.errorMessage {
-              Text(String(format: String(localized: "DNS: %@"), error))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(3)
-            }
-          }
-        }
-      }
-      .formStyle(.grouped)
-      .scrollContentBackground(.hidden)
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .onAppear {
-        appModel.refreshLaunchSettings()
       }
     }
     .sheet(isPresented: $isBackupExportPresented) {
@@ -574,6 +166,580 @@ struct SettingsView: View {
       )
       .environment(appModel)
     }
+  }
+
+  private var settingsForm: some View {
+    @Bindable var settings = settings
+    return
+      Form {
+        if category == .general {
+          Section("General") {
+            SettingsToggleRow(
+              "Menu Bar Traffic Speed",
+              description: "Show live upload and download speeds next to the menu bar icon.",
+              isOn: Binding(
+                get: { appModel.menuBarTrafficSpeedVisible },
+                set: { appModel.setMenuBarTrafficSpeedVisible($0) }
+              )
+            )
+            .help("Turning this off leaves only the ClashMax icon in the menu bar. Traffic monitoring and the menu bar panel's traffic chart are unaffected.")
+            SettingsControlRow("Appearance", description: "Choose the app color scheme.") {
+              Picker("Appearance", selection: $settings.appTheme) {
+                ForEach(AppTheme.allCases) { theme in
+                  Text(theme.displayName).tag(theme)
+                }
+              }
+              .labelsHidden()
+              .pickerStyle(.segmented)
+              .frame(width: 220, alignment: .trailing)
+            }
+            SettingsControlRow(
+              "Language",
+              description: String(
+                format: String(localized: "Current app language: %@. Change per-app language in macOS Language & Region, then reopen ClashMax if needed."),
+                AppLocalization.currentLanguageDisplayName
+              )
+            ) {
+              Button {
+                AppLocalization.openLanguageAndRegionSettings()
+              } label: {
+                Label("Open Language & Region", systemImage: "globe")
+              }
+              .help("Open System Settings > General > Language & Region.")
+            }
+          }
+        }
+
+        if category == .maintenance {
+          Section("Backup & Restore") {
+            SettingsControlRow("Local Backup", description: backupRestoreDescription) {
+              HStack(spacing: 8) {
+                Button {
+                  isBackupExportPresented = true
+                } label: {
+                  Label("Export", systemImage: "square.and.arrow.up")
+                }
+
+                Button {
+                  isBackupRestorePresented = true
+                } label: {
+                  Label("Restore", systemImage: "arrow.clockwise")
+                }
+                .disabled(appModel.isCoreRunning)
+                .help("Stop the core before restoring a backup.")
+              }
+            }
+          }
+
+          Section("Updates") {
+            UpdateVersionRow(
+              title: "App Package",
+              description: appUpdateController.statusMessage,
+              version: appUpdateController.versionSummary
+            ) {
+              CheckForUpdatesButton(updateController: appUpdateController)
+            }
+
+            UpdateVersionRow(
+              title: "Bundled Core",
+              description: bundledCoreInfo.statusMessage,
+              version: bundledCoreInfo.versionSummary
+            )
+          }
+        }
+
+        if category == .general {
+          Section("Launch") {
+            SettingsToggleRow(
+              "Launch at Login",
+              description: "Register ClashMax as a macOS login item.",
+              isOn: Binding(
+                get: { settings.launchSettings.launchAtLogin },
+                set: { appModel.setLaunchAtLogin($0) }
+              )
+            )
+
+            SettingsToggleRow(
+              "Silent Start",
+              description: "Start at login without showing the main window; ClashMax stays in the menu bar.",
+              isOn: Binding(
+                get: { settings.launchSettings.silentStart },
+                set: { appModel.setSilentStart($0) }
+              )
+            )
+            .help("Applies to login-item startup only. Opening ClashMax yourself always shows the main window.")
+
+            SettingsControlRow("Login Item Status", description: settings.launchSettings.statusMessage) {
+              Button {
+                appModel.openLoginItemsSettings()
+              } label: {
+                Label("Open Login Items", systemImage: "gearshape")
+              }
+              .help("Open System Settings > General > Login Items & Extensions.")
+            }
+          }
+        }
+
+        if category == .shortcuts {
+          Section(isExpanded: $isShortcutsExpanded) {
+            GlobalShortcutSettingsView(
+              settings: $settings.globalShortcutSettings,
+              registrationStatus: appModel.shortcutRegistrationStatus
+            ).id("Shortcuts")
+          } header: {
+            Text("Shortcuts")
+          }
+        }
+
+        if category == .runtime {
+          Section("Runtime") {
+            PortControl(
+              title: "Mixed Port",
+              description: "HTTP and SOCKS inbound port used by Mihomo.",
+              value: Binding(
+                get: { settings.overrides.mixedPort },
+                set: { appModel.setMixedPort($0) }
+              )
+            )
+            PortControl(
+              title: "Controller Port",
+              description: "Local controller API port bound to 127.0.0.1.",
+              value: Binding(
+                get: { settings.externalControllerSettings.port },
+                set: { port in
+                  var controllerSettings = settings.externalControllerSettings
+                  controllerSettings.port = port
+                  _ = appModel.updateExternalControllerSettings(controllerSettings)
+                }
+              )
+            )
+            SettingsToggleRow(
+              "Allow LAN",
+              description: "Allow devices on this LAN to use the proxy port.",
+              isOn: Binding(
+                get: { settings.overrides.allowLan },
+                set: { appModel.setAllowLAN($0) }
+              )
+            )
+            SettingsToggleRow(
+              "IPv6",
+              description: "Enable Mihomo IPv6 support in the runtime profile.",
+              isOn: Binding(
+                get: { appModel.ipv6Enabled },
+                set: { appModel.setIPv6Enabled($0) }
+              )
+            )
+            SettingsToggleRow(
+              "Enable DNS Override",
+              description: "Write app-managed DNS options into the runtime profile.",
+              isOn: Binding(
+                get: { settings.overrides.dnsEnabled ?? false },
+                set: { appModel.setDNSOverrideEnabled($0) }
+              )
+            )
+            SettingsControlRow("Delay Test Mode", description: settings.delayTestSettings.mode.description) {
+              Picker(
+                "Delay Test Mode",
+                selection: Binding(
+                  get: { settings.delayTestSettings.mode },
+                  set: { newValue in
+                    var delaySettings = settings.delayTestSettings
+                    delaySettings.mode = newValue
+                    appModel.updateDelayTestSettings(delaySettings)
+                  }
+                )
+              ) {
+                ForEach(DelayTestMode.allCases) { mode in
+                  Text(mode.displayName).tag(mode)
+                }
+              }
+              .labelsHidden()
+              .pickerStyle(.menu)
+              .frame(width: 180, alignment: .trailing)
+            }
+            SettingsToggleRow(
+              "Unified Delay",
+              description: "Measure a second handshake and report that one, so the figure excludes first-connection setup. Mihomo URL mode has the core do it; Ping mode sends the second probe from ClashMax.",
+              isOn: Binding(
+                get: { settings.delayTestSettings.unifiedDelay },
+                set: { newValue in
+                  var delaySettings = settings.delayTestSettings
+                  delaySettings.unifiedDelay = newValue
+                  appModel.updateDelayTestSettings(delaySettings)
+                }
+              )
+            )
+            ExternalControlSettingsRow()
+            SettingsControlRow("Log Level", description: "Runtime logging verbosity.") {
+              Picker("Log Level", selection: Binding(
+                get: { settings.overrides.logLevel },
+                set: { appModel.setLogLevel($0) }
+              )) {
+                Text("Info").tag("info")
+                Text("Warning").tag("warning")
+                Text("Error").tag("error")
+                Text("Debug").tag("debug")
+              }
+              .labelsHidden()
+              .pickerStyle(.menu)
+              .frame(width: 120, alignment: .trailing)
+            }
+            if let message = appModel.runtimeSettingsApplyStatusMessage {
+              Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+          }
+        }
+
+        if category == .subscriptions {
+          Section("Subscriptions") {
+            SettingsControlRow(
+              "User Agent",
+              description: "Client identity sent when fetching subscription profiles."
+            ) {
+              TextField(
+                "User Agent",
+                text: Binding(
+                  get: { settings.subscriptionFetchSettings.userAgent },
+                  set: { settings.subscriptionFetchSettings.userAgent = $0 }
+                )
+              )
+              .textFieldStyle(.roundedBorder)
+              .frame(width: 220, alignment: .trailing)
+            }
+            SettingsControlRow(
+              "Request Timeout",
+              description: "Network timeout used for each subscription fetch attempt."
+            ) {
+              NumberStepperField(
+                accessibilityLabel: "Request Timeout",
+                value: Binding(
+                  get: { settings.subscriptionFetchSettings.timeoutSeconds },
+                  set: { settings.subscriptionFetchSettings.timeoutSeconds = $0 }
+                ),
+                range: SubscriptionFetchSettings.minimumTimeoutSeconds...SubscriptionFetchSettings.maximumTimeoutSeconds,
+                step: 5
+              )
+            }
+            SettingsToggleRow(
+              "Use Local Clash Proxy",
+              description: "Retry failed direct fetches through ClashMax's current mixed-port on 127.0.0.1.",
+              isOn: $settings.subscriptionFetchSettings.useLocalClashProxy
+            )
+            SettingsToggleRow(
+              "Use System Proxy",
+              description: "Retry failed subscription fetches through the current macOS proxy settings.",
+              isOn: $settings.subscriptionFetchSettings.useSystemProxy
+            )
+            SettingsToggleRow(
+              "Ignore TLS Errors",
+              description: "Allow subscription servers with invalid certificates. Use only for trusted panels.",
+              isOn: $settings.subscriptionFetchSettings.allowsInsecureTLS
+            )
+            SettingsToggleRow(
+              "Automatic Updates",
+              description: "Refresh subscriptions using per-profile policy, remote metadata, and the global fallback interval.",
+              isOn: $settings.subscriptionFetchSettings.automaticUpdatesEnabled
+            )
+            SettingsControlRow(
+              "Default Subscription Interval",
+              description: "Fallback interval used when a subscription does not publish profile-update-interval."
+            ) {
+              NumberStepperField(
+                accessibilityLabel: "Default Subscription Interval",
+                value: Binding(
+                  get: { settings.subscriptionFetchSettings.defaultUpdateIntervalMinutes },
+                  set: { settings.subscriptionFetchSettings.defaultUpdateIntervalMinutes = SubscriptionUpdatePolicy.normalizedInterval($0) }
+                ),
+                range: SubscriptionUpdatePolicy.minimumIntervalMinutes...SubscriptionUpdatePolicy.maximumIntervalMinutes,
+                step: 60
+              )
+            }
+            SettingsControlRow(
+              "Background Check Interval",
+              description: "How often ClashMax wakes to check whether any subscription is due."
+            ) {
+              NumberStepperField(
+                accessibilityLabel: "Background Check Interval",
+                value: Binding(
+                  get: { settings.subscriptionFetchSettings.backgroundCheckIntervalMinutes },
+                  set: { settings.subscriptionFetchSettings.backgroundCheckIntervalMinutes = SubscriptionUpdatePolicy.normalizedInterval($0) }
+                ),
+                range: SubscriptionUpdatePolicy.minimumIntervalMinutes...SubscriptionUpdatePolicy.maximumIntervalMinutes,
+                step: 30
+              )
+            }
+            SettingsControlRow(
+              "Retry Backoff Cap",
+              description: "Maximum delay after repeated subscription update failures."
+            ) {
+              NumberStepperField(
+                accessibilityLabel: "Retry Backoff Cap",
+                value: Binding(
+                  get: { settings.subscriptionFetchSettings.retryCapMinutes },
+                  set: { settings.subscriptionFetchSettings.retryCapMinutes = SubscriptionUpdatePolicy.normalizedInterval($0) }
+                ),
+                range: SubscriptionUpdatePolicy.minimumIntervalMinutes...SubscriptionUpdatePolicy.maximumIntervalMinutes,
+                step: 30
+              )
+            }
+            SettingsToggleRow(
+              "Notify Update Failures",
+              description: "Show a macOS notification when automatic subscription refresh fails.",
+              isOn: $settings.subscriptionFetchSettings.notifyOnUpdateFailure
+            )
+          }
+
+          Section("Rules") {
+            if appModel.lastRuntimeApplyOutcome != nil {
+              RuntimeApplyOutcomeBanner()
+                .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
+            }
+            SettingsControlRow("Rule Overlay", description: settings.ruleOverlaySettings.summary) {
+              Button {
+                isRuleOverlayPresented = true
+              } label: {
+                Label("Configure", systemImage: "slider.horizontal.3")
+              }
+              .popover(isPresented: $isRuleOverlayPresented, arrowEdge: .bottom) {
+                RuleOverlayDraftPopover(
+                  baseline: settings.ruleOverlaySettings,
+                  pendingSummary: appModel.runtimeApplyMode(for: .rules).pendingSummary,
+                  isApplying: isApplyingRuleOverlay,
+                  errorMessage: ruleOverlayApplyError
+                ) { draft in
+                  applyGlobalRuleOverlay(draft)
+                }
+                .frame(width: 560)
+                .padding(18)
+              }
+            }
+
+            // Geo data is what GEOSITE/GEOIP rules match against, so it belongs with the rules rather
+            // than with the network plumbing (roadmap B5).
+            SettingsControlRow("Geo Databases", description: settings.geoDatabaseSettings.summary) {
+              Button {
+                isGeoDatabasePresented = true
+              } label: {
+                Label("Configure", systemImage: "globe")
+              }
+              .popover(isPresented: $isGeoDatabasePresented, arrowEdge: .bottom) {
+                GeoDatabaseSettingsPopover(
+                  baseline: settings.geoDatabaseSettings,
+                  diagnosis: appModel.geoDatabaseDiagnostics,
+                  isUpdating: appModel.geoDatabaseUpdateInFlight,
+                  canUpdateNow: appModel.canUpdateGeoDatabases,
+                  updateStatusMessage: appModel.geoDatabaseUpdateStatusMessage,
+                  onUpdateNow: { appModel.updateGeoDatabases() },
+                  onSave: { draft in
+                    guard appModel.updateGeoDatabaseSettings(draft) else { return }
+                    isGeoDatabasePresented = false
+                  }
+                )
+                .frame(width: 560)
+                .padding(18)
+                .task {
+                  appModel.refreshGeoDatabaseInventory()
+                }
+              }
+            }
+          }
+        }
+
+        if category == .system {
+          Section("System") {
+            SettingsControlRow("Proxy Routing", description: "Routing mode used when the core starts.") {
+              Picker("Proxy Routing", selection: Binding(
+                get: { settings.proxyRoutingMode },
+                set: { appModel.requestProxyRoutingMode($0) }
+              )) {
+                ForEach(ProxyRoutingMode.allCases) { mode in
+                  Label(mode.displayName, systemImage: mode.symbolName).tag(mode)
+                }
+              }
+              .labelsHidden()
+              .pickerStyle(.menu)
+              .frame(width: 180, alignment: .trailing)
+              .help("Start uses this routing mode.")
+            }
+
+            SettingsControlRow("Network Policies", description: settings.networkPolicySettings.summary) {
+              Button {
+                isNetworkPoliciesPresented = true
+              } label: {
+                Label("Configure", systemImage: "wifi.router")
+              }
+              .popover(isPresented: $isNetworkPoliciesPresented, arrowEdge: .bottom) {
+                NetworkPolicySettingsPopover(
+                  settings: $settings.networkPolicySettings,
+                  currentNetwork: appModel.currentNetwork,
+                  statusMessage: appModel.networkPolicyStatusMessage,
+                  lastAppliedPolicyID: appModel.lastAppliedNetworkPolicyID,
+                  onRefresh: {
+                    appModel.refreshCurrentNetworkPolicyState()
+                  },
+                  onApplyCurrent: {
+                    appModel.applyMatchingNetworkPolicyForCurrentNetwork()
+                  },
+                  onApplyRule: { rule in
+                    appModel.applyNetworkPolicy(rule)
+                  },
+                  onResolveSSIDAvailability: {
+                    appModel.resolveCurrentNetworkSSIDAvailability()
+                  }
+                )
+                .frame(width: 560)
+                .padding(18)
+                .onAppear {
+                  appModel.refreshCurrentNetworkPolicyState()
+                }
+              }
+            }
+
+            if settings.proxyRoutingMode == .tun {
+              SettingsControlRow("TUN Helper Status", description: appModel.tunHelperPreparationState.message) {
+                ViewThatFits(in: .horizontal) {
+                  helperActionButtons
+                  helperActionButtonRows
+                }
+              }
+              .id("TUN Helper")
+              .onAppear {
+                appModel.refreshHelperRegistrationStatus()
+              }
+            } else if settings.proxyRoutingMode == .neProxy {
+              SettingsControlRow(
+                "TUN Helper",
+                description: "NE Proxy mode does not touch the privileged TUN helper."
+              ) {
+                Image(systemName: "checkmark.shield")
+                  .foregroundStyle(.secondary)
+              }
+            } else {
+              SettingsControlRow(
+                "TUN Helper",
+                description: "System Proxy mode does not need a privileged helper. Switch to TUN if you want VPN-style routing for non-HTTP traffic."
+              ) {
+                Image(systemName: "checkmark.shield")
+                  .foregroundStyle(.secondary)
+              }
+            }
+          }
+
+          if settings.proxyRoutingMode != .neProxy {
+            Section("NE Proxy") {
+              Text("Select NE Proxy routing to view extension settings.")
+                .foregroundStyle(.secondary)
+                .id("System Extension")
+                .id("NE Diagnostics")
+                .id("Transparent Proxy Status")
+            }
+          }
+          if settings.proxyRoutingMode == .neProxy {
+            Section("NE Proxy") {
+              SettingsControlRow("System Extension", description: appModel.networkExtensionController.statusMessage) {
+                ViewThatFits(in: .horizontal) {
+                  networkExtensionActionButtons
+                  networkExtensionActionButtonRows
+                }
+              }
+              .onAppear {
+                appModel.refreshNetworkExtensionStatus()
+              }
+
+              SettingsControlRow(
+                "Transparent Proxy Status",
+                description: appModel.networkExtensionController.tunnelStatusMessage
+              ) {
+                Label(
+                  appModel.networkExtensionController.vpnStatus.displayName,
+                  systemImage: networkExtensionStatusSymbol
+                )
+                .foregroundStyle(appModel.networkExtensionController.vpnStatus.isActive ? .green : .secondary)
+              }
+
+              SettingsControlRow(
+                "NE Diagnostics",
+                description: networkExtensionDiagnosticsSummary
+              ) {
+                Button {
+                  appModel.refreshNetworkExtensionStatus()
+                } label: {
+                  Label("Refresh", systemImage: "arrow.clockwise")
+                }
+              }
+
+              if let error = appModel.networkExtensionController.recentError {
+                Text(error)
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+                  .lineLimit(3)
+              }
+
+              if let error = appModel.networkExtensionSystemDNSState.errorMessage {
+                Text(String(format: String(localized: "DNS: %@"), error))
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+                  .lineLimit(3)
+              }
+            }
+          }
+        }
+      }
+      .formStyle(.grouped)
+      .scrollContentBackground(.hidden)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .onAppear {
+        appModel.refreshLaunchSettings()
+      }
+  }
+
+  private var settingsNavigation: some View {
+    VStack(spacing: 10) {
+      WorkspaceSearchField(prompt: String(localized: "Search settings"), text: $settingsSearch)
+        .padding(.horizontal, 8)
+      if settingsSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        List(selection: $category) {
+          ForEach(SettingsCategory.allCases) { item in
+            Label {
+              Text(item.title).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            } icon: {
+              Image(systemName: item.symbolName)
+            }
+            .tag(item)
+            .help(item.title)
+          }
+        }
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+      } else {
+        let matches = SettingsSearchEntry.matches(settingsSearch)
+        if matches.isEmpty {
+          Text("No matching settings").font(.callout).foregroundStyle(.secondary).padding(8)
+          Spacer()
+        } else {
+          List(matches) { item in
+            Button {
+              category = item.category
+              searchTarget = item
+            } label: {
+              VStack(alignment: .leading, spacing: 3) {
+                Text(item.localizedTitle).lineLimit(2)
+                Text(item.category.title).font(.caption).foregroundStyle(.secondary)
+              }
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(item.localizedTitle)
+          }
+          .listStyle(.sidebar)
+        }
+      }
+    }
+    .padding(.top, 8)
   }
 
   private var backupRestoreDescription: String {
@@ -774,8 +940,8 @@ private struct BackupExportSheet: View {
 
       HStack {
         Spacer()
-        Button("Cancel", action: onCancel)
-        Button("Export") {
+        Button(String(localized: "Cancel"), action: onCancel)
+        Button(String(localized: "Export")) {
           onExport(includeSecrets, includeSecrets ? password : nil, includeSecrets ? passwordConfirmation : nil)
         }
         .keyboardShortcut(.defaultAction)
@@ -835,13 +1001,13 @@ private struct BackupRestoreSheet: View {
 
       HStack {
         Spacer()
-        Button("Cancel", action: onCancel)
+        Button(String(localized: "Cancel"), action: onCancel)
         Button {
           appModel.chooseBackupForRestore()
         } label: {
           Label("Choose", systemImage: "folder")
         }
-        Button("Restore") {
+        Button(String(localized: "Restore")) {
           restore()
         }
         .keyboardShortcut(.defaultAction)
@@ -1498,14 +1664,14 @@ struct GeoDatabaseSettingsPopover: View {
         .fixedSize(horizontal: false, vertical: true)
 
       HStack(spacing: 10) {
-        Button("Restore Defaults") {
+        Button(String(localized: "Restore Defaults")) {
           draft = .default
         }
         .disabled(draft.isDefault)
 
         Spacer()
 
-        Button("Save") {
+        Button(String(localized: "Save")) {
           onSave(draft)
         }
         .keyboardShortcut(.defaultAction)
@@ -1579,7 +1745,7 @@ struct RuleOverlayDraftPopover: View {
 
         Spacer(minLength: 12)
 
-        Button("Revert") {
+        Button(String(localized: "Revert")) {
           draft = baseline
         }
         .disabled(pendingChangeCount == 0 || isApplying)
@@ -2442,6 +2608,7 @@ private struct SettingsControlRow<Control: View>: View {
       }
     }
     .layoutPriority(1)
+    .id(title)
   }
 }
 
@@ -2493,6 +2660,7 @@ private struct UpdateVersionRow<Action: View>: View {
         .frame(maxWidth: .infinity, alignment: .trailing)
       }
     }
+    .id(title)
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 
@@ -2910,7 +3078,7 @@ private struct ExternalControlCORSSettingsPopover: View {
           TextField("https://dashboard.example", text: $originDraft)
             .textFieldStyle(.roundedBorder)
             .onSubmit(addOrigin)
-          Button("Add", action: addOrigin)
+          Button(String(localized: "Add"), action: addOrigin)
             .disabled(originDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
 
@@ -2933,9 +3101,9 @@ private struct ExternalControlCORSSettingsPopover: View {
 
       HStack {
         Spacer()
-        Button("Cancel", action: onCancel)
+        Button(String(localized: "Cancel"), action: onCancel)
           .keyboardShortcut(.cancelAction)
-        Button("Save", action: onSave)
+        Button(String(localized: "Save"), action: onSave)
           .keyboardShortcut(.defaultAction)
       }
     }
@@ -3042,9 +3210,9 @@ private struct ExternalControlSettingsSheet: View {
 
       HStack {
         Spacer()
-        Button("Cancel", action: onCancel)
+        Button(String(localized: "Cancel"), action: onCancel)
           .keyboardShortcut(.cancelAction)
-        Button("Save", action: onSave)
+        Button(String(localized: "Save"), action: onSave)
           .keyboardShortcut(.defaultAction)
       }
     }

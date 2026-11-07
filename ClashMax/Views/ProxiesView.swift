@@ -5,7 +5,11 @@ import SwiftUI
 enum ProxiesLayout {
   /// The group navigator is a fixed column: a group name plus its current node fit here, and the
   /// remaining width always belongs to the node list the page exists for.
-  static let groupListWidth: CGFloat = 224
+  static let groupListWidth: CGFloat = 212
+
+  static func usesGroupColumn(pageWidth: CGFloat) -> Bool {
+    pageWidth.isFinite && pageWidth >= groupListWidth + 440
+  }
 }
 
 /// Keeps the browsing selection inside the node list pointed at a node that is still displayed.
@@ -55,6 +59,7 @@ struct ProxiesView: View {
   @State private var customDelayURLPopoverPresented = false
   @State private var providersPopoverPresented = false
   @State private var scrollToCurrentNodeRequest = 0
+  @State private var pageWidth: CGFloat = 0
 
   /// `initialSelectedGroupID` / `initialSelectedNodeID` seed the browsing selection for previews and
   /// fixture renders; the app always starts from the default selection.
@@ -121,6 +126,7 @@ struct ProxiesView: View {
         )
       }
     }
+    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { pageWidth = $0 - 36 }
     .searchable(text: $navigation.searchText, placement: .toolbar, prompt: Text("Search"))
     .task {
       // Returning to the page: the coordinator outlives the view, so restore the
@@ -208,24 +214,36 @@ struct ProxiesView: View {
       }
 
       HStack(spacing: 0) {
-        ProxyGroupNavigator(groups: groups, selectedGroupID: $selectedGroupID)
-          .frame(width: ProxiesLayout.groupListWidth)
-
-        Divider()
-
-        if let selectedGroup {
-          ProxyGroupNodePane(
-            group: selectedGroup,
-            selectedNodeID: $selectedNodeID,
-            isDelayBatchRunning: isDelayBatchRunning,
-            scrollToCurrentNodeRequest: scrollToCurrentNodeRequest
-          )
-        } else {
-          CenteredUnavailableState(
-            title: "No group selected",
-            systemImage: "point.3.connected.trianglepath.dotted",
-            message: "Select a proxy group to inspect nodes."
-          )
+        if ProxiesLayout.usesGroupColumn(pageWidth: pageWidth) {
+          ProxyGroupNavigator(groups: groups, selectedGroupID: $selectedGroupID)
+            .frame(width: ProxiesLayout.groupListWidth)
+          Divider()
+        }
+        VStack(spacing: 0) {
+          if !ProxiesLayout.usesGroupColumn(pageWidth: pageWidth) {
+            Picker("Proxy Group", selection: $selectedGroupID) {
+              ForEach(groups) { group in
+                Text(group.name).tag(Optional(group.id))
+              }
+            }
+            .pickerStyle(.menu)
+            .padding(10)
+            Divider()
+          }
+          if let selectedGroup {
+            ProxyGroupNodePane(
+              group: selectedGroup,
+              selectedNodeID: $selectedNodeID,
+              isDelayBatchRunning: isDelayBatchRunning,
+              scrollToCurrentNodeRequest: scrollToCurrentNodeRequest
+            )
+          } else {
+            CenteredUnavailableState(
+              title: "No group selected",
+              systemImage: "point.3.connected.trianglepath.dotted",
+              message: "Select a proxy group to inspect nodes."
+            )
+          }
         }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -620,19 +638,19 @@ private struct ProxyGroupNodePane: View {
 
   @ViewBuilder
   private func nodeMenu(for node: ProxyNode, canSelect: Bool, closesOldConnections: Bool) -> some View {
-    Button("Use Node") {
+    Button(String(localized: "Use Node")) {
       useNode(node, canSelect: canSelect, closesOldConnections: closesOldConnections)
     }
     .disabled(!(canSelect && node.isSelectable))
 
-    Button("Test Delay") {
+    Button(String(localized: "Test Delay")) {
       testDelay(for: node)
     }
     .disabled(!canTest(node))
 
     Divider()
 
-    Button("Copy Node Name") {
+    Button(String(localized: "Copy Node Name")) {
       NSPasteboard.general.clearContents()
       NSPasteboard.general.setString(node.name, forType: .string)
     }
@@ -790,7 +808,7 @@ private struct ProxyNodeDetailBar: View {
 
   private func actions(isCurrent: Bool) -> some View {
     HStack(spacing: 8) {
-      Button("Test Delay", action: onTest)
+      Button(String(localized: "Test Delay"), action: onTest)
         .disabled(!canTest)
         .help(canTest ? String(localized: "Test delay") : ProxyNodeDelayLabel(node: node).help)
 
@@ -800,7 +818,7 @@ private struct ProxyNodeDetailBar: View {
             .font(.callout)
             .foregroundStyle(Color.accentColor)
         } else {
-          Button("Use Node", action: onUse)
+          Button(String(localized: "Use Node"), action: onUse)
             .buttonStyle(.borderedProminent)
             .disabled(!(canSelect && node.isSelectable))
         }

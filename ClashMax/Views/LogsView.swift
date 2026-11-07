@@ -5,6 +5,10 @@ struct LogsView: View {
   @Environment(AppModel.self) private var appModel
   @Environment(RuntimeDataStore.self) private var runtimeData
   @State private var levelFilter: LogLevelFilter = .all
+  @State private var searchText = ""
+  @State private var pausedEntries: [LogEntry]?
+  @State private var followsLatest = true
+  @State private var lastSeenEntryID: LogEntry.ID?
   /// The highlighted entry reads in full; every other row stays on two lines.
   @State private var selectedLogID: LogEntry.ID?
 
@@ -17,21 +21,46 @@ struct LogsView: View {
 
   var body: some View {
     let retainedLogs = runtimeData.visibleLogs(logLevel: appModel.selectedLogLevel)
-    let visibleLogs = filteredLogs(from: retainedLogs)
+    let visibleLogs = filteredLogs(from: pausedEntries ?? retainedLogs)
 
     AdaptivePage(title: "Logs") {
-      // One compact menu instead of a five-segment control: the filter is rarely changed, and the
-      // label always says which level is showing.
-      Picker(selection: $levelFilter) {
-        ForEach(LogLevelFilter.allCases) { filter in
-          Text(filter.displayName).tag(filter)
+      HStack(spacing: 8) {
+        WorkspaceSearchField(prompt: String(localized: "Search logs"), text: $searchText)
+        Spacer(minLength: 0)
+        Button {
+          if pausedEntries == nil {
+            pausedEntries = retainedLogs
+            lastSeenEntryID = retainedLogs.last?.id
+          } else {
+            pausedEntries = nil
+            followsLatest = true
+          }
+        } label: {
+          Label(pausedEntries == nil ? "Pause Display" : "Resume Display", systemImage: pausedEntries == nil ? "pause" : "play")
         }
-      } label: {
-        Label("Level", systemImage: "line.3.horizontal.decrease.circle")
+        .help("Pausing the display keeps log collection running.")
+        Button {
+          pausedEntries = nil
+          followsLatest = true
+          lastSeenEntryID = retainedLogs.last?.id
+        } label: {
+          Label("Latest", systemImage: "arrow.down.to.line")
+        }
+        .disabled(followsLatest && pausedEntries == nil)
+        // One compact menu instead of a five-segment control: the filter is rarely changed, and the
+        // label always says which level is showing.
+        Picker(selection: $levelFilter) {
+          ForEach(LogLevelFilter.allCases) { filter in
+            Text(filter.displayName).tag(filter)
+          }
+        } label: {
+          Label("Level", systemImage: "line.3.horizontal.decrease.circle")
+        }
+        .pickerStyle(.menu)
+        .fixedSize()
+        .help("Show only entries of one level. Filtering never changes what the core records.")
       }
-      .pickerStyle(.menu)
-      .fixedSize()
-      .help("Show only entries of one level. Filtering never changes what the core records.")
+      .frame(maxWidth: .infinity)
     } content: {
       if showsLoadingSkeleton(retainedLogs: retainedLogs) {
         ClashMaxSkeletonTable(rows: 8)
@@ -43,21 +72,51 @@ struct LogsView: View {
         )
       } else {
         VStack(spacing: 8) {
-          List(visibleLogs, selection: $selectedLogID) { entry in
-            LogEntryRow(entry: entry, isExpanded: selectedLogID == entry.id)
-              .tag(entry.id)
-              .contextMenu {
-                Button("Copy Message") {
-                  copy(entry.message)
+          ScrollViewReader { proxy in
+            List(visibleLogs, selection: $selectedLogID) { entry in
+              LogEntryRow(entry: entry, isExpanded: selectedLogID == entry.id)
+                .tag(entry.id)
+                .contextMenu {
+                  Button(String(localized: "Copy Message")) {
+                    copy(entry.message)
+                  }
+                  Button(String(localized: "Copy Line")) {
+                    copy(lineText(entry))
+                  }
                 }
-                Button("Copy Line") {
-                  copy("\(DisplayFormatters.date.string(from: entry.date)) \(entry.level.uppercased()) \(entry.message)")
-                }
+            }
+            .listStyle(.inset)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .accessibilityLabel("Log entries")
+            .onCopyCommand {
+              guard let entry = visibleLogs.first(where: { $0.id == selectedLogID }) else { return [] }
+              return [NSItemProvider(object: lineText(entry) as NSString)]
+            }
+            .onScrollPhaseChange { _, phase in
+              if phase == .interacting {
+                followsLatest = false
+                lastSeenEntryID = retainedLogs.last?.id
               }
+            }
+            .onChange(of: visibleLogs.last?.id, initial: true) { _, id in
+              if followsLatest, pausedEntries == nil, let id {
+                proxy.scrollTo(id, anchor: .bottom)
+                lastSeenEntryID = id
+              }
+            }
+            .onChange(of: followsLatest) { _, follows in
+              if follows, let id = visibleLogs.last?.id { proxy.scrollTo(id, anchor: .bottom) }
+            }
           }
-          .listStyle(.inset)
-          .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-          .accessibilityLabel("Log entries")
+          if pausedEntries != nil || !followsLatest {
+            HStack {
+              Label(pausedEntries != nil ? "Display paused · collection continues" : "Reading earlier logs", systemImage: "pause.circle")
+              Spacer()
+              let unseen = LogDisplayPolicy.unseenCount(entries: retainedLogs, after: lastSeenEntryID)
+              if unseen > 0 { Text("\(unseen) new entries").monospacedDigit() }
+            }
+            .font(.caption).foregroundStyle(.secondary)
+          }
 
           PageStatusFooter(text: footerText(visibleCount: visibleLogs.count))
         }
@@ -68,11 +127,21 @@ struct LogsView: View {
         self.selectedLogID = nil
       }
     }
+    .onChange(of: selectedLogID) { _, id in
+      if let id, id != visibleLogs.last?.id {
+        followsLatest = false
+        lastSeenEntryID = retainedLogs.last?.id
+      }
+    }
   }
 
   private func copy(_ text: String) {
     NSPasteboard.general.clearContents()
     NSPasteboard.general.setString(text, forType: .string)
+  }
+
+  private func lineText(_ entry: LogEntry) -> String {
+    "\(DisplayFormatters.date.string(from: entry.date)) \(entry.level.uppercased()) \(entry.message)"
   }
 
   private func showsLoadingSkeleton(retainedLogs: [LogEntry]) -> Bool {
@@ -89,9 +158,8 @@ struct LogsView: View {
   }
 
   private var emptyStateTitle: String {
-    if debugFilterNeedsVerboseLevel {
-      return "Debug logging is off"
-    }
+    if debugFilterNeedsVerboseLevel { return "Debug logging is off" }
+    if !searchText.isEmpty { return "No matching logs" }
     return runtimeData.logs.isEmpty ? "No logs yet" : "No matching logs"
   }
 
@@ -117,6 +185,7 @@ struct LogsView: View {
   }
 
   private func filteredLogs(from entries: [LogEntry]) -> [LogEntry] {
+    let entries = LogDisplayPolicy.search(entries: entries, text: searchText)
     switch levelFilter {
     case .all:
       return entries
@@ -217,5 +286,19 @@ private enum LogLevelFilter: String, CaseIterable, Identifiable {
     case .error: String(localized: "Error")
     case .debug: String(localized: "Debug")
     }
+  }
+}
+
+enum LogDisplayPolicy {
+  static func search(entries: [LogEntry], text: String) -> [LogEntry] {
+    let query = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !query.isEmpty else { return entries }
+    return entries.filter { $0.message.localizedCaseInsensitiveContains(query) || $0.level.localizedCaseInsensitiveContains(query) }
+  }
+
+  static func unseenCount(entries: [LogEntry], after id: LogEntry.ID?) -> Int {
+    guard let id else { return 0 }
+    guard let index = entries.firstIndex(where: { $0.id == id }) else { return entries.count }
+    return entries.count - index - 1
   }
 }

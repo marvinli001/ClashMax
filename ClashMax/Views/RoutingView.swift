@@ -287,24 +287,24 @@ struct RoutingView: View {
       titleVisibility: .visible
     ) {
       if canSave {
-        Button("Save Changes") {
+        Button(String(localized: "Save Changes")) {
           saveDraft(then: pendingAction)
         }
       }
-      Button("Discard Changes", role: .destructive) {
+      Button(String(localized: "Discard Changes"), role: .destructive) {
         discardDraft(then: pendingAction)
       }
-      Button("Cancel", role: .cancel) {
+      Button(String(localized: "Cancel"), role: .cancel) {
         pendingAction = nil
       }
     } message: {
       Text("The current snippet has changes that have not been saved.")
     }
     .alert("Delete Snippet?", isPresented: deleteConfirmationPresented) {
-      Button("Delete", role: .destructive) {
+      Button(String(localized: "Delete"), role: .destructive) {
         confirmDeleteSnippet()
       }
-      Button("Cancel", role: .cancel) {
+      Button(String(localized: "Cancel"), role: .cancel) {
         snippetPendingDeletion = nil
       }
     } message: {
@@ -386,18 +386,18 @@ struct RoutingView: View {
 
       Divider()
 
-      Button("Move Snippet Up") {
+      Button(String(localized: "Move Snippet Up")) {
         moveSelectedSnippet(by: -1)
       }
       .disabled(!canMoveSelectedSnippet(by: -1))
-      Button("Move Snippet Down") {
+      Button(String(localized: "Move Snippet Down")) {
         moveSelectedSnippet(by: 1)
       }
       .disabled(!canMoveSelectedSnippet(by: 1))
 
       Divider()
 
-      Button("Delete Snippet…", role: .destructive) {
+      Button(String(localized: "Delete Snippet…"), role: .destructive) {
         snippetPendingDeletion = selectedSnippet
       }
       .disabled(selectedSnippet == nil)
@@ -511,20 +511,20 @@ struct RoutingView: View {
   @ViewBuilder
   private func snippetMenu(for snippet: RuntimeSnippet) -> some View {
     let index = snippetLibrary.snippets.firstIndex { $0.id == snippet.id }
-    Button("Move Up") {
+    Button(String(localized: "Move Up")) {
       if let index {
         moveSnippet(at: index, by: -1)
       }
     }
     .disabled(index.map { $0 == 0 } ?? true)
-    Button("Move Down") {
+    Button(String(localized: "Move Down")) {
       if let index {
         moveSnippet(at: index, by: 1)
       }
     }
     .disabled(index.map { $0 >= snippetLibrary.snippets.count - 1 } ?? true)
     Divider()
-    Button("Delete…", role: .destructive) {
+    Button(String(localized: "Delete…"), role: .destructive) {
       snippetPendingDeletion = snippet
     }
   }
@@ -1340,15 +1340,15 @@ struct RoutingRuleListEditor: View {
         RoutingRuleRowView(text: rule.runtimeRule, validationError: rule.validationError)
           .tag(RoutingRuleRowID.rule(rule.id))
           .contextMenu {
-            Button("Edit…") { sheet = .editRule(rule, section) }
-            Button("Duplicate") { duplicate(rule, in: keyPath) }
+            Button(String(localized: "Edit…")) { sheet = .editRule(rule, section) }
+            Button(String(localized: "Duplicate")) { duplicate(rule, in: keyPath) }
             Divider()
-            Button("Move Up") { move(rule.id, in: keyPath, by: -1) }
+            Button(String(localized: "Move Up")) { move(rule.id, in: keyPath, by: -1) }
               .disabled(rules.first?.id == rule.id)
-            Button("Move Down") { move(rule.id, in: keyPath, by: 1) }
+            Button(String(localized: "Move Down")) { move(rule.id, in: keyPath, by: 1) }
               .disabled(rules.last?.id == rule.id)
             Divider()
-            Button("Remove", role: .destructive) {
+            Button(String(localized: "Remove"), role: .destructive) {
               settings[keyPath: keyPath].removeAll { $0.id == rule.id }
             }
           }
@@ -1378,14 +1378,14 @@ struct RoutingRuleListEditor: View {
         )
         .tag(RoutingRuleRowID.matcher(matcher.id))
         .contextMenu {
-          Button("Edit…") { sheet = .editMatcher(matcher) }
+          Button(String(localized: "Edit…")) { sheet = .editMatcher(matcher) }
           Divider()
-          Button("Move Up") { moveMatcher(matcher.id, by: -1) }
+          Button(String(localized: "Move Up")) { moveMatcher(matcher.id, by: -1) }
             .disabled(matchers.first?.id == matcher.id)
-          Button("Move Down") { moveMatcher(matcher.id, by: 1) }
+          Button(String(localized: "Move Down")) { moveMatcher(matcher.id, by: 1) }
             .disabled(matchers.last?.id == matcher.id)
           Divider()
-          Button("Remove", role: .destructive) {
+          Button(String(localized: "Remove"), role: .destructive) {
             settings.disabledRuleMatchers.removeAll { $0.id == matcher.id }
           }
         }
@@ -1588,9 +1588,9 @@ private struct RoutingRuleFormSheet: View {
 
       HStack {
         Spacer()
-        Button("Cancel") { dismiss() }
+        Button(String(localized: "Cancel")) { dismiss() }
           .keyboardShortcut(.cancelAction)
-        Button(mode == .add ? "Add" : "Save", action: commit)
+        Button(mode == .add ? String(localized: "Add") : String(localized: "Save"), action: commit)
           .keyboardShortcut(.defaultAction)
           .disabled(rule.validationError != nil)
       }
@@ -1721,9 +1721,9 @@ private struct RoutingMatcherFormSheet: View {
 
       HStack {
         Spacer()
-        Button("Cancel") { dismiss() }
+        Button(String(localized: "Cancel")) { dismiss() }
           .keyboardShortcut(.cancelAction)
-        Button(mode == .add ? "Add" : "Save", action: commit)
+        Button(mode == .add ? String(localized: "Add") : String(localized: "Save"), action: commit)
           .keyboardShortcut(.defaultAction)
           .disabled(matcher.validationError != nil)
       }
@@ -1811,7 +1811,7 @@ private struct RoutingToolSheet: View {
 
       HStack {
         Spacer()
-        Button("Done", action: onDone)
+        Button(String(localized: "Done"), action: onDone)
           .keyboardShortcut(.defaultAction)
       }
       .padding(12)
@@ -2166,7 +2166,7 @@ private struct RoutingDiagnosticsTool: View {
         systemImage: "doc.badge.clock",
         message: String(localized: "Refresh the effective config to see which DNS keys Mihomo really reads.")
       )
-      Button("Refresh Effective Config") {
+      Button(String(localized: "Refresh Effective Config")) {
         let editor = appModel.routingEditor
         let draft = editor.draftHasUnsavedChanges ? editor.draftSnippet : nil
         Task { @MainActor in
@@ -2446,7 +2446,7 @@ private struct RoutingSimulatorTool: View {
           .font(.caption.weight(.semibold))
           .foregroundStyle(.secondary)
         Spacer()
-        Button("Clear") {
+        Button(String(localized: "Clear")) {
           appModel.routingEditor.explanationContext = nil
           appModel.routingEditor.domainVerdictContext = nil
         }
@@ -2809,8 +2809,7 @@ private struct RoutingSnippetTextArea: View {
   var minHeight: CGFloat
 
   var body: some View {
-    TextEditor(text: $text)
-      .font(.system(.caption, design: .monospaced))
+    SnippetTextEditor(text: $text)
       .frame(minHeight: minHeight)
       .overlay(alignment: .topLeading) {
         if text.isEmpty {

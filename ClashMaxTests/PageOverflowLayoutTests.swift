@@ -1,3 +1,4 @@
+import AppKit
 @testable import ClashMax
 import SwiftUI
 import XCTest
@@ -65,52 +66,13 @@ final class PageOverflowLayoutTests: XCTestCase {
 
   // MARK: - Connections layout
 
-  func testStackedConnectionsListShrinksWithAShortPage() {
-    XCTAssertEqual(ConnectionsLayout.stackedListMinHeight(availableHeight: 400), 180, accuracy: 0.001)
-    XCTAssertEqual(
-      ConnectionsLayout.stackedListMinHeight(availableHeight: 1_200),
-      ConnectionsLayout.stackedListMinHeight,
-      accuracy: 0.001
-    )
-  }
-
-  func testStackedConnectionsListKeepsAFloor() {
-    XCTAssertEqual(ConnectionsLayout.stackedListMinHeight(availableHeight: 100), 120, accuracy: 0.001)
-    XCTAssertEqual(
-      ConnectionsLayout.stackedListMinHeight(availableHeight: 0),
-      ConnectionsLayout.stackedListMinHeight
-    )
-  }
-
-  /// The stacked layout has to fit the list, the detail card, the controls row and the spacing
-  /// between them into one page. Anything more overflowed the window.
-  func testStackedConnectionsBlocksFitTheirPage() {
-    let controlsAndSpacing: CGFloat = 52
-
-    for availableHeight in stride(from: CGFloat(360), through: 1_400, by: 20) {
-      let list = ConnectionsLayout.stackedListMinHeight(availableHeight: availableHeight)
-      let detail = ConnectionsLayout.detailMaxHeight(mode: .stackedDetail, availableHeight: availableHeight)
-      XCTAssertLessThanOrEqual(
-        list + detail + controlsAndSpacing,
-        availableHeight,
-        "Stacked connections overflow a \(availableHeight)pt page"
-      )
+  func testConnectionsUseSheetUntilTableAndInspectorBothFit() {
+    for width in stride(from: CGFloat(400), to: ConnectionsLayout.splitDetailBreakpoint, by: 20) {
+      XCTAssertEqual(ConnectionsLayout.mode(forWidth: width), .sheetDetail)
     }
-  }
-
-  func testSplitConnectionsDetailOwnsItsColumn() {
-    XCTAssertEqual(ConnectionsLayout.detailMaxHeight(mode: .splitDetail, availableHeight: 720), 720)
-  }
-
-  func testStackedConnectionsDetailStaysASliceOfThePage() {
-    XCTAssertEqual(ConnectionsLayout.detailMaxHeight(mode: .stackedDetail, availableHeight: 700), 280, accuracy: 0.001)
-    XCTAssertEqual(ConnectionsLayout.detailMaxHeight(mode: .stackedDetail, availableHeight: 4_000), 320)
-    XCTAssertEqual(ConnectionsLayout.detailMaxHeight(mode: .stackedDetail, availableHeight: 120), 96, accuracy: 0.001)
-  }
-
-  func testConnectionsDetailHeightFallsBackBeforeTheFirstGeometryPass() {
-    XCTAssertEqual(ConnectionsLayout.detailMaxHeight(mode: .stackedDetail, availableHeight: 0), 320)
-    XCTAssertEqual(ConnectionsLayout.detailMaxHeight(mode: .splitDetail, availableHeight: .nan), 320)
+    XCTAssertEqual(ConnectionsLayout.mode(forWidth: ConnectionsLayout.splitDetailBreakpoint), .splitDetail)
+    XCTAssertGreaterThanOrEqual(ConnectionsLayout.splitDetailBreakpoint - ConnectionsLayout.detailWidth - 16, 660)
+    XCTAssertEqual(ConnectionsLayout.mode(forWidth: .nan), .sheetDetail)
   }
 
   // MARK: - Page chrome
@@ -123,5 +85,80 @@ final class PageOverflowLayoutTests: XCTestCase {
       SecondarySectionHeight.maxHeight(pageHeight: EnvironmentValues().pageHeight),
       SecondarySectionHeight.ceiling
     )
+  }
+}
+
+@MainActor
+final class NativeInputInteractionTests: XCTestCase {
+  private final class Draft {
+    var text = "# 合成配置\nrules: []\n"
+  }
+
+  func testSearchFocusAndChineseCompositionSurviveUpdate() async throws {
+    let draft = Draft()
+    let binding = Binding(get: { draft.text }, set: { draft.text = $0 })
+    let host = NSHostingView(rootView: NativeSearchField(prompt: "Search", text: binding))
+    let window = makeWindow(host)
+    defer { window.orderOut(nil) }
+    try await Task.sleep(for: .milliseconds(120))
+    host.rootView = NativeSearchField(prompt: "Search", text: binding, focusRequest: 1)
+    try await Task.sleep(for: .milliseconds(120))
+    let field = try XCTUnwrap(host.firstDescendant(of: NSSearchField.self))
+    let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+    XCTAssertTrue(window.firstResponder === editor)
+    editor.setMarkedText("中文输入", selectedRange: NSRange(location: 2, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+    host.rootView = NativeSearchField(prompt: "Search", text: binding, focusRequest: 1)
+    try await Task.sleep(for: .milliseconds(80))
+    XCTAssertTrue(editor.hasMarkedText())
+    XCTAssertTrue(editor.string.contains("中文输入"))
+    editor.unmarkText()
+    field.selectText(nil)
+    XCTAssertEqual(editor.selectedRange().length, (editor.string as NSString).length)
+  }
+
+  func testSnippetChineseCompositionSelectionUndoRedoAndLargeText() async throws {
+    let draft = Draft()
+    let binding = Binding(get: { draft.text }, set: { draft.text = $0 })
+    let host = NSHostingView(rootView: SnippetTextEditor(text: binding))
+    let window = makeWindow(host)
+    defer { window.orderOut(nil) }
+    try await Task.sleep(for: .milliseconds(180))
+    let editor = try XCTUnwrap(host.firstDescendant(of: NSTextView.self))
+    XCTAssertTrue(editor.allowsUndo)
+    XCTAssertTrue(editor.isSelectable)
+    XCTAssertNotNil(editor.enclosingScrollView)
+    window.makeFirstResponder(editor)
+    editor.setSelectedRange(NSRange(location: 0, length: 0))
+    editor.setMarkedText("中文组合", selectedRange: NSRange(location: 2, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+    host.rootView = SnippetTextEditor(text: binding)
+    try await Task.sleep(for: .milliseconds(80))
+    XCTAssertTrue(editor.hasMarkedText())
+    editor.unmarkText()
+    try await Task.sleep(for: .milliseconds(80))
+    editor.undoManager?.removeAllActions()
+    editor.breakUndoCoalescing()
+    let before = editor.string
+    editor.insertText("撤销测试", replacementRange: editor.selectedRange())
+    editor.breakUndoCoalescing()
+    let after = editor.string
+    XCTAssertNotEqual(before, after)
+    editor.undoManager?.undo()
+    XCTAssertEqual(editor.string, before)
+    editor.undoManager?.redo()
+    XCTAssertEqual(editor.string, after)
+    editor.setSelectedRange(NSRange(location: 0, length: 4))
+    XCTAssertEqual(editor.selectedRange().length, 4)
+    editor.string = String(repeating: "  - DOMAIN,example.com,DIRECT # 合成\n", count: 10_000)
+    editor.didChangeText()
+    try await Task.sleep(for: .milliseconds(120))
+    XCTAssertEqual(draft.text, editor.string)
+    XCTAssertGreaterThan(editor.string.utf8.count, 300_000)
+  }
+
+  private func makeWindow(_ content: NSView) -> NSWindow {
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
+    window.contentView = content
+    window.makeKeyAndOrderFront(nil)
+    return window
   }
 }

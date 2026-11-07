@@ -9,46 +9,24 @@ struct DashboardView: View {
     let state = appModel.dashboardRuntimeState
 
     GeometryReader { proxy in
-      Group {
-        if state.usesOperationalLayout {
-          ScrollView {
-            VStack(spacing: 16) {
-              RunningDashboardView(
-                currentNodeCoordinator: appModel.dashboardCurrentNodeCoordinator,
-                state: state,
-                namespace: dashboardNamespace,
-                reduceMotion: reduceMotion,
-                availableWidth: proxy.size.width
-              )
-              .transition(.opacity)
-            }
-            .padding(DashboardLayoutMetrics.pagePadding(for: proxy.size.width))
-            .frame(maxWidth: DashboardLayoutMetrics.dashboardMaxWidth(for: proxy.size.width))
-            .frame(maxWidth: .infinity)
-          }
-        } else {
-          LaunchDashboardView(
-            state: state,
-            namespace: dashboardNamespace,
-            reduceMotion: reduceMotion,
-            availableSize: proxy.size
-          )
-          .transition(.opacity)
-          .padding(DashboardLayoutMetrics.pagePadding(for: proxy.size.width))
-          .frame(maxWidth: DashboardLayoutMetrics.dashboardMaxWidth(for: proxy.size.width))
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
+      ScrollView {
+        RunningDashboardView(
+          currentNodeCoordinator: appModel.dashboardCurrentNodeCoordinator,
+          state: state,
+          namespace: dashboardNamespace,
+          reduceMotion: reduceMotion,
+          availableWidth: max(0, proxy.size.width - 2 * DashboardLayoutMetrics.pagePadding(for: proxy.size.width))
+        )
+        .padding(DashboardLayoutMetrics.pagePadding(for: proxy.size.width))
+        .frame(maxWidth: DashboardLayoutMetrics.dashboardMaxWidth(for: proxy.size.width))
+        .frame(maxWidth: .infinity)
       }
     }
     .background {
       DashboardSceneBackground()
     }
-    // Only the swap between the launch page and the running page animates. Keyed on the layout
-    // rather than on `state`, so starting → running (same layout) does not replay it, and nothing
-    // else that happens to change in the same update — a crash message, a readiness issue, a
-    // profile switch — is swept into a page-wide spring.
     .animation(
-      reduceMotion ? .easeOut(duration: 0.16) : .spring(duration: 0.35, bounce: 0),
+      reduceMotion ? nil : .spring(duration: 0.42, bounce: 0.04),
       value: state.usesOperationalLayout
     )
   }

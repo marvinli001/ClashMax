@@ -139,7 +139,7 @@ struct RulesView: View {
       Text(rule.raw.isEmpty ? "-" : rule.raw)
         .font(.system(.callout, design: .monospaced))
         .textSelection(.enabled)
-        .lineLimit(2)
+        .lineLimit(4)
         .fixedSize(horizontal: false, vertical: true)
       if showsProvider, let provider = rule.providerName, !provider.isEmpty {
         Spacer(minLength: 8)
@@ -159,7 +159,7 @@ struct RulesView: View {
   @ViewBuilder
   private func ruleMenu(for selection: [RuntimeRule]) -> some View {
     if let rule = selection.first, selection.count == 1 {
-      Button("Insert Rule Before This…") {
+      Button(String(localized: "Insert Rule Before This…")) {
         quickRuleContext = QuickRuleSheetContext(
           title: "Insert Rule Before This",
           subtitle: String(
@@ -172,17 +172,17 @@ struct RulesView: View {
       }
 
       let isDisabled = appModel.isDisabledByQuickRules(rule)
-      Button(isDisabled ? "Enable This Rule" : "Disable This Rule") {
+      Button(isDisabled ? String(localized: "Enable This Rule") : String(localized: "Disable This Rule")) {
         Task { await appModel.setRuntimeRuleDisabled(rule, disabled: !isDisabled) }
       }
       .disabled(rule.raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
       Divider()
 
-      Button("Copy Rule") { copy(rule.raw) }
-      Button("Copy Payload") { copy(rule.payload) }
+      Button(String(localized: "Copy Rule")) { copy(rule.raw) }
+      Button(String(localized: "Copy Payload")) { copy(rule.payload) }
     } else if !selection.isEmpty {
-      Button("Copy Rules") {
+      Button(String(localized: "Copy Rules")) {
         copy(selection.map(\.raw).joined(separator: "\n"))
       }
     } else {
@@ -206,8 +206,7 @@ struct RulesView: View {
   /// rule providers open on demand instead of sitting above the table.
   private func ruleControls(selectedRules: [RuntimeRule]) -> some View {
     HStack(spacing: 10) {
-      TextField("Search rules", text: $searchText)
-        .textFieldStyle(.roundedBorder)
+      WorkspaceSearchField(prompt: String(localized: "Search rules"), text: $searchText)
         .frame(minWidth: 220, idealWidth: 360, maxWidth: 460)
 
       Button {

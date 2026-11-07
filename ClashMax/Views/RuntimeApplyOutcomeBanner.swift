@@ -29,7 +29,7 @@ struct RuntimeApplyOutcomeBanner: View {
         Spacer(minLength: 8)
 
         if case .restartNeeded = outcome {
-          Button("Restart Now") {
+          Button(String(localized: "Restart Now")) {
             appModel.restart()
             appModel.clearRuntimeApplyOutcome()
           }

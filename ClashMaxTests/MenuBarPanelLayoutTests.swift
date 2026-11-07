@@ -440,6 +440,20 @@ final class MenuBarPanelLayoutTests: XCTestCase {
     )
   }
 
+  func testConnectionAppIconPathUsesOutermostAppBundle() {
+    XCTAssertEqual(
+      ConnectionAppIconCache.iconPath(forProcessPath: "/Applications/Safari.app/Contents/MacOS/Safari"),
+      "/Applications/Safari.app"
+    )
+    XCTAssertEqual(
+      ConnectionAppIconCache.iconPath(
+        forProcessPath: "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper"
+      ),
+      "/Applications/Google Chrome.app"
+    )
+    XCTAssertEqual(ConnectionAppIconCache.iconPath(forProcessPath: "/usr/bin/curl"), "/usr/bin/curl")
+  }
+
   private func fullPanelView(model: AppModel, localeIdentifier: String) -> some View {
     MenuBarView()
       .environment(model)
@@ -540,9 +554,9 @@ final class MainWindowLayoutTests: XCTestCase {
     XCTAssertFalse(RoutingWorkspaceLayout.showsToolPane(pageWidth: 980 - 215))
   }
 
-  func testConnectionsLayoutMovesDetailBelowAtNarrowWidths() {
-    XCTAssertEqual(ConnectionsLayout.mode(forWidth: 1_079), .stackedDetail)
-    XCTAssertEqual(ConnectionsLayout.mode(forWidth: 1_080), .splitDetail)
+  func testConnectionsLayoutUsesSheetAtNarrowWidths() {
+    XCTAssertEqual(ConnectionsLayout.mode(forWidth: ConnectionsLayout.splitDetailBreakpoint - 1), .sheetDetail)
+    XCTAssertEqual(ConnectionsLayout.mode(forWidth: ConnectionsLayout.splitDetailBreakpoint), .splitDetail)
   }
 
   func testStatusStripCompactMessageFitsNarrowWidthWithoutSingleLineLoss() {

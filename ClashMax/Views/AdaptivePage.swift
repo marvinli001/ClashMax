@@ -81,6 +81,9 @@ struct AdaptivePage<Actions: View, Content: View>: View {
       proxy.size
     } action: { size in
       pageSize = size
+      #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--layout") { print("AdaptivePage", title, size) }
+      #endif
     }
     .environment(\.pageHeight, pageSize.height)
   }
@@ -146,4 +149,36 @@ struct CenteredUnavailableState: View {
 
 private func localizedPageText(_ value: String) -> String {
   NSLocalizedString(value, comment: "")
+}
+
+/// An inspector belongs to the window's split view; pages publish its selection and actions.
+struct WorkspaceInspectorRequest: Equatable {
+  enum Selection: Equatable {
+    case profile(Profile?, active: Bool, updating: Bool, upstreamName: String?)
+    case connections([ConnectionSnapshot], actionState: String, closingIDs: Set<ConnectionSnapshot.ID>)
+  }
+
+  let section: AppSection
+  let selection: Selection
+  let isPresented: Bool
+  let canPresentInline: Bool
+  let idealWidth: CGFloat
+  let setPresented: (Bool) -> Void
+  let content: AnyView
+
+  static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.section == rhs.section && lhs.selection == rhs.selection
+      && lhs.isPresented == rhs.isPresented && lhs.canPresentInline == rhs.canPresentInline && lhs.idealWidth == rhs.idealWidth
+  }
+}
+
+struct WorkspaceInspectorPreference: PreferenceKey {
+  static var defaultValue: WorkspaceInspectorRequest? { nil }
+  static func reduce(value: inout WorkspaceInspectorRequest?, nextValue: () -> WorkspaceInspectorRequest?) {
+    if let next = nextValue() { value = next }
+  }
+}
+
+extension EnvironmentValues {
+  @Entry var workspaceInspectorOccupiedWidth: CGFloat = 0
 }

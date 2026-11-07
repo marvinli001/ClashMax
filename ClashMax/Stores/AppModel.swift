@@ -751,6 +751,8 @@ final class AppModel {
   /// explain an empty Debug filter rather than showing a bare "no logs".
   var isVerboseLogLevelSelected: Bool { LogVisibility.isVerbose(logLevel: selectedLogLevel) }
   private(set) var runtimeOwner: RuntimeOwner = .stopped
+  let isVisualFixture: Bool
+  private(set) var proxySelectionInFlightGroups = Set<ProxyGroup.ID>()
   var systemProxyEnabled: Bool {
     get { systemProxy.enabled }
     set { systemProxy.enabled = newValue }
@@ -1195,6 +1197,7 @@ final class AppModel {
 
   init(
     paths: RuntimePaths,
+    isVisualFixture: Bool = false,
     profileStore: ProfileStore? = nil,
     outboundProxyEndpointStore: OutboundProxyEndpointStore? = nil,
     coreController: CoreProcessController = CoreProcessController(),
@@ -1221,6 +1224,7 @@ final class AppModel {
     bundledCoreURLProvider: (() throws -> URL)? = nil,
     providerSideLoadPreflightRunner: any ProviderSideLoadPreflightRunning = MihomoProviderSideLoadPreflightRunner()
   ) {
+    self.isVisualFixture = isVisualFixture
     self.paths = paths
     self.externalDashboardSecretStore = externalDashboardSecretStore
     globalShortcutManager = GlobalShortcutManager(registrar: globalShortcutRegistrar ?? KeyboardShortcutsRegistrar())
@@ -1340,8 +1344,12 @@ final class AppModel {
       }
     }
     coreController.onStatusChange = { [weak self] status in
+      guard self?.isVisualFixture != true else { return }
       self?.handleCoreStatusChange(status)
     }
+
+    // Visual fixtures use temporary stores and never recover or register live system services.
+    guard !isVisualFixture else { return }
 
     // @Published publishers emitted their current value on subscribe, so these three handlers each
     // ran once during setup. `didSet` does not fire during init, so prime them explicitly.
@@ -1407,6 +1415,15 @@ final class AppModel {
     if case .running = coreController.status { return true }
     return tunnelCoreRunning
   }
+
+  #if DEBUG
+    func configureVisualFixtureOwnership(startedAt: Date? = nil) {
+      precondition(isVisualFixture)
+      runtimeOwner = isCoreRunning ? .user : .stopped
+      systemProxyEnabled = isCoreRunning
+      sessionStartedAt = isCoreRunning ? startedAt ?? Date().addingTimeInterval(-3_600) : nil
+    }
+  #endif
 
   func waitForOutboundProxyEndpointLoad() async {
     await outboundProxyEndpointsCoordinator.waitForLoad()
@@ -1828,7 +1845,7 @@ final class AppModel {
 
   var readinessIssue: String? {
     if profileStore.activeProfile == nil {
-      return "No active profile selected."
+      return String(localized: "No active profile selected.")
     }
     if (try? bundledCoreURL()) == nil {
       return AppError.missingBundledCore.description
@@ -3578,6 +3595,7 @@ final class AppModel {
   }
 
   func start() {
+    guard !isVisualFixture else { return }
     start(userInitiated: true)
   }
 
@@ -4033,6 +4051,7 @@ final class AppModel {
   }
 
   func stop() {
+    guard !isVisualFixture else { return }
     clearNetworkPolicyRestoreSnapshotForUserChange()
     pendingStartAfterStop = nil
     guard !lifecycleStopInFlight else { return }
@@ -4040,6 +4059,7 @@ final class AppModel {
   }
 
   func restart() {
+    guard !isVisualFixture else { return }
     restart(preserveNetworkPolicyRestoreSnapshot: false)
   }
 
@@ -4652,6 +4672,7 @@ final class AppModel {
   }
 
   func requestMode(_ mode: RunMode) {
+    guard !isVisualFixture else { return }
     pendingModeTask?.cancel()
     pendingModeTask = nil
     guard overrides.mode != mode else { return }
@@ -4664,6 +4685,7 @@ final class AppModel {
   }
 
   func requestProxyRoutingMode(_ mode: ProxyRoutingMode) {
+    guard !isVisualFixture else { return }
     clearNetworkPolicyRestoreSnapshotForUserChange()
     pendingRoutingModeTask?.cancel()
     pendingRoutingModeTask = nil
@@ -4694,6 +4716,7 @@ final class AppModel {
   }
 
   func startNetworkEnvironmentMonitoring() {
+    guard !isVisualFixture else { return }
     networkPolicy.startNetworkEnvironmentMonitoring()
   }
 
@@ -4726,10 +4749,12 @@ final class AppModel {
   }
 
   func registerHelper() {
+    guard !isVisualFixture else { return }
     prepareTunHelperIfNeeded(force: true)
   }
 
   func warmTunHelperRegistrationOnLaunch() {
+    guard !isVisualFixture else { return }
     guard !didWarmTunHelperRegistrationOnLaunch else { return }
     let serviceStatus = helperClient.serviceStatus
     if shouldDeferInitialTunHelperPromptDuringSilentStart(serviceStatus) {
@@ -4766,6 +4791,7 @@ final class AppModel {
   }
 
   func evaluateInitialTunHelperPromptOnLaunch() {
+    guard !isVisualFixture else { return }
     guard !settings.initialTunHelperPromptHandled else {
       initialTunHelperPrompt = nil
       return
@@ -4792,6 +4818,7 @@ final class AppModel {
   /// Runs the primary button of the setup sheet. What that means depends on the
   /// stage, but the user only ever sees one obvious next step.
   func installInitialTunHelper() {
+    guard !isVisualFixture else { return }
     guard !initialTunHelperPromptActionInFlight else { return }
     if case let .relocate(issue) = initialTunHelperPrompt?.stage {
       relocateAppForHelperSetup(issue: issue)
@@ -5056,6 +5083,7 @@ final class AppModel {
   }
 
   func refreshHelperRegistrationStatus() {
+    guard !isVisualFixture else { return }
     Task { @MainActor [weak self] in
       guard let self else { return }
       let state = await helperClient.currentPreparationState()
@@ -5065,6 +5093,7 @@ final class AppModel {
   }
 
   func repairHelperRegistration() {
+    guard !isVisualFixture else { return }
     Task { @MainActor [weak self] in
       guard let self else { return }
       do {
@@ -5090,6 +5119,7 @@ final class AppModel {
   }
 
   func unregisterHelper() {
+    guard !isVisualFixture else { return }
     Task { @MainActor [weak self] in
       guard let self else { return }
       do {
@@ -5156,6 +5186,7 @@ final class AppModel {
   }
 
   func installNetworkExtension() {
+    guard !isVisualFixture else { return }
     Task { @MainActor [weak self] in
       guard let self else { return }
       await networkExtensionController.activateSystemExtension()
@@ -5164,6 +5195,7 @@ final class AppModel {
   }
 
   func refreshNetworkExtensionStatus() {
+    guard !isVisualFixture else { return }
     Task { @MainActor [weak self] in
       guard let self else { return }
       await networkExtensionController.refreshStatus()
@@ -5294,6 +5326,7 @@ final class AppModel {
   }
 
   func refreshLaunchSettings() {
+    guard !isVisualFixture else { return }
     settings.refreshLaunchSettings()
   }
 
@@ -5690,12 +5723,14 @@ final class AppModel {
       proxySelectionTasks[groupID]?.cancel()
       let token = UUID()
       proxySelectionTokens[groupID] = token
+      proxySelectionInFlightGroups.insert(groupID)
       proxySelectionTasks[groupID] = Task { @MainActor [weak self] in
         guard let self else { return }
         defer {
           if proxySelectionTokens[groupID] == token {
             proxySelectionTasks[groupID] = nil
             proxySelectionTokens[groupID] = nil
+            proxySelectionInFlightGroups.remove(groupID)
           }
         }
         do {
@@ -6155,6 +6190,7 @@ final class AppModel {
   }
 
   func setSystemProxyEnabled(_ enabled: Bool) {
+    guard !isVisualFixture else { return }
     clearNetworkPolicyRestoreSnapshotForUserChange()
     Task { @MainActor [weak self] in
       guard let self else { return }
@@ -6601,6 +6637,7 @@ final class AppModel {
   }
 
   func repairNetworkExtensionDNS() {
+    guard !isVisualFixture else { return }
     Task { @MainActor [weak self] in
       guard let self else { return }
       do {
@@ -6625,6 +6662,7 @@ final class AppModel {
   }
 
   func repairTunDNS() {
+    guard !isVisualFixture else { return }
     guard !lifecycleStopInFlight, stopTask == nil else { return }
     guard tunRoutingRepairTask == nil else { return }
     guard tunDNSRepairTask == nil else { return }
@@ -6668,6 +6706,7 @@ final class AppModel {
   }
 
   func repairTunRouting() {
+    guard !isVisualFixture else { return }
     guard !lifecycleStopInFlight, stopTask == nil else { return }
     guard runtimeSettingsApplyTask == nil,
           tunSettingsApplyTask == nil,
@@ -6866,6 +6905,7 @@ final class AppModel {
   /// routes traffic itself, so a proxy still pointing at a port ClashMax does not serve only
   /// breaks the apps that honor it (issue #19); no helper restart can clear that.
   func disableResidualSystemProxy() {
+    guard !isVisualFixture else { return }
     guard !residualSystemProxyEntries.isEmpty, residualSystemProxyDisableTask == nil else { return }
     let entries = residualSystemProxyEntries
     residualSystemProxyDisableInFlight = true
@@ -7197,7 +7237,7 @@ final class AppModel {
   }
 
   private func canStartPreviewRuntime(profilePreviewGroups groups: [ProxyGroup]? = nil) -> Bool {
-    previewRuntimeRequested
+    !isVisualFixture && previewRuntimeRequested
       && !startInFlight
       && !isCoreRunning
       && profileStore.activeProfile != nil
@@ -7392,6 +7432,7 @@ final class AppModel {
 
     proxySelectionTasks.values.forEach { $0.cancel() }
     proxySelectionTasks.removeAll()
+    proxySelectionInFlightGroups.removeAll()
     proxySelectionTokens.removeAll()
 
     proxyDelayTests.cancelAll()
@@ -8824,6 +8865,7 @@ extension AppModel: ClashMaxIntentControlling {
     proxySelectionTasks[group.id]?.cancel()
     proxySelectionTasks[group.id] = nil
     proxySelectionTokens[group.id] = nil
+    proxySelectionInFlightGroups.remove(group.id)
     do {
       try await apiClient.selectProxy(group: group.name, proxy: nodeName)
     } catch {

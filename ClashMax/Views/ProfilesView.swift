@@ -7,8 +7,8 @@ import Yams
 enum ProfilesLayout {
   /// Below this page width the detail pane would squeeze the Name column into uselessness, so the
   /// pane steps aside and every one of its actions stays reachable through the More and context menus.
-  static let detailPaneBreakpoint: CGFloat = 700
-  static let detailPaneWidth: CGFloat = 256
+  static let detailPaneBreakpoint: CGFloat = 816
+  static let detailPaneWidth: CGFloat = 300
   /// The Usage column is the one column the table can do without: below this width it would only
   /// buy a horizontal scroller, and the detail pane carries the same facts for the selected profile.
   static let usageColumnBreakpoint: CGFloat = 1_000
@@ -87,6 +87,7 @@ enum ProfileStatusSummary {
 
 struct ProfilesView: View {
   @Environment(AppModel.self) private var appModel
+  @Environment(\.workspaceInspectorOccupiedWidth) private var inspectorOccupiedWidth
   @Environment(ProfileStore.self) private var profileStore
   @Environment(ProfileCoordinator.self) private var profileCoordinator
   @Environment(ProviderAnalyticsStore.self) private var providerAnalytics
@@ -94,7 +95,9 @@ struct ProfilesView: View {
   /// or moving this selection can never switch the runtime's profile.
   @State private var selectedProfileID: Profile.ID?
   @State private var showsDetailPane = true
-  @State private var pageWidth: CGFloat = 0
+  @State private var showsCompactDetail = false
+  @State private var measuredPageWidth: CGFloat = 0
+  private var pageWidth: CGFloat { measuredPageWidth + inspectorOccupiedWidth }
   @State private var addSubscriptionPresented = false
   @State private var profileBeingEdited: Profile?
   @State private var providerInsightsProfile: Profile?
@@ -125,6 +128,17 @@ struct ProfilesView: View {
     AdaptivePage(title: "Profiles") {
       addMenu
       updateButton(selectedProfile: selectedProfile)
+      Button {
+        if ProfilesLayout.showsDetailPane(pageWidth: pageWidth, requested: true) {
+          showsDetailPane.toggle()
+        } else {
+          showsCompactDetail = true
+        }
+      } label: {
+        Label("Show Details", systemImage: "sidebar.right")
+      }
+      .disabled(selectedProfile == nil)
+      .help("Show details for the selected profile")
       moreMenu(selectedProfile: selectedProfile, hasSubscriptions: profiles.contains(where: \.isSubscription))
     } content: {
       VStack(alignment: .leading, spacing: 10) {
@@ -155,6 +169,33 @@ struct ProfilesView: View {
         }
       }
     }
+    .preference(key: WorkspaceInspectorPreference.self, value: WorkspaceInspectorRequest(
+      section: .profiles,
+      selection: .profile(selectedProfile, active: selectedProfile?.id == profileStore.activeProfileID,
+                          updating: selectedProfile.map(isUpdating) ?? false,
+                          upstreamName: selectedProfile.flatMap(upstreamEndpoint)?.name),
+      isPresented: selectedProfile != nil && ProfilesLayout.showsDetailPane(pageWidth: pageWidth, requested: showsDetailPane),
+      canPresentInline: ProfilesLayout.showsDetailPane(pageWidth: pageWidth, requested: true),
+      idealWidth: ProfilesLayout.detailPaneWidth,
+      setPresented: { presented in
+        if ProfilesLayout.showsDetailPane(pageWidth: pageWidth, requested: true) { showsDetailPane = presented }
+        else if presented { showsCompactDetail = true }
+      },
+      content: AnyView(profileDetails(selectedProfile))
+    ))
+    .sheet(isPresented: $showsCompactDetail) {
+      VStack(spacing: 0) {
+        HStack {
+          Text("Profile Details").font(.headline)
+          Spacer()
+          Button(String(localized: "Done")) { showsCompactDetail = false }.keyboardShortcut(.cancelAction)
+        }.padding(16)
+        Divider()
+        profileDetails(selectedProfile).padding(16)
+      }
+      .frame(width: 440, height: 560)
+    }
+    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { measuredPageWidth = $0 - 36 }
     .onAppear {
       reconcileSelection(with: profiles)
     }
@@ -228,10 +269,10 @@ struct ProfilesView: View {
       )
     }
     .alert("Delete Profile?", isPresented: deleteConfirmationPresented) {
-      Button("Delete", role: .destructive) {
+      Button(String(localized: "Delete"), role: .destructive) {
         confirmDeleteProfile()
       }
-      Button("Cancel", role: .cancel) {
+      Button(String(localized: "Cancel"), role: .cancel) {
         profilePendingDeletion = nil
       }
     } message: {
@@ -310,11 +351,11 @@ struct ProfilesView: View {
     Menu {
       profileActions(for: selectedProfile, includesEdit: true)
       Divider()
-      Button("Update All") {
+      Button(String(localized: "Update All")) {
         appModel.updateAllSubscriptions()
       }
       .disabled(!hasSubscriptions)
-      Button("Update Due") {
+      Button(String(localized: "Update Due")) {
         appModel.updateDueSubscriptions()
       }
       .disabled(!hasSubscriptions)
@@ -335,7 +376,7 @@ struct ProfilesView: View {
   @ViewBuilder
   private func profileActions(for profile: Profile?, includesEdit: Bool) -> some View {
     let isActive = profile.map { profileStore.activeProfileID == $0.id } ?? false
-    Button("Set as Current") {
+    Button(String(localized: "Set as Current")) {
       if let profile {
         appModel.selectProfile(profile)
       }
@@ -343,7 +384,7 @@ struct ProfilesView: View {
     .disabled(profile == nil || isActive)
 
     if includesEdit {
-      Button("Edit…") {
+      Button(String(localized: "Edit…")) {
         if let profile {
           beginEditing(profile)
         }
@@ -351,21 +392,21 @@ struct ProfilesView: View {
       .disabled(profile == nil)
     }
 
-    Button("Update Subscription") {
+    Button(String(localized: "Update Subscription")) {
       if let profile {
         updateSubscription(profile)
       }
     }
     .disabled(!(profile.map { $0.isSubscription && !isUpdating($0) } ?? false))
 
-    Button("Provider Details…") {
+    Button(String(localized: "Provider Details…")) {
       providerInsightsProfile = profile
     }
     .disabled(profile == nil)
 
     // Roadmap C1: the import-time report stays reachable, and is run now for a profile imported
     // before reports existed.
-    Button("Audit Report…") {
+    Button(String(localized: "Audit Report…")) {
       guard let profile else { return }
       if profile.subscriptionDiagnostics.latestAudit != nil {
         appModel.presentAuditReport(for: profile.id)
@@ -384,7 +425,7 @@ struct ProfilesView: View {
 
     Divider()
 
-    Button("Delete…", role: .destructive) {
+    Button(String(localized: "Delete…"), role: .destructive) {
       profilePendingDeletion = profile
     }
     .disabled(profile == nil)
@@ -398,10 +439,10 @@ struct ProfilesView: View {
     } description: {
       Text("Profiles stay unchanged on disk; ClashMax generates a runtime copy when starting.")
     } actions: {
-      Button("Add Subscription…") {
+      Button(String(localized: "Add Subscription…")) {
         addSubscriptionPresented = true
       }
-      Button("Import YAML…") {
+      Button(String(localized: "Import YAML…")) {
         appModel.importLocalProfile()
       }
     }
@@ -409,40 +450,30 @@ struct ProfilesView: View {
   }
 
   private func workspace(profiles: [Profile], selectedProfile: Profile?) -> some View {
-    let showsPane = ProfilesLayout.showsDetailPane(pageWidth: pageWidth, requested: showsDetailPane)
-    return VStack(spacing: 8) {
-      HStack(alignment: .top, spacing: 12) {
+    VStack(spacing: 8) {
+      GeometryReader { geometry in
         profileTable(profiles: profiles)
-          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-
-        if showsPane {
-          ProfileDetailPane(
-            profile: selectedProfile,
-            isActive: selectedProfile.map { profileStore.activeProfileID == $0.id } ?? false,
-            isUpdating: selectedProfile.map(isUpdating) ?? false,
-            sourceSummary: selectedProfile.map(sourceSummary) ?? "",
-            upstreamEndpointName: selectedProfile.flatMap(upstreamEndpoint)?.name,
-            onActivate: { profile in appModel.selectProfile(profile) },
-            onEdit: beginEditing,
-            onUpdate: updateSubscription,
-            onProviderDetails: { profile in providerInsightsProfile = profile }
-          )
-          .frame(width: ProfilesLayout.detailPaneWidth, alignment: .topLeading)
-          .frame(maxHeight: .infinity, alignment: .topLeading)
-        }
+          .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-
       PageStatusFooter(text: String.localizedStringWithFormat(
-        NSLocalizedString("%lld profiles", comment: ""),
-        Int64(profiles.count)
+        NSLocalizedString("%lld profiles", comment: ""), Int64(profiles.count)
       ))
     }
-    .onGeometryChange(for: CGFloat.self) { proxy in
-      proxy.size.width
-    } action: { width in
-      pageWidth = width
-    }
+  }
+
+  private func profileDetails(_ profile: Profile?) -> some View {
+    ProfileDetailPane(
+      profile: profile,
+      isActive: profile.map { profileStore.activeProfileID == $0.id } ?? false,
+      isUpdating: profile.map(isUpdating) ?? false,
+      sourceSummary: profile.map(sourceSummary) ?? "",
+      upstreamEndpointName: profile.flatMap(upstreamEndpoint)?.name,
+      onActivate: { profile in appModel.selectProfile(profile) },
+      onEdit: beginEditing,
+      onUpdate: updateSubscription,
+      onProviderDetails: { profile in providerInsightsProfile = profile }
+    )
+    .frame(maxHeight: .infinity, alignment: .topLeading)
   }
 
   private func profileTable(profiles: [Profile]) -> some View {
@@ -923,9 +954,9 @@ private struct ClientMigrationReportSheet: View {
 
       HStack {
         Spacer()
-        Button("Cancel", action: onCancel)
+        Button(String(localized: "Cancel"), action: onCancel)
           .keyboardShortcut(.cancelAction)
-        Button("Apply") {
+        Button(String(localized: "Apply")) {
           onApply(
             ClientMigrationApplyOptions(
               importLocalProfiles: importLocalProfiles && !report.localProfiles.isEmpty,
@@ -1323,9 +1354,9 @@ private struct AddSubscriptionSheet: View {
 
       HStack {
         Spacer()
-        Button("Cancel", action: onCancel)
+        Button(String(localized: "Cancel"), action: onCancel)
           .keyboardShortcut(.cancelAction)
-        Button(profileCoordinator.isAddingSubscription ? "Adding" : "Add", action: addIfPossible)
+        Button(profileCoordinator.isAddingSubscription ? String(localized: "Adding") : String(localized: "Add"), action: addIfPossible)
           .keyboardShortcut(.defaultAction)
           .disabled(!canAdd)
       }
@@ -1425,7 +1456,7 @@ private struct ProfileProviderInsightsSheet: View {
 
       HStack {
         Spacer()
-        Button("Close", action: onClose)
+        Button(String(localized: "Close"), action: onClose)
           .keyboardShortcut(.cancelAction)
       }
     }
@@ -1775,9 +1806,9 @@ private struct ProfileEditSheet: View {
 
       HStack {
         Spacer()
-        Button("Cancel", action: onCancel)
+        Button(String(localized: "Cancel"), action: onCancel)
           .keyboardShortcut(.cancelAction)
-        Button("Save", action: onSave)
+        Button(String(localized: "Save"), action: onSave)
           .keyboardShortcut(.defaultAction)
           .disabled(!canSave)
       }
@@ -1914,8 +1945,7 @@ private struct ProfileEditTextEditorRow: View {
 
   var body: some View {
     ProfileEditRow(title, alignment: .top) {
-      TextEditor(text: $text)
-        .font(.system(.caption, design: .monospaced))
+      SnippetTextEditor(text: $text)
         .frame(minHeight: minHeight)
         .overlay {
           RoundedRectangle(cornerRadius: ProfileEditLayout.panelCornerRadius, style: .continuous)
@@ -2978,9 +3008,9 @@ private struct ManualProxyProfileSheet: View {
       Divider()
       HStack {
         Spacer()
-        Button("Cancel", action: onCancel)
+        Button(String(localized: "Cancel"), action: onCancel)
           .keyboardShortcut(.cancelAction)
-        Button("Add") {
+        Button(String(localized: "Add")) {
           onSave(
             draft.endpoint,
             draft.suppliedPassword,
@@ -3072,7 +3102,7 @@ private struct OutboundProxyEndpointManagerSheet: View {
       Divider()
       HStack {
         Spacer()
-        Button("Close", action: onClose)
+        Button(String(localized: "Close"), action: onClose)
           .keyboardShortcut(.cancelAction)
       }
     }
@@ -3103,14 +3133,14 @@ private struct OutboundProxyEndpointManagerSheet: View {
       .environment(appModel)
     }
     .alert("Delete Proxy Endpoint?", isPresented: deleteConfirmationPresented) {
-      Button("Delete", role: .destructive) {
+      Button(String(localized: "Delete"), role: .destructive) {
         guard let endpoint = endpointPendingDeletion else { return }
         endpointPendingDeletion = nil
         Task { @MainActor in
           _ = await appModel.deleteOutboundProxyEndpoint(endpoint.id)
         }
       }
-      Button("Cancel", role: .cancel) {
+      Button(String(localized: "Cancel"), role: .cancel) {
         endpointPendingDeletion = nil
       }
     } message: {
@@ -3138,14 +3168,14 @@ private struct OutboundProxyEndpointManagerSheet: View {
       }
       .frame(maxWidth: .infinity, alignment: .leading)
 
-      Button("Test") {
+      Button(String(localized: "Test")) {
         Task { @MainActor in
           await appModel.testOutboundProxyEndpoint(endpoint.id)
         }
       }
       .disabled(appModel.outboundProxyEndpointTestStates[endpoint.id] == .testing)
 
-      Button("Edit") {
+      Button(String(localized: "Edit")) {
         editorContext = OutboundProxyEndpointEditorContext(endpoint: endpoint)
       }
 
@@ -3246,9 +3276,9 @@ private struct OutboundProxyEndpointEditorSheet: View {
       Divider()
       HStack {
         Spacer()
-        Button("Cancel", action: onCancel)
+        Button(String(localized: "Cancel"), action: onCancel)
           .keyboardShortcut(.cancelAction)
-        Button("Save") {
+        Button(String(localized: "Save")) {
           onSave(draft.endpoint, draft.suppliedPassword)
         }
         .keyboardShortcut(.defaultAction)

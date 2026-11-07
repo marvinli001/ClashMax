@@ -46,7 +46,33 @@ final class DashboardRuntimeStateTests: XCTestCase {
       return
     }
 
-    XCTAssertTrue(reason.contains("No active profile"))
+    XCTAssertEqual(reason, String(localized: "No active profile selected."))
+  }
+
+  func testVisualFixtureNeverWarmsARealPreviewCore() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    let source = paths.appSupport.appendingPathComponent("fixture.yaml")
+    try Self.writeProxyConfig(named: "Example", to: source)
+    _ = try await store.importLocalConfig(from: source)
+    var bundledCoreLookups = 0
+    let model = try AppModel(
+      paths: paths,
+      isVisualFixture: true,
+      profileStore: store,
+      coreController: .visualFixture(status: .stopped),
+      defaults: Self.makeIsolatedDefaults(),
+      bundledCoreURLProvider: {
+        bundledCoreLookups += 1
+        throw AppError.missingBundledCore
+      }
+    )
+    model.profilePreviewGroups = [ProxyGroup(name: "Example", type: "select", selected: "DIRECT", nodes: [ProxyNode(name: "DIRECT", type: "direct", delay: nil, isSelectable: true)])]
+    model.warmPreviewRuntimeOnLaunch()
+    try await Task.sleep(for: .milliseconds(120))
+    XCTAssertEqual(bundledCoreLookups, 0)
+    XCTAssertEqual(model.coreController.status, .stopped)
+    XCTAssertFalse(model.previewRuntimeActive)
   }
 
   func testEffectiveRuntimePreviewResolvesProfileUpstreamAndRedactsEndpointPassword() async throws {

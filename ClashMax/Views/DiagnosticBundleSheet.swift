@@ -43,15 +43,15 @@ struct DiagnosticBundleSheet: View {
       HStack(spacing: 8) {
         footerStatus
         Spacer()
-        Button("Close") {
+        Button(String(localized: "Close")) {
           dismiss()
         }
         .keyboardShortcut(.cancelAction)
-        Button("Copy") {
+        Button(String(localized: "Copy")) {
           copy()
         }
         .disabled(bundle == nil)
-        Button("Save…") {
+        Button(String(localized: "Save…")) {
           save()
         }
         .keyboardShortcut(.defaultAction)

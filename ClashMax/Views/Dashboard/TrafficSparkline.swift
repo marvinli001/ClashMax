@@ -182,6 +182,7 @@ struct TrafficSparkline: View {
   let samples: [TrafficSample]
   /// Total samples appended this session (`RuntimeDataStore.trafficSampleCount`).
   let sampleCount: Int
+  var animatesEntrance = false
   var inset: CGFloat = 8
   var downloadLineWidth: CGFloat = 2.4
   var uploadLineWidth: CGFloat = 2
@@ -200,7 +201,9 @@ struct TrafficSparkline: View {
   var sampleInterval: Double = 1
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.scenePhase) private var scenePhase
   @State private var head: Double = 0
+  @State private var revealed = false
 
   var body: some View {
     let geometry = TrafficChartGeometry(samples: samples, sampleCount: sampleCount)
@@ -219,25 +222,31 @@ struct TrafficSparkline: View {
       series(geometry.download, in: geometry, isClosed: true)
         .fill(
           LinearGradient(
-            colors: [.cyan.opacity(0.26), .cyan.opacity(0.02)],
+            colors: [.blue.opacity(0.22), .blue.opacity(0.02)],
             startPoint: .top,
             endPoint: .bottom
           )
         )
 
       series(geometry.download, in: geometry)
-        .stroke(.cyan, style: StrokeStyle(lineWidth: downloadLineWidth, lineCap: .round, lineJoin: .round))
+        .stroke(.blue, style: StrokeStyle(lineWidth: downloadLineWidth, lineCap: .round, lineJoin: .round))
 
       series(geometry.upload, in: geometry)
-        .stroke(.indigo, style: StrokeStyle(lineWidth: uploadLineWidth, lineCap: .round, lineJoin: .round))
+        .stroke(.cyan, style: StrokeStyle(lineWidth: uploadLineWidth, lineCap: .round, lineJoin: .round))
     }
     .clipped()
+    .mask(alignment: .leading) {
+      Rectangle().scaleEffect(x: !animatesEntrance || reduceMotion || revealed ? 1 : 0, anchor: .leading)
+    }
+    .onAppear {
+      withAnimation(.easeOut(duration: 0.6)) { revealed = true }
+    }
     .padding(inset)
     // Explicit animations rather than `.animation(value:)`: the window must never animate
     // *backwards*. A restart resets the sequence to zero, and easing the head from 500 back to 0
     // would sweep the whole plot sideways for a second.
     .onChange(of: geometry.newestSequence, initial: true) { previous, next in
-      guard next > previous, !reduceMotion else {
+      guard next > previous, !reduceMotion, scenePhase != .background else {
         head = Double(next)
         return
       }
@@ -283,35 +292,100 @@ private struct TrafficGridShape: Shape {
 struct DashboardTrafficSparkline: View {
   let samples: [TrafficSample]
   let sampleCount: Int
-  /// Must match the sparkline's inset so each label sits on its grid line.
+  var animatesEntrance = false
+  @State private var inspectedSequence: Int?
   private let inset: CGFloat = 8
   private let axisWidth: CGFloat = 60
 
+  private var firstSequence: Int { max(sampleCount, samples.count) - samples.count }
+  private var selectedIndex: Int? {
+    guard let inspectedSequence else { return nil }
+    let index = inspectedSequence - firstSequence
+    return samples.indices.contains(index) ? index : nil
+  }
+
+  private var reading: TrafficSample { selectedIndex.map { samples[$0] } ?? samples.last ?? .zero }
+  private var readingDescription: String {
+    "\(String(localized: "Download")) \(TrafficSample.format(reading.download)) · \(String(localized: "Upload")) \(TrafficSample.format(reading.upload))"
+  }
+
   var body: some View {
     let ticks = TrafficChartGeometry(samples: samples, sampleCount: sampleCount).axisTicks
-
-    HStack(spacing: 4) {
-      GeometryReader { proxy in
-        let plotHeight = max(0, proxy.size.height - inset * 2)
-        ForEach(ticks, id: \.fraction) { tick in
-          Text(tick.label)
-            .font(.caption2.monospacedDigit())
-            .foregroundStyle(.tertiary)
-            .lineLimit(1)
-            .minimumScaleFactor(0.8)
-            .frame(width: axisWidth, alignment: .trailing)
-            .position(x: axisWidth / 2, y: inset + plotHeight * (1 - tick.fraction))
+    GeometryReader { geometry in
+      HStack(spacing: 4) {
+        GeometryReader { proxy in
+          let plotHeight = max(0, proxy.size.height - inset * 2)
+          ForEach(ticks, id: \.fraction) { tick in
+            Text(tick.label)
+              .font(.caption2.monospacedDigit())
+              .foregroundStyle(.tertiary)
+              .lineLimit(1)
+              .minimumScaleFactor(0.8)
+              .frame(width: axisWidth, alignment: .trailing)
+              .position(x: axisWidth / 2, y: inset + plotHeight * (1 - tick.fraction))
+          }
+        }
+        .frame(width: axisWidth)
+        .accessibilityHidden(true)
+        TrafficSparkline(samples: samples, sampleCount: sampleCount, animatesEntrance: animatesEntrance, inset: inset, gridFractions: ticks.map(\.fraction))
+      }
+      .overlay {
+        if let index = selectedIndex {
+          let plotWidth = max(1, geometry.size.width - axisWidth - 4 - inset * 2)
+          let visibleSlots = max(1, min(70, samples.count - 1))
+          let visibleIndex = index - max(0, samples.count - visibleSlots - 1)
+          Rectangle().fill(.secondary.opacity(0.5)).frame(width: 1, height: max(0, geometry.size.height - inset * 2))
+            .position(x: axisWidth + 4 + inset + plotWidth * CGFloat(visibleIndex) / CGFloat(visibleSlots), y: geometry.size.height / 2)
         }
       }
-      .frame(width: axisWidth)
-      .accessibilityHidden(true)
-
-      TrafficSparkline(
-        samples: samples,
-        sampleCount: sampleCount,
-        inset: inset,
-        gridFractions: ticks.map(\.fraction)
-      )
+      .overlay(alignment: .topTrailing) {
+        if let index = selectedIndex {
+          VStack(alignment: .trailing, spacing: 2) {
+            Text("\(samples.count - index - 1) seconds ago")
+            Text(verbatim: readingDescription)
+          }
+          .font(.caption.monospacedDigit())
+          .padding(6)
+          .background(.cardSurface, in: RoundedRectangle(cornerRadius: 6))
+          .allowsHitTesting(false)
+        }
+      }
+      .contentShape(Rectangle())
+      .onContinuousHover { phase in
+        switch phase {
+        case let .active(location): inspect(x: location.x, width: geometry.size.width)
+        case .ended: inspectedSequence = nil
+        }
+      }
+      .gesture(DragGesture(minimumDistance: 0).onChanged { inspect(x: $0.location.x, width: geometry.size.width) })
     }
+    .focusable()
+    .onKeyPress(.leftArrow) { moveSelection(-1); return .handled }
+    .onKeyPress(.rightArrow) { moveSelection(1); return .handled }
+    .onKeyPress(.escape) { inspectedSequence = nil; return .handled }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel("Traffic history")
+    .accessibilityValue(readingDescription)
+    .accessibilityHint("Use the arrow keys to inspect traffic samples.")
+    .accessibilityAdjustableAction { direction in
+      moveSelection(direction == .increment ? 1 : -1)
+    }
+    .onChange(of: firstSequence) { _, first in
+      if let inspectedSequence, inspectedSequence < first + max(0, samples.count - 71) { self.inspectedSequence = nil }
+    }
+  }
+
+  private func moveSelection(_ offset: Int) {
+    guard !samples.isEmpty else { return }
+    let lower = max(0, samples.count - 71)
+    let index = max(lower, min(samples.count - 1, (selectedIndex ?? samples.count - 1) + offset))
+    inspectedSequence = firstSequence + index
+  }
+
+  private func inspect(x: CGFloat, width: CGFloat) {
+    guard !samples.isEmpty else { return }
+    let fraction = max(0, min(1, (x - axisWidth - 4 - inset) / max(1, width - axisWidth - 4 - inset * 2)))
+    let lower = max(0, samples.count - 71)
+    inspectedSequence = firstSequence + lower + Int((fraction * CGFloat(samples.count - lower - 1)).rounded())
   }
 }

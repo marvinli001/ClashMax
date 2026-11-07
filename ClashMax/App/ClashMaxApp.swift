@@ -3,6 +3,20 @@ import AppKit
 import SwiftUI
 
 @main
+enum ClashMaxEntryPoint {
+  static func main() {
+    #if DEBUG
+      if ProcessInfo.processInfo.arguments.contains("--ui-fixture")
+        || Bundle.main.bundleIdentifier?.hasPrefix("io.github.clashmax.UIFixture.") == true
+      {
+        UIRefreshFixture.run()
+        return
+      }
+    #endif
+    ClashMaxApp.main()
+  }
+}
+
 struct ClashMaxApp: App {
   @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
   @State private var appModel: AppModel
@@ -73,72 +87,74 @@ struct ClashMaxApp: App {
     // whenever MainWindowLaunchPolicy says it should be shown.
     .defaultLaunchBehavior(silentStartRequested ? .suppressed : .presented)
     .commands {
+      WorkspaceFindCommands()
+      InspectorCommands()
       CommandGroup(after: .appInfo) {
         CheckForUpdatesButton(updateController: appUpdateController)
         Divider()
-        Button("Open Main Window") {
+        Button(String(localized: "Open Main Window")) {
           AppDelegate.showMainWindow()
         }
         .keyboardShortcut("0", modifiers: [.command])
       }
 
       CommandGroup(after: .help) {
-        Button("Export Diagnostic Bundle…") {
+        Button(String(localized: "Export Diagnostic Bundle…")) {
           AppDelegate.showMainWindow()
           appModel.isDiagnosticBundleSheetPresented = true
         }
       }
 
       CommandMenu("Config") {
-        Button("Rule Mode") {
+        Button(String(localized: "Rule Mode")) {
           appModel.requestMode(.rule)
         }
         .keyboardShortcut("1", modifiers: [.command, .option])
 
-        Button("Global Mode") {
+        Button(String(localized: "Global Mode")) {
           appModel.requestMode(.global)
         }
         .keyboardShortcut("2", modifiers: [.command, .option])
 
-        Button("Direct Mode") {
+        Button(String(localized: "Direct Mode")) {
           appModel.requestMode(.direct)
         }
         .keyboardShortcut("3", modifiers: [.command, .option])
 
         Divider()
 
-        Button("System Proxy Routing") {
+        Button(String(localized: "System Proxy Routing")) {
           appModel.requestProxyRoutingMode(.systemProxy)
         }
 
-        Button("TUN Routing") {
+        Button(String(localized: "TUN Routing")) {
           appModel.requestProxyRoutingMode(.tun)
         }
 
-        Button("NE Proxy Routing") {
+        Button(String(localized: "NE Proxy Routing")) {
           appModel.requestProxyRoutingMode(.neProxy)
         }
 
         Divider()
 
-        Button(appModel.systemProxyEnabled ? "Disable System Proxy" : "Enable System Proxy") {
+        Button(appModel.systemProxyEnabled ? String(localized: "Disable System Proxy") : String(localized: "Enable System Proxy")) {
           appModel.setSystemProxyEnabled(!appModel.systemProxyEnabled)
         }
         .keyboardShortcut("s", modifiers: [.command, .option])
 
-        Button("Profiles") {
+        Button(String(localized: "Profiles")) {
           AppDelegate.showMainWindow()
           appModel.selectedSection = .profiles
         }
         .keyboardShortcut("p", modifiers: [.command, .option])
 
-        Button("Update All") {
+        Button(String(localized: "Update All")) {
           AppDelegate.showMainWindow()
           appModel.selectedSection = .profiles
           appModel.updateAllSubscriptions()
         }
 
-        Button("Import Client") {
+        Button(String(localized: "Import Client")) {
           AppDelegate.showMainWindow()
           appModel.selectedSection = .profiles
           NotificationCenter.default.post(name: .clashMaxImportClashXRequested, object: nil)
@@ -177,6 +193,7 @@ struct ClashMaxApp: App {
 
     Settings {
       SettingsView(bundledCoreInfo: bundledCoreInfo)
+        .frame(minWidth: 740, idealWidth: 880, minHeight: 560, idealHeight: 680)
         // The Settings scene has no window toolbar to publish into, so this page
         // keeps its inline header instead of the title-bar chrome the main window uses.
         .environment(\.pageChromePlacement, .inline)

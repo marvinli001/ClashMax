@@ -180,6 +180,21 @@ struct RuntimeStartRetryPolicy: Equatable, Sendable {
 @MainActor
 @Observable
 final class CoreProcessController {
+  #if DEBUG
+    private var isVisualFixtureController = false
+
+    func transitionVisualFixture(to status: CoreStatus) {
+      precondition(isVisualFixtureController)
+      self.status = status
+    }
+
+    static func visualFixture(status: CoreStatus) -> CoreProcessController {
+      let controller = CoreProcessController()
+      controller.isVisualFixtureController = true
+      controller.status = status
+      return controller
+    }
+  #endif
   /// Fired after `status` changes. Assigned by `AppModel.init`.
   @ObservationIgnored var onStatusChange: ((CoreStatus) -> Void)?
 

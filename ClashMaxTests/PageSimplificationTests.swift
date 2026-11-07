@@ -7,6 +7,34 @@ import XCTest
 /// checked by eye — only the decisions a view makes from data.
 @MainActor
 final class PageSimplificationTests: XCTestCase {
+  func testLogSearchDoesNotMutateCollectionAndCountsOnlyUnseenEntries() {
+    let first = LogEntry(level: "info", message: "Synthetic example.com connected")
+    let second = LogEntry(level: "warning", message: "合成连接需要检查")
+    let retained = [first, second]
+    let paused = retained
+    let latest = retained + [LogEntry(level: "info", message: "New synthetic message")]
+    XCTAssertEqual(LogDisplayPolicy.search(entries: retained, text: "EXAMPLE"), [first])
+    XCTAssertEqual(LogDisplayPolicy.search(entries: retained, text: "连接"), [second])
+    XCTAssertEqual(LogDisplayPolicy.search(entries: retained, text: "warning"), [second])
+    XCTAssertEqual(paused.count, 2)
+    XCTAssertEqual(LogDisplayPolicy.unseenCount(entries: latest, after: paused.last?.id), 1)
+    XCTAssertEqual(LogDisplayPolicy.unseenCount(entries: [latest.last!], after: first.id), 1)
+    XCTAssertEqual(retained, [first, second])
+  }
+
+  func testSettingsSearchReturnsOneEditableDestinationWithAStableAnchor() {
+    let results = SettingsSearchEntry.matches("Mixed Port")
+    XCTAssertEqual(results.count, 1)
+    XCTAssertEqual(results.first?.category, .runtime)
+    XCTAssertEqual(results.first?.title, "Mixed Port")
+    XCTAssertTrue(SettingsSearchEntry.matches("never-a-setting").isEmpty)
+  }
+
+  func testProxyGroupColumnLeavesRoomForNodes() {
+    XCTAssertFalse(ProxiesLayout.usesGroupColumn(pageWidth: ProxiesLayout.groupListWidth + 439))
+    XCTAssertTrue(ProxiesLayout.usesGroupColumn(pageWidth: ProxiesLayout.groupListWidth + 440))
+  }
+
   func testDashboardNavigationOverridesRetainedProxySearchInEitherLifecycleOrder() {
     for restoreFirst in [false, true] {
       var navigation = ProxiesPageNavigationState()

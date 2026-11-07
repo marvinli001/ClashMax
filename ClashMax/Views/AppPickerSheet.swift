@@ -52,15 +52,15 @@ struct AppPickerSheet: View {
       .frame(minHeight: 280)
 
       HStack {
-        Button("Choose…") {
+        Button(String(localized: "Choose…")) {
           chooseFromDisk()
         }
         Spacer()
-        Button("Cancel", role: .cancel) {
+        Button(String(localized: "Cancel"), role: .cancel) {
           dismiss()
         }
         .keyboardShortcut(.cancelAction)
-        Button("Use App") {
+        Button(String(localized: "Use App")) {
           if let app = apps?.first(where: { $0.id == selection }) {
             pick(app)
           }

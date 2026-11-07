@@ -1,45 +1,28 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum ConnectionsLayoutMode {
-  case stackedDetail
+  case sheetDetail
   case splitDetail
 }
 
 enum ConnectionsLayout {
-  static let splitDetailBreakpoint: CGFloat = 1_080
+  static let tableMinimumWidth: CGFloat = 660
   static let detailWidth: CGFloat = 320
-  static let stackedListMinHeight: CGFloat = 280
+  static let splitDetailBreakpoint: CGFloat = tableMinimumWidth + detailWidth + 16
 
   static func mode(forWidth width: CGFloat) -> ConnectionsLayoutMode {
-    width >= splitDetailBreakpoint ? .splitDetail : .stackedDetail
-  }
-
-  /// Issue #27: the stacked layout puts the detail *under* the list, so the two share one page.
-  /// `stackedListMinHeight` alone outgrew a short window, and an oversized page does not clip — it
-  /// stretches the whole window's layout. Both blocks therefore scale with the room they have.
-  static func stackedListMinHeight(availableHeight: CGFloat) -> CGFloat {
-    guard availableHeight.isFinite, availableHeight > 0 else { return stackedListMinHeight }
-    return min(stackedListMinHeight, max(availableHeight * 0.45, 120))
-  }
-
-  /// How tall the detail may grow before its contents scroll inside it. Beside the list it owns a
-  /// full column; under the list it may claim only part of the page.
-  static func detailMaxHeight(mode: ConnectionsLayoutMode, availableHeight: CGFloat) -> CGFloat {
-    guard availableHeight.isFinite, availableHeight > 0 else { return 320 }
-    switch mode {
-    case .splitDetail:
-      return availableHeight
-    case .stackedDetail:
-      return min(max(availableHeight * 0.4, 96), 320)
-    }
+    width.isFinite && width >= splitDetailBreakpoint ? .splitDetail : .sheetDetail
   }
 }
 
 struct ConnectionsView: View {
   @Environment(AppModel.self) private var appModel
+  @Environment(\.workspaceInspectorOccupiedWidth) private var inspectorOccupiedWidth
   @Environment(RuntimeDataStore.self) private var runtimeData
   @State private var searchText = ""
+  @State private var workspaceSize: CGSize = .zero
   @State private var mode = ConnectionViewMode.active
   @State private var groupsByApp = false
   /// Details are opt-in: the table alone answers most questions, and a permanent detail block used
@@ -99,14 +82,10 @@ struct ConnectionsView: View {
           )
         } else {
           VStack(spacing: 8) {
-            GeometryReader { proxy in
-              connectionsWorkspace(
-                visibleConnections: visibleConnections,
-                mode: ConnectionsLayout.mode(forWidth: proxy.size.width),
-                availableHeight: proxy.size.height
-              )
+            GeometryReader { geometry in
+              connectionList(visibleConnections)
+                .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
             PageStatusFooter(text: String.localizedStringWithFormat(
               NSLocalizedString("%lld active, %lld retained", comment: ""),
@@ -118,6 +97,30 @@ struct ConnectionsView: View {
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
+    .preference(key: WorkspaceInspectorPreference.self, value: WorkspaceInspectorRequest(
+      section: .connections,
+      selection: .connections(selection, actionState: String(describing: snifferFixPhase),
+                              closingIDs: runtimeData.closingConnectionIDs.intersection(selectedConnectionIDs)),
+      isPresented: showsDetail && ConnectionsLayout.mode(forWidth: workspaceSize.width + inspectorOccupiedWidth - 36) == .splitDetail,
+      canPresentInline: ConnectionsLayout.mode(forWidth: workspaceSize.width + inspectorOccupiedWidth - 36) == .splitDetail,
+      idealWidth: ConnectionsLayout.detailWidth,
+      setPresented: { showsDetail = $0 },
+      content: AnyView(connectionDetail(visibleConnections: visibleConnections, maxHeight: max(300, workspaceSize.height)))
+    ))
+    .sheet(isPresented: detailPresentation(for: .sheetDetail)) {
+      VStack(spacing: 0) {
+        HStack {
+          Text("Connection Details").font(.headline)
+          Spacer()
+          Button(String(localized: "Done")) { showsDetail = false }.keyboardShortcut(.cancelAction)
+        }.padding(16)
+        Divider()
+        connectionDetail(visibleConnections: visibleConnections, maxHeight: 560)
+          .padding(16)
+      }
+      .frame(minWidth: 480, idealWidth: 560, minHeight: 400, idealHeight: 620)
+    }
+    .onGeometryChange(for: CGSize.self) { $0.size } action: { workspaceSize = $0 }
     .onChange(of: visibleConnections.map(\.id)) { _, ids in
       // Rows that left the list leave the selection too, so a closed connection can never stay the
       // target of Close Selected; rows that stay keep their highlight through every refresh.
@@ -136,9 +139,7 @@ struct ConnectionsView: View {
 
   private func controls(selection: [ConnectionSnapshot], selectedActive: [ConnectionSnapshot]) -> some View {
     HStack(spacing: 10) {
-      TextField("Search app, host, IP, rule, chain", text: $searchText)
-        .textFieldStyle(.roundedBorder)
-        .frame(minWidth: 200, idealWidth: 320, maxWidth: 400)
+      WorkspaceSearchField(prompt: String(localized: "Search app, host, IP, rule, chain"), text: $searchText)
 
       Picker("Mode", selection: $mode) {
         ForEach(ConnectionViewMode.allCases) { mode in
@@ -170,7 +171,6 @@ struct ConnectionsView: View {
           .labelStyle(.iconOnly)
       }
       .toggleStyle(.button)
-      .keyboardShortcut("i", modifiers: [.command, .option])
       .help("Show details for the selected connection (⌥⌘I)")
       .accessibilityLabel("Show Details")
 
@@ -216,40 +216,13 @@ struct ConnectionsView: View {
 
   // MARK: - Workspace
 
-  @ViewBuilder
-  private func connectionsWorkspace(
-    visibleConnections: [ConnectionSnapshot],
-    mode layoutMode: ConnectionsLayoutMode,
-    availableHeight: CGFloat
-  ) -> some View {
-    let detailMaxHeight = ConnectionsLayout.detailMaxHeight(
-      mode: layoutMode,
-      availableHeight: availableHeight
-    )
-    let list = connectionList(visibleConnections)
-
-    if showsDetail {
-      switch layoutMode {
-      case .splitDetail:
-        HStack(alignment: .top, spacing: 12) {
-          list
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-          connectionDetail(visibleConnections: visibleConnections, maxHeight: detailMaxHeight)
-            .frame(width: ConnectionsLayout.detailWidth, alignment: .topLeading)
-        }
-      case .stackedDetail:
-        VStack(alignment: .leading, spacing: 12) {
-          list
-            .frame(minHeight: ConnectionsLayout.stackedListMinHeight(availableHeight: availableHeight))
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-          connectionDetail(visibleConnections: visibleConnections, maxHeight: detailMaxHeight)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-        }
+  private func detailPresentation(for mode: ConnectionsLayoutMode) -> Binding<Bool> {
+    Binding(
+      get: { showsDetail && ConnectionsLayout.mode(forWidth: workspaceSize.width + inspectorOccupiedWidth - 36) == mode },
+      set: { presented in
+        if presented || ConnectionsLayout.mode(forWidth: workspaceSize.width + inspectorOccupiedWidth - 36) == mode { showsDetail = presented }
       }
-    } else {
-      list
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
+    )
   }
 
   @ViewBuilder
@@ -370,7 +343,7 @@ struct ConnectionsView: View {
         }
       }
 
-      Button("Open in Routing") {
+      Button(String(localized: "Open in Routing")) {
         appModel.openRoutingExplanation(for: connection)
       }
 
@@ -383,7 +356,7 @@ struct ConnectionsView: View {
       }
 
       if includesShowDetails {
-        Button("Show Details") {
+        Button(String(localized: "Show Details")) {
           showsDetail = true
         }
       }
@@ -391,14 +364,14 @@ struct ConnectionsView: View {
       Divider()
 
       if canCloseConnection(connection) {
-        Button("Close Connection") {
+        Button(String(localized: "Close Connection")) {
           appModel.closeConnection(connection)
         }
         Divider()
       }
 
-      Button("Copy Host") { copy(connectionRuleHost(connection)) }
-      Button("Copy Destination") { copy(connection.destinationAddress) }
+      Button(String(localized: "Copy Host")) { copy(connectionRuleHost(connection)) }
+      Button(String(localized: "Copy Destination")) { copy(connection.destinationAddress) }
     } else if !selection.isEmpty {
       let closable = selection.filter(canCloseConnection)
       if !closable.isEmpty {
@@ -407,7 +380,7 @@ struct ConnectionsView: View {
         }
         Divider()
       }
-      Button("Copy Hosts") {
+      Button(String(localized: "Copy Hosts")) {
         copy(selection.map(connectionRuleHost).filter { !$0.isEmpty }.joined(separator: "\n"))
       }
     }
@@ -456,7 +429,6 @@ struct ConnectionsView: View {
       }
     }
     .padding(12)
-    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     .accessibilityElement(children: .contain)
     .accessibilityLabel("Connection details")
   }
@@ -471,7 +443,7 @@ struct ConnectionsView: View {
       Spacer(minLength: 8)
       if isActive {
         if canCloseConnection(connection) {
-          Button("Close") {
+          Button(String(localized: "Close")) {
             appModel.closeConnection(connection)
           }
           .controlSize(.small)
@@ -837,7 +809,20 @@ final class ConnectionAppIconCache {
     else {
       return nil
     }
-    return path
+    return Self.iconPath(forProcessPath: path)
+  }
+
+  /// The file whose icon stands for a process. mihomo reports the executable
+  /// (`…/Safari.app/Contents/MacOS/Safari`), and an executable's own icon is the generic terminal
+  /// glyph, so the path is cut at its outermost `.app` bundle — which also gives a helper
+  /// (`Google Chrome.app/…/Google Chrome Helper.app/…`) its parent app's icon. A process outside
+  /// any bundle keeps its own path.
+  nonisolated static func iconPath(forProcessPath path: String) -> String {
+    let components = path.split(separator: "/", omittingEmptySubsequences: false)
+    guard let bundleIndex = components.firstIndex(where: { $0.lowercased().hasSuffix(".app") }) else {
+      return path
+    }
+    return components[...bundleIndex].joined(separator: "/")
   }
 
   private func trimIfNeeded() {
@@ -850,6 +835,7 @@ final class ConnectionAppIconCache {
 }
 
 private struct ConnectionAppLabel: View {
+  private static let genericIcon = NSWorkspace.shared.icon(for: .unixExecutable)
   let connection: ConnectionSnapshot
   let iconCache: ConnectionAppIconCache
 
@@ -861,9 +847,12 @@ private struct ConnectionAppLabel: View {
           .frame(width: 16, height: 16)
           .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
       } else {
-        Image(systemName: "app")
-          .foregroundStyle(.secondary)
-          .frame(width: 16)
+        // No path from the core (find-process-mode off, or a remote client): the system's generic
+        // executable icon, not an outlined square that reads as a checkbox in a table row.
+        Image(nsImage: Self.genericIcon)
+          .resizable()
+          .frame(width: 16, height: 16)
+          .opacity(0.8)
       }
       Text(connection.appDisplayName)
         .lineLimit(1)
