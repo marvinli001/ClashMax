@@ -13,7 +13,7 @@ struct ContentView: View {
     @Bindable var appModel = appModel
     return NavigationSplitView {
       SidebarView(selection: $appModel.selectedSection, hasRuntimeIssue: appModel.readinessIssue != nil || appModel.lastError != nil)
-        .navigationSplitViewColumnWidth(min: 200, ideal: 214, max: 240)
+        .navigationSplitViewColumnWidth(min: 140, ideal: 160, max: 220)
     } detail: {
       VStack(spacing: 0) {
         StatusStrip()

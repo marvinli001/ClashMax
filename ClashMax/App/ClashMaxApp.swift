@@ -28,6 +28,8 @@ struct ClashMaxApp: App {
   private let silentStartRequested = UserDefaults.standard.bool(forKey: AppModel.silentStartDefaultsKey)
 
   init() {
+    // Before any scene exists: the main window restores its saved sidebar width when it is built.
+    SidebarWidthReset.applyOnce()
     let appModel = AppModel.bootstrap()
     _appModel = State(initialValue: appModel)
     // Shortcuts actions run in this process and resolve the model through `@Dependency`. Registered

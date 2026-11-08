@@ -272,3 +272,29 @@ final class AppActivationPolicyTests: XCTestCase {
     )
   }
 }
+
+final class SidebarWidthResetTests: XCTestCase {
+  func testForgetsSavedSidebarWidthsOnceAndKeepsLaterOnes() throws {
+    let suite = "SidebarWidthResetTests.\(UUID().uuidString)"
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let mainKey = "NSSplitView Subview Frames main-AppWindow-1, SidebarNavigationSplitView"
+    let otherKey = "NSSplitView Subview Frames main-AppWindow-1, SomeOtherSplitView"
+    let frames = ["0.000000, 0.000000, 208.000000, 712.000000, NO, NO"]
+    defaults.set(frames, forKey: mainKey)
+    defaults.set(frames, forKey: otherKey)
+    defaults.set("keep", forKey: "NSWindow Frame main-AppWindow-1")
+
+    SidebarWidthReset.applyOnce(defaults: defaults)
+
+    XCTAssertNil(defaults.object(forKey: mainKey))
+    XCTAssertNotNil(defaults.object(forKey: otherKey), "only the sidebar split view is reset")
+    XCTAssertEqual(defaults.string(forKey: "NSWindow Frame main-AppWindow-1"), "keep")
+    XCTAssertTrue(defaults.bool(forKey: SidebarWidthReset.completedKey))
+
+    // A width the user sets after the reset is theirs: a later launch leaves it alone.
+    defaults.set(frames, forKey: mainKey)
+    SidebarWidthReset.applyOnce(defaults: defaults)
+    XCTAssertNotNil(defaults.object(forKey: mainKey))
+  }
+}

@@ -16,7 +16,7 @@ struct CoreVisualView: View {
           .transition(.opacity)
       }
     }
-    .changeEffect(.ping(shape: Circle(), style: Color.accentColor.opacity(0.5), count: 1),
+    .changeEffect(.pulse(shape: Circle(), style: Color.accentColor.opacity(0.5), count: 1),
                   value: state.isRunning, isEnabled: state.isRunning && !reduceMotion && scenePhase != .background)
   }
 }

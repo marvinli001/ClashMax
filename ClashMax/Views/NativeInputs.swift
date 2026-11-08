@@ -143,3 +143,99 @@ struct RuntimePrimaryActionStyle: ViewModifier {
     }
   }
 }
+
+/// One choice in a `PopUpSelectionButton`.
+struct PopUpSelectionItem<Value: Hashable>: Identifiable {
+  let value: Value
+  let title: String
+  var systemImage: String?
+
+  var id: Value { value }
+}
+
+/// A one-of-many choice whose menu opens the way a native pop-up button's does: over the control,
+/// with the current choice checked and placed under the pointer. A SwiftUI `Menu` is a pull-down —
+/// it always drops below its label — which reads as a list of actions rather than a value.
+///
+/// The label stays SwiftUI, so a headline or a capsule keeps its own look (a `Picker` would replace
+/// it with a stock bezel). The menu is an `NSPopUpButtonCell`'s, so its placement, check mark and
+/// keyboard handling are AppKit's own. `items` is read only when the menu opens, so a 1600-node
+/// group costs nothing while the control just sits on screen, and the label always shows the
+/// model's value — a choice the model turns down never lingers as if it had been applied.
+struct PopUpSelectionButton<Value: Hashable, Label: View>: View {
+  let selection: Value?
+  let items: () -> [PopUpSelectionItem<Value>]
+  let onSelect: (Value) -> Void
+  @ViewBuilder let label: () -> Label
+  @State private var presenter = PopUpMenuPresenter()
+
+  var body: some View {
+    Button {
+      let items = items()
+      presenter.present(
+        entries: items.map { ($0.title, $0.systemImage) },
+        selectedIndex: selection.flatMap { selection in items.firstIndex { $0.value == selection } }
+      ) { index in
+        guard items.indices.contains(index) else { return }
+        onSelect(items[index].value)
+      }
+    } label: {
+      label()
+    }
+    .background(PopUpMenuAnchor(presenter: presenter))
+  }
+}
+
+@MainActor
+private final class PopUpMenuPresenter: NSObject {
+  weak var anchorView: NSView?
+  private var onChoose: ((Int) -> Void)?
+
+  func present(entries: [(title: String, systemImage: String?)], selectedIndex: Int?, onChoose: @escaping (Int) -> Void) {
+    guard let anchorView, anchorView.window != nil, !entries.isEmpty else { return }
+    let cell = NSPopUpButtonCell(textCell: "", pullsDown: false)
+    cell.isBordered = false
+    cell.autoenablesItems = false
+    cell.font = NSFont.menuFont(ofSize: 0)
+    let menu = NSMenu()
+    menu.autoenablesItems = false
+    for (index, entry) in entries.enumerated() {
+      let item = NSMenuItem(title: entry.title, action: #selector(choose(_:)), keyEquivalent: "")
+      item.target = self
+      item.tag = index
+      if let symbol = entry.systemImage {
+        item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+      }
+      menu.addItem(item)
+    }
+    cell.menu = menu
+    cell.selectItem(at: selectedIndex ?? -1)
+    self.onChoose = onChoose
+    // Tracks the menu modally, positioned as a pop-up button occupying the label's frame would.
+    cell.performClick(withFrame: anchorView.bounds, in: anchorView)
+  }
+
+  @objc private func choose(_ sender: NSMenuItem) {
+    onChoose?(sender.tag)
+  }
+}
+
+/// The AppKit view the menu is positioned against: it sits behind the label at the label's frame
+/// and never takes a click, so the SwiftUI button above it still receives them.
+private struct PopUpMenuAnchor: NSViewRepresentable {
+  let presenter: PopUpMenuPresenter
+
+  func makeNSView(context _: Context) -> PassThroughView {
+    let view = PassThroughView()
+    presenter.anchorView = view
+    return view
+  }
+
+  func updateNSView(_ view: PassThroughView, context _: Context) {
+    presenter.anchorView = view
+  }
+
+  final class PassThroughView: NSView {
+    override func hitTest(_: NSPoint) -> NSView? { nil }
+  }
+}

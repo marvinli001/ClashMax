@@ -216,17 +216,17 @@ private struct RunningHeaderCard: View {
         .disabled(!appModel.canStopRuntime && (state.isStarting || appModel.readinessIssue != nil))
         .help(appModel.canStopRuntime ? String(localized: "Stop ClashMax") : String(localized: "Start ClashMax"))
         .accessibilityLabel(appModel.canStopRuntime ? Text("Stop ClashMax") : Text("Start ClashMax"))
-        VStack(alignment: .leading, spacing: 8) {
-          profileMenu
-          HStack(spacing: 8) {
-            Text("Traffic Capture").foregroundStyle(.secondary)
-            routingMenu
-            ProxyRoutingSettingsButton()
-          }
-          .font(.callout)
+        profileMenu
+          .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+          .layoutPriority(1)
+
+        // Traffic capture sits with the other runtime controls, one click from a switch, instead
+        // of as a caption under the profile name.
+        HStack(spacing: 6) {
+          routingMenu
+          ProxyRoutingSettingsButton()
         }
-        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-        .layoutPriority(1)
+        .fixedSize()
 
         Menu {
           Stepper(value: Binding(get: { appModel.overrides.mixedPort }, set: { appModel.setMixedPort($0) }), in: 1024...65535) {
@@ -289,49 +289,49 @@ private struct RunningHeaderCard: View {
   }
 
   private var profileMenu: some View {
-    Menu {
-      ForEach(appModel.profileStore.profiles) { profile in
-        Button {
-          appModel.selectProfile(profile)
-        } label: {
-          Label(profile.name, systemImage: profile.id == appModel.profileStore.activeProfileID ? "checkmark" : "doc.text")
-        }
+    let profiles = appModel.profileStore.profiles
+    return PopUpSelectionButton(
+      selection: appModel.profileStore.activeProfileID,
+      items: { profiles.map { PopUpSelectionItem(value: $0.id, title: $0.name) } },
+      onSelect: { id in
+        if let profile = profiles.first(where: { $0.id == id }) { appModel.selectProfile(profile) }
       }
-    } label: {
+    ) {
       HStack(spacing: 7) {
         Text(appModel.profileStore.activeProfile?.name ?? String(localized: "No Profile"))
           .font(.title3.weight(.semibold))
           .lineLimit(1)
           .truncationMode(.middle)
-        Image(systemName: "chevron.down").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+        Image(systemName: "chevron.up.chevron.down").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
       }
+      .contentShape(Rectangle())
     }
-    .menuStyle(.borderlessButton)
-    .menuIndicator(.hidden)
-    .disabled(state.isStarting || appModel.profileStore.profiles.isEmpty)
+    .buttonStyle(.plain)
+    .disabled(state.isStarting || profiles.isEmpty)
     .help(appModel.profileStore.activeProfile?.name ?? String(localized: "No Profile"))
     .accessibilityLabel("Profile")
     .accessibilityValue(appModel.profileStore.activeProfile?.name ?? String(localized: "No Profile"))
   }
 
   private var routingMenu: some View {
-    Menu {
-      ForEach(ProxyRoutingMode.allCases) { mode in
-        Button { appModel.requestProxyRoutingMode(mode) } label: {
-          Label(mode.displayName, systemImage: mode == appModel.proxyRoutingMode ? "checkmark" : mode.symbolName)
-        }
-      }
-    } label: {
+    PopUpSelectionButton(
+      selection: appModel.proxyRoutingMode,
+      items: { ProxyRoutingMode.allCases.map { PopUpSelectionItem(value: $0, title: $0.displayName, systemImage: $0.symbolName) } },
+      onSelect: { appModel.requestProxyRoutingMode($0) }
+    ) {
       HStack(spacing: 5) {
         Image(systemName: appModel.proxyRoutingMode.symbolName)
         Text(appModel.proxyRoutingMode.displayName)
-        Image(systemName: "chevron.down").font(.caption2)
+          .lineLimit(1)
+        Image(systemName: "chevron.up.chevron.down")
+          .font(.caption2.weight(.semibold))
+          .foregroundStyle(.secondary)
       }
     }
-    .menuStyle(.borderlessButton)
-    .menuIndicator(.hidden)
-    .fixedSize()
+    .buttonStyle(.bordered)
+    .controlSize(.regular)
     .disabled(state.isStarting)
+    .help("Traffic Capture")
     .accessibilityLabel("Proxy Routing")
     .accessibilityValue(appModel.proxyRoutingMode.displayName)
   }
@@ -816,21 +816,13 @@ private struct CurrentProxyRuntimeCard: View {
   private func groupControl(groups: [ProxyGroup]) -> some View {
     let selection = groupSelection(groups: groups)
     return DashboardLabeledControl(title: "Proxy Group") {
-      // The node control's capsule, as a menu: the two controls read as one pair instead of a
-      // stock popup button beside a glass one.
-      Menu {
-        ForEach(groups) { group in
-          Button {
-            selection.wrappedValue = group.name
-          } label: {
-            if group.name == selection.wrappedValue {
-              Label(group.name, systemImage: "checkmark")
-            } else {
-              Text(group.name)
-            }
-          }
-        }
-      } label: {
+      // The node control's capsule, opening a native pop-up menu: the two controls read as one
+      // pair instead of a stock popup button beside a glass one.
+      PopUpSelectionButton(
+        selection: selection.wrappedValue,
+        items: { groups.map { PopUpSelectionItem(value: $0.name, title: $0.name) } },
+        onSelect: { selection.wrappedValue = $0 }
+      ) {
         HStack(spacing: 6) {
           Text(selection.wrappedValue ?? String(localized: "No selection"))
             .lineLimit(1)
@@ -841,9 +833,7 @@ private struct CurrentProxyRuntimeCard: View {
             .foregroundStyle(.secondary)
         }
       }
-      .menuStyle(.button)
       .buttonStyle(DashboardCapsuleMenuStyle())
-      .menuIndicator(.hidden)
       .help("Proxy Group")
       .accessibilityLabel(Text("Proxy Group"))
       .accessibilityValue(Text(selection.wrappedValue ?? ""))
@@ -1057,8 +1047,7 @@ private struct DashboardNodePickerRow: View {
   }
 }
 
-/// The capsule both Current Node controls share. A custom `ButtonStyle` is what lets a `Menu` keep
-/// its label's layout (stock menu styles discard it and size the bezel themselves).
+/// The capsule both Current Node controls share.
 private struct DashboardCapsuleMenuStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
     Bezel(configuration: configuration)

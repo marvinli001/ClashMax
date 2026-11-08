@@ -47,6 +47,7 @@
         let path = arguments[index + 1]
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
           if arguments.contains("--layout"), let root = window.contentView {
+            @MainActor
             func inspect(_ view: NSView) {
               if view is NSScrollView || view is NSTableView || view is NSSearchField {
                 print(String(describing: type(of: view)), view.convert(view.bounds, to: root))
@@ -195,6 +196,7 @@
       if arguments.contains("--show-details") {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
           guard let root = window.contentView else { return }
+          @MainActor
           func select(_ view: NSView) {
             if let table = view as? NSTableView, table.bounds.width > 400, table.numberOfRows > 0 {
               window.makeFirstResponder(table)
@@ -223,6 +225,7 @@
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
           if arguments.contains("--layout") {
             print("Fixture window", window.frame, "layout", window.contentLayoutRect, "safe", window.contentView?.safeAreaInsets as Any)
+            @MainActor
             func inspect(_ view: NSView) {
               if view is NSScrollView || view is NSTableView || view is NSSearchField {
                 print(String(describing: type(of: view)), view.convert(view.bounds, to: window.contentView))
@@ -345,6 +348,7 @@
           model.runtimeData.flushPendingLogs()
           model.runtimeData.appendTrafficSample(TrafficSample(upload: tick * 4_000, download: tick * 300_000))
           if let root = window.contentView {
+            @MainActor
             func scroll(_ view: NSView) {
               if let viewport = view as? NSScrollView, viewport.bounds.width > 400, viewport.bounds.height > 200 {
                 let maximum = max(0, (viewport.documentView?.bounds.height ?? 0) - viewport.bounds.height)
@@ -406,7 +410,7 @@
       } else {
         NavigationSplitView {
           SidebarView(selection: $section)
-            .navigationSplitViewColumnWidth(min: 200, ideal: 214, max: 240)
+            .navigationSplitViewColumnWidth(min: 140, ideal: 160, max: 220)
         } detail: {
           VStack(spacing: 0) {
             StatusStripContent(statusSummary: running ? "Running" : "Stopped", statusSymbol: running ? "checkmark.circle.fill" : "stop.circle",

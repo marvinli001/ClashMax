@@ -230,15 +230,11 @@ final class MenuBarPanelLayoutTests: XCTestCase {
     // exactly how the rows drifted apart (79 / 90 / 118pt for Run Mode / Profile
     // / a group). So this measures the *drawn* bezel out of a render.
     let panel = VStack(alignment: .leading, spacing: 7) {
-      MenuBarSelectionMenu {
-        Button("Rule") {}
-      } value: {
+      MenuBarPopUpSelection(selection: RunMode.rule, items: { [] }, onSelect: { _ in }) {
         Label(RunMode.rule.displayName, systemImage: "list.bullet.rectangle")
       }
 
-      MenuBarSelectionMenu {
-        Button("Elite") {}
-      } value: {
+      MenuBarPopUpSelection(selection: "Elite", items: { [] }, onSelect: { _ in }) {
         Label("Elite", systemImage: "arrow.triangle.2.circlepath.circle")
       }
 
@@ -285,9 +281,7 @@ final class MenuBarPanelLayoutTests: XCTestCase {
   }
 
   private func groupSelector(node: String) -> some View {
-    MenuBarSelectionMenu {
-      Button(node) {}
-    } value: {
+    MenuBarPopUpSelection(selection: node, items: { [] }, onSelect: { _ in }) {
       MenuBarGroupSelectionLabel(selectedNode: node)
     }
   }

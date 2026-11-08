@@ -1155,11 +1155,11 @@ private struct RuntimeSnippetRow: View {
   let isEnabled: Bool
   let isUnsaved: Bool
   /// A detached row edits only its draft; a saved row changes the library through AppModel.
-  let onToggle: (Bool) -> Void
+  let onToggle: @MainActor (Bool) -> Void
 
   var body: some View {
     HStack(alignment: .center, spacing: 8) {
-      Toggle("Enabled", isOn: Binding(get: { isEnabled }, set: onToggle))
+      Toggle("Enabled", isOn: Binding(get: { isEnabled }, set: { onToggle($0) }))
         .labelsHidden()
         .toggleStyle(.switch)
         .controlSize(.mini)

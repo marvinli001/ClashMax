@@ -83,20 +83,11 @@ struct MenuBarView: View {
         MenuBarProxyModeSelector()
 
         MenuBarControlRow(title: String(localized: "Run Mode"), systemImage: "slider.horizontal.3") {
-          MenuBarSelectionMenu {
-            ForEach(RunMode.allCases) { mode in
-              Button {
-                appModel.requestMode(mode)
-              } label: {
-                Label(
-                  mode.displayName,
-                  systemImage: mode == appModel.overrides.mode
-                    ? "checkmark.circle.fill"
-                    : mode.menuBarSymbolName
-                )
-              }
-            }
-          } value: {
+          MenuBarPopUpSelection(
+            selection: appModel.overrides.mode,
+            items: { RunMode.allCases.map { PopUpSelectionItem(value: $0, title: $0.displayName, systemImage: $0.menuBarSymbolName) } },
+            onSelect: { appModel.requestMode($0) }
+          ) {
             Label(
               appModel.overrides.mode.displayName,
               systemImage: appModel.overrides.mode.menuBarSymbolName
@@ -105,20 +96,19 @@ struct MenuBarView: View {
         }
 
         MenuBarControlRow(title: String(localized: "Profile"), systemImage: "rectangle.stack") {
-          MenuBarSelectionMenu {
-            ForEach(appModel.profileStore.profiles) { profile in
-              Button {
+          MenuBarPopUpSelection(
+            selection: appModel.profileStore.activeProfileID,
+            items: {
+              appModel.profileStore.profiles.map {
+                PopUpSelectionItem(value: $0.id, title: $0.name, systemImage: $0.menuBarSymbolName)
+              }
+            },
+            onSelect: { id in
+              if let profile = appModel.profileStore.profiles.first(where: { $0.id == id }) {
                 appModel.selectProfile(profile)
-              } label: {
-                Label(
-                  profile.name,
-                  systemImage: profile.id == appModel.profileStore.activeProfileID
-                    ? "checkmark.circle.fill"
-                    : profile.menuBarSymbolName
-                )
               }
             }
-          } value: {
+          ) {
             Label(activeProfileName, systemImage: activeProfileSymbolName)
           }
           .disabled(appModel.profileStore.profiles.isEmpty)
@@ -538,9 +528,22 @@ private struct MenuBarGroupSelectionRow: View {
 
   var body: some View {
     MenuBarControlRow(title: group.name, systemImage: systemImage) {
-      MenuBarSelectionMenu {
-        MenuBarGroupNodeButtons(group: group)
-      } value: {
+      MenuBarPopUpSelection(
+        selection: group.selected,
+        items: {
+          group.nodes.filter(\.isSelectable).map {
+            PopUpSelectionItem(value: $0.name, title: MenuBarNodeSelection.nodeMenuTitle(for: $0))
+          }
+        },
+        onSelect: { name in
+          guard let node = group.nodes.first(where: { $0.name == name && $0.isSelectable }) else { return }
+          appModel.selectProxy(
+            group: group,
+            node: node,
+            closeOldConnections: appModel.proxyPageSettings.closesOldConnectionsAfterSwitch
+          )
+        }
+      ) {
         MenuBarGroupSelectionLabel(
           selectedNode: MenuBarNodeSelection.currentSelectionLabel(for: group)
         )
@@ -851,9 +854,10 @@ private extension Profile {
   }
 }
 
-/// The panel's one trailing control: a pull-down menu drawn as a fixed-width
-/// popup button. Run Mode, Profile, and every proxy-group selector use it, so the
-/// three rows line up on both edges and no value can widen its row.
+/// The panel's one trailing control: a menu drawn as a fixed-width popup button.
+/// Run Mode, Profile, and every proxy-group selector share its bezel and width
+/// (through `MenuBarPopUpSelection`), so the rows line up on both edges and no
+/// value can widen its row.
 ///
 /// It is deliberately not a stock `Picker`/`Menu` bezel. A macOS popup button
 /// sizes itself to its own content and a SwiftUI frame can only *compress* it,
@@ -862,6 +866,9 @@ private extension Profile {
 /// entirely (an overlong node name grew the bezel instead of truncating). Routing
 /// the menu through a custom `ButtonStyle` is what moves the layout from AppKit
 /// back into SwiftUI, which is where the shared width becomes ours to set.
+///
+/// The pull-down form is kept only for a row whose menu nests submenus (More Proxy Groups); a
+/// one-of-many row uses `MenuBarPopUpSelection`, the same control opening a native pop-up menu.
 struct MenuBarSelectionMenu<Content: View, Value: View>: View {
   @ViewBuilder var content: Content
   @ViewBuilder var value: Value
@@ -870,22 +877,48 @@ struct MenuBarSelectionMenu<Content: View, Value: View>: View {
     Menu {
       content
     } label: {
-      HStack(spacing: 4) {
-        value
-          .lineLimit(1)
-
-        Spacer(minLength: 2)
-
-        Image(systemName: "chevron.up.chevron.down")
-          .font(.caption2.weight(.semibold))
-          .foregroundStyle(.secondary)
-      }
-      .font(.subheadline)
+      MenuBarSelectionValue { value }
     }
     .menuStyle(.button)
     .buttonStyle(MenuBarSelectionMenuStyle())
     .menuIndicator(.hidden)
     .frame(width: MenuBarPanelLayout.trailingControlWidth)
+  }
+}
+
+/// `MenuBarSelectionMenu`'s fixed-width control for a one-of-many choice: the menu opens over the
+/// control with the current value checked, as a native pop-up button's does, instead of dropping
+/// below it.
+struct MenuBarPopUpSelection<Selection: Hashable, Value: View>: View {
+  let selection: Selection?
+  let items: () -> [PopUpSelectionItem<Selection>]
+  let onSelect: (Selection) -> Void
+  @ViewBuilder var value: Value
+
+  var body: some View {
+    PopUpSelectionButton(selection: selection, items: items, onSelect: onSelect) {
+      MenuBarSelectionValue { value }
+    }
+    .buttonStyle(MenuBarSelectionMenuStyle())
+    .frame(width: MenuBarPanelLayout.trailingControlWidth)
+  }
+}
+
+private struct MenuBarSelectionValue<Value: View>: View {
+  @ViewBuilder var value: Value
+
+  var body: some View {
+    HStack(spacing: 4) {
+      value
+        .lineLimit(1)
+
+      Spacer(minLength: 2)
+
+      Image(systemName: "chevron.up.chevron.down")
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(.secondary)
+    }
+    .font(.subheadline)
   }
 }
 
