@@ -3,6 +3,20 @@
     <channel>
         <title>ClashMax</title>
         <item>
+            <title>1.1.5</title>
+            <pubDate>Sun, 08 Nov 2026 15:12:05 +1300</pubDate>
+            <sparkle:version>35</sparkle:version>
+            <sparkle:shortVersionString>1.1.5</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/marvinli001/ClashMax/releases/download/v1.1.5/ClashMax-1.1.5.zip" length="61112308" type="application/octet-stream" sparkle:edSignature="4Suw9ZbOKCwMVNf3dG/UGonBlK5fEHuzBDvq4POyR8x6wrUudDDb+MUE4ayMfRBH4WIsR4wxPz7wOMnCSCCpDA=="/>
+            <sparkle:deltas>
+                <enclosure url="https://github.com/marvinli001/ClashMax/releases/download/v1.1.5/ClashMax35-34.delta" sparkle:deltaFrom="34" length="6113998" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="976464" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="wySDI91clbD1yXbxRk286EuAfxy5VkUhsIzUS7UVISuDYDSBnQsrSUuJ04pctOPF/qEv3CsCgMugI9NT4fqcDQ=="/>
+                <enclosure url="https://github.com/marvinli001/ClashMax/releases/download/v1.1.5/ClashMax35-33.delta" sparkle:deltaFrom="33" length="11567426" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977840" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="tNJuONeLfMLG5DBIKfeUO9CdYOGJWewbAz71SGdi0tQCWLQvCKu2f6g+uBRM3b/DAfBJDJuCulnwWamnpYc7BQ=="/>
+                <enclosure url="https://github.com/marvinli001/ClashMax/releases/download/v1.1.5/ClashMax35-32.delta" sparkle:deltaFrom="32" length="12910982" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977840" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="kal0yrGGhy1+c2spoJYPAXly8fv40DJleQwpM64Bj+37Tpueu+d404c1URbMTv2GXcYxNNXEare4M6YFx7IrAA=="/>
+                <enclosure url="https://github.com/marvinli001/ClashMax/releases/download/v1.1.5/ClashMax35-31.delta" sparkle:deltaFrom="31" length="20579398" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977840" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="CfFc3sB7hxztFeKXS+8LdeVd9KE3jd03iWTPn4S0be22OOPTnFoAvFvM64+u7VTDY9pX5AxxcaYeUIdVHhJbAw=="/>
+            </sparkle:deltas>
+        </item>
+        <item>
             <title>1.1.4</title>
             <pubDate>Sun, 25 Oct 2026 00:33:52 +1300</pubDate>
             <sparkle:version>34</sparkle:version>
