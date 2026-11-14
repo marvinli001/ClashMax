@@ -1,9 +1,9 @@
-:HL["/ClashMax/web/_next/static/chunks/0zh7sz0odrim4.css","style"]
-:HL["/ClashMax/web/_next/static/media/916cd8a3bde3edf8-s.p.0oace-s_gkfks.woff2","font",{"crossOrigin":"","type":"font/woff2"}]
+:HL["/ClashMax/web/_next/static/chunks/2j-5oij57gm16.css","style"]
+:HL["/ClashMax/web/_next/static/media/73c8302d2fdfe340-s.p.30xqm3yldpj47.woff2","font",{"crossOrigin":"","type":"font/woff2"}]
+:HL["/ClashMax/web/_next/static/media/9f5be66613d9c872-s.p.27korwsf9c79u.woff2","font",{"crossOrigin":"","type":"font/woff2"}]
 :HL["/ClashMax/web/_next/static/media/b329089f2db5464e-s.p.29kh463pnessh.woff2","font",{"crossOrigin":"","type":"font/woff2"}]
 :HL["/ClashMax/web/_next/static/media/c6a5c2fdc12da45c-s.p.17-aodiw50953.woff2","font",{"crossOrigin":"","type":"font/woff2"}]
-:HL["/ClashMax/web/_next/static/media/d6c1ff7e86974212-s.p.40sczeszzbjw1.woff2","font",{"crossOrigin":"","type":"font/woff2"}]
 :HL["/ClashMax/web/_next/static/chunks/213c261-933am.css","style"]
 2:[["children",{"s":"__PAGE__","h":160}]]
 1:[["children",{"s":"(en)","h":112,"c":"$Q2"}]]
-0:{"b":"BUhy1eJaqb2rvb_jxoGCY","t":{"t":{"s":"","h":80,"c":"$Q1"}}}
+0:{"b":"Kq2P61nsN2i9zqgSXP9-o","t":{"t":{"s":"","h":80,"c":"$Q1"}}}

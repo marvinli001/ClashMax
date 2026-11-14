@@ -13,6 +13,26 @@ updates:
         patterns:
           - "*"
 
+  # Marketing site (Next.js). After merging an update, run `npm run release`
+  # in web/ so docs/web carries the rebuilt export.
+  - package-ecosystem: "npm"
+    directory: "/web"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Pacific/Auckland"
+    open-pull-requests-limit: 2
+    groups:
+      web:
+        update-types:
+          - "minor"
+          - "patch"
+
+# The bundled Mihomo core (Resources/Core/mihomo-manifest.json) and the
+# SwiftFormat pin (.swiftformat + ci.yml) are not package-manager managed, so
+# Dependabot cannot track them; check them during routine maintenance.
+#
 # Swift package versions currently live in XcodeGen's project.yml rather than
 # a SwiftPM manifest or lockfile. Add a "swift" ecosystem entry here if the
 # repository later gains Package.swift or Package.resolved.

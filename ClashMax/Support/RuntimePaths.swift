@@ -267,7 +267,7 @@ enum UserFacingError {
   }
 
   private static func helperRegistrationMessage(domain: String?, code: Int?, message: String) -> String? {
-    if domain == "SMAppServiceErrorDomain" && code == 1 {
+    if domain == "SMAppServiceErrorDomain", code == 1 {
       return helperOperationNotPermittedRecovery
     }
     let helperRegistrationFailed = domain == "SMAppServiceErrorDomain" && code == 3
