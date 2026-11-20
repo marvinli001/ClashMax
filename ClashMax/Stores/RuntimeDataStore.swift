@@ -47,6 +47,16 @@ final class RuntimeDataStore {
   @ObservationIgnored
   private var connectionStateGeneration: UInt64 = 0
   @ObservationIgnored var dnsLogIndex = ConnectionDNSLogIndex()
+  private(set) var processRoutePlan = NEProcessRoutePlan()
+  private(set) var processRoutesAppliedAt: Date?
+  @ObservationIgnored private var routesByInbound: [String: NEProcessRoute] = [:]
+
+  func setProcessRoutePlan(_ plan: NEProcessRoutePlan) {
+    connectionStateGeneration &+= 1
+    processRoutePlan = plan
+    processRoutesAppliedAt = Date()
+    routesByInbound = Dictionary(uniqueKeysWithValues: plan.routes.map { ($0.inbound, $0) })
+  }
 
   /// `logLevel` is the runtime log level the user selected. At `debug`/`trace`
   /// it suppresses every visibility filter, so the Log Level setting actually
@@ -102,6 +112,7 @@ final class RuntimeDataStore {
       snapshots: snapshots,
       limit: AppConstants.retainedConnectionLimit,
       dnsIndex: dnsLogIndex,
+      routes: routesByInbound,
       now: Date()
     )
     applyConnectionMerge(result)
@@ -118,6 +129,7 @@ final class RuntimeDataStore {
     let previousRecords = connectionRecords
     let previousSnapshots = connections
     let dnsIndex = dnsLogIndex
+    let routes = routesByInbound
     let limit = AppConstants.retainedConnectionLimit
     let now = Date()
     let result = await Task.detached(priority: .utility) {
@@ -127,6 +139,7 @@ final class RuntimeDataStore {
         snapshots: snapshots,
         limit: limit,
         dnsIndex: dnsIndex,
+        routes: routes,
         now: now
       )
     }.value
@@ -168,6 +181,7 @@ final class RuntimeDataStore {
     snapshots: [ConnectionSnapshot],
     limit: Int,
     dnsIndex: ConnectionDNSLogIndex,
+    routes: [String: NEProcessRoute],
     now: Date
   ) -> ConnectionMergeResult {
     let activeIDs = Set(snapshots.map(\.id))
@@ -180,6 +194,10 @@ final class RuntimeDataStore {
     nextRecords.reserveCapacity(snapshots.count + previousRecords.count)
     let observed = snapshots.map { snapshot in
       var result = snapshot
+      if let inbound = snapshot.inboundName, let route = routes[inbound], route.port == snapshot.inboundPort {
+        result.neAttributedApp = route.attributedApp
+        result.neAttributedAt = previousRecordsByID[snapshot.id]?.snapshot.neAttributedAt ?? now
+      }
       result.dnsObservation = previousRecordsByID[snapshot.id]?.snapshot.dnsObservation
         ?? dnsIndex.observation(for: snapshot, now: now)
       return result

@@ -17,10 +17,12 @@ struct NetworkExtensionRuntimeConfiguration: Equatable, Sendable {
   var systemDNSOverrideEnabled: Bool
   var systemDNSServers: [String]
   var systemDNSOverrideApplied: Bool
+  var processRoutes: [NEProcessRoute] = []
 
   static func clashMax(
     overrides: RuntimeOverrides,
-    routingSettings: NetworkExtensionRoutingSettings = .default
+    routingSettings: NetworkExtensionRoutingSettings = .default,
+    processRoutes: [NEProcessRoute] = []
   ) -> NetworkExtensionRuntimeConfiguration {
     NetworkExtensionRuntimeConfiguration(
       providerBundleIdentifier: NetworkExtensionRuntimeConstants.providerBundleIdentifier,
@@ -35,12 +37,13 @@ struct NetworkExtensionRuntimeConfiguration: Equatable, Sendable {
       dnsFakeIPEnabled: routingSettings.dnsFakeIPEnabled,
       systemDNSOverrideEnabled: routingSettings.systemDNSOverrideEnabled,
       systemDNSServers: routingSettings.effectiveSystemDNSServers,
-      systemDNSOverrideApplied: false
+      systemDNSOverrideApplied: false,
+      processRoutes: processRoutes
     )
   }
 
   var providerConfiguration: [String: Any] {
-    [
+    var configuration: [String: Any] = [
       "socksHost": socksHost,
       "socksPort": socksPort,
       "routeExcludeCIDRs": routeExcludeCIDRs,
@@ -52,6 +55,13 @@ struct NetworkExtensionRuntimeConfiguration: Equatable, Sendable {
       "systemDNSServers": systemDNSServers,
       "systemDNSOverrideApplied": systemDNSOverrideApplied,
     ]
+    if !processRoutes.isEmpty {
+      configuration["processRoutes"] = processRoutes.map { route in
+        ["predicate": ["kind": route.predicate.kind.rawValue, "value": route.predicate.value],
+         "inbound": route.inbound, "port": route.port, "conditional": route.conditional] as [String: Any]
+      }
+    }
+    return configuration
   }
 }
 

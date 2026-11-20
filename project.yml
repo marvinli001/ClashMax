@@ -299,6 +299,7 @@ targets:
     platform: macOS
     sources:
       - path: Shared/Socks5ConnectRequest.swift
+      - path: Shared/NEProcessMatcher.swift
       - path: Shared/NetworkExtensionRuntimeConstants.swift
       - path: Shared/StructuredLogProducer.swift
       - path: Shared/StructuredLogPrivacy.swift

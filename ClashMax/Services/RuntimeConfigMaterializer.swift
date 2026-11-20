@@ -19,6 +19,7 @@ struct RuntimeConfigMaterializationResult: Sendable, Equatable {
   /// What `ConfigNormalizer` changed about the profile on the way to `runtimeConfigURL`, for
   /// the app log. See `RuntimeConfigGeneration.notes`.
   var normalizationNotes: [String] = []
+  var processRoutePlan = NEProcessRoutePlan()
 
   var artifactURLs: [URL] {
     [runtimeConfigURL] + [providerContentURL].compactMap(\.self)
@@ -97,7 +98,8 @@ struct RuntimeConfigMaterializer: Sendable {
       let result = RuntimeConfigMaterializationResult(
         runtimeConfigURL: runtimeConfigURL,
         providerContentURL: materializedProviderContentURL,
-        normalizationNotes: generation.notes
+        normalizationNotes: generation.notes,
+        processRoutePlan: generation.processRoutePlan
       )
       cleanUpRetainedArtifacts(
         for: request,

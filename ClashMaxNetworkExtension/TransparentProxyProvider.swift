@@ -21,6 +21,7 @@ final class TransparentProxyProvider: NETransparentProxyProvider, @unchecked Sen
   private var bridges: [UUID: FlowBridge] = [:]
   private var socksHost = defaultSocksHost
   private var socksPort = defaultSocksPort
+  private var processMatcher: NEProcessMatcher?
   private var dnsCapturePolicy = NetworkExtensionDNSCapturePolicy.disabled
 
   override func startProxy(
@@ -31,6 +32,19 @@ final class TransparentProxyProvider: NETransparentProxyProvider, @unchecked Sen
     let configuration = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration ?? [:]
     socksHost = Self.stringValue(options?["socksHost"]) ?? Self.stringValue(configuration["socksHost"]) ?? Self.defaultSocksHost
     socksPort = Self.intValue(options?["socksPort"]) ?? Self.intValue(configuration["socksPort"]) ?? Self.defaultSocksPort
+    do {
+      if let encoded = configuration["processRoutes"] {
+        let data = try JSONSerialization.data(withJSONObject: encoded)
+        let routes = try JSONDecoder().decode([NEProcessRoute].self, from: data)
+        guard routes.count <= NEProcessRoutePlan.limit, routes.allSatisfy({ (1024...65535).contains($0.port) }) else {
+          throw CocoaError(.coderReadCorrupt)
+        }
+        processMatcher = try NEProcessMatcher(routes: routes)
+      } else { processMatcher = nil }
+    } catch {
+      completion(error)
+      return
+    }
     let dnsCaptureEnabled = Self.boolValue(options?["dnsCaptureEnabled"])
       ?? Self.boolValue(configuration["dnsCaptureEnabled"])
       ?? false
@@ -166,7 +180,7 @@ final class TransparentProxyProvider: NETransparentProxyProvider, @unchecked Sen
       flow: tcpFlow,
       endpoint: targetEndpoint,
       socksHost: socksHost,
-      socksPort: socksPort,
+      socksPort: attributedPort(for: tcpFlow),
       onError: { [weak self] message, socksHandshakeFailure in
         self?.diagnostics.recordError(
           message,
@@ -209,7 +223,7 @@ final class TransparentProxyProvider: NETransparentProxyProvider, @unchecked Sen
       initialEndpoint: endpoint,
       dnsCapturePolicy: dnsCapturePolicy,
       socksHost: socksHost,
-      socksPort: socksPort,
+      socksPort: attributedPort(for: flow),
       onDatagram: { [weak self] originalEndpoint, targetEndpoint in
         self?.diagnostics.recordUDPDatagram(
           remoteEndpoint: originalEndpoint.diagnosticDescription,
@@ -249,6 +263,23 @@ final class TransparentProxyProvider: NETransparentProxyProvider, @unchecked Sen
     insertBridge(bridge, id: id)
     bridge.start()
     return true
+  }
+
+  private func attributedPort(for flow: NEAppProxyFlow) -> Int {
+    guard let processMatcher, !processMatcher.isEmpty else { return socksPort }
+    let path = flow.metaData.sourceAppAuditToken.flatMap { data -> String? in
+      guard data.count == MemoryLayout<audit_token_t>.size else { return nil }
+      var token = data.withUnsafeBytes { $0.loadUnaligned(as: audit_token_t.self) }
+      var buffer = [UInt8](repeating: 0, count: Int(MAXPATHLEN) * 4)
+      // libproc also checks the PID version in the audit token, so a recycled PID cannot supply
+      // another executable's path between PID extraction and proc_pidpath.
+      let size = UInt32(buffer.count)
+      guard proc_pidpath_audittoken(&token, &buffer, size) > 0 else { return nil }
+      return String(bytes: buffer.prefix { $0 != 0 }, encoding: .utf8)
+    }
+    let choice = processMatcher.select(path: path, signingIdentifier: flow.metaData.sourceAppSigningIdentifier)
+    if choice.uncertain { diagnostics.recordUncertainProcessAttribution() }
+    return choice.route?.port ?? socksPort
   }
 
   private func shouldProxy(
@@ -516,6 +547,10 @@ private final class NetworkExtensionDiagnosticsRecorder: @unchecked Sendable {
       snapshot.activeUDPBridgeCount = max(0, udp)
       snapshot.activeBridgeCount = snapshot.activeTCPBridgeCount + snapshot.activeUDPBridgeCount
     }
+  }
+
+  func recordUncertainProcessAttribution() {
+    update(persistence: .deferred) { $0.lastUncertainProcessAttribution = Date() }
   }
 
   func recordUDPDatagram(remoteEndpoint: String?, sourceAppSigningIdentifier: String?) {

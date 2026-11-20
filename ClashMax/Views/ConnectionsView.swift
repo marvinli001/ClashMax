@@ -329,7 +329,7 @@ struct ConnectionsView: View {
 
       // Roadmap B1: the process path is already on the row, so the app it belongs to is one lookup
       // away — the outermost .app, which also covers the helpers that opened half its connections.
-      if let draft = AppProcessRule.draft(forProcessPath: connection.processPath) {
+      if connection.neAttributedApp == nil, let draft = AppProcessRule.draft(forProcessPath: connection.processPath) {
         let appName = AppProcessRule.appName(forProcessPath: connection.processPath) ?? connection.appDisplayName
         Button(String(format: String(localized: "Route %@ Through…"), appName)) {
           quickRuleContext = QuickRuleSheetContext(
@@ -407,6 +407,9 @@ struct ConnectionsView: View {
         if let connection {
           detailHeader(connection)
           detailRow("App", connection.appDisplayName)
+          if let source = connection.neAttributionSource {
+            detailRow("Attribution source", source)
+          }
           detailRow("Process", connection.processPath ?? "-")
           detailRow("Network", connection.network.isEmpty ? "-" : connection.network)
           detailRow("Source", connection.sourceAddress)
@@ -822,7 +825,7 @@ private struct ConnectionAppLabel: View {
 
   var body: some View {
     HStack(spacing: 6) {
-      if let image = iconCache.icon(for: connection.processPath) {
+      if connection.neAttributedApp == nil, let image = iconCache.icon(for: connection.processPath) {
         Image(nsImage: image)
           .resizable()
           .frame(width: 16, height: 16)
@@ -837,6 +840,7 @@ private struct ConnectionAppLabel: View {
       }
       Text(connection.appDisplayName)
         .lineLimit(1)
+        .help(connection.neAttributionSource ?? connection.appDisplayName)
     }
   }
 }

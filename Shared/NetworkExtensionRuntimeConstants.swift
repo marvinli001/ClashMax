@@ -389,6 +389,7 @@ struct NetworkExtensionDiagnosticsSnapshot: Codable, Equatable, Sendable {
   var systemDNSOverrideStatus: String
   var lastDNSEndpoint: String?
   var lastDNSSourceAppSigningIdentifier: String?
+  var lastUncertainProcessAttribution: Date?
   var recentBypasses: [NetworkExtensionDiagnosticEvent]
   var recentErrors: [NetworkExtensionDiagnosticEvent]
   var updatedAt: Date
@@ -438,6 +439,7 @@ struct NetworkExtensionDiagnosticsSnapshot: Codable, Equatable, Sendable {
     case systemDNSOverrideStatus
     case lastDNSEndpoint
     case lastDNSSourceAppSigningIdentifier
+    case lastUncertainProcessAttribution
     case recentBypasses
     case recentErrors
     case updatedAt
@@ -562,5 +564,6 @@ struct NetworkExtensionDiagnosticsSnapshot: Codable, Equatable, Sendable {
       ),
       updatedAt: container.decodeDefault(Date.self, forKey: .updatedAt, default: defaults.updatedAt)
     )
+    lastUncertainProcessAttribution = try container.decodeIfPresent(Date.self, forKey: .lastUncertainProcessAttribution)
   }
 }

@@ -193,9 +193,9 @@ enum ProcessRuleCoverage {
     var text: String
   }
 
-  static func notes(routingMode: ProxyRoutingMode, findProcessMode: String?) -> [Note] {
+  static func notes(routingMode: ProxyRoutingMode, findProcessMode: String?, plan: NEProcessRoutePlan = .init(), appliedAt: Date? = nil) -> [Note] {
     var notes: [Note] = []
-    if findProcessMode?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "off" {
+    if routingMode != .neProxy, findProcessMode?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "off" {
       // Measured against v1.19.31: with `off`, a bundle pattern that otherwise caught both the app
       // and its helper matched nothing, and every connection fell through to MATCH.
       notes.append(Note(
@@ -204,11 +204,10 @@ enum ProcessRuleCoverage {
       ))
     }
     if routingMode == .neProxy {
-      // From the extension's code: it relays every flow over its own SOCKS connection to the core.
-      notes.append(Note(
-        severity: .blocking,
-        text: String(localized: "In NE Proxy routing, ClashMax's network extension relays every connection to the core, so a process rule sees the extension, never the app. Use System Proxy or TUN routing for per-app rules.")
-      ))
+      notes.append(Note(severity: .partial, text: String(localized: "NE Proxy attributes the first 64 distinct process matches. Overlapping conditional rules can be ambiguous; see NE Diagnostics.")))
+      if let omitted = plan.omissionSummary(appliedAt: appliedAt) {
+        notes.append(Note(severity: .partial, text: omitted))
+      }
     }
     if routingMode == .systemProxy {
       notes.append(Note(
@@ -234,5 +233,38 @@ enum FindProcessModeConfigReader {
       else { return nil }
       return root["find-process-mode"] as? String
     }.value
+  }
+}
+
+extension NEProcessRoute {
+  var attributedApp: String {
+    switch predicate.kind {
+    case .name: return predicate.value
+    case .path:
+      return AppProcessRule.appName(forProcessPath: predicate.value) ?? URL(fileURLWithPath: predicate.value).lastPathComponent
+    case .pathRegex:
+      // Only the picker's round-trippable bundle prefix identifies an application by name.
+      // A general regex may represent several apps; display its actual predicate instead.
+      if predicate.value.hasPrefix("^/"), predicate.value.hasSuffix("/") {
+        let literal = String(predicate.value.dropFirst().dropLast())
+          .replacingOccurrences(of: #"\x2C"#, with: ",")
+          .replacingOccurrences(of: #"\\(.)"#, with: "$1", options: .regularExpression)
+        let bundle = URL(fileURLWithPath: literal)
+        if bundle.pathExtension == "app", AppProcessRule.bundlePathPattern(for: bundle) == predicate.value {
+          return bundle.deletingPathExtension().lastPathComponent
+        }
+      }
+      fallthrough
+    case .nameRegex:
+      return String(format: String(localized: "Match %@"), predicate.value)
+    }
+  }
+}
+
+extension NEProcessRoutePlan {
+  func omissionSummary(appliedAt: Date?) -> String? {
+    guard overLimit > 0 || unsupported > 0 else { return nil }
+    let counts = String(format: String(localized: "Process matches omitted · limit: %lld · incompatible pattern: %lld"), Int64(overLimit), Int64(unsupported))
+    return [counts, DiagnosticFactSource.simulation.title, appliedAt?.formatted(date: .abbreviated, time: .standard) ?? String(localized: "Time unavailable")].joined(separator: " · ")
   }
 }

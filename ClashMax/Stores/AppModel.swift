@@ -3561,6 +3561,7 @@ final class AppModel {
     } else {
       materialization = try await materializeNonTunRuntimeConfig()
     }
+    if try await restartForChangedProcessRoutes(materialization, reason: logMessage) { return }
     let runtimeConfig = materialization.runtimeConfigURL
     try await apiClient.reloadConfig(path: runtimeConfig.path, force: true)
     activateRuntimeArtifacts(materialization, coreLaunched: false)
@@ -3926,8 +3927,12 @@ final class AppModel {
         )
       }
       appendAppLog(level: "info", message: "Starting NE transparent proxy; System Proxy off, TUN helper untouched.")
+      for route in materialization.processRoutePlan.routes {
+        try await proxyPortReadinessProbe.waitUntilReady(host: "127.0.0.1", port: route.port)
+      }
       try await networkExtensionController.startTransparentProxy(
-        configuration: .clashMax(overrides: startSnapshot.overrides, routingSettings: networkExtensionSettings)
+        configuration: .clashMax(overrides: startSnapshot.overrides, routingSettings: networkExtensionSettings,
+                                 processRoutes: materialization.processRoutePlan.routes)
       )
       if networkExtensionSettings.systemDNSOverrideEnabled {
         try await applyNetworkExtensionSystemDNS(networkExtensionSettings)
@@ -4440,6 +4445,7 @@ final class AppModel {
     }
     let previouslyAppliedEndpoint = settings.appliedRuntimeSettingsSnapshot?.overrides.endpoint
     let materialization = try await materializeNonTunRuntimeConfig(target)
+    if try await restartForChangedProcessRoutes(materialization, reason: reason) { return }
     let runtimeConfig = materialization.runtimeConfigURL
     try await currentClient.reloadConfig(path: runtimeConfig.path, force: true)
     activateRuntimeArtifacts(materialization, coreLaunched: false)
@@ -4484,8 +4490,17 @@ final class AppModel {
     reloadRuntimeData()
   }
 
+  private func restartForChangedProcessRoutes(_ materialization: RuntimeConfigMaterializationResult, reason: String) async throws -> Bool {
+    guard runtimeOwner == .networkExtension,
+          materialization.processRoutePlan.routes != (activeRuntimeConfigMaterialization?.processRoutePlan.routes ?? []) else { return false }
+    // providerConfiguration is read at tunnel start. Never reload new listener identities under
+    // a running provider that is still sending flows according to the previous table.
+    try await restartRuntimeForSettingsApply(reason: reason)
+    return true
+  }
+
   private func restartRuntimeForSettingsApply(reason: String) async throws {
-    appendAppLog(level: "info", message: "\(reason): restarting runtime to apply controller or proxy port changes.")
+    appendAppLog(level: "info", message: "\(reason): restarting runtime to apply the new NE endpoints.")
     let stopResult = await stopRuntimeCoordinated(.settingsApplyRestart)
     handleStopResult(stopResult)
     guard stopResult.succeeded else {
@@ -4589,6 +4604,7 @@ final class AppModel {
       return
     }
     let materialization = try await materializeNonTunRuntimeConfig()
+    if try await restartForChangedProcessRoutes(materialization, reason: "IPv6 settings") { return }
     let runtimeConfig = materialization.runtimeConfigURL
     try await apiClient.reloadConfig(path: runtimeConfig.path, force: true)
     activateRuntimeArtifacts(materialization, coreLaunched: false)
@@ -4620,7 +4636,8 @@ final class AppModel {
     let options = RuntimeConfigOptions(
       networkExtensionRoutingSettings: isNetworkExtensionRuntime
         ? (snapshot?.networkExtensionRoutingSettings ?? networkExtensionRoutingSettings)
-        : nil
+        : nil,
+      existingNEProcessRoutes: activeRuntimeConfigMaterialization?.processRoutePlan.routes ?? []
     )
     return try await generateRuntimeConfig(
       for: profile,
@@ -7863,6 +7880,7 @@ final class AppModel {
   /// restart) and false for a hot reload into the running one.
   private func activateRuntimeArtifacts(_ materialization: RuntimeConfigMaterializationResult, coreLaunched: Bool) {
     activeRuntimeConfigMaterialization = materialization
+    runtimeData.setProcessRoutePlan(materialization.processRoutePlan)
     if coreLaunched {
       runtimeDiagnostics.recordCoreLaunch()
     }
@@ -7872,11 +7890,12 @@ final class AppModel {
 
   /// What can keep a process rule from matching, for the app picker and the quick-rule sheet.
   var processRuleCoverageNotes: [ProcessRuleCoverage.Note] {
-    ProcessRuleCoverage.notes(routingMode: proxyRoutingMode, findProcessMode: isRunning ? activeFindProcessMode : nil)
+    ProcessRuleCoverage.notes(routingMode: proxyRoutingMode, findProcessMode: isRunning ? activeFindProcessMode : nil, plan: runtimeData.processRoutePlan, appliedAt: runtimeData.processRoutesAppliedAt)
   }
 
   private func clearActiveRuntimeArtifacts() {
     activeRuntimeConfigMaterialization = nil
+    runtimeData.setProcessRoutePlan(.init())
     runtimeDiagnostics.clearRuntimeFacts()
   }
 
@@ -8218,9 +8237,8 @@ final class AppModel {
 
   private func currentRoutingRuntimeConfigOptions() -> RuntimeConfigOptions {
     RuntimeConfigOptions(
-      networkExtensionRoutingSettings: proxyRoutingMode == .neProxy
-        ? networkExtensionRoutingSettings
-        : nil
+      networkExtensionRoutingSettings: proxyRoutingMode == .neProxy ? networkExtensionRoutingSettings : nil,
+      existingNEProcessRoutes: activeRuntimeConfigMaterialization?.processRoutePlan.routes ?? []
     )
   }
 

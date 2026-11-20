@@ -4980,6 +4980,8 @@ struct ConnectionSnapshot: Identifiable, Codable, Equatable, Sendable {
   var inboundName: String?
   var inboundUser: String?
   var dnsObservation: ConnectionDNSObservation?
+  var neAttributedApp: String?
+  var neAttributedAt: Date?
   var processName: String?
   var processPath: String?
   /// `metadata.dnsMode` (`normal`, `fake-ip`, `redir-host`) — how the name in front of this
@@ -5084,8 +5086,14 @@ struct ConnectionSnapshot: Identifiable, Codable, Equatable, Sendable {
     return reportedHost
   }
 
+  var neAttributionSource: String? {
+    guard neAttributedApp != nil else { return nil }
+    return [DiagnosticFactSource.simulation.title, inboundName, neAttributedAt?.formatted(date: .abbreviated, time: .standard)].compactMap(\.self).joined(separator: " · ")
+  }
+
   var appDisplayName: String {
-    processName ?? processPath.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent } ?? "-"
+    if let neAttributedApp { return String(format: String(localized: "Attributed via NE: %@"), neAttributedApp) }
+    return processName ?? processPath.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent } ?? "-"
   }
 
   /// The Connections table has always shown the destination IP for a connection with no domain.

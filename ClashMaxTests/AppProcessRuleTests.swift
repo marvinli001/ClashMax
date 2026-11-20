@@ -209,7 +209,8 @@ final class AppProcessRuleTests: XCTestCase {
     XCTAssertTrue(off.first?.text.contains("find-process-mode: off") == true)
 
     let ne = ProcessRuleCoverage.notes(routingMode: .neProxy, findProcessMode: nil)
-    XCTAssertEqual(ne.filter { $0.severity == .blocking }.count, 1)
+    XCTAssertTrue(ne.allSatisfy { $0.severity == .partial })
+    XCTAssertTrue(ne.contains { $0.text.contains("64") })
 
     let systemProxy = ProcessRuleCoverage.notes(routingMode: .systemProxy, findProcessMode: "strict")
     XCTAssertTrue(systemProxy.allSatisfy { $0.severity == .partial })

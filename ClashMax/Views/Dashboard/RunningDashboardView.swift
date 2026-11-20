@@ -1968,6 +1968,12 @@ struct StatusView: View {
   private var networkExtensionRows: some View {
     let diagnostics = appModel.networkExtensionController.diagnostics
     let routing = appModel.networkExtensionRoutingSettings
+    if let omitted = runtimeData.processRoutePlan.omissionSummary(appliedAt: runtimeData.processRoutesAppliedAt) {
+      Text(omitted).foregroundStyle(.secondary)
+    }
+    if let date = diagnostics.lastUncertainProcessAttribution {
+      LabeledContent("App attribution may be imprecise", value: [DiagnosticFactSource.log.title, date.formatted(date: .abbreviated, time: .standard)].joined(separator: " · "))
+    }
     LabeledContent("TCP", value: "\(diagnostics.activeTCPBridgeCount)")
     LabeledContent("UDP", value: "\(diagnostics.activeUDPBridgeCount)")
     LabeledContent("DNS", value: "\(diagnostics.dnsCaptureCount)")

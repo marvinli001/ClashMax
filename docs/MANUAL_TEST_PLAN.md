@@ -421,12 +421,31 @@ ClashMax running in **System Proxy** routing with a profile that has at least tw
    the helper). Pick a different policy and **Add Rule**. The verdict says *Your rule is the one that
    matches* and names the probe process; new Chrome connections now take that policy.
 5. *Choose…* in the picker opens a file panel at /Applications and accepts an app from elsewhere.
-6. Switch routing to **NE Proxy** and open *Choose App…* again: the notes now say process rules see
-   the extension, not the app, flagged as blocking.
+6. Switch routing to **NE Proxy** and open *Choose App…* again. Check the 64-match limit and
+   the conditional-rule ambiguity note. Run the signed NE Proxy cases below.
 7. Optional, with the helper installed: repeat step 3 in **TUN** routing and record whether the rule
    matches there — this is the one case the roadmap entry could not measure.
 8. With the system language set to Simplified Chinese, the picker, the notes and the menu item are
    in Chinese.
+
+### NE Proxy — signed source-app attribution
+
+Status **NOT RUN**. Use a signed, installed build with its approved transparent proxy. Record
+the starting proxy, DNS, extension and listener state, and use a disposable profile.
+
+1. Put a picker-generated bundle rule above MATCH. Start NE Proxy. From the main app and a nested
+   helper, open TCP and send UDP to a controlled endpoint. Check the reported inbound, chosen
+   policy and timestamped NE attribution in Connections, then inspect the retained closed rows.
+2. Place a conditional process rule above an overlapping bundle rule. Trigger a flow matching
+   both process predicates. Check the first listener is used, the network/domain condition still
+   runs inside Mihomo, and NE Diagnostics records the time of possible imprecision.
+3. Try an unrelated app and a flow without a usable audit-token path. Check the mixed-port
+   fallback for unmatched flows. A name rule matching the actual signing identifier may still win.
+4. Try 65 distinct process predicates. The picker must show one over the limit, the 65th rule
+   must retain its original YAML, and the audit must still show only loopback managed listeners.
+5. Edit only a policy, then change the matcher table. Check the former reloads with the same
+   ports and the latter activates the new provider table together with its listeners. Stop the
+   test runtime, restore the starting state and check that its extra listeners are gone.
 
 ### Sign-off
 

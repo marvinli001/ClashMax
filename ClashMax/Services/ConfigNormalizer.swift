@@ -4,6 +4,7 @@ import Yams
 
 struct RuntimeConfigOptions: Equatable, Sendable {
   var networkExtensionRoutingSettings: NetworkExtensionRoutingSettings?
+  var existingNEProcessRoutes: [NEProcessRoute] = []
   var subscriptionProviderOptions: SubscriptionProviderOptions = .default
   var runtimeSnippets: [RuntimeSnippet] = []
   var manualProxyEndpoint: ResolvedOutboundProxyEndpoint?
@@ -30,6 +31,7 @@ struct RuntimeConfigGeneration: Equatable, Sendable {
   /// Human-readable, one per decision, meant for the app log. Empty when the profile was passed
   /// through as authored apart from the app-managed keys.
   var notes: [String]
+  var processRoutePlan = NEProcessRoutePlan()
 }
 
 struct ConfigNormalizer {
@@ -399,7 +401,15 @@ struct ConfigNormalizer {
     // supply `proxy-server-nameserver`, so only the final map knows whether Mihomo will accept it.
     try validateDNSCompatibility(root["dns"])
 
-    return try RuntimeConfigGeneration(yaml: Yams.dump(object: root, sortKeys: false), notes: notes)
+    var processPlan = NEProcessRoutePlan()
+    if let ne = options.networkExtensionRoutingSettings {
+      var rewriter = NEProcessRuleRewriter(reusing: options.existingNEProcessRoutes)
+      var reserved = Set([overrides.mixedPort, overrides.externalControllerPort, ne.normalizedDNSListenPort])
+      if let dns = root["dns"] as? [String: Any], let listen = dns["listen"] as? String,
+         let port = listen.split(separator: ":").last.flatMap({ Int($0) }) { reserved.insert(port) }
+      processPlan = try rewriter.apply(to: &root, reservedPorts: reserved)
+    }
+    return try RuntimeConfigGeneration(yaml: Yams.dump(object: root, sortKeys: false), notes: notes, processRoutePlan: processPlan)
   }
 
   /// Root-level Mihomo inbound listener keys a profile may carry that ClashMax never passes
