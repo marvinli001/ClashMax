@@ -10,8 +10,6 @@ import SwiftUI
 /// that made issue #15 worth filing: did the rule actually take effect.
 struct QuickRuleSheet: View {
   @Environment(AppModel.self) private var appModel
-  @Environment(ProfileStore.self) private var profileStore
-  @Environment(RuntimeSnippetLibraryStore.self) private var snippetLibrary
   @Environment(RuntimeDataStore.self) private var runtimeData
   @Environment(\.dismiss) private var dismiss
 
@@ -216,28 +214,7 @@ struct QuickRuleSheet: View {
             .foregroundStyle(.secondary)
         }
       } else if let verdict {
-        Label {
-          VStack(alignment: .leading, spacing: 2) {
-            Text(verdict.title)
-              .font(.callout.weight(.semibold))
-            Text(verdict.detail)
-              .font(.caption)
-              .foregroundStyle(.secondary)
-              .fixedSize(horizontal: false, vertical: true)
-            if let probe = verdict.probeSummary {
-              Text(probe)
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
-            }
-          }
-        } icon: {
-          Image(systemName: verdict.systemImage)
-            .foregroundStyle(verdict.tint)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(verdict.tint.opacity(0.10), in: SurfaceRadius.shape(SurfaceRadius.tile))
+        QuickRuleVerdictView(verdict: verdict)
       }
     }
   }
@@ -330,43 +307,10 @@ struct QuickRuleSheet: View {
   private func settleVerdict() {
     verdictFallback?.cancel()
     verdictFallback = nil
-    verdict = computeVerdict()
+    verdict = appModel.quickRuleVerdict(for: draft)
     if case .verifying = phase {
       phase = .done(alreadyPresent: false)
     }
-  }
-
-  private func computeVerdict() -> QuickRuleVerdict {
-    guard let input = draft.verificationInput else { return .unavailable }
-    let trace = RuleMatchSimulator().simulate(input: input, candidateProvider: effectiveRuleCandidates)
-    let probe = QuickRuleVerdict.probeDescription(for: input)
-    switch trace.outcome {
-    case let .matched(rule):
-      return draft.describes(rule) ? .winning(rule, probe: probe) : .shadowed(rule, probe: probe)
-    case let .mihomoOnly(reason):
-      return .mihomoOnly(reason, probe: probe)
-    case .noMatch:
-      return .noMatch(probe: probe)
-    }
-  }
-
-  /// The same rule list the Routing simulator evaluates, so the two pages never disagree about
-  /// what matches: the running core's own list when there is one, the composed overlay preview
-  /// otherwise.
-  private func effectiveRuleCandidates() -> [RuntimeRuleCandidate] {
-    if appModel.isCoreRunning || !runtimeData.rules.isEmpty {
-      return RuntimeRuleCandidateBuilder.runtimeCandidates(runtimeRules: runtimeData.rules)
-    }
-    let activeSnippets = profileStore.activeProfileID.map { snippetLibrary.snippets(applyingTo: $0) } ?? []
-    let activeProfile = profileStore.activeProfile
-    return RuntimeRuleCandidateBuilder.candidates(
-      globalOverlay: appModel.ruleOverlaySettings,
-      profileOverlay: activeProfile?.isSubscription == true
-        ? activeProfile?.subscriptionProviderOptions.ruleOverlay ?? .disabled
-        : .disabled,
-      snippetOverlay: RuntimeSnippetApplication(snippets: activeSnippets).ruleOverlay,
-      runtimeRules: runtimeData.rules
-    )
   }
 }
 
@@ -491,5 +435,73 @@ extension View {
     sheet(item: context) { context in
       QuickRuleSheet(title: context.title, subtitle: context.subtitle, draft: context.draft)
     }
+  }
+}
+
+/// The post-apply verdict as one tinted row, shared by the sheet and the menu bar's
+/// "Route This Site or App…" so both say the same thing the same way.
+struct QuickRuleVerdictView: View {
+  let verdict: QuickRuleVerdict
+
+  var body: some View {
+    Label {
+      VStack(alignment: .leading, spacing: 2) {
+        Text(verdict.title)
+          .font(.callout.weight(.semibold))
+        Text(verdict.detail)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+        if let probe = verdict.probeSummary {
+          Text(probe)
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      }
+    } icon: {
+      Image(systemName: verdict.systemImage)
+        .foregroundStyle(verdict.tint)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(10)
+    .background(verdict.tint.opacity(0.10), in: SurfaceRadius.shape(SurfaceRadius.tile))
+  }
+}
+
+extension AppModel {
+  /// What `draft` does against the current rule list: whether it is the rule that matches its own
+  /// probe, or something earlier wins. A simulation, never a claim about live traffic.
+  func quickRuleVerdict(for draft: QuickRuleDraft) -> QuickRuleVerdict {
+    guard let input = draft.verificationInput else { return .unavailable }
+    let trace = RuleMatchSimulator().simulate(input: input, candidateProvider: { self.effectiveQuickRuleCandidates() })
+    let probe = QuickRuleVerdict.probeDescription(for: input)
+    switch trace.outcome {
+    case let .matched(rule):
+      return draft.describes(rule) ? .winning(rule, probe: probe) : .shadowed(rule, probe: probe)
+    case let .mihomoOnly(reason):
+      return .mihomoOnly(reason, probe: probe)
+    case .noMatch:
+      return .noMatch(probe: probe)
+    }
+  }
+
+  /// The same rule list the Routing simulator evaluates, so the two pages never disagree about
+  /// what matches: the running core's own list when there is one, the composed overlay preview
+  /// otherwise.
+  private func effectiveQuickRuleCandidates() -> [RuntimeRuleCandidate] {
+    if isCoreRunning || !runtimeData.rules.isEmpty {
+      return RuntimeRuleCandidateBuilder.runtimeCandidates(runtimeRules: runtimeData.rules)
+    }
+    let activeSnippets = profileStore.activeProfileID.map { runtimeSnippetLibrary.snippets(applyingTo: $0) } ?? []
+    let activeProfile = profileStore.activeProfile
+    return RuntimeRuleCandidateBuilder.candidates(
+      globalOverlay: ruleOverlaySettings,
+      profileOverlay: activeProfile?.isSubscription == true
+        ? activeProfile?.subscriptionProviderOptions.ruleOverlay ?? .disabled
+        : .disabled,
+      snippetOverlay: RuntimeSnippetApplication(snippets: activeSnippets).ruleOverlay,
+      runtimeRules: runtimeData.rules
+    )
   }
 }

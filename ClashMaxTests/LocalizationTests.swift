@@ -518,6 +518,12 @@ final class LocalizationTests: XCTestCase {
 
     let ownerFormat = zhBundle.localizedString(forKey: "Owner: %@", value: nil, table: nil)
     XCTAssertEqual(String(format: ownerFormat, "用户模式"), "归属：用户模式")
+
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Route This Site or App…", value: nil, table: nil), "为当前网页或 App 分流…")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Route Through", value: nil, table: nil), "分流至")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Single Node", value: nil, table: nil), "单个节点")
+    let allOfFormat = zhBundle.localizedString(forKey: "All of %@", value: nil, table: nil)
+    XCTAssertEqual(String(format: allOfFormat, "Slack"), "Slack 的全部流量")
   }
 
   func testSimplifiedChineseStringCatalogProvidesOperationalScreenshotKeys() throws {

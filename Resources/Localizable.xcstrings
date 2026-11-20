@@ -330,6 +330,16 @@
         }
       }
     },
+    "%@ loads pages through WebKit's networking service, which an app rule cannot see. Route one of its sites instead." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 通过 WebKit 的网络服务加载网页，App 规则无法匹配这部分流量。请改为对它的某个网站分流。"
+          }
+        }
+      }
+    },
     "%@ nodes" : {
       "comment" : "A label showing the number of nodes in a group. The argument is the number of nodes in the group.",
       "extractionState" : "stale",
@@ -1814,6 +1824,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "所有网络代理节点和远程 Provider 均使用此上游。"
+          }
+        }
+      }
+    },
+    "All of %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 的全部流量"
           }
         }
       }
@@ -12337,6 +12357,16 @@
         }
       }
     },
+    "No recent connections from %@ yet, so only the app can be routed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 最近还没有连接，目前只能按 App 分流。"
+          }
+        }
+      }
+    },
     "No recent updates." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -17196,6 +17226,26 @@
         }
       }
     },
+    "Route This Site or App…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "为当前网页或 App 分流…"
+          }
+        }
+      }
+    },
+    "Route Through" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分流至"
+          }
+        }
+      }
+    },
     "Routing" : {
       "localizations" : {
         "zh-Hans" : {
@@ -18694,6 +18744,16 @@
         }
       }
     },
+    "Send the app in front, or a site it just opened, through the policy you choose." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "让最前面的 App，或它刚打开的网站，走你选择的策略。"
+          }
+        }
+      }
+    },
     "Serve a web dashboard (%@)." : {
       "localizations" : {
         "zh-Hans" : {
@@ -19136,6 +19196,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已按当前规则列表模拟：%@。"
+          }
+        }
+      }
+    },
+    "Single Node" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "单个节点"
           }
         }
       }
@@ -20698,6 +20768,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "将运行模式切换为 Rule 或 Global。"
+          }
+        }
+      }
+    },
+    "Switch to the app or browser you want to route, then open this panel again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先切换到要分流的 App 或浏览器，再重新打开此面板。"
           }
         }
       }

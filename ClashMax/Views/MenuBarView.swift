@@ -128,6 +128,8 @@ struct MenuBarView: View {
           MenuBarMoreGroupsRow(groups: groupLayout.overflowGroups)
         }
 
+        MenuBarRouteFrontmostSection(groups: appModel.visibleProxyGroups)
+
         MenuBarControlRow(title: systemProxyToggleTitle, systemImage: "network.badge.shield.half.filled") {
           Toggle("", isOn: Binding(
             get: { appModel.systemProxyEnabled },
