@@ -865,6 +865,13 @@ final class AppModel {
 
   private(set) var providerSideLoadPreflightStatus: ProviderSideLoadPreflightStatus = .idle
   var proxyDelayBatchProgress: ProxyDelayBatchProgress? { proxyDelayTests.proxyDelayBatchProgress }
+  var aiServiceCheckRequest: AIServiceCheckRequest?
+  var lastAIServiceReport: String?
+  var aiServiceProbe: AIServiceProbe? {
+    guard isRunning, let apiClient else { return nil }
+    return AIServiceProbe(client: apiClient, mixedPort: currentRuntimeMixedPort)
+  }
+
   var routingSimulationRequest: RoutingSimulationRequest?
   /// Raised by the Help menu and the Status page; the main window presents the diagnostic bundle
   /// sheet while it is set (roadmap A5).
@@ -8691,6 +8698,7 @@ extension AppModel {
       sniffer: snapshot?.sniffer,
       runningCoreSniffing: isRunning ? activeSnifferSettings.map(\.isSniffingEnabled) : nil,
       dnsResolution: dnsResolutionDiagnostics,
+      aiServiceReport: lastAIServiceReport,
       network: DiagnosticBundleNetwork(
         wiFi: currentNetwork,
         savedPolicyCount: networkPolicySettings.rules.count,

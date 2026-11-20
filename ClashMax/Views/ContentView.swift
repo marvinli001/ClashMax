@@ -123,6 +123,9 @@ struct ContentView: View {
         )
       }
     }
+    .sheet(item: $appModel.aiServiceCheckRequest) { request in
+      AIServiceCheckSheet(request: request)
+    }
     .sheet(isPresented: diagnosticBundleSheetPresented) {
       DiagnosticBundleSheet()
     }

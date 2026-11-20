@@ -393,7 +393,7 @@ enum ProxyEffectDiagnosticsBuilder {
 
   // MARK: - Classification helpers
 
-  private static func isDirect(_ value: String?) -> Bool {
+  static func isDirect(_ value: String?) -> Bool {
     guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
       return false
     }

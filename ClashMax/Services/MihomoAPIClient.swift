@@ -10,6 +10,7 @@ protocol MihomoAPIControlling: Sendable {
   func connections() async throws -> ConnectionsReport
   func selectProxy(group: String, proxy: String) async throws
   func testDelay(proxy: String, testURL: URL, timeout: Int) async throws -> Int
+  func probeHTTPReachability(proxy: String, url: URL) async throws -> Bool
   func testGroupDelay(group: String, testURL: URL, timeout: Int) async throws -> [String: Int]
   func flushFakeIPCache() async throws
   func dnsQuery(name: String, type: String) async throws -> DNSQueryResult
@@ -30,6 +31,10 @@ protocol MihomoAPIControlling: Sendable {
 }
 
 extension MihomoAPIControlling {
+  func probeHTTPReachability(proxy: String, url: URL) async throws -> Bool {
+    try await testDelay(proxy: proxy, testURL: url, timeout: 6000) >= 0
+  }
+
   func reloadConfig(path: String) async throws {
     try await reloadConfig(path: path, force: true)
   }
@@ -283,6 +288,15 @@ struct MihomoAPIClient: Sendable {
   }
 
   func testDelay(proxy: String, testURL: URL, timeout: Int) async throws -> Int {
+    try await delay(proxy: proxy, testURL: testURL, timeout: timeout, expected: nil)
+  }
+
+  func probeHTTPReachability(proxy: String, url: URL) async throws -> Bool {
+    try await delay(proxy: proxy, testURL: url, timeout: 6000, expected: "100-599") >= 0
+  }
+
+  private func delay(proxy: String, testURL: URL, timeout: Int, expected: String?) async throws -> Int {
+    let expectedItems = expected.map { [URLQueryItem(name: "expected", value: $0)] } ?? []
     let data: Data
     do {
       data = try await self.data(for: request(
@@ -290,7 +304,7 @@ struct MihomoAPIClient: Sendable {
         queryItems: [
           URLQueryItem(name: "url", value: testURL.absoluteString),
           URLQueryItem(name: "timeout", value: String(timeout)),
-        ]
+        ] + expectedItems
       ))
     } catch let ClientError.httpStatus(status) where status == 503 || status == 504 {
       // Mihomo uses 503/504 when the controller itself is reachable but the

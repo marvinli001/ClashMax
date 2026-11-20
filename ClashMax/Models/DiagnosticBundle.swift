@@ -145,6 +145,7 @@ struct DiagnosticBundleInput: Sendable {
   /// the file has not been read yet.
   var runningCoreSniffing: Bool?
   var dnsResolution: DNSResolutionSnapshot?
+  var aiServiceReport: String? = nil
   var network: DiagnosticBundleNetwork
   var logs: [LogEntry]
   var coreProcessOutput: String
@@ -185,6 +186,7 @@ enum DiagnosticBundleBuilder {
     section("Versions", into: &lines, body: versionLines(input.versions))
     section("Runtime State", into: &lines, body: runtimeStateLines(input.report))
     section("Diagnoses", into: &lines, body: diagnosisLines(input))
+    if let report = input.aiServiceReport { section("AI service checks", into: &lines, body: [report]) }
     section("Network Environment", into: &lines, body: networkLines(input.network))
     section("Effective Runtime YAML", into: &lines, body: configLines(input.config, redactedYAML: configYAML))
     section("Logs", into: &lines, body: logLines(input))

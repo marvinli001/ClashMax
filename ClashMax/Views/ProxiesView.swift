@@ -650,6 +650,9 @@ private struct ProxyGroupNodePane: View {
 
     Divider()
 
+    Button("Check AI services") { appModel.aiServiceCheckRequest = AIServiceCheckRequest(node: node.name) }
+      .disabled(!appModel.isRunning || !node.supportsDelayTesting)
+
     Button(String(localized: "Copy Node Name")) {
       NSPasteboard.general.clearContents()
       NSPasteboard.general.setString(node.name, forType: .string)

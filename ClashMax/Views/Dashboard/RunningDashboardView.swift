@@ -229,6 +229,8 @@ private struct RunningHeaderCard: View {
         .fixedSize()
 
         Menu {
+          Button("Check AI services") { appModel.aiServiceCheckRequest = AIServiceCheckRequest() }
+            .disabled(!appModel.isRunning)
           Stepper(value: Binding(get: { appModel.overrides.mixedPort }, set: { appModel.setMixedPort($0) }), in: 1024...65535) {
             Text("Mixed Port: \(String(appModel.overrides.mixedPort))")
           }
