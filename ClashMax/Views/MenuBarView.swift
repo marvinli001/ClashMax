@@ -148,6 +148,8 @@ struct MenuBarView: View {
         if !groupLayout.overflowGroups.isEmpty {
           MenuBarMoreGroupsRow(groups: groupLayout.overflowGroups)
         }
+
+        MenuBarRouteFrontmostSection(groups: appModel.visibleProxyGroups)
       }
 
       Divider()

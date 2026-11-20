@@ -573,6 +573,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     Self.sharedDelegate = self
+    // Recorded from launch: opening the menu bar panel can make ClashMax itself the frontmost app.
+    FrontmostApplicationTracker.shared.start()
     NSWorkspace.shared.notificationCenter.addObserver(
       self,
       selector: #selector(workspaceDidWake(_:)),

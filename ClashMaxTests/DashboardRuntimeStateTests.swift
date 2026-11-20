@@ -601,6 +601,69 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertFalse(runtimeConfig.contains("inactive.example"))
   }
 
+  /// The menu bar's "Route This Site or App…" lands through the same quick-rule path as the
+  /// Connections page: the rule reaches the running core by reload, and the verdict is computed
+  /// against the refreshed rule list.
+  func testMenuBarRouteThisSiteAppliesLiveThroughQuickRules() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let configURL = paths.appSupport.appendingPathComponent("route.yaml")
+    try Self.writeProxyConfig(named: "Japan", to: configURL)
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    let profile = try await store.importLocalConfig(from: configURL)
+    try await store.select(profile)
+    let controller = CoreProcessController(
+      launcher: FakeProcessLauncher(),
+      validator: RecordingRuntimeConfigValidator(result: .success(())),
+      readinessProbe: RecordingCoreReadinessProbe(),
+      reaper: RecordingCoreProcessReaper(),
+      portChecker: EmptyRuntimePortChecker()
+    )
+    let client = RecordingMihomoController(proxyGroupsResponse: [], testDelayResult: 0)
+    let preflightCore = try Self.makeRuleOverlayPreflightCore(in: paths.appSupport, rejectedToken: "never-matched")
+    let model = try AppModel(
+      paths: paths,
+      profileStore: store,
+      coreController: controller,
+      apiClient: client,
+      defaults: Self.makeIsolatedDefaults(),
+      bundledCoreURLProvider: { preflightCore }
+    )
+    try await controller.startUserMode(
+      coreURL: URL(fileURLWithPath: "/tmp/mihomo"),
+      configURL: URL(fileURLWithPath: profile.originalConfigPath),
+      workDirectory: paths.runtime,
+      api: CoreAPIEndpoint(host: "127.0.0.1", port: 9097, secret: "abc")
+    )
+    let chrome = FrontmostAppSnapshot(
+      name: "Google Chrome",
+      bundleIdentifier: "com.google.Chrome",
+      bundleURL: URL(fileURLWithPath: "/Applications/Google Chrome.app", isDirectory: true),
+      executableURL: URL(fileURLWithPath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+    )
+    let draft = try XCTUnwrap(FrontmostRoutePolicy.draft(for: .site(host: "github.com"), app: chrome, target: .direct))
+
+    let didApply = await model.addQuickRule(draft)
+
+    XCTAssertTrue(didApply)
+    XCTAssertEqual(model.lastRuntimeApplyOutcome, .applied(.rules))
+    let reloadPaths = await client.reloadRequestPaths()
+    XCTAssertEqual(reloadPaths.count, 1)
+    let runtimeConfig = try String(contentsOfFile: XCTUnwrap(reloadPaths.first), encoding: .utf8)
+    XCTAssertTrue(runtimeConfig.contains("DOMAIN-SUFFIX,github.com,DIRECT"))
+    XCTAssertTrue(model.quickRuleIsAlreadyActive(draft))
+
+    // The core reports the refreshed list with its own camelCased types.
+    model.runtimeData.rules = [
+      RuntimeRule(index: 0, type: "DomainSuffix", payload: "github.com", policy: "DIRECT", raw: "DomainSuffix,github.com,DIRECT"),
+      RuntimeRule(index: 1, type: "Match", payload: "", policy: "Proxy", raw: "Match,Proxy"),
+    ]
+    guard case let .winning(rule, _) = model.quickRuleVerdict(for: draft) else {
+      return XCTFail("Expected the menu bar rule to be the one that matches")
+    }
+    XCTAssertEqual(rule.payload, "github.com")
+    XCTAssertEqual(rule.policy, "DIRECT")
+  }
+
   func testSavingARoutingDraftKeepsTheSnippetTheListSwitchedOff() async throws {
     // Draft with an unsaved edit -> the list's switch turns the snippet off -> Save. The editor's
     // draft still says enabled=true; the save must not switch the snippet back on.
