@@ -1,4 +1,5 @@
 import Foundation
+import Network
 
 protocol PublicIPInfoFetching: Sendable {
   func fetchPublicIPInfo() async throws -> PublicIPInfo
@@ -58,6 +59,7 @@ struct PublicIPInfoClient: PublicIPInfoFetching, Sendable {
     let orderedProviders = shuffleProviders ? providers.shuffled() : providers
 
     for provider in orderedProviders {
+      try Task.checkCancellation()
       do {
         return try await fetch(from: provider, fetchedAt: Date())
       } catch {
@@ -86,6 +88,21 @@ struct PublicIPInfoClient: PublicIPInfoFetching, Sendable {
       throw ClientError.invalidResponse(provider.name)
     }
     return try provider.mapper(object, fetchedAt)
+  }
+
+  static func loopbackConfiguration(port: Int) throws -> URLSessionConfiguration {
+    guard let raw = UInt16(exactly: port), raw > 0, let port = NWEndpoint.Port(rawValue: raw) else { throw URLError(.badURL) }
+    var proxy = ProxyConfiguration(httpCONNECTProxy: .hostPort(host: "127.0.0.1", port: port))
+    proxy.matchDomains = [""]
+    proxy.allowFailover = false
+    let config = URLSessionConfiguration.ephemeral
+    config.proxyConfigurations = [proxy]
+    config.urlCache = nil
+    config.httpCookieStorage = nil
+    config.urlCredentialStorage = nil
+    config.timeoutIntervalForRequest = 8
+    config.timeoutIntervalForResource = 12
+    return config
   }
 
   private static func makeSession(timeout: TimeInterval) -> URLSession {

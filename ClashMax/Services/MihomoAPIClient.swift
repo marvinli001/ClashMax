@@ -648,6 +648,8 @@ struct MihomoAPIClient: Sendable {
         ),
         destinationPort: Self.intValue(for: ["destinationPort", "destination-port", "dstPort"], in: metadata),
         inboundPort: Self.intValue(for: ["inboundPort", "inbound-port", "inPort"], in: metadata),
+        inboundName: Self.stringValue(for: ["inboundName"], in: metadata),
+        inboundUser: Self.stringValue(for: ["inboundUser"], in: metadata),
         processName: Self.stringValue(for: ["process", "processName", "process-name"], in: metadata),
         processPath: Self.stringValue(for: ["processPath", "process-path"], in: metadata),
         dnsMode: Self.stringValue(for: ["dnsMode", "dns-mode"], in: metadata),
@@ -657,7 +659,7 @@ struct MihomoAPIClient: Sendable {
         chain: chains,
         rule: item["rule"] as? String,
         rulePayload: item["rulePayload"] as? String ?? item["rule-payload"] as? String,
-        startedAt: nil
+        startedAt: Self.date(from: item["start"])
       )
     }
     return ConnectionsReport(connections: connections, totals: totals)
@@ -714,7 +716,8 @@ struct MihomoAPIClient: Sendable {
   private static func date(from value: Any?) -> Date? {
     switch value {
     case let string as String:
-      if let date = ISO8601DateFormatter().date(from: string) {
+      if let date = try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(string) { return date }
+      if let date = try? Date.ISO8601FormatStyle().parse(string) {
         return date
       }
       if let timestamp = Double(string.trimmingCharacters(in: .whitespacesAndNewlines)) {

@@ -8261,6 +8261,7 @@ final class AppModel {
 
   private func cancelRuntimeStreams() {
     runtimeStreamToken = nil
+    runtimeData.dnsLogIndex = ConnectionDNSLogIndex()
     connectionReportRevision &+= 1
     streamTasks.forEach { $0.cancel() }
     streamTasks.removeAll()
@@ -8315,6 +8316,7 @@ final class AppModel {
       do {
         for try await entry in client.logStream(level: logLevel) {
           guard !Task.isCancelled else { return }
+          if logLevel == "debug" { runtimeData.dnsLogIndex.record(entry) }
           runtimeData.appendLog(entry)
         }
       } catch is CancellationError {

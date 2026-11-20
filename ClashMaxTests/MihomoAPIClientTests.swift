@@ -378,6 +378,7 @@ final class MihomoAPIClientTests: XCTestCase {
           "download": 256,
           "rule": "DOMAIN-SUFFIX",
           "rulePayload": "example.com",
+          "start": "2026-11-20T22:09:25.916282+13:00",
           "chains": ["Proxy", "Japan"],
           "metadata": {
             "network": "tcp",
@@ -387,6 +388,8 @@ final class MihomoAPIClientTests: XCTestCase {
             "destinationIP": "93.184.216.34",
             "destinationPort": 443,
             "inboundPort": "7890",
+            "inboundName": "local",
+            "inboundUser": "test-user",
             "processName": "Safari",
             "processPath": "/Applications/Safari.app"
           }
@@ -405,6 +408,9 @@ final class MihomoAPIClientTests: XCTestCase {
     XCTAssertEqual(connection.sourceAddress, "192.168.1.2:53000")
     XCTAssertEqual(connection.destinationAddress, "93.184.216.34:443")
     XCTAssertEqual(connection.inboundPort, 7890)
+    XCTAssertEqual(connection.inboundName, "local")
+    XCTAssertEqual(connection.inboundUser, "test-user")
+    XCTAssertNotNil(connection.startedAt)
     XCTAssertEqual(connection.ruleSummary, "DOMAIN-SUFFIX example.com")
     XCTAssertEqual(connection.chain, ["Proxy", "Japan"])
   }

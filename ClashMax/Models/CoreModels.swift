@@ -4977,6 +4977,9 @@ struct ConnectionSnapshot: Identifiable, Codable, Equatable, Sendable {
   var remoteDestinationIP: String?
   var destinationPort: Int?
   var inboundPort: Int?
+  var inboundName: String?
+  var inboundUser: String?
+  var dnsObservation: ConnectionDNSObservation?
   var processName: String?
   var processPath: String?
   /// `metadata.dnsMode` (`normal`, `fake-ip`, `redir-host`) — how the name in front of this
@@ -5004,6 +5007,8 @@ struct ConnectionSnapshot: Identifiable, Codable, Equatable, Sendable {
     remoteDestinationIP: String? = nil,
     destinationPort: Int? = nil,
     inboundPort: Int? = nil,
+    inboundName: String? = nil,
+    inboundUser: String? = nil,
     processName: String? = nil,
     processPath: String? = nil,
     dnsMode: String? = nil,
@@ -5027,6 +5032,8 @@ struct ConnectionSnapshot: Identifiable, Codable, Equatable, Sendable {
     self.remoteDestinationIP = remoteDestinationIP?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     self.destinationPort = destinationPort
     self.inboundPort = inboundPort
+    self.inboundName = inboundName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    self.inboundUser = inboundUser?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     self.processName = processName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     self.processPath = processPath?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     self.dnsMode = dnsMode?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty

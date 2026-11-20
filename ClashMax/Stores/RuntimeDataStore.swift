@@ -46,6 +46,7 @@ final class RuntimeDataStore {
   // stale tick can't overwrite a newer synchronous update or a clear.
   @ObservationIgnored
   private var connectionStateGeneration: UInt64 = 0
+  @ObservationIgnored var dnsLogIndex = ConnectionDNSLogIndex()
 
   /// `logLevel` is the runtime log level the user selected. At `debug`/`trace`
   /// it suppresses every visibility filter, so the Log Level setting actually
@@ -100,6 +101,7 @@ final class RuntimeDataStore {
       previousSnapshots: connections,
       snapshots: snapshots,
       limit: AppConstants.retainedConnectionLimit,
+      dnsIndex: dnsLogIndex,
       now: Date()
     )
     applyConnectionMerge(result)
@@ -115,6 +117,7 @@ final class RuntimeDataStore {
     let generation = connectionStateGeneration
     let previousRecords = connectionRecords
     let previousSnapshots = connections
+    let dnsIndex = dnsLogIndex
     let limit = AppConstants.retainedConnectionLimit
     let now = Date()
     let result = await Task.detached(priority: .utility) {
@@ -123,6 +126,7 @@ final class RuntimeDataStore {
         previousSnapshots: previousSnapshots,
         snapshots: snapshots,
         limit: limit,
+        dnsIndex: dnsIndex,
         now: now
       )
     }.value
@@ -163,6 +167,7 @@ final class RuntimeDataStore {
     previousSnapshots: [ConnectionSnapshot],
     snapshots: [ConnectionSnapshot],
     limit: Int,
+    dnsIndex: ConnectionDNSLogIndex,
     now: Date
   ) -> ConnectionMergeResult {
     let activeIDs = Set(snapshots.map(\.id))
@@ -173,7 +178,13 @@ final class RuntimeDataStore {
 
     var nextRecords: [ConnectionRecord] = []
     nextRecords.reserveCapacity(snapshots.count + previousRecords.count)
-    for snapshot in snapshots {
+    let observed = snapshots.map { snapshot in
+      var result = snapshot
+      result.dnsObservation = previousRecordsByID[snapshot.id]?.snapshot.dnsObservation
+        ?? dnsIndex.observation(for: snapshot, now: now)
+      return result
+    }
+    for snapshot in observed {
       var candidate = snapshot
       candidate.endedAt = nil
       candidate.lastSeenAt = now
@@ -220,9 +231,9 @@ final class RuntimeDataStore {
 
     return ConnectionMergeResult(
       records: boundedRecords,
-      snapshots: snapshots,
+      snapshots: observed,
       recordsChanged: boundedRecords != previousRecords,
-      snapshotsChanged: snapshots != previousSnapshots
+      snapshotsChanged: observed != previousSnapshots
     )
   }
 
@@ -283,6 +294,7 @@ final class RuntimeDataStore {
 
   func clearRuntimeCollections() {
     flushPendingLogs()
+    dnsLogIndex = ConnectionDNSLogIndex()
     proxyGroups = []
     proxyProviders = []
     ruleProviders = []
