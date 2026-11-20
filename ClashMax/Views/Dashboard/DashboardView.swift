@@ -3,22 +3,21 @@ import SwiftUI
 struct DashboardView: View {
   @Environment(AppModel.self) private var appModel
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @Namespace private var dashboardNamespace
 
   var body: some View {
     let state = appModel.dashboardRuntimeState
 
     GeometryReader { proxy in
+      let padding = DashboardLayoutMetrics.pagePadding(for: proxy.size.width)
+      let pageWidth = min(proxy.size.width, DashboardLayoutMetrics.dashboardMaxWidth(for: proxy.size.width))
       ScrollView {
         RunningDashboardView(
           currentNodeCoordinator: appModel.dashboardCurrentNodeCoordinator,
           state: state,
-          namespace: dashboardNamespace,
-          reduceMotion: reduceMotion,
-          availableWidth: max(0, proxy.size.width - 2 * DashboardLayoutMetrics.pagePadding(for: proxy.size.width))
+          availableWidth: max(0, pageWidth - 2 * padding)
         )
-        .padding(DashboardLayoutMetrics.pagePadding(for: proxy.size.width))
-        .frame(maxWidth: DashboardLayoutMetrics.dashboardMaxWidth(for: proxy.size.width))
+        .padding(padding)
+        .frame(width: pageWidth)
         .frame(maxWidth: .infinity)
       }
     }

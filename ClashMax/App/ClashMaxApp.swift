@@ -108,6 +108,16 @@ struct ClashMaxApp: App {
       }
 
       CommandMenu("Config") {
+        // ⌘R lives here rather than on the toolbar button, which Home hides in favour of its own
+        // Start/Stop; a menu item keeps the shortcut on every page.
+        Button(appModel.canStopRuntime ? String(localized: "Stop ClashMax") : String(localized: "Start ClashMax")) {
+          if appModel.canStopRuntime { appModel.stop() } else { appModel.start() }
+        }
+        .keyboardShortcut("r", modifiers: [.command])
+        .disabled(!appModel.canStopRuntime && (appModel.dashboardRuntimeState.isStarting || appModel.readinessIssue != nil))
+
+        Divider()
+
         Button(String(localized: "Rule Mode")) {
           appModel.requestMode(.rule)
         }

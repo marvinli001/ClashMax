@@ -80,7 +80,28 @@ struct MenuBarView: View {
       }
 
       VStack(spacing: 7) {
+        // Two different "modes", named for what they decide: how traffic reaches the core
+        // (Traffic Capture: System Proxy / TUN / NE, plus the System Proxy switch that only
+        // applies to the first), then where the core sends it (Run Mode: Rule / Global / Direct).
         MenuBarProxyModeSelector()
+
+        MenuBarControlRow(title: String(localized: "System Proxy"), systemImage: "network.badge.shield.half.filled") {
+          Toggle("", isOn: Binding(
+            get: { appModel.systemProxyEnabled },
+            set: { appModel.setSystemProxyEnabled($0) }
+          ))
+          .labelsHidden()
+          .toggleStyle(.switch)
+          .accessibilityLabel(String(localized: "System Proxy"))
+        }
+        .disabled(appModel.proxyRoutingMode != .systemProxy)
+        .help(
+          appModel.proxyRoutingMode == .systemProxy
+            ? String(localized: "System Proxy")
+            : String(localized: "System Proxy requires System Proxy routing.")
+        )
+
+        Divider()
 
         MenuBarControlRow(title: String(localized: "Run Mode"), systemImage: "slider.horizontal.3") {
           MenuBarPopUpSelection(
@@ -127,22 +148,6 @@ struct MenuBarView: View {
         if !groupLayout.overflowGroups.isEmpty {
           MenuBarMoreGroupsRow(groups: groupLayout.overflowGroups)
         }
-
-        MenuBarControlRow(title: systemProxyToggleTitle, systemImage: "network.badge.shield.half.filled") {
-          Toggle("", isOn: Binding(
-            get: { appModel.systemProxyEnabled },
-            set: { appModel.setSystemProxyEnabled($0) }
-          ))
-          .labelsHidden()
-          .toggleStyle(.switch)
-          .accessibilityLabel(systemProxyToggleTitle)
-        }
-        .disabled(appModel.proxyRoutingMode != .systemProxy)
-        .help(
-          appModel.proxyRoutingMode == .systemProxy
-            ? String(localized: "System Proxy")
-            : String(localized: "System Proxy requires System Proxy routing.")
-        )
       }
 
       Divider()
@@ -211,12 +216,6 @@ struct MenuBarView: View {
 
   private var primaryActionSymbol: String {
     appModel.canStopRuntime ? "stop.fill" : "play.fill"
-  }
-
-  private var systemProxyToggleTitle: String {
-    appModel.systemProxyEnabled
-      ? String(localized: "Stop Proxy Gateway")
-      : String(localized: "Start Proxy Gateway")
   }
 
   private func runRuntime() {
@@ -398,7 +397,7 @@ struct MenuBarProxyModeSelector: View {
 
   var body: some View {
     MenuBarControlRow(
-      title: String(localized: "Proxy Mode"),
+      title: String(localized: "Traffic Capture"),
       systemImage: appModel.proxyRoutingMode.symbolName
     ) {
       HStack(spacing: 8) {

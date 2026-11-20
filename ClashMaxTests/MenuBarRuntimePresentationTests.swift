@@ -324,6 +324,33 @@ final class MenuBarStatusItemImageTests: XCTestCase {
     XCTAssertGreaterThan(alphaPixels(in: rep, yRange: rep.pixelsHigh / 2..<rep.pixelsHigh), 0)
   }
 
+  func testMenuBarLogoAssetGlyphFillsItsCanvas() throws {
+    // Both menu bar paths draw the whole asset canvas into a 16pt box, so any transparent
+    // padding in the PNGs shrinks the cat. The original asset left ~45% padding and rendered
+    // the glyph at ~8pt next to the traffic rows.
+    let logo = try XCTUnwrap(NSImage(named: "ClashMaxMenuBarLogo"))
+    let side = 64
+    let rep = try XCTUnwrap(NSBitmapImageRep(
+      bitmapDataPlanes: nil, pixelsWide: side, pixelsHigh: side, bitsPerSample: 8, samplesPerPixel: 4,
+      hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+    ))
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+    logo.draw(in: NSRect(x: 0, y: 0, width: side, height: side))
+    NSGraphicsContext.restoreGraphicsState()
+
+    var minX = Int.max, minY = Int.max, maxX = -1, maxY = -1
+    for x in 0..<side {
+      for y in 0..<side where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.1 {
+        minX = min(minX, x); maxX = max(maxX, x)
+        minY = min(minY, y); maxY = max(maxY, y)
+      }
+    }
+    XCTAssertGreaterThanOrEqual(maxX, 0, "Logo drew no pixels")
+    let fill = Double(max(maxX - minX, maxY - minY) + 1) / Double(side)
+    XCTAssertGreaterThan(fill, 0.85)
+  }
+
   private func solidLogo() -> NSImage {
     NSImage(size: NSSize(width: 16, height: 16), flipped: false) { rect in
       NSColor.black.setFill()

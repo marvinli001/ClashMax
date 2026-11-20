@@ -1,49 +1,27 @@
-import Pow
 import SwiftUI
 
 struct RunningDashboardView: View {
   @Environment(AppModel.self) private var appModel
   @Environment(RuntimeDataStore.self) private var runtimeData
-  // Owned by AppModel so the Current Node card repaints from the retained
-  // snapshot when the user returns to the dashboard tab (see ProxiesView).
-  private let currentNodeCoordinator: ProxySearchCoordinator
-  @State private var selectedProxyGroupName: String?
+  let currentNodeCoordinator: ProxySearchCoordinator
   let state: DashboardRuntimeState
-  let namespace: Namespace.ID
-  let reduceMotion: Bool
   let availableWidth: CGFloat
+  @State private var selectedProxyGroupName: String?
+  @State private var metricsVisible = true
 
-  init(
-    currentNodeCoordinator: ProxySearchCoordinator,
-    state: DashboardRuntimeState,
-    namespace: Namespace.ID,
-    reduceMotion: Bool,
-    availableWidth: CGFloat
-  ) {
-    self.currentNodeCoordinator = currentNodeCoordinator
-    self.state = state
-    self.namespace = namespace
-    self.reduceMotion = reduceMotion
-    self.availableWidth = availableWidth
-  }
-
-  // Four things, in the order a person checks them after pressing Start: is it running and what
-  // is it carrying (header and its numbers), which node am I on and what does the world see (node +
-  // public IP), how busy is it (traffic + groups). The routing checks only take a row when one of
-  // them is failing; the status strip already says TUN / NE is on. Everything else the old
-  // dashboard repeated here (controller address, rule counts, the last six log lines) has a page
-  // of its own.
   var body: some View {
-    let selection = resolvedCurrentSelection
-    let resolvedGroups = currentNodeCoordinator.snapshot.unfilteredGroups
-    let groupsAreLoading = resolvedGroupsAreLoading
-    return VStack(spacing: 12) {
-      RunningHeaderCard(
-        state: state,
-        namespace: namespace,
-        reduceMotion: reduceMotion,
-        availableWidth: availableWidth
-      )
+    let groups = currentNodeCoordinator.snapshot.unfilteredGroups
+    let group = DashboardProxySelectionState.resolvedGroup(from: groups, preferredName: selectedProxyGroupName)
+    let node = group.flatMap(DashboardProxySelectionState.currentNode)
+    let loading = state.usesOperationalLayout && groups.isEmpty
+      && (state.isStarting || appModel.runtimeDataLoading || (!currentNodeCoordinator.snapshot.hasResolved && !appModel.visibleProxyGroups.isEmpty))
+    let compact = availableWidth < DashboardLayoutMetrics.runningPairColumnsBreakpoint
+    let entrance = state.isStarting || appModel.sessionStartedAt.map { Date().timeIntervalSince($0) < 3 } == true
+
+    VStack(alignment: .leading, spacing: HomeMetrics.sectionSpacing) {
+      HomeHeroCard(state: state, compact: compact, groups: groups, group: group, node: node,
+                   isLoading: loading, selectedGroupName: $selectedProxyGroupName)
+        .modifier(RuntimeContentEntrance(delay: 0, isEnabled: entrance))
 
       if case let .crashed(message) = state {
         HStack(alignment: .top, spacing: 12) {
@@ -55,9 +33,12 @@ struct RunningDashboardView: View {
           Button(String(localized: "Status")) { appModel.selectedSection = .status }
         }
         .font(.callout)
-        .padding(12)
-        .dashboardCard()
+        .padding(HomeMetrics.cardPadding)
+        .homeCard()
       }
+
+      HomeControlCard(state: state, compact: compact)
+        .modifier(RuntimeContentEntrance(delay: 0.04, isEnabled: entrance))
 
       if appModel.proxyRoutingMode == .tun {
         TunDiagnosticsAttentionRow(availableWidth: availableWidth)
@@ -66,232 +47,170 @@ struct RunningDashboardView: View {
         NetworkExtensionAttentionRow(availableWidth: availableWidth)
       }
 
-      if state.usesOperationalLayout {
-        if resolvedGroups.isEmpty, !groupsAreLoading {
-          noProxyGroupsRow
-          PublicIPInfoCard(availableWidth: availableWidth, currentGroup: nil, currentNode: nil)
-            .modifier(RuntimeContentEntrance(delay: 0.06, isEnabled: animatesRuntimeEntrance))
-        } else {
-          DashboardResponsivePair(availableWidth: availableWidth) {
-            currentNodeCard(groups: resolvedGroups, isLoading: groupsAreLoading)
-          } trailing: {
-            PublicIPInfoCard(
-              availableWidth: runtimeInfoCardWidth(share: 0.4),
-              currentGroup: selection.group,
-              currentNode: selection.node,
-              hasMissingSelection: selection.hasMissingSelection
-            )
-            .modifier(RuntimeContentEntrance(delay: 0.06, isEnabled: animatesRuntimeEntrance))
+      if appModel.profileStore.activeProfile != nil {
+        HomeMetricGrid(compact: compact, live: state.usesOperationalLayout)
+          .modifier(RuntimeContentEntrance(delay: 0.08, isEnabled: entrance))
+          .onScrollVisibilityChange(threshold: 0.1) { metricsVisible = $0 }
+
+        if state.usesOperationalLayout {
+          Group {
+            if groups.isEmpty, !loading {
+              TrafficRuntimeCard(showRates: !metricsVisible, starting: state.isStarting)
+            } else {
+              DashboardResponsivePair(availableWidth: availableWidth) {
+                TrafficRuntimeCard(showRates: !metricsVisible, starting: state.isStarting)
+              } trailing: {
+                ProxyGroupsRuntimeCard(groups: groups, trackedGroup: group?.name)
+              }
+            }
           }
+          .modifier(RuntimeContentEntrance(delay: 0.12, isEnabled: entrance))
+
+          HomeDestinationsCard(compact: compact)
+            .modifier(RuntimeContentEntrance(delay: 0.16, isEnabled: entrance))
         }
-        if resolvedGroups.isEmpty, !groupsAreLoading {
-          trafficCard
-        } else {
-          DashboardResponsivePair(availableWidth: availableWidth) {
-            trafficCard
-          } trailing: {
-            ProxyGroupsRuntimeCard(groups: resolvedGroups, isLoading: groupsAreLoading)
-              .modifier(RuntimeContentEntrance(delay: 0.16, isEnabled: animatesRuntimeEntrance))
-          }
-        }
-      } else if !resolvedGroups.isEmpty || groupsAreLoading {
-        // Before launch the same two cards the running page leads with, already usable: the node
-        // can be chosen offline and is applied on Start, so pressing Start changes the numbers,
-        // not the layout.
-        DashboardResponsivePair(availableWidth: availableWidth) {
-          currentNodeCard(groups: resolvedGroups, isLoading: groupsAreLoading)
-        } trailing: {
-          ProxyGroupsRuntimeCard(groups: resolvedGroups, isLoading: groupsAreLoading)
-        }
-      } else if appModel.profileStore.activeProfile != nil {
-        noProxyGroupsRow
       }
     }
     .task {
-      // First population: resolve providers off-main so the dashboard never expands a large config
-      // synchronously in the body (issue #10).
       currentNodeCoordinator.submit(appModel.proxySearchInput(searchText: ""), reason: .initial)
     }
     .onChange(of: appModel.proxyPageSettings.sortOrder) { _, _ in
       currentNodeCoordinator.submit(appModel.proxySearchInput(searchText: ""), reason: .sort)
     }
-    .onChange(of: currentNodeDataSignature) { _, _ in
+    .onChange(of: ProxySearchInputSignature(groups: appModel.visibleProxyGroups, providers: runtimeData.proxyProviders)) { _, _ in
       currentNodeCoordinator.submit(appModel.proxySearchInput(searchText: ""), reason: .data)
     }
   }
-
-  private var noProxyGroupsRow: some View {
-    HStack(alignment: .center, spacing: 12) {
-      Image(systemName: "point.3.connected.trianglepath.dotted")
-        .foregroundStyle(.secondary)
-      VStack(alignment: .leading, spacing: 4) {
-        Text("Current Node").font(.callout.weight(.medium))
-        Text("This profile has no switchable proxy groups.")
-          .font(.callout).foregroundStyle(.secondary)
-      }
-      Spacer(minLength: 0)
-      Button(String(localized: "Profiles")) { appModel.selectedSection = .profiles }
-    }
-    .padding(14)
-    .dashboardCard()
-  }
-
-  private func currentNodeCard(groups: [ProxyGroup], isLoading: Bool) -> some View {
-    CurrentProxyRuntimeCard(
-      state: state, availableWidth: state.usesOperationalLayout ? runtimeInfoCardWidth(share: 0.6) : availableWidth,
-      resolvedGroups: groups, isLoading: isLoading, selectedGroupName: $selectedProxyGroupName
-    )
-    .modifier(RuntimeContentEntrance(delay: 0, isEnabled: animatesRuntimeEntrance))
-  }
-
-  private var trafficCard: some View {
-    TrafficRuntimeCard(samples: runtimeData.trafficHistory, sampleCount: runtimeData.trafficSampleCount,
-                       sample: runtimeData.trafficSample, isLoading: showsInitialRuntimeSkeletons)
-      .modifier(RuntimeContentEntrance(delay: 0.12, isEnabled: animatesRuntimeEntrance))
-  }
-
-  private var animatesRuntimeEntrance: Bool {
-    state.isStarting || appModel.sessionStartedAt.map { Date().timeIntervalSince($0) < 3 } == true
-  }
-
-  /// The provider-resolved current group/node (and whether the selection is missing) shared by the
-  /// Current Node card and the public-IP proxy-effect check, so neither re-expands providers.
-  private var resolvedCurrentSelection: (group: ProxyGroup?, node: ProxyNode?, hasMissingSelection: Bool) {
-    let groups = DashboardProxySelectionState.selectableGroups(from: currentNodeCoordinator.snapshot.unfilteredGroups)
-    let group = DashboardProxySelectionState.resolvedGroup(from: groups, preferredName: selectedProxyGroupName)
-    let node = group.flatMap(DashboardProxySelectionState.currentNode)
-    let missing = group.map(DashboardProxySelectionState.hasMissingSelection) ?? false
-    return (group, node, missing)
-  }
-
-  /// Watches the same group/provider fingerprint the Proxies page does, so the off-main resolve only
-  /// reruns when something that affects the current node actually changed.
-  private var currentNodeDataSignature: ProxySearchInputSignature {
-    ProxySearchInputSignature(groups: appModel.visibleProxyGroups, providers: runtimeData.proxyProviders)
-  }
-
-  /// Shows the skeleton only during genuine async loading — while starting, while runtime data is
-  /// loading with nothing resolved yet, or before the off-main pipeline has produced its first
-  /// result for a non-empty config — never in place of the empty/recovery states (AGENTS.md).
-  private var resolvedGroupsAreLoading: Bool {
-    if state.isStarting { return true }
-    let snapshot = currentNodeCoordinator.snapshot
-    if appModel.runtimeDataLoading, snapshot.unfilteredGroups.isEmpty { return true }
-    if !snapshot.hasResolved, !appModel.visibleProxyGroups.isEmpty { return true }
-    return false
-  }
-
-  private func runtimeInfoCardWidth(share: CGFloat) -> CGFloat {
-    if availableWidth >= DashboardLayoutMetrics.runningPairColumnsBreakpoint {
-      return max(0, (availableWidth - DashboardLayoutMetrics.dashboardGridSpacing) * share)
-    }
-    return availableWidth
-  }
-
-  private var showsInitialRuntimeSkeletons: Bool {
-    (appModel.runtimeDataLoading || state.isStarting)
-      && runtimeData.proxyGroups.isEmpty
-      && runtimeData.connections.isEmpty
-      && runtimeData.rules.isEmpty
-      && runtimeData.trafficHistory.isEmpty
-  }
 }
 
-private struct RunningHeaderCard: View {
+private struct HomeHeroCard: View {
   @Environment(AppModel.self) private var appModel
   let state: DashboardRuntimeState
-  let namespace: Namespace.ID
-  let reduceMotion: Bool
-  let availableWidth: CGFloat
+  let compact: Bool
+  let groups: [ProxyGroup]
+  let group: ProxyGroup?
+  let node: ProxyNode?
+  let isLoading: Bool
+  @Binding var selectedGroupName: String?
+  @State private var addingSubscription = false
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      HStack(spacing: 14) {
-        Button {
-          if appModel.canStopRuntime { appModel.stop() } else { appModel.start() }
-        } label: {
-          CoreVisualView(state: state, reduceMotion: reduceMotion).frame(width: 64, height: 64)
-        }
-        .buttonStyle(.plain)
-        .disabled(!appModel.canStopRuntime && (state.isStarting || appModel.readinessIssue != nil))
-        .help(appModel.canStopRuntime ? String(localized: "Stop ClashMax") : String(localized: "Start ClashMax"))
-        .accessibilityLabel(appModel.canStopRuntime ? Text("Stop ClashMax") : Text("Start ClashMax"))
-        profileMenu
-          .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-          .layoutPriority(1)
-
-        // Traffic capture sits with the other runtime controls, one click from a switch, instead
-        // of as a caption under the profile name.
-        HStack(spacing: 6) {
-          routingMenu
-          ProxyRoutingSettingsButton()
-        }
-        .fixedSize()
-
-        Menu {
-          Button("Check AI services") { appModel.aiServiceCheckRequest = AIServiceCheckRequest() }
-            .disabled(!appModel.isRunning)
-          Stepper(value: Binding(get: { appModel.overrides.mixedPort }, set: { appModel.setMixedPort($0) }), in: 1024...65535) {
-            Text("Mixed Port: \(String(appModel.overrides.mixedPort))")
-          }
-          Divider()
-          Button(String(localized: "Settings")) { appModel.selectedSection = .settings }
-        } label: {
-          Image(systemName: "ellipsis.circle")
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Runtime settings")
-        .accessibilityLabel("Runtime settings")
-
-        if state.isStarting { ProgressView().controlSize(.small) }
-        Button {
-          if appModel.canStopRuntime { appModel.stop() } else { appModel.start() }
-        } label: {
-          Label(appModel.canStopRuntime ? "Stop" : "Start", systemImage: "power")
-            .frame(minWidth: 66)
-        }
-        .disabled(!appModel.canStopRuntime && (state.isStarting || appModel.readinessIssue != nil))
-        .modifier(RuntimePrimaryActionStyle(canStop: appModel.canStopRuntime))
-        .controlSize(.regular)
+    let hasProfile = appModel.profileStore.activeProfile != nil
+    let missing = group.map(DashboardProxySelectionState.hasMissingSelection) ?? false
+    let probe = DashboardProxySelectionState.automaticDelayProbeKey(
+      sessionStartedAt: appModel.sessionStartedAt, isRunning: state.isRunning,
+      canControlRuntimeProxies: appModel.canControlRuntimeProxies, group: group, node: node
+    )
+    VStack(alignment: .leading, spacing: compact ? 8 : 12) {
+      HStack(spacing: 10) {
+        statusChip
+        if !appModel.profileStore.profiles.isEmpty { profileMenu }
+        Spacer(minLength: 4)
+        runtimeMenu
       }
-      Divider()
-      if state.usesOperationalLayout {
-        DashboardRuntimeNumbers(reduceMotion: reduceMotion)
-          .transition(.opacity)
-      } else if appModel.profileStore.profiles.isEmpty {
-        HStack(spacing: 12) {
-          Label("Add a profile to start ClashMax.", systemImage: "doc.badge.plus")
-            .font(.callout)
-            .foregroundStyle(.secondary)
-          Spacer(minLength: 8)
-          Button(String(localized: "Import YAML…")) { appModel.importLocalProfile() }
-          Button(String(localized: "Add Subscription…")) { appModel.selectedSection = .profiles }
-            .buttonStyle(.borderedProminent)
+      if hasProfile {
+        let layout = compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 10))
+          : AnyLayout(HStackLayout(alignment: .center, spacing: 24))
+        layout {
+          VStack(alignment: .leading, spacing: 8) {
+            nodeContent(missing: missing)
+            if let failure = appModel.activeStartValidationFailure {
+              recovery(message: failure, section: .profiles)
+            } else if case let .blocked(reason) = state {
+              recovery(message: localizedRuntimeText(reason), section: .status)
+            } else if appModel.previewRuntimeActive {
+              Text("Preview runtime is active. System traffic is not captured.")
+                .font(.caption).foregroundStyle(.secondary)
+            }
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
+          HomeExitWell(compact: compact, running: state.isRunning, currentGroup: group, currentNode: node, hasMissingSelection: missing)
+            .frame(minWidth: 220, maxWidth: compact ? .infinity : 320)
         }
       } else {
-        VStack(alignment: .leading, spacing: 12) {
-          if case let .blocked(reason) = state {
-            Label(localizedRuntimeText(reason), systemImage: "exclamationmark.triangle.fill")
-              .font(.callout)
-              .foregroundStyle(.orange)
-              .fixedSize(horizontal: false, vertical: true)
-          } else if appModel.previewRuntimeActive {
-            Label("Preview runtime is active. System traffic is not captured.", systemImage: "eye")
-              .font(.callout).foregroundStyle(.secondary)
-          }
-          DashboardLaunchFacts()
+        Text("Add a profile to start ClashMax.")
+          .font(.system(size: 24, weight: .semibold))
+        HStack {
+          Button(String(localized: "Import YAML…")) { appModel.importLocalProfile() }
+          Button(String(localized: "Add Subscription…")) { addingSubscription = true }
+            .buttonStyle(.borderedProminent)
         }
-        .transition(.opacity)
       }
     }
-    .padding(16)
-    .dashboardCard()
+    .padding(HomeMetrics.heroPadding)
+    .homeCard()
+    .task(id: probe) {
+      guard probe != nil, let group, let node, node.resolvedDelayState != .testing else { return }
+      appModel.testDelay(in: group, for: node)
+    }
+    .sheet(isPresented: $addingSubscription) {
+      AddSubscriptionSheet(onCancel: { addingSubscription = false }, onAdded: { addingSubscription = false })
+    }
+  }
+
+  @ViewBuilder private var statusChip: some View {
+    if appModel.profileStore.activeProfile == nil {
+      HomeChip(text: String(localized: "No Profile"), dot: true)
+    } else if appModel.activeStartValidationFailure != nil, !state.isStarting {
+      HomeChip(text: String(localized: "Validation failed"), tone: .red, dot: true)
+    } else {
+      switch state {
+      case .running: HomeChip(text: String(localized: "Running"), tone: .green, dot: true)
+      case .starting: HomeChip(text: String(localized: "Starting"), busy: true)
+      case .crashed: HomeChip(text: String(localized: "Crashed"), tone: .red, dot: true)
+      case .blocked: HomeChip(text: String(localized: "Unable to start"), tone: .orange, dot: true)
+      case .stopped where appModel.previewRuntimeActive: HomeChip(text: String(localized: "Preview runtime"), dot: true)
+      case .stopped: HomeChip(text: String(localized: "Stopped"), dot: true)
+      }
+    }
+  }
+
+  @ViewBuilder private func nodeContent(missing: Bool) -> some View {
+    if let group, missing {
+      let message = selectionUnavailableMessage(group: group)
+      Text("Selected node unavailable").font(.system(size: 24, weight: .semibold))
+      HStack {
+        groupMenu(group)
+        HomeChip(text: String(localized: "Unavailable"), symbol: "exclamationmark.triangle", tone: .orange)
+        Button(String(localized: "Refresh")) {
+          if appModel.canControlRuntimeProxies { appModel.reloadRuntimeData() }
+          else { _ = appModel.profileCoordinator.refreshPreview() }
+        }
+      }
+      Text(message).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+    } else if let group, let node {
+      DashboardNodePickerButton(group: group, currentNode: node, hero: true)
+      HStack(spacing: 6) {
+        groupMenu(group)
+        HomeChip(text: DashboardProxySelectionState.typeLabel(for: node))
+        Button { appModel.testDelay(in: group, for: node) } label: {
+          DashboardDelayBadge(state: node.resolvedDelayState, showsSymbol: true)
+        }
+        .buttonStyle(.plain)
+        .disabled(!appModel.canControlRuntimeProxies || !node.supportsDelayTesting || node.resolvedDelayState == .testing)
+        .help(nodeDelayTestHelp(node: node))
+      }
+    } else if isLoading {
+      ClashMaxCurrentNodeSkeleton(isCompact: compact)
+    } else {
+      Text("This profile has no switchable proxy groups.").font(.headline)
+      Button(String(localized: "Profiles")) { appModel.selectedSection = .profiles }
+    }
+  }
+
+  private func recovery(message: String, section: AppSection) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Text(message).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+      Button(section == .profiles ? String(localized: "Profiles") : String(localized: "Show in Status")) {
+        appModel.selectedSection = section
+      }
+      .buttonStyle(.link)
+    }
   }
 
   private var profileMenu: some View {
     let profiles = appModel.profileStore.profiles
+    let name = appModel.profileStore.activeProfile?.name ?? String(localized: "No Profile")
     return PopUpSelectionButton(
       selection: appModel.profileStore.activeProfileID,
       items: { profiles.map { PopUpSelectionItem(value: $0.id, title: $0.name) } },
@@ -299,123 +218,298 @@ private struct RunningHeaderCard: View {
         if let profile = profiles.first(where: { $0.id == id }) { appModel.selectProfile(profile) }
       }
     ) {
-      HStack(spacing: 7) {
-        Text(appModel.profileStore.activeProfile?.name ?? String(localized: "No Profile"))
-          .font(.title3.weight(.semibold))
-          .lineLimit(1)
-          .truncationMode(.middle)
-        Image(systemName: "chevron.up.chevron.down").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+      HStack(spacing: 5) {
+        Text(name).lineLimit(1).truncationMode(.middle)
+        Image(systemName: "chevron.up.chevron.down").font(.caption2.weight(.semibold))
       }
-      .contentShape(Rectangle())
+      .font(.callout).foregroundStyle(.secondary).contentShape(Rectangle())
+      .frame(maxWidth: 360, alignment: .leading)
     }
     .buttonStyle(.plain)
-    .disabled(state.isStarting || profiles.isEmpty)
-    .help(appModel.profileStore.activeProfile?.name ?? String(localized: "No Profile"))
+    .disabled(state.isStarting)
+    .help(name)
     .accessibilityLabel("Profile")
-    .accessibilityValue(appModel.profileStore.activeProfile?.name ?? String(localized: "No Profile"))
+    .accessibilityValue(name)
   }
 
-  private var routingMenu: some View {
-    PopUpSelectionButton(
-      selection: appModel.proxyRoutingMode,
-      items: { ProxyRoutingMode.allCases.map { PopUpSelectionItem(value: $0, title: $0.displayName, systemImage: $0.symbolName) } },
-      onSelect: { appModel.requestProxyRoutingMode($0) }
-    ) {
-      HStack(spacing: 5) {
-        Image(systemName: appModel.proxyRoutingMode.symbolName)
-        Text(appModel.proxyRoutingMode.displayName)
-          .lineLimit(1)
-        Image(systemName: "chevron.up.chevron.down")
-          .font(.caption2.weight(.semibold))
-          .foregroundStyle(.secondary)
+  private var runtimeMenu: some View {
+    Menu {
+      Button("Check AI services") { appModel.aiServiceCheckRequest = AIServiceCheckRequest() }
+        .disabled(!appModel.isRunning)
+      Stepper(value: Binding(get: { appModel.overrides.mixedPort }, set: { appModel.setMixedPort($0) }), in: 1024...65535) {
+        Text("Mixed Port: \(String(appModel.overrides.mixedPort))")
       }
+      Divider()
+      Button(String(localized: "Settings")) { appModel.selectedSection = .settings }
+    } label: {
+      Image(systemName: "ellipsis.circle")
     }
-    .buttonStyle(.bordered)
-    .controlSize(.regular)
-    .disabled(state.isStarting)
-    .help("Traffic Capture")
-    .accessibilityLabel("Proxy Routing")
-    .accessibilityValue(appModel.proxyRoutingMode.displayName)
+    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+    .help("Runtime settings").accessibilityLabel("Runtime settings")
+  }
+
+  private func groupMenu(_ group: ProxyGroup) -> some View {
+    PopUpSelectionButton(
+      selection: group.name,
+      items: { DashboardProxySelectionState.selectableGroups(from: groups).map { PopUpSelectionItem(value: $0.name, title: $0.name) } },
+      onSelect: { selectedGroupName = $0 }
+    ) {
+      HomeChip(text: group.name, symbol: "square.stack.3d.up")
+    }
+    .buttonStyle(.plain)
+    .help(group.name)
+    .accessibilityLabel("Proxy Group").accessibilityValue(group.name)
+  }
+
+  private func selectionUnavailableMessage(group: ProxyGroup) -> String {
+    guard let selected = group.selected, !selected.isEmpty else {
+      return String(localized: "Refresh runtime data or check the active profile's proxy-groups.")
+    }
+    return String(format: String(localized: "\"%@\" isn't in the current runtime data for %@. Refresh runtime data, or check the profile/provider for a mismatch."),
+                  selected, group.name)
+  }
+
+  private func nodeDelayTestHelp(node: ProxyNode) -> String {
+    if !node.supportsDelayTesting { return String(localized: "Built-in outbounds have no connection to measure.") }
+    if !appModel.canControlRuntimeProxies { return appModel.proxyRuntimeActionMessage }
+    return String(localized: "Test current node delay")
   }
 }
 
-/// The header's numbers: what is moving right now, how much this core has moved, how many
-/// connections are open, how long it has been up and what the core itself weighs.
-///
-/// The labels are monochrome on purpose — on this page colour means state, or one of the two
-/// traffic curves, and nothing else.
-private struct DashboardRuntimeNumbers: View {
+/// The resolved group, selected node and measured exit shown in the Home header.
+struct DashboardHeaderRoute: Equatable {
+  enum Exit: Equatable {
+    /// No probe has run yet, or it failed with nothing to fall back on; the line leaves exit out.
+    case unknown
+    case checking
+    case located(String)
+  }
+
+  let groupName: String?
+  let nodeName: String?
+  let exit: Exit
+
+  init(group: ProxyGroup?, node: ProxyNode?, hasMissingSelection: Bool, exit: PublicIPInfoState) {
+    groupName = group?.name
+    // A missing selection is reported by the Current Node card; repeating a stale name here would
+    // claim a route the core is not using.
+    nodeName = hasMissingSelection ? nil : Self.trimmed(node?.name ?? group?.selected)
+    self.exit = Self.exit(from: exit)
+  }
+
+  static func exit(from state: PublicIPInfoState) -> Exit {
+    if let info = state.info, let place = location(of: info) { return .located(place) }
+    return state.isLoading ? .checking : .unknown
+  }
+
+  /// "Tokyo, Japan", falling back to the country alone or its code.
+  static func location(of info: PublicIPInfo) -> String? {
+    let country = trimmed(info.countryName) ?? trimmed(info.countryCode)
+    let city = trimmed(info.city)
+    switch (city, country) {
+    case let (city?, country?) where city != country: return "\(city), \(country)"
+    case let (_, country?): return country
+    case let (city?, nil): return city
+    default: return nil
+    }
+  }
+
+  private static func trimmed(_ value: String?) -> String? {
+    guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
+    return value
+  }
+}
+
+private struct HomeControlCard: View {
   @Environment(AppModel.self) private var appModel
-  @Environment(RuntimeDataStore.self) private var runtimeData
-  let reduceMotion: Bool
+  let state: DashboardRuntimeState
+  let compact: Bool
 
   var body: some View {
-    // Uptime is the only value that changes without a runtime event, so only it needs the clock.
-    TimelineView(.periodic(from: Date(), by: 1)) { context in
-      let metrics = metrics(now: context.date)
-      ViewThatFits(in: .horizontal) {
-        HStack(alignment: .top, spacing: 12) {
-          ForEach(metrics) { metric in
-            DashboardMetricCell(metric: metric, reduceMotion: reduceMotion)
-              .frame(minWidth: 112, maxWidth: .infinity, alignment: .leading)
-          }
+    HStack(alignment: .center, spacing: 22) {
+      if compact {
+        VStack(alignment: .leading, spacing: 8) {
+          HStack { captureLabel.frame(width: 94, alignment: .leading); capturePicker }
+          HStack { modeLabel.frame(width: 94, alignment: .leading); modePicker }
         }
-
-        Grid(alignment: .topLeading, horizontalSpacing: 12, verticalSpacing: 12) {
-          GridRow {
-            ForEach(metrics.prefix(3)) { metric in
-              DashboardMetricCell(metric: metric, reduceMotion: reduceMotion)
-            }
-          }
-          GridRow {
-            ForEach(metrics.dropFirst(3)) { metric in
-              DashboardMetricCell(metric: metric, reduceMotion: reduceMotion)
-            }
-          }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+      } else {
+        VStack(alignment: .leading, spacing: 7) { captureLabel; capturePicker }
+        VStack(alignment: .leading, spacing: 7) { modeLabel; modePicker }
       }
+      Spacer(minLength: 0)
+      HomePowerButton(state: state)
     }
+    .frame(maxHeight: .infinity, alignment: .center)
+    .padding(HomeMetrics.cardPadding)
+    .homeCard()
   }
 
-  private func metrics(now: Date) -> [DashboardRuntimeMetric] {
-    DashboardRuntimeMetric.all(
-      sample: runtimeData.trafficSample,
-      totals: runtimeData.trafficTotals,
-      connectionCount: runtimeData.connections.count,
-      sessionStartedAt: appModel.sessionStartedAt,
-      memory: runtimeData.memorySample,
-      now: now
+  private var captureLabel: some View {
+    Label("Traffic capture", systemImage: "network").font(.caption).foregroundStyle(.secondary)
+  }
+
+  private var modeLabel: some View {
+    Label("Run mode", systemImage: "arrow.triangle.branch").font(.caption).foregroundStyle(.secondary)
+  }
+
+  private var capturePicker: some View {
+    HStack(spacing: 8) {
+      // Every change still goes through `requestProxyRoutingMode`, which owns the confirmation and
+      // the TUN helper guidance; the capsule only draws the choice.
+      GlassSegmentedPicker(
+        title: "Traffic capture",
+        options: ProxyRoutingMode.allCases.map { .init(value: $0, title: $0.displayName, systemImage: $0.symbolName) },
+        selection: appModel.proxyRoutingMode,
+        onSelect: { appModel.requestProxyRoutingMode($0) }
+      )
+      ProxyRoutingSettingsButton()
+    }
+    .disabled(state.isStarting)
+  }
+
+  private var modePicker: some View {
+    GlassSegmentedPicker(
+      title: "Run mode",
+      options: RunMode.allCases.map { .init(value: $0, title: $0.displayName) },
+      selection: appModel.overrides.mode,
+      onSelect: { appModel.requestMode($0) }
     )
+    .disabled(state.isStarting)
   }
 }
 
-/// One number in the header strip, resolved away from SwiftUI so the wording of each placeholder
-/// and total can be tested.
-struct DashboardRuntimeMetric: Identifiable, Equatable {
-  enum Kind: String {
-    case download
-    case upload
-    case connections
-    case uptime
-    case memory
-    case runMode
-    case mixedPort
-    case proxyGroups
-    case nodes
-    case core
+enum HomePowerState: Equatable {
+  case start, stop, starting, restart, blocked
+
+  init(state: DashboardRuntimeState, canStop: Bool, readinessIssue: String?) {
+    if state.isStarting { self = .starting }
+    else if canStop { self = .stop }
+    else if readinessIssue != nil { self = .blocked }
+    else if case .crashed = state { self = .restart }
+    else { self = .start }
   }
 
-  /// Shown until the core has reported the value. An em dash, not "0": zero would be a reading.
-  static let placeholder = "—"
+  var title: LocalizedStringResource {
+    switch self {
+    case .start, .blocked: "Start"
+    case .stop: "Stop"
+    case .starting: "Starting…"
+    case .restart: "Restart"
+    }
+  }
 
+  var tint: Color {
+    switch self {
+    case .start, .starting: .accentColor
+    case .stop: .green
+    case .restart: .red
+    case .blocked: .gray
+    }
+  }
+}
+
+private struct HomePowerButton: View {
+  @Environment(AppModel.self) private var appModel
+  @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var hovered = false
+  let state: DashboardRuntimeState
+
+  var body: some View {
+    let issue = appModel.readinessIssue.map(localizedRuntimeText)
+    let power = HomePowerState(state: state, canStop: appModel.canStopRuntime, readinessIssue: issue)
+    let action = power == .stop ? String(localized: "Stop ClashMax") : String(localized: "Start ClashMax")
+    Button {
+      appModel.canStopRuntime ? appModel.stop() : appModel.start()
+    } label: {
+      HStack(spacing: 10) {
+        ZStack {
+          if power == .stop {
+            Circle().strokeBorder(.green.opacity(0.22), lineWidth: 3).frame(width: 44, height: 44)
+          }
+          core(power)
+        }
+        .frame(width: 44, height: 44)
+        VStack(alignment: .leading, spacing: 1) {
+          Text(power.title).font(.callout.weight(.semibold))
+          if power == .stop {
+            let start = appModel.sessionStartedAt
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+              Text(verbatim: dashboardDurationString(from: start, now: context.date))
+            }
+            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+          } else {
+            let detail = power == .blocked ? shortReadinessIssue : appModel.profileStore.activeProfile?.name
+            Text(detail ?? String(localized: "Ready"))
+              .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+              .lineLimit(1).truncationMode(.middle).help(power == .blocked ? issue ?? "" : detail ?? "")
+          }
+        }
+        .frame(minWidth: 64, maxWidth: 112, alignment: .leading)
+      }
+      .padding(EdgeInsets(top: 5, leading: 5, bottom: 5, trailing: 16))
+      .background { if hovered { Capsule().fill(.primary.opacity(0.035)) } }
+      .homeWell(Capsule())
+      .contentShape(Capsule())
+    }
+    .buttonStyle(HomePowerButtonStyle())
+    .disabled(power == .starting || power == .blocked)
+    .onHover { hovered = $0 }
+    .help(power == .blocked ? issue ?? action : action)
+    .accessibilityLabel(action)
+    .accessibilityValue(power == .blocked ? issue ?? "" : String(localized: power.title))
+  }
+
+  private var shortReadinessIssue: String {
+    if appModel.profileStore.activeProfile == nil { return String(localized: "No Profile") }
+    if appModel.proxyRoutingMode == .tun, appModel.readinessIssue == appModel.tunHelperPreparationState.message {
+      return String(localized: "TUN helper unavailable")
+    }
+    return String(localized: "No Core")
+  }
+
+  private func core(_ power: HomePowerState) -> some View {
+    ZStack {
+      if #available(macOS 26, *), !reduceTransparency {
+        Circle().fill(power.tint)
+          .glassEffect(.regular.tint(power.tint).interactive(), in: Circle())
+      } else {
+        Circle().fill(power.tint).shadow(color: power.tint.opacity(0.35), radius: 6, y: 2)
+      }
+      if power == .starting {
+        ProgressView().controlSize(.small).tint(.white)
+      } else {
+        Image(systemName: power == .restart ? "arrow.clockwise" : "power")
+          .font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+          .symbolEffect(.bounce, options: .nonRepeating, value: !reduceMotion && power == .stop)
+      }
+    }
+    .frame(width: 38, height: 38)
+    .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: power)
+  }
+}
+
+private struct HomePowerButtonStyle: ButtonStyle {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .scaleEffect(!reduceMotion && configuration.isPressed ? 0.96 : 1)
+      .animation(reduceMotion ? nil : .spring(duration: 0.25, bounce: 0.2), value: configuration.isPressed)
+  }
+}
+
+struct DashboardRuntimeMetric: Identifiable, Equatable {
+  enum Kind {
+    case download, upload, connections, memory, runMode, mixedPort, proxyGroups, nodes
+  }
+
+  static let placeholder = "—"
   let kind: Kind
   let value: String
-  /// Drives the direction of the digit roll; `nil` where the value is not a quantity.
-  let numericValue: Double?
-  /// The session total under a rate, e.g. "This session 1.2 GB".
-  let detail: String?
-
+  var unit: String?
+  var numericValue: Double?
+  var detail: String?
   var id: Kind { kind }
 
   var title: LocalizedStringResource {
@@ -423,13 +517,11 @@ struct DashboardRuntimeMetric: Identifiable, Equatable {
     case .download: "Download"
     case .upload: "Upload"
     case .connections: "Connections"
-    case .uptime: "Uptime"
     case .memory: "Core Memory"
-    case .runMode: "Run Mode"
+    case .runMode: "Run mode"
     case .mixedPort: "Mixed Port"
     case .proxyGroups: "Proxy Groups"
     case .nodes: "Nodes"
-    case .core: "Core"
     }
   }
 
@@ -438,117 +530,218 @@ struct DashboardRuntimeMetric: Identifiable, Equatable {
     case .download: "arrow.down"
     case .upload: "arrow.up"
     case .connections: "network"
-    case .uptime: "clock"
     case .memory: "memorychip"
     case .runMode: "arrow.triangle.branch"
     case .mixedPort: "number"
     case .proxyGroups: "square.stack.3d.up"
     case .nodes: "server.rack"
-    case .core: "cpu"
     }
   }
 
-  /// The stopped header's row: what Start will run with. Counts come from the active profile, so
-  /// they are real before the core is.
-  static func launchFacts(
-    runMode: String,
-    mixedPort: Int,
-    groupCount: Int,
-    nodeCount: Int,
-    coreVersion: String?
-  ) -> [DashboardRuntimeMetric] {
+  static func launchFacts(runMode: String, mixedPort: Int, groupCount: Int, nodeCount: Int, coreVersion: String?) -> [Self] {
     [
-      DashboardRuntimeMetric(kind: .runMode, value: runMode, numericValue: nil, detail: nil),
-      DashboardRuntimeMetric(kind: .mixedPort, value: String(mixedPort), numericValue: Double(mixedPort), detail: nil),
-      DashboardRuntimeMetric(kind: .proxyGroups, value: groupCount.formatted(), numericValue: Double(groupCount), detail: nil),
-      DashboardRuntimeMetric(kind: .nodes, value: nodeCount.formatted(), numericValue: Double(nodeCount), detail: nil),
-      DashboardRuntimeMetric(kind: .core, value: coreVersion ?? placeholder, numericValue: nil, detail: nil),
+      Self(kind: .runMode, value: runMode),
+      Self(kind: .mixedPort, value: String(mixedPort)),
+      Self(kind: .proxyGroups, value: groupCount.formatted()),
+      Self(kind: .nodes, value: nodeCount.formatted(), detail: coreVersion),
     ]
   }
 
-  static func all(
-    sample: TrafficSample,
-    totals: TrafficTotals?,
-    connectionCount: Int,
-    sessionStartedAt: Date?,
-    memory: CoreMemorySample,
-    now: Date
-  ) -> [DashboardRuntimeMetric] {
-    [
-      DashboardRuntimeMetric(
-        kind: .download,
-        value: TrafficSample.format(sample.download),
-        numericValue: Double(sample.download),
-        detail: sessionTotal(totals?.download)
-      ),
-      DashboardRuntimeMetric(
-        kind: .upload,
-        value: TrafficSample.format(sample.upload),
-        numericValue: Double(sample.upload),
-        detail: sessionTotal(totals?.upload)
-      ),
-      DashboardRuntimeMetric(
-        kind: .connections,
-        value: connectionCount.formatted(),
-        numericValue: Double(connectionCount),
-        detail: nil
-      ),
-      DashboardRuntimeMetric(
-        kind: .uptime,
-        value: sessionStartedAt.map { dashboardDurationString(from: $0, now: now) } ?? placeholder,
-        numericValue: sessionStartedAt.map { now.timeIntervalSince($0) },
-        detail: nil
-      ),
-      DashboardRuntimeMetric(
-        kind: .memory,
-        value: memory.hasReading ? memory.formattedInUse : placeholder,
-        numericValue: memory.hasReading ? Double(memory.inUse) : nil,
-        detail: nil
-      ),
+  static func live(sample: TrafficSample?, totals: TrafficTotals?, connectionCount: Int, memory: CoreMemorySample, coreVersion: String) -> [Self] {
+    func rate(_ kind: Kind, _ value: Int?, _ total: Int?) -> Self {
+      let parts = value.map(HomeRateParts.split)
+      return Self(kind: kind, value: parts?.number ?? placeholder, unit: parts?.unit,
+                  numericValue: value.map(Double.init), detail: sessionTotal(total))
+    }
+    let resident = memory.hasReading ? HomeRateParts.bytes(memory.inUse) : nil
+    return [
+      rate(.download, sample?.download, totals?.download),
+      rate(.upload, sample?.upload, totals?.upload),
+      Self(kind: .connections, value: connectionCount.formatted(), numericValue: Double(connectionCount)),
+      Self(kind: .memory, value: resident?.number ?? placeholder, unit: resident?.unit,
+           numericValue: memory.hasReading ? Double(memory.inUse) : nil, detail: coreVersion),
     ]
   }
 
-  /// The core counts from its own start, so the total is labelled "this session": it restarts at
-  /// zero with the core, including on every System Proxy ↔ TUN switch.
+  /// Mihomo resets these counters on every core restart, including a change of capture mode.
   static func sessionTotal(_ bytes: Int?) -> String {
     let value = bytes.map(TrafficSample.formatBytes) ?? placeholder
     return String(format: String(localized: "This session %@"), value)
   }
 }
 
-private struct DashboardMetricCell: View {
-  let metric: DashboardRuntimeMetric
-  let reduceMotion: Bool
+private struct HomeMetricGrid: View {
+  @Environment(AppModel.self) private var appModel
+  @Environment(RuntimeDataStore.self) private var runtimeData
+  let compact: Bool
+  let live: Bool
+  private static let core = BundledCoreInfo().versionSummary
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 3) {
-      Label {
-        Text(metric.title)
-      } icon: {
-        Image(systemName: metric.symbolName)
-      }
-      .font(.caption)
-      .foregroundStyle(.secondary)
-      .lineLimit(1)
-
-      Text(metric.value)
-        .font(.system(.title2, design: .rounded).weight(.semibold).monospacedDigit())
-        .contentTransition(.numericText(value: metric.numericValue ?? 0))
-        .lineLimit(1)
-        .minimumScaleFactor(0.7)
-        // Short and ease-out: the numbers change every second, and a roll that outlasts a fraction
-        // of that second reads as lag.
-        .animation(reduceMotion || metric.kind == .uptime ? nil : .easeOut(duration: 0.2), value: metric.value)
-
-      if let detail = metric.detail {
-        Text(detail)
-          .font(.caption.monospacedDigit())
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
-          .minimumScaleFactor(0.8)
+    let columns = Array(repeating: GridItem(.flexible(minimum: 0), spacing: HomeMetrics.gridSpacing), count: compact ? 2 : 4)
+    LazyVGrid(columns: columns, spacing: HomeMetrics.gridSpacing) {
+      ForEach(metrics) { metric in
+        HomeMetricCard(metric: metric, compact: compact, live: live)
       }
     }
+  }
+
+  private var metrics: [DashboardRuntimeMetric] {
+    if live {
+      return DashboardRuntimeMetric.live(
+        sample: runtimeData.trafficHistory.isEmpty ? nil : runtimeData.trafficSample, totals: runtimeData.trafficTotals,
+        connectionCount: runtimeData.connections.count, memory: runtimeData.memorySample, coreVersion: Self.core
+      )
+    }
+    let groups = appModel.visibleProxyGroups
+    let nodeCount = Set(groups.flatMap { $0.nodes.filter(\.isSelectable).map(\.name) }).count
+    return DashboardRuntimeMetric.launchFacts(runMode: appModel.overrides.mode.displayName, mixedPort: appModel.overrides.mixedPort,
+                                              groupCount: DashboardProxySelectionState.selectableGroups(from: groups).count,
+                                              nodeCount: nodeCount, coreVersion: Self.core)
+  }
+}
+
+private struct HomeMetricCard: View {
+  @Environment(AppModel.self) private var appModel
+  @Environment(RuntimeDataStore.self) private var runtimeData
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  let metric: DashboardRuntimeMetric
+  let compact: Bool
+  let live: Bool
+  @State private var hovered = false
+
+  var body: some View {
+    if metric.kind == .connections {
+      Button { appModel.selectedSection = .connections } label: { card }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .help("Connections")
+    } else {
+      card
+    }
+  }
+
+  private var card: some View {
+    let direction: KeyPath<TrafficSample, Int>? = switch metric.kind {
+    case .download: \.download
+    case .upload: \.upload
+    default: nil
+    }
+    let color: Color = switch metric.kind {
+    case .download: TrafficSeriesColor.download
+    case .upload: TrafficSeriesColor.upload
+    default: .secondary
+    }
+    let history = direction.map { key in runtimeData.trafficHistory.map { $0[keyPath: key] } } ?? []
+    // Every live card shares one skeleton — label, number, one caption, then a 34 pt band at the
+    // bottom — so the four numbers and captions sit on the same lines across the row and no card
+    // ends in dead space. Launch facts have no band and centre their text in the card instead.
+    return VStack(alignment: .leading, spacing: 0) {
+      if !live { Spacer(minLength: 0) }
+      VStack(alignment: .leading, spacing: compact ? 2 : 4) {
+        HStack(spacing: 4) {
+          Image(systemName: metric.symbolName).foregroundStyle(color)
+          Text(metric.title).lineLimit(1)
+          Spacer(minLength: 2)
+          if let peak = history.max() {
+            let caption = String(format: String(localized: "Peak %@"), TrafficSample.format(peak))
+            Text(caption).font(.caption2.monospacedDigit()).lineLimit(1).minimumScaleFactor(0.8).help(caption)
+          } else if metric.kind == .connections {
+            Image(systemName: "chevron.right").font(.caption2).opacity(hovered ? 1 : 0)
+          }
+        }
+        .font(.callout).foregroundStyle(.secondary)
+
+        HStack(alignment: .firstTextBaseline, spacing: 3) {
+          Text(metric.value)
+            .font(.system(size: 28, weight: .semibold, design: .rounded).monospacedDigit())
+            .contentTransition(reduceMotion ? .identity : .numericText(value: metric.numericValue ?? 0))
+            .lineLimit(1).minimumScaleFactor(0.75)
+          if let unit = metric.unit {
+            Text(verbatim: unit).font(.callout).foregroundStyle(.secondary)
+          }
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: metric.numericValue)
+
+        if let caption {
+          Text(caption).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            .lineLimit(1).minimumScaleFactor(0.85).help(caption)
+        }
+      }
+      .padding(.top, live ? (compact ? 10 : HomeMetrics.cardPadding.top) : 0)
+      .padding(.horizontal, HomeMetrics.cardPadding.leading)
+      Spacer(minLength: 0)
+      if live {
+        band(direction: direction, history: history, color: color)
+          .frame(height: 34)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .frame(height: live ? (compact ? 114 : 136) : (compact ? 78 : 98))
+    .homeCard()
+    .contentShape(SurfaceRadius.shape(HomeMetrics.cardRadius))
     .accessibilityElement(children: .combine)
+  }
+
+  private var caption: String? {
+    guard metric.kind == .connections, live else { return metric.detail }
+    let totals = runtimeData.trafficDestinations
+    return totals.reject == 0
+      ? String(localized: "Proxy \(totals.proxy) · Direct \(totals.direct)")
+      : String(localized: "Proxy \(totals.proxy) · Direct \(totals.direct) · Rejected \(totals.reject)")
+  }
+
+  @ViewBuilder
+  private func band(direction: KeyPath<TrafficSample, Int>?, history: [Int], color: Color) -> some View {
+    if direction != nil {
+      HomeRateSparkline(values: history.suffix(60), color: color)
+    } else if metric.kind == .memory {
+      let readings = runtimeData.memoryHistory
+      if readings.count > 1 {
+        // Memory moves a few percent at most; drawn from zero it would be a flat line pinned to the
+        // top. Lift the baseline under the lowest reading so the drift is visible.
+        let low = readings.min() ?? 0
+        let high = readings.max() ?? 0
+        let baseline = max(0, low - max(high - low, high / 40))
+        HomeRateSparkline(values: readings.suffix(60).map { $0 - baseline }[...], color: .gray)
+      }
+    } else if metric.kind == .connections {
+      connectionBar
+        .padding(.horizontal, HomeMetrics.cardPadding.leading)
+        .frame(maxHeight: .infinity, alignment: .center)
+    }
+  }
+
+  private var connectionBar: some View {
+    let totals = runtimeData.trafficDestinations
+    return GeometryReader { bounds in
+      let width = bounds.size.width / CGFloat(max(1, totals.count))
+      HStack(spacing: 0) {
+        Rectangle().fill(.secondary).frame(width: width * CGFloat(totals.proxy))
+        Rectangle().fill(.tertiary).frame(width: width * CGFloat(totals.direct))
+        Rectangle().fill(.red.opacity(0.6)).frame(width: width * CGFloat(totals.reject))
+      }
+    }
+    .frame(height: 6).homeWell(Capsule()).clipShape(Capsule())
+  }
+}
+
+private struct HomeRateSparkline: View {
+  let values: ArraySlice<Int>
+  let color: Color
+
+  var body: some View {
+    let points = values.map(Double.init)
+    let scale = 1 / Double(max(values.max() ?? 0, TrafficChartGeometry.minimumCeiling))
+    let line = TrafficSeriesShape(values: points, newestSequence: points.count - 1, slotCount: 60,
+                                  head: Double(points.count - 1), scale: scale, smoothing: 0.2, isClosed: false, edgeInset: 0)
+    var area = line
+    area.isClosed = true
+    return ZStack {
+      area.fill(LinearGradient(colors: [color.opacity(0.20), color.opacity(0.02)], startPoint: .top, endPoint: .bottom))
+      line.stroke(color, style: StrokeStyle(lineWidth: 1.6, lineJoin: .round))
+    }
+    .accessibilityHidden(true)
   }
 }
 
@@ -562,14 +755,14 @@ private struct DashboardResponsivePair<Leading: View, Trailing: View>: View {
 
   var body: some View {
     if availableWidth >= DashboardLayoutMetrics.runningPairColumnsBreakpoint {
-      HStack(alignment: .top, spacing: DashboardLayoutMetrics.dashboardGridSpacing) {
+      HStack(alignment: .top, spacing: HomeMetrics.gridSpacing) {
         leading
-          .frame(width: (availableWidth - DashboardLayoutMetrics.dashboardGridSpacing) * 0.6)
+          .frame(width: (availableWidth - HomeMetrics.gridSpacing) * 0.6)
         trailing
       }
       .fixedSize(horizontal: false, vertical: true)
     } else {
-      VStack(alignment: .leading, spacing: DashboardLayoutMetrics.dashboardGridSpacing) {
+      VStack(alignment: .leading, spacing: HomeMetrics.gridSpacing) {
         leading
         trailing
       }
@@ -596,7 +789,7 @@ struct DashboardProxyGroupsSummary: Equatable {
 enum DashboardProxySelectionState {
   static func selectableGroups(from groups: [ProxyGroup]) -> [ProxyGroup] {
     groups.filter { group in
-      group.allowsManualProxySelection && group.nodes.contains(where: \.isSelectable)
+      group.allowsManualProxySelection && (group.nodes.contains(where: \.isSelectable) || hasMissingSelection(in: group))
     }
   }
 
@@ -670,278 +863,52 @@ enum DashboardProxySelectionState {
   }
 }
 
-private struct CurrentProxyRuntimeCard: View {
-  @Environment(AppModel.self) private var appModel
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  let state: DashboardRuntimeState
-  let availableWidth: CGFloat
-  /// Provider-resolved + sorted groups supplied by `RunningDashboardView` (shares the Proxies page's
-  /// off-main pipeline). The card never resolves providers itself, so the heavy expansion stays off
-  /// the SwiftUI body hot path (issue #10 / #14).
-  let resolvedGroups: [ProxyGroup]
-  /// `true` only during genuine async runtime/pipeline loading, so the skeleton never replaces a
-  /// failure/recovery or empty state (AGENTS.md).
-  let isLoading: Bool
-  @Binding var selectedGroupName: String?
-
-  var body: some View {
-    let groups = DashboardProxySelectionState.selectableGroups(from: resolvedGroups)
-    let group = DashboardProxySelectionState.resolvedGroup(from: groups, preferredName: selectedGroupName)
-    let node = group.flatMap(DashboardProxySelectionState.currentNode)
-
-    VStack(alignment: .leading, spacing: 14) {
-      HStack(spacing: 10) {
-        DashboardSectionHeader(title: "Current Node", symbolName: "location.circle")
-
-        Button {
-          appModel.reloadRuntimeData()
-        } label: {
-          Image(systemName: "arrow.clockwise")
-        }
-        .buttonStyle(.borderless)
-        .disabled(!appModel.canControlRuntimeProxies || state.isStarting)
-        .help("Refresh runtime proxy groups")
-      }
-
-      if let group, let node {
-        currentNodeSummary(group: group, node: node)
-
-        HStack(alignment: .bottom, spacing: 10) {
-          groupControl(groups: groups)
-            .frame(minWidth: 112, idealWidth: 150, maxWidth: 180)
-            .layoutPriority(1)
-          nodeControl(group: group, node: node)
-            .frame(minWidth: 0, maxWidth: .infinity)
-            .layoutPriority(2)
-        }
-      } else if isLoading {
-        ClashMaxCurrentNodeSkeleton(isCompact: availableWidth < 460)
-      } else if let group, DashboardProxySelectionState.hasMissingSelection(in: group) {
-        // A node is selected but absent from the resolved data (runtime not yet refreshed, or a
-        // profile/provider mismatch). Surface an explicit recovery state — never DIRECT, never a
-        // skeleton — and keep the refresh affordance above (issue #14).
-        selectionUnavailableView(group: group)
-      } else {
-        DashboardEmptyRuntimeView(
-          title: "No selectable proxy groups",
-          symbolName: "point.3.connected.trianglepath.dotted",
-          message: String(localized: "Refresh runtime data or check the active profile's proxy-groups.")
-        )
-      }
-    }
-    .padding(14)
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    .dashboardCard()
-    // Measure the node the selector actually uses as soon as the runtime is up (and again when the
-    // user picks another one), so the card shows a delay without anyone pressing the button. The
-    // key only changes per session and per node, so a finished probe is never re-run by a repaint.
-    .task(id: automaticDelayProbeKey(group: group, node: node)) {
-      guard automaticDelayProbeKey(group: group, node: node) != nil,
-            let group, let node,
-            node.resolvedDelayState != .testing
-      else { return }
-      appModel.testDelay(in: group, for: node)
-    }
-  }
-
-  private func automaticDelayProbeKey(group: ProxyGroup?, node: ProxyNode?) -> String? {
-    DashboardProxySelectionState.automaticDelayProbeKey(
-      sessionStartedAt: appModel.sessionStartedAt,
-      isRunning: state.isRunning,
-      canControlRuntimeProxies: appModel.canControlRuntimeProxies,
-      group: group,
-      node: node
-    )
-  }
-
-  private func selectionUnavailableView(group: ProxyGroup) -> some View {
-    DashboardEmptyRuntimeView(
-      title: "Selected node unavailable",
-      symbolName: "exclamationmark.triangle",
-      message: selectionUnavailableMessage(group: group)
-    )
-  }
-
-  private func selectionUnavailableMessage(group: ProxyGroup) -> String {
-    guard let selected = group.selected, !selected.isEmpty else {
-      return String(localized: "Refresh runtime data or check the active profile's proxy-groups.")
-    }
-    return String(
-      format: String(localized: "\"%@\" isn't in the current runtime data for %@. Refresh runtime data, or check the profile/provider for a mismatch."),
-      selected,
-      group.name
-    )
-  }
-
-  /// Sits directly on the card: no inset panel, no tinted icon tile. The delay pill is the one
-  /// coloured element, and its colour is the delay verdict.
-  private func currentNodeSummary(group: ProxyGroup, node: ProxyNode) -> some View {
-    HStack(spacing: 12) {
-      VStack(alignment: .leading, spacing: 4) {
-        Text(node.name)
-          .font(.system(.title3, design: .rounded).weight(.semibold))
-          .lineLimit(1)
-          .minimumScaleFactor(0.68)
-        Text(verbatim: "\(group.name) · \(DashboardProxySelectionState.typeLabel(for: node))")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
-      }
-      .help(Text(verbatim: "\(node.name)\n\(group.name)"))
-
-      Spacer(minLength: 12)
-
-      delayPill(for: node)
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
-  }
-
-  /// The same verdict and colour the Proxies list uses, so "142 ms" here and there agree.
-  private func delayPill(for node: ProxyNode) -> some View {
-    let display = ProxyDelayDisplay(state: node.resolvedDelayState)
-    return HStack(spacing: 6) {
-      if node.resolvedDelayState == .testing {
-        ProgressView()
-          .controlSize(.mini)
-      }
-      Text(display.localizedLabel)
-        .contentTransition(.numericText())
-    }
-    .font(.system(.callout, design: .rounded).weight(.semibold))
-    .foregroundStyle(display.tone.color)
-    .padding(.horizontal, 12)
-    .padding(.vertical, 7)
-    .background(display.tone.color.opacity(0.13), in: Capsule())
-    .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: display)
-  }
-
-  private func groupControl(groups: [ProxyGroup]) -> some View {
-    let selection = groupSelection(groups: groups)
-    return DashboardLabeledControl(title: "Proxy Group") {
-      // The node control's capsule, opening a native pop-up menu: the two controls read as one
-      // pair instead of a stock popup button beside a glass one.
-      PopUpSelectionButton(
-        selection: selection.wrappedValue,
-        items: { groups.map { PopUpSelectionItem(value: $0.name, title: $0.name) } },
-        onSelect: { selection.wrappedValue = $0 }
-      ) {
-        HStack(spacing: 6) {
-          Text(selection.wrappedValue ?? String(localized: "No selection"))
-            .lineLimit(1)
-            .truncationMode(.middle)
-          Spacer(minLength: 4)
-          Image(systemName: "chevron.up.chevron.down")
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(.secondary)
-        }
-      }
-      .buttonStyle(DashboardCapsuleMenuStyle())
-      .help("Proxy Group")
-      .accessibilityLabel(Text("Proxy Group"))
-      .accessibilityValue(Text(selection.wrappedValue ?? ""))
-    }
-  }
-
-  private func nodeControl(group: ProxyGroup, node: ProxyNode) -> some View {
-    DashboardLabeledControl(title: "Node") {
-      HStack(spacing: 8) {
-        // A button, not a `Picker`: a picker builds a menu item for every node on every repaint,
-        // which for a 1600-node group is 1600 views rebuilt once a second. The list behind this
-        // button is built only while its popover is open, and lazily.
-        DashboardNodePickerButton(group: group, currentNode: node)
-
-        // Probe under the group the card shows. Looking the node up by name used to find it in
-        // whichever group listed it first, and the result was filed under that group's key, so the
-        // node in *this* group never updated — the button that "never did anything".
-        Button {
-          appModel.testDelay(in: group, for: node)
-        } label: {
-          Image(systemName: "speedometer")
-            .frame(width: 18, height: 18)
-        }
-        .buttonStyle(.borderless)
-        .controlSize(.small)
-        .disabled(!appModel.canControlRuntimeProxies || !node.supportsDelayTesting || node.resolvedDelayState == .testing)
-        .help(nodeDelayTestHelp(node: node))
-      }
-    }
-    // Before launch the node is still choosable (applied on Start); the picker and the delay
-    // button each disable themselves for the cases they cannot serve.
-    .disabled(!appModel.canControlRuntimeProxies && !appModel.canSelectProxyOffline)
-  }
-
-  private func nodeDelayTestHelp(node: ProxyNode) -> String {
-    guard appModel.canControlRuntimeProxies else { return appModel.proxyRuntimeActionMessage }
-    // Reserved outbounds (REJECT / PASS …) can be *selected* as a group's node but never answer a
-    // delay probe, so the button is disabled instead of firing a request that always fails.
-    guard node.supportsDelayTesting else {
-      return String(localized: "Built-in outbounds have no connection to measure.")
-    }
-    return String(localized: "Test current node delay")
-  }
-
-  private func groupSelection(groups: [ProxyGroup]) -> Binding<String?> {
-    Binding(
-      get: {
-        DashboardProxySelectionState.resolvedGroup(from: groups, preferredName: selectedGroupName)?.name
-      },
-      set: { selectedGroupName = $0 }
-    )
-  }
-}
-
-/// The Current Node card's node control: the current node's name, opening a searchable list of the
-/// group's nodes.
 private struct DashboardNodePickerButton: View {
   @Environment(AppModel.self) private var appModel
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let group: ProxyGroup
   let currentNode: ProxyNode
+  var hero = false
   @State private var isPresented = false
+  @State private var hovered = false
 
   var body: some View {
-    Button {
-      isPresented.toggle()
-    } label: {
-      HStack(spacing: 6) {
+    Button { isPresented.toggle() } label: {
+      HStack(spacing: 4) {
         Text(currentNode.name)
-          .lineLimit(1)
-          .truncationMode(.middle)
-        Spacer(minLength: 4)
+          .font(hero ? .system(size: 24, weight: .semibold) : .callout)
+          .foregroundStyle(hero ? .primary : .secondary)
+          .lineLimit(1).minimumScaleFactor(hero ? 0.75 : 1).truncationMode(.middle)
         if appModel.proxySelectionInFlightGroups.contains(group.id) {
-          ProgressView().controlSize(.small)
+          ProgressView().controlSize(.mini)
         } else {
-          Image(systemName: "chevron.up.chevron.down")
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(.secondary)
+          Image(systemName: "chevron.down").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+            .opacity(!hero || hovered || isPresented ? 1 : 0)
         }
       }
-      .frame(maxWidth: .infinity, alignment: .leading)
+      .contentShape(Rectangle())
     }
-    .padding(.horizontal, 12)
-    .padding(.vertical, 8)
     .buttonStyle(.plain)
-    .modifier(FunctionalGlass())
-    .disabled(!group.allowsManualProxySelection || appModel.proxySelectionInFlightGroups.contains(group.id)
-      || (!appModel.canControlRuntimeProxies && !appModel.canSelectProxyOffline))
-    .changeEffect(.shine(duration: 0.22), value: currentNode.name,
-                  isEnabled: !reduceMotion && appModel.isRunning && !appModel.previewRuntimeActive)
-    .help("Choose a node")
-    .accessibilityLabel(Text("Node"))
-    .accessibilityValue(Text(currentNode.name))
+    .background { if hovered { RoundedRectangle(cornerRadius: 5).fill(.tileSurface) } }
+    .onHover { hovered = $0 }
+    .disabled(!group.allowsManualProxySelection || appModel.proxySelectionInFlightGroups.contains(group.id))
+    .help(currentNode.name)
+    .accessibilityLabel("Choose a node").accessibilityValue(currentNode.name)
     .popover(isPresented: $isPresented, arrowEdge: .bottom) {
-      DashboardNodePickerPopover(
-        group: group,
-        currentNodeName: currentNode.name,
-        onSelect: { node in
-          isPresented = false
-          appModel.selectProxy(group: group, node: node)
-        },
-        onOpenInProxies: {
-          isPresented = false
-          appModel.openProxies(focusingGroup: group.name)
-        }
-      )
+      // Only the open popover builds searchable rows, including for groups with thousands of nodes.
+      if isPresented {
+        DashboardNodePickerPopover(
+          group: group, currentNodeName: currentNode.name,
+          canSelect: appModel.canControlRuntimeProxies || appModel.canSelectProxyOffline,
+          onSelect: { node in
+            isPresented = false
+            appModel.selectProxy(group: group, node: node)
+          },
+          onOpenInProxies: {
+            isPresented = false
+            appModel.openProxies(focusingGroup: group.name)
+          }
+        )
+      }
     }
   }
 }
@@ -960,6 +927,7 @@ enum DashboardNodePickerFilter {
 private struct DashboardNodePickerPopover: View {
   let group: ProxyGroup
   let currentNodeName: String
+  let canSelect: Bool
   let onSelect: (ProxyNode) -> Void
   let onOpenInProxies: () -> Void
   @State private var searchText = ""
@@ -973,7 +941,7 @@ private struct DashboardNodePickerPopover: View {
         .labelsHidden()
         // Return takes the first match, so type-to-filter then Return never needs the mouse.
         .onSubmit {
-          if let first = nodes.first {
+          if canSelect, let first = nodes.first {
             onSelect(first)
           }
         }
@@ -986,16 +954,23 @@ private struct DashboardNodePickerPopover: View {
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       } else {
         ScrollViewReader { proxy in
-          List(nodes) { node in
-            DashboardNodePickerRow(node: node, isCurrent: node.name == currentNodeName) {
-              onSelect(node)
+          ScrollView {
+            LazyVStack(spacing: 0) {
+              ForEach(nodes) { node in
+                DashboardNodePickerRow(node: node, isCurrent: node.name == currentNodeName) {
+                  onSelect(node)
+                }
+                .disabled(!canSelect)
+                .id(node.id)
+              }
             }
           }
-          .listStyle(.plain)
-          .onAppear {
-            if let current = nodes.first(where: { $0.name == currentNodeName }) {
-              proxy.scrollTo(current.id, anchor: .center)
-            }
+          .accessibilityLabel("Nodes")
+          .task {
+            guard nodes.first?.name != currentNodeName,
+                  let current = nodes.first(where: { $0.name == currentNodeName }) else { return }
+            await Task.yield()
+            if !Task.isCancelled { proxy.scrollTo(current.id, anchor: .center) }
           }
         }
       }
@@ -1022,6 +997,7 @@ private struct DashboardNodePickerRow: View {
   let node: ProxyNode
   let isCurrent: Bool
   let action: () -> Void
+  @State private var hovered = false
 
   var body: some View {
     // The same verdict and colour as the Proxies list.
@@ -1037,92 +1013,20 @@ private struct DashboardNodePickerRow: View {
         Text(node.name)
           .lineLimit(1)
           .truncationMode(.middle)
+          .help(node.name)
         Spacer(minLength: 8)
         Text(delay.localizedLabel)
           .font(.caption.monospacedDigit())
           .foregroundStyle(delay.tone.color)
       }
+      .padding(.horizontal, 10)
+      .frame(height: 26)
+      .background { if hovered { Rectangle().fill(.tileSurface) } }
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
+    .onHover { hovered = $0 }
     .accessibilityAddTraits(isCurrent ? .isSelected : [])
-  }
-}
-
-/// The capsule both Current Node controls share.
-private struct DashboardCapsuleMenuStyle: ButtonStyle {
-  func makeBody(configuration: Configuration) -> some View {
-    Bezel(configuration: configuration)
-  }
-
-  private struct Bezel: View {
-    @Environment(\.isEnabled) private var isEnabled
-    let configuration: ButtonStyleConfiguration
-
-    var body: some View {
-      configuration.label
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .contentShape(Capsule())
-        .modifier(FunctionalGlass())
-        .opacity(isEnabled ? (configuration.isPressed ? 0.75 : 1) : 0.45)
-    }
-  }
-}
-
-/// What a stopped core will start with, in the slot the live numbers take once it runs: the same
-/// row, so Start swaps values instead of rebuilding the card.
-private struct DashboardLaunchFacts: View {
-  @Environment(AppModel.self) private var appModel
-  private static let coreVersion = BundledCoreInfo().version
-
-  var body: some View {
-    let facts = facts
-    ViewThatFits(in: .horizontal) {
-      HStack(alignment: .top, spacing: 12) {
-        ForEach(facts) { fact in
-          DashboardMetricCell(metric: fact, reduceMotion: true)
-            .frame(minWidth: 112, maxWidth: .infinity, alignment: .leading)
-        }
-      }
-      Grid(alignment: .topLeading, horizontalSpacing: 12, verticalSpacing: 12) {
-        GridRow {
-          ForEach(facts.prefix(3)) { DashboardMetricCell(metric: $0, reduceMotion: true) }
-        }
-        GridRow {
-          ForEach(facts.dropFirst(3)) { DashboardMetricCell(metric: $0, reduceMotion: true) }
-        }
-      }
-      .frame(maxWidth: .infinity, alignment: .leading)
-    }
-  }
-
-  private var facts: [DashboardRuntimeMetric] {
-    let groups = DashboardProxySelectionState.selectableGroups(from: appModel.visibleProxyGroups)
-    let nodeCount = Set(appModel.visibleProxyGroups.flatMap { $0.nodes.filter(\.isSelectable).map(\.name) }).count
-    return DashboardRuntimeMetric.launchFacts(
-      runMode: appModel.overrides.mode.displayName,
-      mixedPort: appModel.overrides.mixedPort,
-      groupCount: groups.count,
-      nodeCount: nodeCount,
-      coreVersion: Self.coreVersion
-    )
-  }
-}
-
-private struct DashboardLabeledControl<Content: View>: View {
-  let title: LocalizedStringResource
-  @ViewBuilder var content: Content
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 6) {
-      Text(title)
-        .font(.caption2)
-        .foregroundStyle(.secondary)
-      content
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
   }
 }
 
@@ -1169,7 +1073,7 @@ private struct DashboardAttentionRow<Actions: View>: View {
     .padding(.horizontal, 14)
     .padding(.vertical, 11)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .dashboardCard()
+    .homeCard()
   }
 
   private var message: some View {
@@ -2196,173 +2100,173 @@ private struct StatusTunDiagnosticCheckRow: View {
 
 private struct TrafficRuntimeCard: View {
   @Environment(AppModel.self) private var appModel
-  let samples: [TrafficSample]
-  /// Total samples the store has ever appended this session; the chart anchors each sample to its
-  /// sequence number so a new one slides in from the right instead of every slot morphing in place.
-  let sampleCount: Int
-  /// The live reading, repeated in the legend next to the colour of its curve.
-  let sample: TrafficSample
-  let isLoading: Bool
+  @Environment(RuntimeDataStore.self) private var runtimeData
+  let showRates: Bool
+  let starting: Bool
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
-      DashboardSectionHeader(title: "Traffic", symbolName: "waveform.path.ecg")
-
-      if isLoading {
-        ClashMaxChartSkeleton()
-          .frame(height: 178)
+      HStack(spacing: 10) {
+        Label("Traffic", systemImage: "waveform.path.ecg").font(.callout).foregroundStyle(.secondary)
+        Spacer(minLength: 2)
+        legend("Download", symbol: "arrow.down", color: TrafficSeriesColor.download, value: runtimeData.trafficSample.download)
+        legend("Upload", symbol: "arrow.up", color: TrafficSeriesColor.upload, value: runtimeData.trafficSample.upload)
+      }
+      if starting || appModel.runtimeDataLoading, runtimeData.trafficHistory.isEmpty {
+        ClashMaxChartSkeleton().frame(height: 150)
       } else {
-        DashboardTrafficSparkline(samples: samples, sampleCount: sampleCount,
+        DashboardTrafficSparkline(samples: runtimeData.trafficHistory, sampleCount: runtimeData.trafficSampleCount,
                                   animatesEntrance: appModel.sessionStartedAt.map { Date().timeIntervalSince($0) < 3 } == true)
-          .frame(height: 178)
-      }
-
-      HStack(spacing: 16) {
-        TrafficLegendValue(title: "Download", symbolName: "arrow.down", color: .blue, rate: sample.download)
-        TrafficLegendValue(title: "Upload", symbolName: "arrow.up", color: .cyan, rate: sample.upload)
-        Spacer()
+          .frame(height: 150)
       }
     }
-    .padding(14)
-    .frame(maxWidth: .infinity, minHeight: 260, maxHeight: .infinity, alignment: .topLeading)
-    .dashboardCard()
+    .padding(HomeMetrics.cardPadding)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    .homeCard()
   }
-}
 
-/// "↓ 246 KB/s": the arrow in its curve's colour is the legend swatch, the value is the reading.
-private struct TrafficLegendValue: View {
-  let title: LocalizedStringResource
-  let symbolName: String
-  let color: Color
-  let rate: Int
-
-  var body: some View {
-    HStack(spacing: 4) {
-      Image(systemName: symbolName)
-        .font(.caption.weight(.bold))
-        .foregroundStyle(color)
-      Text(TrafficSample.format(rate))
-        .font(.caption.monospacedDigit())
-        .foregroundStyle(.secondary)
+  private func legend(_ title: LocalizedStringResource, symbol: String, color: Color, value: Int) -> some View {
+    HStack(spacing: 3) {
+      Image(systemName: symbol).foregroundStyle(color)
+      if showRates, !runtimeData.trafficHistory.isEmpty {
+        Text(TrafficSample.format(value))
+      } else {
+        Text(title)
+      }
     }
-    .help(Text(title))
+    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+    .help(Text(verbatim: TrafficSample.format(value)))
     .accessibilityElement(children: .ignore)
-    .accessibilityLabel(Text(title))
-    .accessibilityValue(Text(TrafficSample.format(rate)))
+    .accessibilityLabel(Text(title)).accessibilityValue(TrafficSample.format(value))
   }
 }
 
 private struct ProxyGroupsRuntimeCard: View {
   @Environment(AppModel.self) private var appModel
-  /// Resolved groups in profile order, from `RunningDashboardView`.
   let groups: [ProxyGroup]
-  let isLoading: Bool
+  let trackedGroup: String?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
       HStack {
-        DashboardSectionHeader(title: "Proxy Groups", symbolName: "point.3.connected.trianglepath.dotted")
-        Button {
-          appModel.reloadRuntimeData()
-        } label: {
-          Image(systemName: "arrow.clockwise")
-        }
-        .buttonStyle(.borderless)
-        .help("Refresh")
+        Label("Proxy Groups", systemImage: "square.stack.3d.up").font(.callout).foregroundStyle(.secondary)
+        Spacer()
+        Button { appModel.reloadRuntimeData() } label: { Image(systemName: "arrow.clockwise") }
+          .buttonStyle(.borderless).disabled(!appModel.canControlRuntimeProxies)
+          .help("Refresh runtime proxy groups")
       }
-
-      if groups.isEmpty, isLoading {
-        ClashMaxSkeletonList(rows: 4, showsLeadingIcon: false, trailingWidth: 58)
-      } else if groups.isEmpty {
-        // Loading has settled, so nothing is on its way: say so instead of an hourglass that never ends.
-        DashboardEmptyRuntimeView(
-          title: "No proxy groups",
-          symbolName: "point.3.connected.trianglepath.dotted",
-          message: String(localized: "Refresh runtime data or check the active profile's proxy-groups.")
-        )
+      if groups.isEmpty {
+        ClashMaxSkeletonList(rows: 3, showsLeadingIcon: false, trailingWidth: 45)
       } else {
         let summary = DashboardProxyGroupsSummary(groups: groups)
         VStack(spacing: 0) {
           ForEach(summary.rows) { group in
-            DashboardProxyGroupRow(group: group) {
-              appModel.openProxies(focusingGroup: group.name)
-            }
+            DashboardProxyGroupRow(group: group, tracked: group.name == trackedGroup)
+            if group.id != summary.rows.last?.id { Divider().opacity(0.5) }
           }
         }
-
         if summary.hiddenCount > 0 {
-          Button("View All \(groups.count)") {
-            appModel.openProxies()
-          }
-          .buttonStyle(.link)
-          .font(.callout)
-          .padding(.leading, 8)
+          Button("\(summary.hiddenCount) more groups") { appModel.openProxies() }
+            .buttonStyle(.link).font(.caption)
         }
       }
     }
-    .padding(14)
+    .padding(HomeMetrics.cardPadding)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    .dashboardCard()
+    .homeCard()
   }
 }
 
-/// One group: its name, the node it is on now and that node's delay. The whole row opens the
-/// Proxies page on the group.
 private struct DashboardProxyGroupRow: View {
+  @Environment(AppModel.self) private var appModel
   let group: ProxyGroup
-  let action: () -> Void
-  @State private var isHovered = false
+  /// The group the Home hero follows. Its row is tinted, and keeps its node and delay like every
+  /// other row — a list whose first entry reads "Current Node" with no name looks unloaded.
+  let tracked: Bool
 
   var body: some View {
     let node = DashboardProxySelectionState.currentNode(in: group)
-    Button(action: action) {
-      HStack(spacing: 10) {
-        Text(group.name)
-          .fontWeight(.medium)
-          .lineLimit(1)
-          .layoutPriority(1)
-        Text(group.selected ?? String(localized: "No selection"))
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
-          .truncationMode(.tail)
-        Spacer(minLength: 8)
-        if let node, node.resolvedDelayState != .unknown {
-          // Never compressed: squeezed by a long group name, the pill's text wrapped one glyph per line.
-          DashboardDelayBadge(state: node.resolvedDelayState)
-            .fixedSize()
-        }
-        Image(systemName: "chevron.right")
-          .font(.caption2.weight(.semibold))
-          .foregroundStyle(.tertiary)
+    HStack(spacing: 6) {
+      Text(group.name).font(.callout.weight(.medium))
+        .lineLimit(1).truncationMode(.middle).help(group.name)
+      if let node, group.allowsManualProxySelection {
+        DashboardNodePickerButton(group: group, currentNode: node)
+      } else {
+        let name = node?.name ?? group.selected ?? String(localized: "No selection")
+        Text(name).font(.callout).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(name)
       }
-      .font(.callout)
-      .padding(.horizontal, 8)
-      .padding(.vertical, 6)
-      .background(
-        isHovered ? AnyShapeStyle(.fill.quaternary) : AnyShapeStyle(.clear),
-        in: SurfaceRadius.shape(SurfaceRadius.chip)
-      )
-      .contentShape(Rectangle())
+      Spacer(minLength: 0)
+      if let node {
+        DashboardDelayBadge(state: node.resolvedDelayState).fixedSize()
+      }
+      Button { appModel.openProxies(focusingGroup: group.name) } label: {
+        Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+          .frame(width: 18, height: 26).contentShape(Rectangle())
+      }
+      .buttonStyle(.plain).help("Show \(group.name) in Proxies")
+      .accessibilityLabel(Text("Show \(group.name) in Proxies"))
     }
-    .buttonStyle(.plain)
-    .onHover { isHovered = $0 }
-    .help(Text(verbatim: "\(group.name) · \(group.selected ?? String(localized: "No selection"))\n")
-      + Text("Show \(group.name) in Proxies"))
+    .padding(.horizontal, 6).frame(height: 30)
+    .background { if tracked { RoundedRectangle(cornerRadius: HomeMetrics.wellRadius).fill(.tileSurface) } }
   }
 }
 
-/// The delay verdict as a small pill — the Proxies list's wording and colour.
 private struct DashboardDelayBadge: View {
   let state: ProxyDelayState
+  var showsSymbol = false
 
   var body: some View {
     let display = ProxyDelayDisplay(state: state)
-    Text(display.localizedLabel)
-      .font(.caption.weight(.medium).monospacedDigit())
-      .foregroundStyle(display.tone.color)
-      .padding(.horizontal, 7)
-      .padding(.vertical, 2)
-      .background(display.tone.color.opacity(0.13), in: Capsule())
+    HomeChip(text: display.localizedLabel, symbol: showsSymbol ? "bolt" : nil,
+             tone: display.tone == .unavailable ? nil : display.tone.color, busy: state == .testing)
+  }
+}
+
+private struct HomeDestinationsCard: View {
+  @Environment(RuntimeDataStore.self) private var runtimeData
+  let compact: Bool
+
+  var body: some View {
+    let destinations = runtimeData.trafficDestinations
+    VStack(alignment: .leading, spacing: 12) {
+      Label("Traffic destinations · current connections", systemImage: "arrow.triangle.branch")
+        .font(.callout).foregroundStyle(.secondary)
+      if destinations.count == 0 {
+        Text("No open connections").font(.callout).foregroundStyle(.secondary)
+      } else {
+        let layout = compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 14))
+          : AnyLayout(HStackLayout(alignment: .top, spacing: 28))
+        layout {
+          column("By domain", rows: destinations.domains)
+          column("By exit node", rows: destinations.exits)
+        }
+      }
+    }
+    .padding(HomeMetrics.cardPadding)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .homeCard()
+  }
+
+  private func column(_ title: LocalizedStringResource, rows: [HomeTrafficDestinations.Row]) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text(title).font(.caption.weight(.medium)).foregroundStyle(.secondary)
+      ForEach(rows) { row in
+        VStack(spacing: 3) {
+          HStack {
+            Text(row.name).font(.callout).lineLimit(1).truncationMode(.middle).help(row.name)
+            Spacer(minLength: 8)
+            Text(TrafficSample.formatBytes(row.bytes)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+          }
+          GeometryReader { proxy in
+            let fraction = CGFloat(row.bytes) / CGFloat(max(1, rows.first?.bytes ?? 0))
+            Capsule().fill(.secondary).frame(width: proxy.size.width * fraction)
+          }
+          .frame(height: 3).homeWell(Capsule()).accessibilityHidden(true)
+        }
+        .accessibilityElement(children: .combine)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 }
 
@@ -2377,11 +2281,13 @@ private struct RuntimeContentEntrance: ViewModifier {
   @State private var appeared = false
 
   func body(content: Content) -> some View {
+    let animate = isEnabled && !reduceMotion
     content
-      .opacity(!isEnabled || appeared ? 1 : 0)
-      .offset(y: !isEnabled || appeared || reduceMotion ? 0 : 8)
-      .onAppear {
-        withAnimation((reduceMotion ? Animation.easeOut(duration: 0.14) : .spring(duration: 0.42, bounce: 0.06)).delay(delay)) {
+      .opacity(animate && !appeared ? 0 : 1)
+      .offset(y: animate && !appeared ? 8 : 0)
+      .task(id: animate) {
+        guard animate else { appeared = false; return }
+        withAnimation(.spring(duration: 0.42, bounce: 0.06).delay(delay)) {
           appeared = true
         }
       }

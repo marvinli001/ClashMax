@@ -54,6 +54,177 @@ enum DashboardLayoutMetrics {
   }
 }
 
+enum HomeMetrics {
+  static let cardRadius: CGFloat = 14
+  static let wellRadius: CGFloat = 10
+  static let sectionSpacing: CGFloat = 14
+  static let gridSpacing: CGFloat = 12
+  static let cardPadding = EdgeInsets(top: 14, leading: 16, bottom: 14, trailing: 16)
+  static let heroPadding = EdgeInsets(top: 18, leading: 20, bottom: 18, trailing: 18)
+}
+
+struct HomeCardStyle: ViewModifier {
+  @Environment(\.colorScheme) private var scheme
+
+  func body(content: Content) -> some View {
+    let shape = SurfaceRadius.shape(HomeMetrics.cardRadius)
+    content
+      .clipShape(shape)
+      .background {
+        if scheme == .dark {
+          shape.fill(.cardSurface).shadow(color: .black.opacity(0.35), radius: 14, y: 6)
+        } else {
+          shape.fill(.cardSurface)
+            .shadow(color: .black.opacity(0.05), radius: 1, y: 0.5)
+            .shadow(color: .black.opacity(0.06), radius: 12, y: 4)
+        }
+      }
+      .overlay {
+        shape.strokeBorder(scheme == .dark ? .white.opacity(0.08) : .black.opacity(0.07), lineWidth: 0.5)
+        if scheme == .dark {
+          shape.strokeBorder(LinearGradient(colors: [.white.opacity(0.06), .clear], startPoint: .top, endPoint: .center), lineWidth: 1)
+        }
+      }
+  }
+}
+
+struct HomeWellStyle<S: Shape>: ViewModifier {
+  let shape: S
+
+  func body(content: Content) -> some View {
+    content.background(.tileSurface, in: shape)
+  }
+}
+
+extension View {
+  func homeCard() -> some View { modifier(HomeCardStyle()) }
+  func homeWell(_ shape: some Shape = SurfaceRadius.shape(HomeMetrics.wellRadius)) -> some View {
+    modifier(HomeWellStyle(shape: shape))
+  }
+}
+
+/// A one-of-many choice drawn the way macOS 26 draws a toolbar segmented control: a Liquid Glass
+/// capsule with a sliding selection thumb. Before macOS 26, or with Reduce Transparency, the capsule
+/// is a quiet well with one hairline. VoiceOver still meets a segmented picker.
+struct GlassSegmentedPicker<Value: Hashable>: View {
+  struct Option: Identifiable {
+    let value: Value
+    let title: String
+    var systemImage: String?
+    var id: Value { value }
+  }
+
+  let title: LocalizedStringKey
+  let options: [Option]
+  let selection: Value
+  let onSelect: (Value) -> Void
+
+  @Namespace private var thumbSpace
+  @State private var hovered: Value?
+  @Environment(\.isEnabled) private var isEnabled
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  var body: some View {
+    HStack(spacing: 2) {
+      ForEach(options) { option in
+        segment(option, isSelected: option.value == selection)
+      }
+    }
+    .padding(3)
+    .modifier(GlassCapsuleSurface())
+    .opacity(isEnabled ? 1 : 0.5)
+    .animation(reduceMotion ? nil : .spring(duration: 0.32, bounce: 0.18), value: selection)
+    .fixedSize()
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel(Text(title))
+  }
+
+  private func segment(_ option: Option, isSelected: Bool) -> some View {
+    Button {
+      if !isSelected { onSelect(option.value) }
+    } label: {
+      HStack(spacing: 5) {
+        if let symbol = option.systemImage {
+          Image(systemName: symbol).imageScale(.small)
+        }
+        Text(verbatim: option.title).lineLimit(1)
+      }
+      .font(.callout.weight(isSelected ? .semibold : .regular))
+      .foregroundStyle(isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+      .padding(.horizontal, 13)
+      .frame(minWidth: 44, minHeight: 26)
+      .background {
+        if isSelected {
+          GlassSegmentThumb().matchedGeometryEffect(id: "thumb", in: thumbSpace)
+        } else if hovered == option.value {
+          Capsule().fill(.primary.opacity(0.045))
+        }
+      }
+      .contentShape(Capsule())
+    }
+    .buttonStyle(.plain)
+    .onHover { inside in
+      if inside { hovered = option.value } else if hovered == option.value { hovered = nil }
+    }
+    .help(option.title)
+    .accessibilityLabel(Text(verbatim: option.title))
+    .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+  }
+}
+
+/// The selected segment: a raised pill on the glass track, lit from above like the toolbar's.
+private struct GlassSegmentThumb: View {
+  @Environment(\.colorScheme) private var scheme
+
+  var body: some View {
+    Capsule()
+      .fill(scheme == .dark ? Color.white.opacity(0.16) : Color.white.opacity(0.92))
+      .overlay(Capsule().strokeBorder(scheme == .dark ? Color.white.opacity(0.10) : Color.black.opacity(0.06), lineWidth: 0.5))
+      .shadow(color: .black.opacity(scheme == .dark ? 0.30 : 0.10), radius: 2.5, y: 1)
+  }
+}
+
+private struct GlassCapsuleSurface: ViewModifier {
+  @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+  @Environment(\.colorScheme) private var scheme
+
+  func body(content: Content) -> some View {
+    if #available(macOS 26, *), !reduceTransparency {
+      content.glassEffect(.regular.interactive(), in: Capsule())
+    } else {
+      content
+        .background(.tileSurface, in: Capsule())
+        .overlay(Capsule().strokeBorder(scheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.07), lineWidth: 0.5))
+    }
+  }
+}
+
+struct HomeChip: View {
+  let text: String
+  var symbol: String?
+  var tone: Color?
+  var dot = false
+  var busy = false
+
+  var body: some View {
+    HStack(spacing: 5) {
+      if busy {
+        ProgressView().controlSize(.mini)
+      } else if dot {
+        Circle().fill(tone ?? .secondary).frame(width: 6, height: 6)
+      } else if let symbol {
+        Image(systemName: symbol)
+      }
+      Text(verbatim: text).lineLimit(1).truncationMode(.middle)
+    }
+    .font(.caption.weight(.medium).monospacedDigit())
+    .foregroundStyle(tone ?? .secondary)
+    .padding(.horizontal, 9)
+    .padding(.vertical, 3)
+    .background(tone.map { AnyShapeStyle($0.opacity(0.14)) } ?? AnyShapeStyle(.tileSurface), in: Capsule())
+  }
+}
+
 struct RunModePicker: View {
   let selection: Binding<RunMode>
 
@@ -1239,12 +1410,7 @@ extension ShapeStyle where Self == TileSurface {
   static var tileSurface: TileSurface { TileSurface() }
 }
 
-/// The one surface every Home card sits on: opaque, one hairline, one shadow.
-///
-/// No card on the page is a control as a whole — the controls are the buttons and rows inside — so
-/// none of them gets glass or a hover lift. Liquid Glass stays with the chrome that floats above
-/// content (toolbar, toasts, the menu bar panel); behind dense operational text it only costs
-/// legibility.
+/// The standard workspace surface. Home uses its own elevated card treatment.
 struct DashboardCardModifier: ViewModifier {
   @Environment(\.colorScheme) private var colorScheme
 
@@ -1263,7 +1429,7 @@ extension View {
 }
 
 func dashboardDurationString(from start: Date?, now: Date = Date()) -> String {
-  guard let start else { return "--" }
+  guard let start else { return DashboardRuntimeMetric.placeholder }
   let interval = max(0, Int(now.timeIntervalSince(start)))
   let hours = interval / 3600
   let minutes = (interval % 3600) / 60

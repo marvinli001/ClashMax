@@ -118,7 +118,7 @@
           .environment(model.runtimeData).environment(model.publicIP).environment(updateController)
           .preferredColorScheme(arguments.contains("--dark") ? .dark : .light)
           .frame(minWidth: arguments.contains("--menu") ? 320 : arguments.contains("--settings-window") ? 740 : 980,
-                 minHeight: arguments.contains("--menu") ? 420 : arguments.contains("--settings-window") ? 560 : 660)
+                 minHeight: arguments.contains("--menu") ? 420 : arguments.contains("--settings-window") || arguments.contains("--minimum") ? 560 : 660)
       }
       .defaultSize(width: arguments.contains("--menu") ? 320 : arguments.contains("--settings-window") ? 880 : arguments.contains("--wide") ? 1480 : arguments.contains("--minimum") ? 980 : 1180,
                    height: arguments.contains("--menu") ? 520 : arguments.contains("--settings-window") ? 680 : arguments.contains("--wide") ? 900 : arguments.contains("--minimum") ? 660 : 760)
@@ -171,7 +171,12 @@
         : arguments.contains("--settings-window") ? NSSize(width: 880, height: 680)
         : NSSize(width: arguments.contains("--wide") ? 1480 : arguments.contains("--minimum") ? 980 : 1180,
                  height: arguments.contains("--wide") ? 900 : arguments.contains("--minimum") ? 660 : 760)
-      window.setContentSize(size)
+      if arguments.contains("--minimum") {
+        // Include the native title bar in the 980 × 660 acceptance window.
+        window.setFrame(NSRect(origin: window.frame.origin, size: size), display: true)
+      } else {
+        window.setContentSize(size)
+      }
       window.center()
       window.appearance = NSAppearance(named: arguments.contains("--dark") ? .darkAqua : .aqua)
       window.makeKeyAndOrderFront(nil)
@@ -182,6 +187,8 @@
           let groups = model.runtimeData.proxyGroups
           let connections = model.runtimeData.connections
           let samples = model.runtimeData.trafficHistory
+          let totals = model.runtimeData.trafficTotals
+          let memory = model.runtimeData.memorySample
           try? await Task.sleep(for: .milliseconds(1_500))
           model.runtimeData.clearRuntimeCollections()
           model.coreController.transitionVisualFixture(to: .starting)
@@ -189,8 +196,10 @@
           model.coreController.transitionVisualFixture(to: .running(version: "Synthetic fixture"))
           model.configureVisualFixtureOwnership(startedAt: Date())
           model.runtimeData.proxyGroups = groups
-          model.runtimeData.connections = connections
+          model.connections = connections
           for sample in samples { model.runtimeData.appendTrafficSample(sample) }
+          if let totals { model.runtimeData.recordTrafficTotals(totals) }
+          model.runtimeData.appendMemorySample(memory)
         }
       }
       if arguments.contains("--show-details") {
@@ -267,16 +276,19 @@
       let domain = "ClashMax.UIFixture." + UUID().uuidString
       defaultsDomain = domain
       let defaults = UserDefaults(suiteName: domain)!
+      let stopped = ["--stopped", "--blocked", "--empty", "--animate-start"].contains(where: arguments.contains)
       let state: CoreStatus = arguments.contains("--crashed") ? .crashed(message: String(repeating: "Synthetic validation error: example configuration needs attention. ", count: arguments.contains("--long-text") ? 6 : 1))
-        : arguments.contains("--starting") ? .starting : arguments.contains("--stopped") || arguments.contains("--empty") || arguments.contains("--animate-start") ? .stopped : .running(version: "Synthetic fixture")
+        : arguments.contains("--starting") ? .starting : stopped ? .stopped : .running(version: "Synthetic fixture")
       let endpoints = OutboundProxyEndpointStore(manifestURL: paths.outboundProxyEndpointManifestURL, secretStore: secrets)
       let model = AppModel(paths: paths, isVisualFixture: true, profileStore: store, outboundProxyEndpointStore: endpoints,
                            coreController: .visualFixture(status: state), loginItemService: FixtureLoginItems(),
-                           publicIPInfoClient: FixturePublicIP(), defaults: defaults, externalDashboardSecretStore: secrets)
+                           publicIPInfoClient: FixturePublicIP(fails: arguments.contains("--exit-failed")), defaults: defaults,
+                           externalDashboardSecretStore: secrets,
+                           bundledCoreURLProvider: arguments.contains("--blocked") ? { throw AppError.missingBundledCore } : nil)
       model.configureVisualFixtureOwnership()
       let count = arguments.contains("--stress") ? 2_000 : 18
       let nodes = (0..<count).map { index in
-        ProxyNode(name: ["Tokyo", "Singapore", "Auckland", "Seoul", "Frankfurt", "Los Angeles"][index % 6] + " · Example \(index + 1)" + (arguments.contains("--long-text") ? " · A very long synthetic node name · 长名称验证" : ""),
+        ProxyNode(name: ["Tokyo", "Singapore", "Auckland", "Seoul", "Frankfurt", "Los Angeles"][index % 6] + " · Example \(index + 1)" + (arguments.contains("--long-text") ? " · A very long synthetic node name · Regional fallback for the example workspace · 长名称验证" : ""),
                   type: index % 2 == 0 ? "vless" : "trojan", delay: 28 + index * 7 % 280, isSelectable: true)
       }
       let groups = ["Default", "Streaming", "Development"].enumerated().map { index, name in
@@ -292,14 +304,19 @@
         model.runtimeData.appendTrafficSample(TrafficSample(upload: 200_000 + Int(abs(sin(Double(index) / 6)) * 1_800_000),
                                                             download: 500_000 + Int(abs(sin(Double(index) / 9)) * 12_000_000)))
       }
-      model.runtimeData.connections = (0..<32).map { index in
-        ConnectionSnapshot(id: "fixture-\(index)", network: index % 3 == 0 ? "udp" : "tcp", host: "service-\(index).example.com",
+      model.runtimeData.recordTrafficTotals(TrafficTotals(upload: 312 * 1024 * 1024, download: 2_297_000_000))
+      for index in 0..<60 {
+        let wobble = Int(sin(Double(index) / 5) * 3 * 1024 * 1024)
+        model.runtimeData.appendMemorySample(CoreMemorySample(inUse: 44 * 1024 * 1024 + index * 70 * 1024 + wobble, osLimit: 0))
+      }
+      model.connections = (0..<32).map { index in
+        ConnectionSnapshot(id: "fixture-\(index)", network: index % 3 == 0 ? "udp" : "tcp", host: "service-\(index % 8).example.com",
                            sourceIP: "192.0.2.2", destinationIP: "203.0.113.\(index + 1)", destinationPort: 443,
                            processName: ["Safari", "Mail", "TextEdit"][index % 3],
                            processPath: ["/Applications/Safari.app/Contents/MacOS/Safari",
                                          "/System/Applications/Mail.app/Contents/MacOS/Mail",
                                          "/System/Applications/TextEdit.app/Contents/MacOS/TextEdit"][index % 3],
-                           upload: index * 3200, download: index * 140_000, chain: [nodes[index % nodes.count].name, "Default"],
+                           upload: index * 3200, download: index * 140_000, chain: index % 6 == 0 ? ["DIRECT"] : [nodes[index % 3].name, "Default"],
                            rule: "DomainSuffix", rulePayload: "example.com", startedAt: Date().addingTimeInterval(-Double(index * 8)))
       }
       model.runtimeData.rules = (0..<120).map { index in
@@ -324,7 +341,7 @@
         model.runtimeData.proxyGroups = []
         model.profilePreviewGroups = []
       }
-      if arguments.contains("--empty") {
+      if arguments.contains("--empty") || arguments.contains("--starting") {
         model.runtimeData.clearRuntimeCollections()
         model.profilePreviewGroups = []
       }
@@ -383,9 +400,12 @@
   }
 
   private struct FixturePublicIP: PublicIPInfoFetching {
+    var fails = false
+
     func fetchPublicIPInfo() async throws -> PublicIPInfo {
-      PublicIPInfo(ipAddress: "203.0.113.42", countryCode: "JP", countryName: "Japan", city: "Tokyo", asn: "AS64496", isp: "Example Network",
-                   sourceName: "Synthetic fixture", sourceHost: "example.com", fetchedAt: Date())
+      if fails { throw PublicIPInfoClient.ClientError.allProvidersFailed(["Synthetic timeout"]) }
+      return PublicIPInfo(ipAddress: "203.0.113.42", countryCode: "JP", countryName: "Japan", city: "Tokyo", asn: "AS64496", isp: "Example Network",
+                          sourceName: "Synthetic fixture", sourceHost: "example.com", fetchedAt: Date().addingTimeInterval(-60))
     }
   }
 
@@ -476,8 +496,8 @@
           VStack(alignment: .leading, spacing: 16) {
             Label("Traffic", systemImage: "chart.xyaxis.line").font(.headline)
             HStack(spacing: 28) {
-              Label("12.4 MB/s", systemImage: "arrow.down").foregroundStyle(.blue)
-              Label("1.8 MB/s", systemImage: "arrow.up").foregroundStyle(.cyan)
+              Label("12.4 MB/s", systemImage: "arrow.down").foregroundStyle(TrafficSeriesColor.download)
+              Label("1.8 MB/s", systemImage: "arrow.up").foregroundStyle(TrafficSeriesColor.upload)
             }.font(.title2.monospacedDigit())
             TrafficSparkline(samples: Self.samples, sampleCount: 72).frame(height: 180)
           }.padding(16).dashboardCard()

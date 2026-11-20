@@ -4417,47 +4417,39 @@ final class DashboardRuntimeStateTests: XCTestCase {
   }
 
   func testDashboardNumbersShowADashUntilTheCoreReports() {
-    let started = Date(timeIntervalSinceReferenceDate: 1_000)
-    let fresh = DashboardRuntimeMetric.all(
-      sample: .zero,
-      totals: nil,
-      connectionCount: 0,
-      sessionStartedAt: nil,
-      memory: .zero,
-      now: started
-    )
+    let fresh = DashboardRuntimeMetric.live(sample: nil, totals: nil, connectionCount: 0, memory: .zero, coreVersion: "Mihomo")
     let byKind = Dictionary(uniqueKeysWithValues: fresh.map { ($0.kind, $0) })
-
-    XCTAssertEqual(fresh.map(\.kind), [.download, .upload, .connections, .uptime, .memory])
+    XCTAssertEqual(fresh.map(\.kind), [.download, .upload, .connections, .memory])
     XCTAssertEqual(byKind[.memory]?.value, DashboardRuntimeMetric.placeholder, "The priming 0 B frame is not a reading")
     XCTAssertNil(byKind[.memory]?.numericValue)
-    XCTAssertEqual(byKind[.uptime]?.value, DashboardRuntimeMetric.placeholder)
-    XCTAssertEqual(
-      byKind[.download]?.detail,
-      String(format: String(localized: "This session %@"), DashboardRuntimeMetric.placeholder),
-      "No /connections report yet: the total is unknown, not 0 B"
-    )
+    XCTAssertEqual(byKind[.download]?.value, DashboardRuntimeMetric.placeholder)
+    XCTAssertEqual(byKind[.download]?.detail, String(format: String(localized: "This session %@"), DashboardRuntimeMetric.placeholder))
     XCTAssertEqual(byKind[.connections]?.value, 0.formatted())
     XCTAssertNil(byKind[.connections]?.detail)
 
-    let running = DashboardRuntimeMetric.all(
-      sample: TrafficSample(upload: 2_048, download: 1_048_576),
-      totals: TrafficTotals(upload: 85, download: 3 * 1_073_741_824),
-      connectionCount: 42,
-      sessionStartedAt: started,
-      memory: CoreMemorySample(inUse: 48_234_496, osLimit: 0),
-      now: started.addingTimeInterval(3_725)
-    )
+    let memory = CoreMemorySample(inUse: 48_234_496, osLimit: 0)
+    let running = DashboardRuntimeMetric.live(sample: TrafficSample(upload: 2_048, download: 1_048_576),
+                                              totals: TrafficTotals(upload: 85, download: 3 * 1_073_741_824),
+                                              connectionCount: 42, memory: memory, coreVersion: "Mihomo v1")
     let live = Dictionary(uniqueKeysWithValues: running.map { ($0.kind, $0) })
-
-    XCTAssertEqual(live[.download]?.value, TrafficSample.format(1_048_576))
-    XCTAssertEqual(live[.upload]?.value, TrafficSample.format(2_048))
+    func reading(_ kind: DashboardRuntimeMetric.Kind) -> String {
+      [live[kind]?.value, live[kind]?.unit].compactMap(\.self).joined(separator: " ")
+    }
+    XCTAssertEqual(reading(.download), TrafficSample.format(1_048_576))
+    XCTAssertEqual(reading(.upload), TrafficSample.format(2_048))
     XCTAssertEqual(live[.download]?.detail, String(format: String(localized: "This session %@"), "3.0 GB"))
     XCTAssertEqual(live[.upload]?.detail, String(format: String(localized: "This session %@"), "85 B"))
     XCTAssertEqual(live[.connections]?.value, 42.formatted())
-    XCTAssertEqual(live[.uptime]?.value, "1:02:05")
-    XCTAssertEqual(live[.memory]?.value, CoreMemorySample(inUse: 48_234_496, osLimit: 0).formattedInUse)
+    XCTAssertEqual(reading(.memory), memory.formattedInUse)
     XCTAssertEqual(live[.memory]?.numericValue, 48_234_496)
+    XCTAssertEqual(live[.memory]?.detail, "Mihomo v1")
+    let start = Date(timeIntervalSinceReferenceDate: 1000)
+    XCTAssertEqual(dashboardDurationString(from: start, now: start.addingTimeInterval(3725)), "1:02:05")
+    XCTAssertEqual(dashboardDurationString(from: nil), DashboardRuntimeMetric.placeholder)
+    let facts = DashboardRuntimeMetric.launchFacts(runMode: "Rule", mixedPort: 7890, groupCount: 3, nodeCount: 18, coreVersion: "Mihomo v1")
+    XCTAssertEqual(facts.map(\.kind), [.runMode, .mixedPort, .proxyGroups, .nodes])
+    XCTAssertEqual(facts.map(\.value), ["Rule", "7890", "3", "18"])
+    XCTAssertEqual(facts.last?.detail, "Mihomo v1")
   }
 
   func testDashboardRaisesOnlyFailingOrWarningTunChecks() {
@@ -12114,6 +12106,33 @@ final class DashboardRuntimeStateTests: XCTestCase {
     XCTAssertNil(UserFacingError.details(for: NSError(domain: "x", code: 1)))
     XCTAssertTrue(UserFacingError.message(from: advice).hasSuffix("..."))
     XCTAssertEqual(UserFacingError.message(from: advice).count, 220)
+  }
+
+  func testHomeKeepsStartupValidationFailureOnTheAffectedProfile() async throws {
+    let paths = try Self.makeRuntimePaths()
+    let store = ProfileStore(paths: paths, keychain: InMemorySecretStore())
+    let source = paths.appSupport.appendingPathComponent("invalid.yaml")
+    try Self.writeProxyConfig(named: "Example", to: source)
+    _ = try await store.importLocalConfig(from: source)
+    let model = try AppModel(
+      paths: paths, profileStore: store,
+      coreController: CoreProcessController(
+        launcher: FakeProcessLauncher(),
+        validator: RecordingRuntimeConfigValidator(result: .failure(AppError.configValidationFailed("invalid rule"))),
+        reaper: RecordingCoreProcessReaper(), portChecker: EmptyRuntimePortChecker()
+      ),
+      systemProxyController: SystemProxyController(commandRunner: RecordingCommandRunner(outputs: Self.defaultNetworkSetupOutputs())),
+      defaults: Self.makeIsolatedDefaults()
+    )
+    model.start()
+    await waitUntil { !model.startInFlight && model.lastError != nil }
+    model.acknowledgeErrorAlert()
+    XCTAssertTrue(try XCTUnwrap(model.activeStartValidationFailure).contains("invalid rule"))
+    let other = paths.appSupport.appendingPathComponent("other.yaml")
+    try Self.writeProxyConfig(named: "Second", to: other)
+    let profile = try await store.importLocalConfig(from: other)
+    try await store.select(profile)
+    XCTAssertNil(model.activeStartValidationFailure)
   }
 
   func testUserModeStartFailureExposesControllerBindAdviceInBannerDetails() async throws {

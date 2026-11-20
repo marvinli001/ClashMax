@@ -475,6 +475,22 @@ final class LocalizationTests: XCTestCase {
     XCTAssertEqual(zh("Repair Routing"), "修复路由")
   }
 
+  func testHomeV2StateAndTrafficLabelsCompileInBothLanguages() throws {
+    let app = try XCTUnwrap(Bundle(identifier: AppConstants.bundleIdentifier))
+    for language in ["en", "zh-Hans"] {
+      let bundle = try XCTUnwrap(app.url(forResource: language, withExtension: "lproj").flatMap(Bundle.init(url:)))
+      let keys = [
+        "Unable to start": "无法启动", "Validation failed": "验证失败", "Preview runtime": "预览运行",
+        "Exit is checked after startup.": "启动后检测出口", "Proxy active": "代理生效",
+        "Peak %@": "峰值 %@", "Proxy %lld · Direct %lld · Rejected %lld": "代理 %lld · 直连 %lld · 拒绝 %lld",
+        "Traffic destinations · current connections": "流量去向 · 当前连接", "By exit node": "按出口节点",
+      ]
+      for (key, chinese) in keys {
+        XCTAssertEqual(bundle.localizedString(forKey: key, value: "MISSING", table: nil), language == "en" ? key : chinese)
+      }
+    }
+  }
+
   func testSimplifiedChineseStringCatalogProvidesMenuBarKeys() throws {
     let bundle = try XCTUnwrap(Bundle(identifier: AppConstants.bundleIdentifier))
     let zhPath = try XCTUnwrap(bundle.path(forResource: "zh-Hans", ofType: "lproj"))
@@ -491,15 +507,17 @@ final class LocalizationTests: XCTestCase {
     XCTAssertEqual(zhBundle.localizedString(forKey: "Needs Setup", value: nil, table: nil), "需要设置")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Traffic", value: nil, table: nil), "流量")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Waiting for runtime data", value: nil, table: nil), "等待运行时数据")
-    XCTAssertEqual(zhBundle.localizedString(forKey: "Run Mode", value: nil, table: nil), "运行模式")
-    XCTAssertEqual(zhBundle.localizedString(forKey: "Proxy Mode", value: nil, table: nil), "代理模式")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Run Mode", value: nil, table: nil), "分流模式")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Traffic Capture", value: nil, table: nil), "接管方式")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "System Proxy", value: nil, table: nil), "系统代理")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Proxy Routing", value: nil, table: nil), "代理路由")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Node Selection", value: nil, table: nil), "节点选择")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Select", value: nil, table: nil), "选择")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Enable System Proxy", value: nil, table: nil), "启用系统代理")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Disable System Proxy", value: nil, table: nil), "停用系统代理")
-    XCTAssertEqual(zhBundle.localizedString(forKey: "Start Proxy Gateway", value: nil, table: nil), "启动代理网关")
-    XCTAssertEqual(zhBundle.localizedString(forKey: "Stop Proxy Gateway", value: nil, table: nil), "停止代理网关")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Exit Node", value: nil, table: nil), "出口节点")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Exit %@", value: nil, table: nil), "出口 %@")
+    XCTAssertEqual(zhBundle.localizedString(forKey: "Checking exit…", value: nil, table: nil), "正在检测出口…")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Update Subscription", value: nil, table: nil), "更新订阅")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Open Main Window", value: nil, table: nil), "打开主窗口")
     XCTAssertEqual(zhBundle.localizedString(forKey: "Quit", value: nil, table: nil), "退出")

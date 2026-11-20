@@ -812,6 +812,11 @@ final class AppModel {
   private(set) var startInFlight = false
   private(set) var runtimeDataLoading = false
   private(set) var sessionStartedAt: Date?
+  private var startValidationFailure: (profileID: Profile.ID, message: String)?
+  var activeStartValidationFailure: String? {
+    guard let failure = startValidationFailure, failure.profileID == profileStore.activeProfileID else { return nil }
+    return failure.message
+  }
   private var networkExtensionCoreCrashMessage: String?
   var proxyGroups: [ProxyGroup] {
     get { runtimeData.proxyGroups }
@@ -3659,6 +3664,8 @@ final class AppModel {
 
   private func performStart(taskID: UUID) async {
     guard startTaskID == taskID else { return }
+    let profileID = profileStore.activeProfileID
+    startValidationFailure = nil
     var completedSuccessfully = false
     startInFlight = true
     networkExtensionCoreCrashMessage = nil
@@ -3700,6 +3707,13 @@ final class AppModel {
       let helperOwnedCore = helperMayHoldCoreOutput
       await handleStopResult(stopRuntimeCoordinated())
       let message = UserFacingError.message(for: error)
+      if let profileID, let error = error as? AppError {
+        switch error {
+        case .configValidationFailed, .invalidProfileConfig:
+          startValidationFailure = (profileID, message)
+        default: break
+        }
+      }
       let diagnostics = await startFailureDiagnostics(
         helperOwnedCore: helperOwnedCore,
         includeCoreSummary: false

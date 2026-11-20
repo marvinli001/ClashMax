@@ -4165,6 +4165,20 @@ final class ConfigNormalizerTests: XCTestCase {
     XCTAssertEqual(matchRule.type, "MATCH")
   }
 
+  /// Mihomo reports `chains` outbound-first, so when the local simulator cannot place the rule the
+  /// policy it chose is the end of the chain (the group the rule named), not the node at its start.
+  func testRuleExplanationFallbackPolicyIsTheRulesGroupNotTheExitNode() {
+    let explanation = RuleExplanationBuilder().explanation(
+      for: ConnectionSnapshot(
+        id: "provider", network: "tcp", host: "chat.openai.com", upload: 0, download: 0,
+        chain: ["JP 01", "Auto", "Proxy"], rule: "RULE-SET", rulePayload: "OpenAI"
+      ),
+      rules: [RuntimeRule(index: 1, type: "RULE-SET", payload: "OpenAI", policy: "Proxy")]
+    )
+
+    XCTAssertEqual(explanation.chosenPolicy, "Proxy")
+  }
+
   func testRuleExplanationBuilderUsesConnectionSourceAndPortInputs() throws {
     let builder = RuleExplanationBuilder()
     let connection = ConnectionSnapshot(

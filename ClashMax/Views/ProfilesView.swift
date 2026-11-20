@@ -1289,7 +1289,7 @@ private struct ProfileDetailPane: View {
 }
 
 /// The add-subscription flow, presented on demand instead of living above the list.
-private struct AddSubscriptionSheet: View {
+struct AddSubscriptionSheet: View {
   @Environment(AppModel.self) private var appModel
   @Environment(ProfileCoordinator.self) private var profileCoordinator
   let onCancel: () -> Void

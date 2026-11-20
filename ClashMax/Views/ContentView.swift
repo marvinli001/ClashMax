@@ -16,8 +16,10 @@ struct ContentView: View {
         .navigationSplitViewColumnWidth(min: 140, ideal: 160, max: 220)
     } detail: {
       VStack(spacing: 0) {
-        StatusStrip()
-        Divider()
+        if appModel.selectedSection != .home {
+          StatusStrip()
+          Divider()
+        }
         // Issue #27: a flexible frame does not clamp an oversized child — SwiftUI grows the frame
         // to fit it and then centers the overflow. So a page whose content outgrew the window used
         // to stretch this column from the inside, painting over the title bar and pushing the
@@ -62,22 +64,23 @@ struct ContentView: View {
       .toolbar {
         // Global runtime controls stay separate from each page's actions.
         ToolbarItemGroup(placement: .primaryAction) {
-          RunModePicker(selection: Binding(
-            get: { appModel.overrides.mode },
-            set: { appModel.requestMode($0) }
-          ))
+          if appModel.selectedSection != .home {
+            RunModePicker(selection: Binding(
+              get: { appModel.overrides.mode },
+              set: { appModel.requestMode($0) }
+            ))
 
-          Button {
-            if appModel.canStopRuntime {
-              appModel.stop()
-            } else {
-              appModel.start()
+            Button {
+              if appModel.canStopRuntime {
+                appModel.stop()
+              } else {
+                appModel.start()
+              }
+            } label: {
+              Label(toolbarRunTitle, systemImage: toolbarRunSymbol)
             }
-          } label: {
-            Label(toolbarRunTitle, systemImage: toolbarRunSymbol)
+            .disabled(!appModel.canStopRuntime && appModel.readinessIssue != nil)
           }
-          .keyboardShortcut("r", modifiers: [.command])
-          .disabled(!appModel.canStopRuntime && appModel.readinessIssue != nil)
         }
       }
     }

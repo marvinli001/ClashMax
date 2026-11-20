@@ -5115,6 +5115,29 @@ struct ConnectionSnapshot: Identifiable, Codable, Equatable, Sendable {
     [rule, rulePayload].compactMap(\.self).joined(separator: " ")
   }
 
+  /// Mihomo reports `chains` outbound-first: the node that actually dials, then each group that
+  /// picked it, ending with the group the rule named (`["JP 01", "Auto", "Proxy"]`). Read it through
+  /// these three rather than `chain.first`, which is the node, not the policy.
+  var exitNode: String? {
+    chain.first?.nonEmptyTrimmed
+  }
+
+  /// What the rule named: the outermost group, or the node itself when the rule targets one directly.
+  var rulePolicy: String? {
+    chain.last?.nonEmptyTrimmed
+  }
+
+  /// The groups traffic passes through between the rule and the exit node, rule's group first.
+  /// Empty when the rule targets a node or a built-in outbound (`DIRECT`, `REJECT`) directly.
+  var policyGroups: [String] {
+    chain.dropFirst().reversed().compactMap(\.nonEmptyTrimmed)
+  }
+
+  /// "Proxy → Auto → JP 01", in the order the traffic takes.
+  var routeSummary: String {
+    (policyGroups + [exitNode].compactMap(\.self)).joined(separator: " → ")
+  }
+
   private static func endpointLabel(host: String?, port: Int?) -> String {
     guard let host, !host.isEmpty else { return "-" }
     guard let port else { return host }
@@ -5719,7 +5742,9 @@ struct RuleExplanationBuilder: Sendable {
     case let .matched(rule):
       matchedPolicy = rule.policy
     case .mihomoOnly, .noMatch:
-      matchedPolicy = connection.chain.first
+      // The policy the core's own rule chose, i.e. the end of the outbound-first chain — not
+      // `chain.first`, which is the exit node a group picked.
+      matchedPolicy = connection.rulePolicy
     }
     return RuleExplanation(
       connectionID: connection.id,
@@ -6438,28 +6463,40 @@ struct TrafficSample: Codable, Equatable, Sendable {
   }
 
   static func format(_ bytesPerSecond: Int) -> String {
-    let value = Double(bytesPerSecond)
-    if value >= 1024 * 1024 {
-      return String(format: "%.1f MB/s", value / 1024 / 1024)
-    }
-    if value >= 1024 {
-      return String(format: "%.0f KB/s", value / 1024)
-    }
-    return "\(bytesPerSecond) B/s"
+    HomeRateParts.split(bytesPerSecond).formatted
   }
 
   static func formatBytes(_ bytes: Int) -> String {
+    HomeRateParts.bytes(bytes).formatted
+  }
+}
+
+struct HomeRateParts: Equatable {
+  let number: String
+  let unit: String
+  var formatted: String { "\(number) \(unit)" }
+
+  static func split(_ bytesPerSecond: Int) -> Self {
+    parts(bytesPerSecond, isRate: true)
+  }
+
+  static func bytes(_ bytes: Int) -> Self {
+    parts(bytes, isRate: false)
+  }
+
+  private static func parts(_ bytes: Int, isRate: Bool) -> Self {
     let value = Double(bytes)
-    if value >= 1024 * 1024 * 1024 {
-      return String(format: "%.1f GB", value / 1024 / 1024 / 1024)
+    let suffix = isRate ? "/s" : ""
+    if !isRate, value >= 1024 * 1024 * 1024 {
+      return Self(number: String(format: "%.1f", value / 1024 / 1024 / 1024), unit: "GB")
     }
     if value >= 1024 * 1024 {
-      return String(format: "%.1f MB", value / 1024 / 1024)
+      return Self(number: String(format: "%.1f", value / 1024 / 1024), unit: "MB" + suffix)
     }
     if value >= 1024 {
-      return String(format: "%.0f KB", value / 1024)
+      return Self(number: String(format: "%.0f", value / 1024), unit: "KB" + suffix)
     }
-    return "\(bytes) B"
+    return Self(number: String(bytes), unit: "B" + suffix)
   }
 }
 
@@ -6916,4 +6953,11 @@ enum SystemProxyMode: String, Codable, Equatable {
 enum SystemProxyGuardState: String, Codable, Equatable {
   case idle
   case active
+}
+
+private extension String {
+  var nonEmptyTrimmed: String? {
+    let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+  }
 }

@@ -243,6 +243,14 @@ struct ConnectionsView: View {
                   .font(.callout)
                   .foregroundStyle(.secondary)
                   .lineLimit(1)
+                if let exitNode = connection.exitNode {
+                  Label(exitNode, systemImage: "arrow.turn.down.right")
+                    .font(.callout)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 140, alignment: .leading)
+                    .help(connection.routeSummary)
+                }
                 Text(TrafficSample.formatBytes(connection.download + connection.upload))
                   .font(.callout.monospacedDigit())
                   .foregroundStyle(.secondary)
@@ -282,12 +290,15 @@ struct ConnectionsView: View {
         }
         .width(min: 100, ideal: 150)
 
-        TableColumn("Policy") { connection in
-          Text(connection.chain.first ?? "-")
+        // Mihomo's chain starts at the node, so this column always showed the exit node under a
+        // "Policy" heading. Say so; the groups that led there are in the help tag and the detail.
+        TableColumn("Exit Node") { connection in
+          Text(connection.exitNode ?? "-")
             .lineLimit(1)
-            .help(connection.chain.joined(separator: " / "))
+            .truncationMode(.middle)
+            .help(connection.routeSummary)
         }
-        .width(min: 80, ideal: 110)
+        .width(min: 80, ideal: 120)
 
         TableColumn("Traffic") { connection in
           // Totals, not a rate: the column reads "1.2 MB", the same way the detail row does.
@@ -320,7 +331,7 @@ struct ConnectionsView: View {
             format: String(localized: "%@ currently matches %@ and routes through %@."),
             host,
             connection.ruleSummary.isEmpty ? String(localized: "no reported rule") : connection.ruleSummary,
-            connection.chain.first ?? String(localized: "-")
+            connection.exitNode ?? String(localized: "-")
           ),
           draft: .targeting(host: host)
         )
@@ -414,8 +425,11 @@ struct ConnectionsView: View {
           detailRow("Network", connection.network.isEmpty ? "-" : connection.network)
           detailRow("Source", connection.sourceAddress)
           detailRow("Destination", connection.destinationAddress)
-          detailRow("Rule", connection.ruleSummary.isEmpty ? "-" : connection.ruleSummary)
-          detailRow("Chain", connection.chain.isEmpty ? "-" : connection.chain.joined(separator: " / "))
+          // Rule → group(s) → node, the order a connection is decided in, so a wrong exit reads as
+          // either "the rule sent it to the wrong group" or "the group picked the wrong node".
+          detailRow("Matched Rule", connection.ruleSummary.isEmpty ? "-" : connection.ruleSummary)
+          detailRow("Proxy Group", connection.policyGroups.isEmpty ? "-" : connection.policyGroups.joined(separator: " → "))
+          detailRow("Exit Node", connection.exitNode ?? "-")
           detailRow("Traffic", TrafficSample.formatBytes(connection.download + connection.upload))
           ConnectionPathView(connection: connection).id(connection.id)
           domainVisibility(connection)

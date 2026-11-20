@@ -7,6 +7,51 @@ import XCTest
 /// checked by eye — only the decisions a view makes from data.
 @MainActor
 final class PageSimplificationTests: XCTestCase {
+  func testHomeRatePartsUseTheSameBinaryUnitsAndPrecisionAsTheCoreReadouts() {
+    for (bytes, number, unit) in [(0, "0", "B/s"), (1023, "1023", "B/s"), (1024, "1", "KB/s"),
+                                  (1536, "2", "KB/s"), (1_048_576, "1.0", "MB/s"), (1_073_741_824, "1024.0", "MB/s")]
+    {
+      XCTAssertEqual(HomeRateParts.split(bytes), HomeRateParts(number: number, unit: unit))
+      XCTAssertEqual(TrafficSample.format(bytes), "\(number) \(unit)")
+    }
+    XCTAssertEqual(HomeRateParts.bytes(1_073_741_824), HomeRateParts(number: "1.0", unit: "GB"))
+  }
+
+  func testHomePowerStateHonorsStartInFlightAndOutstandingStopOwnership() {
+    XCTAssertEqual(HomePowerState(state: .stopped, canStop: false, readinessIssue: nil), .start)
+    XCTAssertEqual(HomePowerState(state: .running, canStop: true, readinessIssue: nil), .stop)
+    XCTAssertEqual(HomePowerState(state: .starting, canStop: true, readinessIssue: nil), .starting)
+    XCTAssertEqual(HomePowerState(state: .crashed(message: "exited"), canStop: false, readinessIssue: nil), .restart)
+    XCTAssertEqual(HomePowerState(state: .stopped, canStop: false, readinessIssue: "helper"), .blocked)
+    XCTAssertEqual(HomePowerState(state: .crashed(message: "NE"), canStop: true, readinessIssue: "cleanup"), .stop)
+  }
+
+  func testHomeTrafficDestinationsRankOpenConnectionsAndResetWithTheStore() async {
+    func connection(_ id: String, _ host: String, _ exit: String?, _ upload: Int, _ download: Int, ip: String? = nil) -> ConnectionSnapshot {
+      ConnectionSnapshot(id: id, network: "tcp", host: host, destinationIP: ip, upload: upload, download: download,
+                         chain: exit.map { [$0, "Group"] } ?? [], rule: "MATCH")
+    }
+    let snapshots = [connection("1", "A.example", "Tokyo", 2, 8), connection("2", "a.example", "DIRECT", 9, 8),
+                     connection("3", "", "Tokyo", 11, 12, ip: "192.0.2.5"), connection("4", "", "REJECT-DROP", 0, 1)]
+    let ranked = HomeTrafficDestinations.make(from: snapshots, limit: 2)
+    XCTAssertEqual(ranked.domains, [.init(name: "a.example", bytes: 27), .init(name: "192.0.2.5", bytes: 23)])
+    XCTAssertEqual(ranked.exits, [.init(name: "Tokyo", bytes: 33), .init(name: "DIRECT", bytes: 17)])
+    XCTAssertEqual([ranked.proxy, ranked.direct, ranked.reject], [2, 1, 1])
+    XCTAssertEqual(HomeConnectionRoute.classify("reject"), .reject)
+    XCTAssertEqual(HomeConnectionRoute.classify("Direct"), .direct)
+    XCTAssertEqual(HomeConnectionRoute.classify(nil), .proxy)
+    XCTAssertEqual(HomeTrafficDestinations.make(from: []).domains, [])
+    XCTAssertEqual(HomeTrafficDestinations.make(from: []).exits, [])
+    XCTAssertTrue(HomeTrafficDestinations.make(from: snapshots, limit: 0).domains.isEmpty)
+    let store = RuntimeDataStore()
+    await store.updateConnections(snapshots)
+    XCTAssertEqual(store.trafficDestinations.domains.last?.name, String(localized: "(IP connection)"))
+    store.removeConnection(id: "2")
+    XCTAssertEqual(store.trafficDestinations.direct, 0)
+    store.clearRuntimeCollections()
+    XCTAssertEqual(store.trafficDestinations, HomeTrafficDestinations())
+  }
+
   func testLogSearchDoesNotMutateCollectionAndCountsOnlyUnseenEntries() {
     let first = LogEntry(level: "info", message: "Synthetic example.com connected")
     let second = LogEntry(level: "warning", message: "合成连接需要检查")
@@ -444,5 +489,64 @@ final class PageSimplificationTests: XCTestCase {
 
     let timedOut = ProxyNode(name: "Seoul", type: "vless", delay: nil, isSelectable: true, delayState: .timeout)
     XCTAssertEqual(ProxyNodeDelayLabel(node: timedOut).text, ProxyDelayDisplay(state: .timeout).localizedLabel)
+  }
+}
+
+/// The route read-outs added with the 2026-11 visual pass: Connections' exit-node column and Home's
+/// "group → node · exit" line. Mihomo reports `chains` outbound-first, which is what made the old
+/// "Policy" column show a node.
+@MainActor
+final class RouteReadoutTests: XCTestCase {
+  private func connection(chain: [String]) -> ConnectionSnapshot {
+    ConnectionSnapshot(id: "c", network: "tcp", host: "example.com", upload: 0, download: 0, chain: chain, rule: "Match")
+  }
+
+  func testConnectionChainReadsNodeFirst() {
+    let routed = connection(chain: ["JP 01", "Auto", "Proxy"])
+    XCTAssertEqual(routed.exitNode, "JP 01")
+    XCTAssertEqual(routed.policyGroups, ["Proxy", "Auto"])
+    XCTAssertEqual(routed.routeSummary, "Proxy → Auto → JP 01")
+  }
+
+  func testConnectionChainWithoutGroups() {
+    let direct = connection(chain: ["DIRECT"])
+    XCTAssertEqual(direct.exitNode, "DIRECT")
+    XCTAssertEqual(direct.policyGroups, [])
+    XCTAssertEqual(direct.routeSummary, "DIRECT")
+
+    let empty = connection(chain: [])
+    XCTAssertNil(empty.exitNode)
+    XCTAssertEqual(empty.routeSummary, "")
+  }
+
+  func testHeaderRouteNamesGroupNodeAndExit() {
+    let node = ProxyNode(name: "JP 01", type: "vless", delay: 80, isSelectable: true)
+    let group = ProxyGroup(name: "Proxy", type: "Selector", selected: "JP 01", nodes: [node])
+    let info = PublicIPInfo(ipAddress: "203.0.113.4", countryCode: "JP", countryName: "Japan", city: "Tokyo", sourceName: "test", fetchedAt: .now)
+
+    let route = DashboardHeaderRoute(group: group, node: node, hasMissingSelection: false, exit: .loaded(info))
+    XCTAssertEqual(route.groupName, "Proxy")
+    XCTAssertEqual(route.nodeName, "JP 01")
+    XCTAssertEqual(route.exit, .located("Tokyo, Japan"))
+  }
+
+  func testHeaderRouteDropsAMissingSelectionAndUnknownExit() {
+    let group = ProxyGroup(name: "Proxy", type: "Selector", selected: "Gone", nodes: [])
+    let route = DashboardHeaderRoute(group: group, node: nil, hasMissingSelection: true, exit: .idle)
+    XCTAssertNil(route.nodeName)
+    XCTAssertEqual(route.exit, .unknown)
+
+    let failed = PublicIPInfoState.failed(message: "x", previous: nil, failedAt: .now)
+    XCTAssertEqual(DashboardHeaderRoute.exit(from: failed), .unknown)
+    XCTAssertEqual(DashboardHeaderRoute.exit(from: .loading(previous: nil, startedAt: .now)), .checking)
+  }
+
+  func testHeaderExitLocationFallsBackToCountryOrCode() {
+    XCTAssertEqual(DashboardHeaderRoute.location(of: PublicIPInfo(ipAddress: "1", countryCode: "JP", sourceName: "t", fetchedAt: .now)), "JP")
+    XCTAssertEqual(
+      DashboardHeaderRoute.location(of: PublicIPInfo(ipAddress: "1", countryName: "Singapore", city: "Singapore", sourceName: "t", fetchedAt: .now)),
+      "Singapore"
+    )
+    XCTAssertNil(DashboardHeaderRoute.location(of: PublicIPInfo(ipAddress: "1", sourceName: "t", fetchedAt: .now)))
   }
 }

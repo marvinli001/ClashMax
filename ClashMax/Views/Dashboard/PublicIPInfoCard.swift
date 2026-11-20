@@ -1,397 +1,191 @@
 import SwiftUI
 
-struct PublicIPInfoCard: View {
+struct HomeExitWell: View {
   @Environment(AppModel.self) private var appModel
   @Environment(PublicIPCoordinator.self) private var publicIP
-  let availableWidth: CGFloat
-  /// Provider-resolved current group/node supplied by `RunningDashboardView` so the proxy-effect
-  /// check shares the same off-main resolution as the Current Node card (issue #13 / #14).
-  var currentGroup: ProxyGroup?
-  var currentNode: ProxyNode?
-  var hasMissingSelection = false
+  let compact: Bool
+  let running: Bool
+  let currentGroup: ProxyGroup?
+  let currentNode: ProxyNode?
+  let hasMissingSelection: Bool
   @State private var showsFullIP = false
-  @State private var isProxyEffectExpanded = false
+  @State private var showsDiagnostics = false
 
   var body: some View {
-    TimelineView(.periodic(from: Date(), by: 5)) { context in
-      content(now: context.date)
-        .task(id: refreshTickID(for: context.date)) {
-          appModel.refreshPublicIPInfo(now: context.date)
+    Group {
+      if running {
+        TimelineView(.periodic(from: .now, by: 5)) { context in
+          content
+            .task(id: Int(context.date.timeIntervalSince1970 / 5)) {
+              appModel.refreshPublicIPInfo(now: context.date)
+            }
         }
-    }
-    .task {
-      appModel.refreshPublicIPInfo()
-    }
-    // A probe made before the capture path was live measured the direct route. The moment System
-    // Proxy / TUN / NE takes over, that answer is stale, so it is replaced rather than left to sit
-    // for the whole refresh interval.
-    .onChange(of: captureActive) { _, isActive in
-      if isActive {
-        appModel.refreshPublicIPInfo(force: true)
+      } else {
+        VStack(alignment: .leading, spacing: 6) {
+          title
+          Text("Exit is checked after startup.").font(.caption).foregroundStyle(.secondary)
+        }
       }
     }
+    .padding(.horizontal, 14).padding(.vertical, compact ? 8 : 12)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .homeWell()
+    .onChange(of: captureActive) { _, active in
+      if running, active { appModel.refreshPublicIPInfo(force: true) }
+    }
+    .onChange(of: running) { _, _ in showsFullIP = false; showsDiagnostics = false }
   }
 
   private var captureActive: Bool {
     appModel.systemProxyEnabled || appModel.tunEnabled || appModel.networkExtensionEnabled
   }
 
-  private func content(now: Date) -> some View {
+  private var title: some View {
+    Label("Exit", systemImage: "globe").font(.callout).foregroundStyle(.secondary)
+  }
+
+  private var content: some View {
     let state = publicIP.state
-
-    return VStack(alignment: .leading, spacing: cardVerticalSpacing) {
-      HStack(spacing: 10) {
-        DashboardSectionHeader(
-          title: "Public IP",
-          symbolName: "globe",
-          trailing: isCompact ? nil : state.info.map {
-            String(format: String(localized: "Updated %@"), $0.fetchedAt.formatted(date: .omitted, time: .standard))
+    let diagnostics = appModel.proxyEffectDiagnostics(currentGroup: currentGroup, currentNode: currentNode, hasMissingSelection: hasMissingSelection)
+    let presentation = PublicIPProxyEffectPresentation(diagnostics: diagnostics, isExpanded: showsDiagnostics)
+    return VStack(alignment: .leading, spacing: 6) {
+      HStack(spacing: 7) {
+        title
+        Spacer(minLength: 2)
+        if state.errorMessage == nil || diagnostics.status != .waiting {
+          Button { showsDiagnostics = true } label: {
+            HomeChip(text: String(localized: presentation.title), symbol: "chevron.right", tone: presentation.tint)
           }
-        )
-
-        if state.isLoading {
-          ProgressView()
-            .controlSize(.small)
+          .buttonStyle(.plain)
+          .help("Show proxy effect details")
+          .popover(isPresented: $showsDiagnostics, arrowEdge: .bottom) {
+            diagnosticDetails(diagnostics)
+          }
         }
-
         Button {
-          appModel.refreshPublicIPInfo(force: true, now: now)
-          // Also refresh the inputs the proxy-effect check reads, so a manual refresh re-evaluates
-          // capture/route status. User-initiated only — never on the periodic tick (no refresh loop).
-          if appModel.canControlRuntimeProxies {
-            appModel.reloadRuntimeData()
-          }
-          if appModel.proxyRoutingMode == .tun {
-            appModel.refreshTunDiagnostics()
-          }
+          refresh()
         } label: {
-          Image(systemName: "arrow.clockwise")
+          if state.isLoading { ProgressView().controlSize(.mini) }
+          else { Image(systemName: "arrow.clockwise") }
         }
-        .buttonStyle(.borderless)
-        .disabled(state.isLoading)
-        .help("Refresh public IP and proxy effect")
+        .buttonStyle(.borderless).disabled(state.isLoading)
+        .help("Refresh public IP and proxy effect").accessibilityLabel("Refresh public IP and proxy effect")
       }
-
       if let info = state.info {
-        infoBody(info)
+        if compact {
+          HStack(spacing: 12) {
+            location(info)
+            Spacer(minLength: 4)
+            address(info)
+            timestamp(info)
+          }
+        } else {
+          location(info)
+          address(info)
+          timestamp(info)
+        }
       } else if state.isLoading {
-        publicIPSkeletonBody
-      } else {
-        placeholderBody(
-          title: String(localized: "Public IP unavailable"),
-          symbolName: "network.slash",
-          message: state.errorMessage ?? String(localized: "Refresh after the runtime is ready.")
-        )
+        VStack(alignment: .leading, spacing: 6) {
+          ClashMaxSkeletonBar(width: 128, height: 14)
+          ClashMaxSkeletonBar(width: 96, height: 10)
+        }
+        .clashMaxSkeleton()
+        .accessibilityLabel("Checking exit…")
+      } else if state.errorMessage == nil {
+        Text("Public IP unavailable").font(.caption).foregroundStyle(.secondary)
       }
-
-      // The placeholder above already carries the error when there is no address to show.
-      if let message = state.errorMessage, state.info != nil || state.isLoading {
-        Label(message, systemImage: "exclamationmark.triangle.fill")
-          .font(.caption)
-          .foregroundStyle(.orange)
-          .lineLimit(isCompact ? 3 : 2)
+      if let message = state.errorMessage {
+        HStack {
+          Label(NSLocalizedString(message, comment: ""), systemImage: "exclamationmark.triangle")
+            .fixedSize(horizontal: false, vertical: true)
+          Button(String(localized: "Retry")) { refresh() }.buttonStyle(.link)
+        }
+        .font(.caption)
+      } else if diagnostics.status != .waiting, !presentation.isCollapsible {
+        Text(diagnostics.reason).font(.caption).foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)
       }
+    }
+  }
 
-      if appModel.isCoreRunning {
-        proxyEffectSection()
+  private func refresh() {
+    appModel.refreshPublicIPInfo(force: true)
+    if appModel.canControlRuntimeProxies { appModel.reloadRuntimeData() }
+    if appModel.proxyRoutingMode == .tun { appModel.refreshTunDiagnostics() }
+  }
+
+  private func location(_ info: PublicIPInfo) -> some View {
+    let place = DashboardHeaderRoute.location(of: info) ?? String(localized: "Unknown Region")
+    return HStack(spacing: 7) {
+      if let code = info.countryCode, !code.isEmpty, code != place {
+        Text(code.uppercased()).font(.caption.weight(.semibold))
+          .padding(.horizontal, 6).padding(.vertical, 2)
+          .background(.cardSurface, in: RoundedRectangle(cornerRadius: 6))
       }
-    }
-    .padding(14)
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    .dashboardCard()
-  }
-
-  private func infoBody(_ info: PublicIPInfo) -> some View {
-    VStack(alignment: .leading, spacing: isCompact ? 8 : 12) {
-      if shouldStackIdentity {
-        VStack(alignment: .leading, spacing: 10) {
-          regionIdentity(for: info)
-          ipAddressPill(for: info)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-      } else {
-        HStack(spacing: 12) {
-          regionIdentity(for: info)
-          Spacer(minLength: 8)
-          ipAddressPill(for: info)
-        }
-      }
-
-      // Who is serving the address and where it sits. The organisation repeated the ISP, the
-      // time zone and coordinates repeated the location, and the source is already the subtitle.
-      LazyVGrid(columns: detailColumns, alignment: .leading, spacing: isCompact ? 6 : 8) {
-        PublicIPInfoDetail(title: String(localized: "ASN / ISP"), value: asnISPSummary(for: info))
-        PublicIPInfoDetail(title: String(localized: "Location"), value: locationSummary(for: info))
-      }
+      Text(place).font(.title3.weight(.semibold)).lineLimit(1).truncationMode(.middle).help(place)
     }
   }
 
-  private func proxyEffectSection() -> some View {
-    let diagnostics = appModel.proxyEffectDiagnostics(
-      currentGroup: currentGroup,
-      currentNode: currentNode,
-      hasMissingSelection: hasMissingSelection
-    )
-    let presentation = PublicIPProxyEffectPresentation(
-      diagnostics: diagnostics,
-      isExpanded: isProxyEffectExpanded
-    )
-
-    return VStack(alignment: .leading, spacing: isCompact ? 7 : 9) {
-      Divider()
-        .opacity(0.24)
-
-      proxyEffectHeader(diagnostics, presentation: presentation)
-
-      if presentation.showsDetails {
-        Text(diagnostics.reason)
-          .font(.caption)
-          .foregroundStyle(.primary)
-          .fixedSize(horizontal: false, vertical: true)
-
-        if !diagnostics.facts.isEmpty {
-          LazyVGrid(columns: detailColumns, alignment: .leading, spacing: isCompact ? 5 : 7) {
-            // Every fact: the base four are always present, so a cap of four dropped the one fact a
-            // warning adds (the matched rule, the TUN or NE issue) — the one that explains it.
-            ForEach(Array(diagnostics.facts.enumerated()), id: \.offset) { _, fact in
-              PublicIPInfoDetail(title: fact.title, value: fact.value)
-            }
-          }
-        }
-
-        if !diagnostics.recoveryActions.isEmpty {
-          VStack(alignment: .leading, spacing: 3) {
-            ForEach(Array(diagnostics.recoveryActions.enumerated()), id: \.offset) { _, action in
-              Label(action, systemImage: "arrow.turn.down.right")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            }
-          }
-        }
-      }
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .animation(.easeInOut(duration: 0.16), value: presentation.showsDetails)
-    .onChange(of: diagnostics.cause) { _, _ in
-      isProxyEffectExpanded = false
-    }
-  }
-
-  @ViewBuilder
-  private func proxyEffectHeader(
-    _ diagnostics: ProxyEffectDiagnosticsSnapshot,
-    presentation: PublicIPProxyEffectPresentation
-  ) -> some View {
-    if presentation.isCollapsible {
-      Button {
-        isProxyEffectExpanded.toggle()
-      } label: {
-        proxyEffectHeaderContent(diagnostics, presentation: presentation)
-      }
-      .buttonStyle(.plain)
-      .contentShape(Rectangle())
-      .help(isProxyEffectExpanded ? "Collapse proxy effect details" : "Show proxy effect details")
-    } else {
-      proxyEffectHeaderContent(diagnostics, presentation: presentation)
-    }
-  }
-
-  private func proxyEffectHeaderContent(
-    _ diagnostics: ProxyEffectDiagnosticsSnapshot,
-    presentation: PublicIPProxyEffectPresentation
-  ) -> some View {
-    HStack(spacing: 8) {
-      Image(systemName: proxyEffectSymbol(diagnostics.status))
-        .font(.system(size: 12, weight: .semibold))
-        .foregroundStyle(proxyEffectTint(diagnostics.status))
-        .frame(width: 16)
-      Text("Proxy Effect")
-        .font(.caption.weight(.semibold))
-        .foregroundStyle(.secondary)
-      Spacer(minLength: 6)
-      Text(localizedStatusLabel(diagnostics.status))
-        .font(.caption2.weight(.semibold))
-        .foregroundStyle(proxyEffectTint(diagnostics.status))
-        .padding(.horizontal, 7)
-        .padding(.vertical, 2)
-        .background(proxyEffectTint(diagnostics.status).opacity(0.14), in: Capsule())
-      if presentation.isCollapsible {
-        Image(systemName: presentation.showsDetails ? "chevron.down" : "chevron.right")
-          .font(.caption2.weight(.semibold))
-          .foregroundStyle(.secondary)
-          .frame(width: 10)
-      }
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
-  }
-
-  private func localizedStatusLabel(_ status: ProxyEffectDiagnosticsSnapshot.Status) -> String {
-    switch status {
-    case .pass: return String(localized: "Pass")
-    case .warn: return String(localized: "Warn")
-    case .fail: return String(localized: "Fail")
-    case .waiting: return String(localized: "Waiting")
-    }
-  }
-
-  private func proxyEffectSymbol(_ status: ProxyEffectDiagnosticsSnapshot.Status) -> String {
-    switch status {
-    case .pass: return "checkmark.seal.fill"
-    case .warn: return "exclamationmark.triangle.fill"
-    case .fail: return "xmark.octagon.fill"
-    case .waiting: return "clock"
-    }
-  }
-
-  private func proxyEffectTint(_ status: ProxyEffectDiagnosticsSnapshot.Status) -> Color {
-    switch status {
-    case .pass: return .green
-    case .warn: return .orange
-    case .fail: return .red
-    case .waiting: return .secondary
-    }
-  }
-
-  /// One skeleton, one shimmer: the node skeleton and the bars inside share the band applied here.
-  private var publicIPSkeletonBody: some View {
-    VStack(alignment: .leading, spacing: isCompact ? 8 : 12) {
-      if shouldStackIdentity {
-        VStack(alignment: .leading, spacing: 10) {
-          ClashMaxCurrentNodeSkeleton(isCompact: isCompact)
-        }
-      } else {
-        HStack(spacing: 12) {
-          ClashMaxCurrentNodeSkeleton(isCompact: isCompact)
-          Spacer(minLength: 8)
-          ClashMaxSkeletonBar(width: 128, height: 32, cornerRadius: 8)
-        }
-      }
-
-      LazyVGrid(columns: detailColumns, alignment: .leading, spacing: isCompact ? 6 : 8) {
-        ForEach(0..<2, id: \.self) { index in
-          VStack(alignment: .leading, spacing: 5) {
-            ClashMaxSkeletonBar(width: 62, height: 8)
-            ClashMaxSkeletonBar(width: index.isMultiple(of: 2) ? 128 : 96, height: 11)
-          }
-        }
-      }
-    }
-    .frame(maxWidth: .infinity, minHeight: isCompact ? 98 : 128, alignment: .topLeading)
-    .clashMaxSkeleton()
-    .accessibilityHidden(true)
-  }
-
-  /// Sits directly on the card, like the Current Node summary next to it: no tinted icon tile.
-  private func regionIdentity(for info: PublicIPInfo) -> some View {
-    HStack(spacing: 12) {
-      VStack(alignment: .leading, spacing: 3) {
-        Text(countryTitle(for: info))
-          .font(.system(.title3, design: .rounded).weight(.semibold))
-          .lineLimit(1)
-          .minimumScaleFactor(0.68)
-        Text(info.sourceName)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
-      }
-    }
-  }
-
-  private func ipAddressPill(for info: PublicIPInfo) -> some View {
+  private func address(_ info: PublicIPInfo) -> some View {
     HStack(spacing: 6) {
-      Text(showsFullIP ? info.ipAddress : info.maskedAddress)
-        .font(.system(.callout, design: .monospaced).weight(.semibold))
-        .lineLimit(1)
-        .minimumScaleFactor(0.64)
-
-      Button {
-        showsFullIP.toggle()
-      } label: {
+      Text(verbatim: showsFullIP ? info.ipAddress : info.maskedAddress)
+        .font(.callout.monospaced()).lineLimit(1).minimumScaleFactor(0.75).truncationMode(.middle)
+      Button { showsFullIP.toggle() } label: {
         Image(systemName: showsFullIP ? "eye.slash" : "eye")
       }
       .buttonStyle(.borderless)
       .help(showsFullIP ? "Hide IP address" : "Show IP address")
+      .accessibilityLabel(showsFullIP ? Text("Hide IP address") : Text("Show IP address"))
     }
-    .padding(.horizontal, 10)
-    .padding(.vertical, 7)
-    .background(.tileSurface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
   }
 
-  private func placeholderBody(title: String, symbolName: String, message: String? = nil) -> some View {
-    VStack(spacing: isCompact ? 8 : 10) {
-      Image(systemName: symbolName)
-        .font(.system(size: isCompact ? 22 : 24, weight: .semibold))
-        .foregroundStyle(.secondary)
-      Text(title)
-        .font(.callout.weight(.medium))
-        .foregroundStyle(.secondary)
-      if let message {
-        Text(message)
-          .font(.caption)
-          .foregroundStyle(Color.secondary.opacity(0.86))
-          .multilineTextAlignment(.center)
-          .lineLimit(isCompact ? 3 : 2)
+  private func timestamp(_ info: PublicIPInfo) -> some View {
+    HStack(spacing: 4) {
+      if let asn = info.asn, !asn.isEmpty { Text(asn); Text(verbatim: "·") }
+      Text(info.fetchedAt, format: .relative(presentation: .numeric, unitsStyle: .abbreviated))
+    }
+    .font(.caption).foregroundStyle(.tertiary)
+  }
+
+  private func diagnosticDetails(_ diagnostics: ProxyEffectDiagnosticsSnapshot) -> some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text(diagnostics.headline).font(.headline)
+      Text(diagnostics.reason).font(.callout).fixedSize(horizontal: false, vertical: true)
+      LazyVGrid(columns: [.init(.flexible()), .init(.flexible())], alignment: .leading, spacing: 8) {
+        ForEach(Array(diagnostics.facts.enumerated()), id: \.offset) { _, fact in
+          PublicIPInfoDetail(title: fact.title, value: fact.value)
+        }
+      }
+      ForEach(Array(diagnostics.recoveryActions.enumerated()), id: \.offset) { _, action in
+        Label(action, systemImage: "arrow.turn.down.right").font(.caption).foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
       }
     }
-    .frame(maxWidth: .infinity, minHeight: isCompact ? 98 : 128)
-    .frame(maxHeight: .infinity, alignment: .center)
-  }
-
-  private var detailColumns: [GridItem] {
-    if availableWidth < 340 {
-      return [GridItem(.flexible(minimum: 120), spacing: 8)]
-    }
-
-    let minimum: CGFloat = isCompact ? 118 : 150
-    return [
-      GridItem(.flexible(minimum: minimum), spacing: 10),
-      GridItem(.flexible(minimum: minimum), spacing: 10),
-    ]
-  }
-
-  private var isCompact: Bool {
-    availableWidth < 460
-  }
-
-  private var shouldStackIdentity: Bool {
-    availableWidth < 360
-  }
-
-  private var cardVerticalSpacing: CGFloat {
-    isCompact ? 10 : 12
-  }
-
-  private func refreshTickID(for date: Date) -> Int {
-    Int(date.timeIntervalSince1970 / 5)
-  }
-
-  private func countryTitle(for info: PublicIPInfo) -> String {
-    let country = info.countryName ?? info.countryCode
-    return country ?? String(localized: "Unknown Region")
-  }
-
-  private func asnISPSummary(for info: PublicIPInfo) -> String {
-    [info.asn, info.isp]
-      .compactMap(\.self)
-      .filter { !$0.isEmpty }
-      .joined(separator: " / ")
-      .nonEmpty ?? "--"
-  }
-
-  private func locationSummary(for info: PublicIPInfo) -> String {
-    [info.city, info.region]
-      .compactMap(\.self)
-      .filter { !$0.isEmpty }
-      .joined(separator: ", ")
-      .nonEmpty ?? "--"
+    .padding(16).frame(width: 340)
   }
 }
 
 struct PublicIPProxyEffectPresentation: Equatable {
   var diagnostics: ProxyEffectDiagnosticsSnapshot
   var isExpanded: Bool
+
+  var title: LocalizedStringResource {
+    switch diagnostics.status {
+    case .pass: "Proxy active"
+    case .warn: "Check proxy"
+    case .fail: "Proxy inactive"
+    case .waiting: "Waiting"
+    }
+  }
+
+  var tint: Color? {
+    switch diagnostics.status {
+    case .pass: .green
+    case .warn: .orange
+    case .fail: .red
+    case .waiting: nil
+    }
+  }
 
   var isCollapsible: Bool {
     diagnostics.status == .pass || (diagnostics.status == .warn && diagnostics.cause == .directRunMode)
@@ -418,11 +212,5 @@ private struct PublicIPInfoDetail: View {
         .help(value)
     }
     .frame(maxWidth: .infinity, alignment: .leading)
-  }
-}
-
-private extension String {
-  var nonEmpty: String? {
-    isEmpty ? nil : self
   }
 }

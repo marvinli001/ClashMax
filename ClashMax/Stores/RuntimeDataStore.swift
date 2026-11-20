@@ -10,7 +10,8 @@ final class RuntimeDataStore {
   var proxyProviders: [ProxyProvider] = []
   var ruleProviders: [RuleProvider] = []
   var rules: [RuntimeRule] = []
-  var connections: [ConnectionSnapshot] = []
+  private(set) var connections: [ConnectionSnapshot] = []
+  private(set) var trafficDestinations = HomeTrafficDestinations()
   var connectionRecords: [ConnectionRecord] = []
   private(set) var logs: [LogEntry] = []
   var trafficSample: TrafficSample = .zero
@@ -22,6 +23,9 @@ final class RuntimeDataStore {
   /// The core's own resident-memory reading, or `.zero` while nothing has been reported yet.
   /// Only frames the core actually measured land here — see `appendMemorySample(_:)`.
   var memorySample: CoreMemorySample = .zero
+  /// The last minute of measured readings, oldest first, for the Home memory trend. Kept apart from
+  /// `memorySample` so a reconnect that blanks the current value does not erase the trend.
+  private(set) var memoryHistory: [Int] = []
   /// The core's own byte counters since it started (`/connections`), or `nil` until the first
   /// report lands. They restart from zero with the core, so the dashboard labels them "this session".
   private(set) var trafficTotals: TrafficTotals?
@@ -153,12 +157,13 @@ final class RuntimeDataStore {
       connectionRecordBuffer.replace(with: result.records)
       connectionRecords = connectionRecordBuffer.elements
     }
-    if result.snapshotsChanged {
+    if let destinations = result.destinations {
       // Active connections are published unbounded on purpose: a connection
       // leaves the set the moment it closes, so the count mirrors reality and
       // feeds the live "Connections" stat. Only `connectionRecords` (which
       // retains ended connections) needs the retention cap.
       connections = result.snapshots
+      trafficDestinations = destinations
     }
   }
 
@@ -166,7 +171,7 @@ final class RuntimeDataStore {
     var records: [ConnectionRecord]
     var snapshots: [ConnectionSnapshot]
     var recordsChanged: Bool
-    var snapshotsChanged: Bool
+    var destinations: HomeTrafficDestinations?
   }
 
   /// Pure merge of active snapshots with retained history. Runs off the
@@ -251,7 +256,7 @@ final class RuntimeDataStore {
       records: boundedRecords,
       snapshots: observed,
       recordsChanged: boundedRecords != previousRecords,
-      snapshotsChanged: observed != previousSnapshots
+      destinations: observed == previousSnapshots ? nil : HomeTrafficDestinations.make(from: observed)
     )
   }
 
@@ -276,6 +281,10 @@ final class RuntimeDataStore {
   func appendMemorySample(_ sample: CoreMemorySample) {
     guard sample.hasReading else { return }
     memorySample = sample
+    memoryHistory.append(sample.inUse)
+    if memoryHistory.count > 60 {
+      memoryHistory.removeFirst(memoryHistory.count - 60)
+    }
   }
 
   /// Records the totals carried by a `/connections` report. Written only on a real change: the
@@ -329,6 +338,7 @@ final class RuntimeDataStore {
     trafficHistory = []
     trafficSampleCount = 0
     memorySample = .zero
+    memoryHistory = []
     trafficTotals = nil
   }
 

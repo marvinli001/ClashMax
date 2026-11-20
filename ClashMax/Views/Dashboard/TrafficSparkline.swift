@@ -1,5 +1,13 @@
 import SwiftUI
 
+/// The two traffic curves' colours, shared by every chart and legend. Blue and orange sit on
+/// opposite sides of the wheel, so the curves stay apart where they cross and for colour-blind
+/// readers; the old blue/cyan pair read as one line at a glance.
+enum TrafficSeriesColor {
+  static let download = Color.blue
+  static let upload = Color.orange
+}
+
 /// The traffic chart's data, resolved away from SwiftUI so the parts that decide how the chart
 /// *moves* can be tested without rendering a view.
 ///
@@ -222,17 +230,17 @@ struct TrafficSparkline: View {
       series(geometry.download, in: geometry, isClosed: true)
         .fill(
           LinearGradient(
-            colors: [.blue.opacity(0.22), .blue.opacity(0.02)],
+            colors: [TrafficSeriesColor.download.opacity(0.22), TrafficSeriesColor.download.opacity(0.02)],
             startPoint: .top,
             endPoint: .bottom
           )
         )
 
       series(geometry.download, in: geometry)
-        .stroke(.blue, style: StrokeStyle(lineWidth: downloadLineWidth, lineCap: .round, lineJoin: .round))
+        .stroke(TrafficSeriesColor.download, style: StrokeStyle(lineWidth: downloadLineWidth, lineCap: .round, lineJoin: .round))
 
       series(geometry.upload, in: geometry)
-        .stroke(.cyan, style: StrokeStyle(lineWidth: uploadLineWidth, lineCap: .round, lineJoin: .round))
+        .stroke(TrafficSeriesColor.upload, style: StrokeStyle(lineWidth: uploadLineWidth, lineCap: .round, lineJoin: .round))
     }
     .clipped()
     .mask(alignment: .leading) {

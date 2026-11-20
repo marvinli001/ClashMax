@@ -110,7 +110,7 @@ private struct ActiveCorePowerSymbol: View {
     }
     .aspectRatio(1, contentMode: .fit)
     .accessibilityElement(children: .ignore)
-    .accessibilityLabel(Text("ClashMax power button"))
+    .accessibilityLabel(Text("ClashMax core"))
     .accessibilityValue(Text(state.displayTitle))
   }
 

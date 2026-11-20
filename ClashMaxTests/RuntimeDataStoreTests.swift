@@ -402,6 +402,24 @@ final class RuntimeDataStoreTests: XCTestCase {
     XCTAssertFalse(store.memorySample.hasReading)
   }
 
+  /// The Home memory card draws the last minute of readings: priming frames never enter the trend,
+  /// it keeps only the newest 60, and it starts over with the core.
+  func testMemoryHistoryKeepsTheLastMinuteOfRealReadings() {
+    let store = RuntimeDataStore()
+
+    store.appendMemorySample(.zero)
+    for index in 1...65 {
+      store.appendMemorySample(CoreMemorySample(inUse: index * 1024, osLimit: 0))
+    }
+
+    XCTAssertEqual(store.memoryHistory.count, 60)
+    XCTAssertEqual(store.memoryHistory.first, 6 * 1024)
+    XCTAssertEqual(store.memoryHistory.last, 65 * 1024)
+
+    store.clearRuntimeCollections()
+    XCTAssertTrue(store.memoryHistory.isEmpty)
+  }
+
   // MARK: Session traffic totals
 
   func testTrafficTotalsStayUnknownUntilTheCoreReportsThem() {

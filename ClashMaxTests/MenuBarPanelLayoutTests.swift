@@ -325,8 +325,8 @@ final class MenuBarPanelLayoutTests: XCTestCase {
     // options) without needing an `AppModel`. Both locales must stay inside the
     // 312pt panel and on one compact line.
     let localizedTitles: [(locale: String, title: String)] = [
-      ("en", "Proxy Mode"),
-      ("zh-Hans", "代理模式"),
+      ("en", "Traffic Capture"),
+      ("zh-Hans", "接管方式"),
     ]
 
     for testCase in localizedTitles {
