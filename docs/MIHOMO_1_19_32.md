@@ -1,6 +1,12 @@
 # Mihomo v1.19.32 App adaptation
 
-## Release notes draft
+> Historical adaptation and decision record. The current core pin is in the
+> [manifest](../Resources/Core/mihomo-manifest.json); this note does not pin current development
+> to v1.19.32. App adapters are implemented. The dated live matrix below remains `NOT RUN`;
+> a newer core does not retroactively complete it. For a current authorized run, use the
+> [release guide](RELEASE.md) and [TUN smoke matrix](TUN_SMOKE_TEST.md), recording the actual build.
+
+## Adaptation Delivered With v1.19.32
 
 - TUN Settings now offers `cubic`, `reno`, `bbr`, and `bbr3` TCP congestion control
   when the Mips stack is selected. The picker has no free-text input. `Default (cubic)`

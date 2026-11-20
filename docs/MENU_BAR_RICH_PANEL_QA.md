@@ -1,11 +1,14 @@
 # Menu Bar Rich Panel QA
 
-This note captures the first-pass design and verification contract for the
-ClashMax menu bar rich panel.
+This is the maintained verification contract for the implemented menu bar panel
+(source review: 2026-11-17). Use the [manual plan](MANUAL_TEST_PLAN.md) for per-version
+sign-off and the [development guide](DEVELOPMENT.md) for check scope. A fixture showing
+the panel's content does not prove the real MenuBarExtra system panel's material.
 
 ## Product Scope
 
-- Keep the menu bar item lightweight: status symbol only.
+- Keep the menu bar item lightweight: status symbol, with optional two-line
+  upload/download speeds controlled by Settings > General > Menu Bar Traffic Speed.
 - Open a SwiftUI `MenuBarExtra` window-style panel for daily runtime control.
 - Do not place full main-window workflows in the panel. Proxy groups,
   connections, rules, logs, and deep settings stay in the main window.
@@ -15,12 +18,14 @@ ClashMax menu bar rich panel.
 
 ## Layout Contract
 
-- Panel width stays in the 300-330 px range. Current implementation is 312 px.
+- Panel width stays in the 300-330 pt range. Current implementation is 320 pt,
+  defined by `MenuBarPanelLayout.width` in `ClashMax/Views/MenuBarView.swift`.
 - Top area shows product identity, active profile, runtime owner, and current
   runtime state.
-- Primary action is Start Core or Stop Core.
-- Middle controls include Run Mode, Profile, Proxy Routing, System Proxy, and
-  Traffic only while a real runtime is running.
+- Primary action starts or stops the runtime, with explicit setup/recovery states.
+- Run Mode, Profile and Proxy Routing remain available when applicable, including
+  offline selection. System Proxy controls explain routing-mode restrictions;
+  traffic is shown only for a real running runtime.
 - Footer actions include Update Subscription, Check Updates, Open Main Window,
   and Quit.
 - Use native SwiftUI controls, SF Symbols, semantic status colors, and system
@@ -61,26 +66,26 @@ Check these states in both English and Simplified Chinese:
 
 ## Verification Commands
 
-Run these after changing menu bar UI strings or state mapping:
+For changes to layout/state mapping, run the affected classes. String changes
+also need the localization gate:
 
 ```sh
-xcodegen generate
-jq empty Resources/Localizable.xcstrings
-tmpdir=$(mktemp -d)
-xcrun xcstringstool compile Resources/Localizable.xcstrings --output-directory "$tmpdir" --dry-run
-xcodebuild test -project ClashMax.xcodeproj -scheme ClashMax -destination 'platform=macOS' -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO -only-testing:ClashMaxTests/MenuBarPanelLayoutTests
-xcodebuild test -project ClashMax.xcodeproj -scheme ClashMax -destination 'platform=macOS' -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO -only-testing:ClashMaxTests/MenuBarRuntimePresentationTests
-xcodebuild test -project ClashMax.xcodeproj -scheme ClashMax -destination 'platform=macOS' -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO -only-testing:ClashMaxTests/LocalizationTests
+xcodebuild test -project ClashMax.xcodeproj -scheme ClashMax -destination 'platform=macOS' -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO -only-testing:ClashMaxTests/MenuBarPanelLayoutTests -only-testing:ClashMaxTests/MenuBarRuntimePresentationTests
+script/localization_gate.sh
 ```
 
-`ClashMax.xcodeproj` is generated from `project.yml` and ignored by git, so run
-XcodeGen before relying on new test files or target membership.
+Regenerate only for new files/membership/configuration, after establishing that
+the existing Xcode signing/profile/capability setup is preserved. Documentation-only
+changes need neither generation nor application tests.
 
-Run this before claiming the app still builds and launches:
+When app restart/launch is authorized and needed for the claim, use:
 
 ```sh
 ./script/build_and_run.sh --verify
 ```
+
+This stops the running app, rebuilds and launches it. It is not a read-only check;
+record/restore the baseline for any authorized live network operation.
 
 ## Manual Visual QA
 
@@ -102,17 +107,8 @@ restricted desktop capture environments, so do this manually before release:
   traffic section intact, and survives a relaunch. The icon-only status item
   keeps its runtime tint, so it stays green while running.
 
-## Reference Image Pass
+## Visual References
 
-For a second visual pass, provide 2-4 reference images and identify what should
-be borrowed as inspiration:
-
-- panel density and spacing
-- glass or material feel
-- shadow and corner treatment
-- status color usage
-- footer action grouping
-- icon tone and size
-
-Reference images are used for visual decomposition only. Do not copy
-proprietary code, brand assets, icons, or exact layouts.
+References may inform a separately scoped redesign; they are not a release gate.
+Use them for density, material, status and control analysis only. Do not copy
+proprietary code, brand assets, icons or exact layouts.

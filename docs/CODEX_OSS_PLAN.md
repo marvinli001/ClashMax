@@ -9,6 +9,11 @@ Codex CLI and OpenAI models — not an end-user chatbot**. Nothing in ClashMax c
 OpenAI API at runtime, and nothing in this plan adds an AI feature to the shipped app.
 The credits fund maintenance of the repository itself.
 
+> Scope: an open-source maintenance program proposal, not the app feature backlog.
+> The targets and status table retain the 2026-08-05 baseline; this document cleanup does not
+> assert funding, progress or completed milestones. Current app work is in the
+> [roadmap](ROADMAP.md), and current development commands are in the [development guide](DEVELOPMENT.md).
+
 ## How To Verify This Document
 
 Everything below is written against things you can open right now:
@@ -227,7 +232,7 @@ diverged and why.
   and this work does not create a reason to start.
 - No use of credits to generate marketing content or inflate contribution counts.
 
-## Current Status
+## Baseline Status — 2026-08-05
 
 Honest baseline as of 2026-08-05, so progress can be measured rather than asserted:
 

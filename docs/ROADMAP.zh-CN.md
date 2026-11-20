@@ -2,60 +2,26 @@
 
 [English](ROADMAP.md) | **简体中文**
 
-> 本文是 [`ROADMAP.md`](ROADMAP.md) 的中文版本，内容与英文版逐节对应。两者出现不一致时，以英文版为准。
+> 本文与英文版逐节对应；出现不一致时，以英文版为准。
 
-**状态：** 草案 2026-08-14，2026-08-27 修订，2026-08-29 校正，2026-08-30 扩充 · 维护者 [@marvinli001](https://github.com/marvinli001) ·
-应用 1.1.5，内置 Mihomo [v1.19.34](../Resources/Core/mihomo-manifest.json)
+**状态核对：2026-11-17**，依据源码版本 `9fe49fa`。
+本次仅核对源码和文档，未运行应用、测试或真实网络检查。
+应用和内核版本分别以 [project.yml](../project.yml) 与[内核 manifest](../Resources/Core/mihomo-manifest.json) 为准，不在这里重复维护。
 
-本文记录 **ClashMax 要往哪里走、以及为什么**，并且写成可以对着代码树逐条核对的形式。它不是许愿单。
-下面点名的每一处缺口，都是在 2026-08-14 通过实际阅读仓库验证过的；每一个提出的 issue 都带有可以用一条命令
-或一张截图演示的验收标准。
+本文区分已有实现、尚缺实现和人工验收记录。**已有实现不等于人工验收通过或发布就绪。**
+保留原有条目 ID，便于源码注释、测试和历史记录继续引用。
 
-2026-08-27 的这次修订关掉了 **A3、A6、B5**——这三处覆盖缺口要么用户已经在踩，要么什么都不做也会持续劣化。
-这些小节里引用的每一条端点契约，都是拿内置内核实测出来的，而不是照抄上游文档；凡是实测结果和"想当然"的结论
-相左的地方，都写在了它约束的那条验收标准旁边。
-
-2026-08-29 的一次评审在这版初稿里查出五处缺陷——一条会把单次整组请求失败反过来放大成逐节点请求风暴的
-降级路径、一个在提升阈值两侧含义并不相同的开关、备份与恢复根本没带上的 geo 设置、读的是保存值而不是内核
-实际生效值的 geo 诊断，以及一个「谁说了算」取决于目录枚举顺序的 ClashX 导入。五处全部已修，并且都写在它
-所属的那条验收标准之下、而不是塞进变更日志里，因为出问题的正是那条标准本身。**下文 A3/A6/B5 的「已交付」
-说的是传输层与逻辑；每一节各自点名的人工观察缺口仍然没有关掉。**
-
-2026-08-30 的这次扩充关掉了 §3.2 里最后三行未完成项——**A2**（`/dns/query`）、**`/memory`**、
-**C3**（`listeners`）——并校正了两行已经过时的表述。三处里有两处的形态是被实测结果改写的：`/dns/query`
-的应答里**根本没有 nameserver 字段**，因此面板报告的是「无法归因」，而不是编一个归因出来；而 `listeners`
-从来就没有被剥离过，只是被标记，并且只在 provider 覆盖 YAML 里被标记。凡是某条验收标准要的东西内核压根
-给不了，就用把它作废掉的那次实测重写这条标准，而不是悄悄打上勾。**2026-08-27 那条注意事项在这里同样成立：
-这些说的是传输层、逻辑与测试覆盖。三项没有任何一项在运行中的应用里被亲眼看过。**
-
-Bug 修复、已提交的 issue、Mihomo 版本升级属于日常维护，**刻意**不写进本文。本文讨论的是 ClashMax 存在的
-*意义*。
-
----
+环境与规则见[开发指南](DEVELOPMENT.md)，观察与签核见[人工验收计划](MANUAL_TEST_PLAN.md)，
+签名安装包门禁见[发布指南](RELEASE.md)。旧实现决策与实测依据保存在[历史路线图](archive/ROADMAP-2026-11-17.zh-CN.md)。
 
 ## 1. 定位
 
-其他所有 Mihomo 客户端比拼的都是 **暴露了多少内核开关**。
-
-ClashMax 应该比拼的是 **解释内核到底在干什么**。
-
-这不是空想——代码库本来就长成这个样子。下面这些子系统在 ClashX、Clash Verge Rev、mihomo-party 中都没有
-对应物：
-
-| 能力 | 位置 |
-| --- | --- |
-| 把"流量*为什么*没走代理"分类到具体的 `Cause` | [`ClashMax/Models/ProxyEffectDiagnostics.swift`](../ClashMax/Models/ProxyEffectDiagnostics.swift) |
-| 模拟给定 host 会命中哪条规则 | [`ClashMax/Models/CoreModels.swift`](../ClashMax/Models/CoreModels.swift) 中的 `RuleMatchSimulator` |
-| 在应用前，以 diff 形式展示这次改动最终会生成什么运行时 YAML | [`EffectiveRuntimeConfigBuilder.swift`](../ClashMax/Services/EffectiveRuntimeConfigBuilder.swift)、Routing 页 |
-| 报告用户刚做的改动到底生效了没有 | [`RuntimeApplyOutcomeBanner.swift`](../ClashMax/Views/RuntimeApplyOutcomeBanner.swift) |
-| 标记订阅偷偷塞进来的危险 key | [`CoreModels.swift`](../ClashMax/Models/CoreModels.swift) 中的 `ProviderOptionsRisk` |
-| 独立于内核，直接检查实时 TUN 路由 / DNS 状态与系统代理状态 | [`TunRuntimeInspector.swift`](../ClashMax/Services/TunRuntimeInspector.swift)、[`SystemProxyController.swift`](../ClashMax/Services/SystemProxyController.swift) |
-
-**路线图就是：把这件事做成产品本身，而不是一个附带功能。**
-
----
+ClashMax 是原生 macOS 代理客户端，重点解释 Mihomo 实际做了什么：哪条规则胜出、
+配置是否生效，以及怎样修复具体的代理、DNS 或路由故障。控件围绕用户问题设计；
+任意 Mihomo key 通过共用运行时片段覆盖。
 
 ## 2. 设计原则——三个层次
+
 
 本节具有规范效力。它回答的是那个反复出现的问题：*"怎样既保持易上手，又抬高高级用户的上限？"*
 
@@ -108,7 +74,7 @@ L1 的修复按钮和 L2 的意图表单，必须写入 L3 用户手工编辑的
 `redir-port`、`tproxy-port`）不会被拒绝，而是在每一层（包括原始补丁）都被删除并写入应用日志
 （issue #33）：Mihomo 会先于 mixed 监听器打开这些监听，所以一个同时声明了 `port: 7890` 的订阅会
 先占住应用的端口，`mixed-port` 永远起不来。配置文件自带的其他控制器监听（`external-controller-tls`、
-`-unix`、`-pipe`）也以同样方式从配置文件这一层删除并写入应用日志（2026-10-01，见 [C1](#c1导入时的订阅审计报告)）：unix socket
+`-unix`、`-pipe`）也以同样方式从配置文件这一层删除并写入应用日志（2026-10-01，见 [C1](archive/ROADMAP-2026-11-17.zh-CN.md#c1导入时的订阅审计报告)）：unix socket
 不校验密钥，所以带着它的订阅等于把内核交给了这台 Mac 上的每一个进程。
 
 满足 INV-2 之后，**ClashMax 的上限就等于 Mihomo 的上限**，而 UI 不会膨胀。明天 Mihomo 发布一个新 key，
@@ -121,853 +87,151 @@ L1 的修复按钮和 L2 的意图表单，必须写入 L3 用户手工编辑的
 
 在新增一个设置、一个开关或一个页面之前，先回答完这五个问题：
 
-- [ ] **这属于哪一层？** 如果答案是"L1 和 L3 都算"，那它其实是两个功能。
-- [ ] **如果是 L1：唯一的那个修复按钮是什么？它写入哪个片段？**
-- [ ] **如果是 L2：它复用现有的规则 / 片段模型，还是又发明了一个？**（INV-1）
-- [ ] **如果是 L3：通用覆盖路径是不是已经能到达它？** 如果是，就不要为它做专门 UI。自 2026-08-29 起，
+- **这属于哪一层？** 如果答案是"L1 和 L3 都算"，那它其实是两个功能。
+- **如果是 L1：唯一的那个修复按钮是什么？它写入哪个片段？**
+- **如果是 L2：它复用现有的规则 / 片段模型，还是又发明了一个？**（INV-1）
+- **如果是 L3：通用覆盖路径是不是已经能到达它？** 如果是，就不要为它做专门 UI。自 2026-08-29 起，
       对一个普通 Mihomo key 而言，诚实的答案就是"能"——一个 Raw YAML 片段就够得着。
-- [ ] **用户能不能看到最终的 YAML diff，并把它退回去？**（INV-2）
+- **用户能不能看到最终的 YAML diff，并把它退回去？**（INV-2）
 
 一个只有高级用户需要、且通用片段覆盖已经够得着的 key，就是**已完成**——为它单独做一个开关，是 L1 质量的
 倒退。
 
----
+## 3. 已有实现
 
-## 3. ClashMax 的现状
+下列条目已有源码实现。剩余人工观察在 §5 跟踪，不再写成缺少功能代码。
+原始探测结果与验收理由保留在历史快照。
 
-### 3.1 规模，2026-10-29 实测
-
-| 结论 | 如何核对 |
-| --- | --- |
-| 108 个源文件，约 7.41 万行，覆盖 app、helper、Network Extension、共享代码 | `find ClashMax Shared ClashMaxHelper ClashMaxNetworkExtension -name '*.swift' \| wc -l` |
-| 57 个测试文件，约 4.94 万行，1608 个 XCTest 用例 + 5 个 Swift Testing 用例 | `grep -rhoE 'func test[A-Za-z0-9_]*' ClashMaxTests \| sort -u \| wc -l` |
-| `en` 与 `zh-Hans` 各 1897 个本地化 key | [`Resources/Localizable.xcstrings`](../Resources/Localizable.xcstrings) |
-| 测试在公开 CI 中运行 | [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) |
-
-### 3.2 Mihomo 能力覆盖缺口
-
-ClashMax 已经在用的 Mihomo 控制 API 端点，来自
-[`MihomoAPIClient.swift`](../ClashMax/Services/MihomoAPIClient.swift)：`/`、
-`/cache/fakeip/flush`、`/configs`、`/configs/geo`、`/connections`、`/dns/query`、
-`/group/{name}/delay`、`/logs`、`/memory`、`/providers/proxies`、`/providers/rules`、
-`/proxies`、`/proxies/{name}/delay`、`/restart`、`/rules`、`/traffic`、`/version`。
-
-缺口，按优先级排列：
-
-| 缺口 | 核实状态 | 后果 |
+| ID | 已实现能力 | 当前源码 |
 | --- | --- | --- |
-| **`sniffer`** | **A1a–A1d 已于 2026-08-16 交付，A1e 仍未关闭。** 解码器不再用目标 IP 回填缺失的域名，`ConnectionSnapshot` 把*原生上报*、*嗅探恢复*、*完全没有*三种情况作为类型化状态分开。ClashMax 以片段载荷的形式生成并接管 `sniffer:` 块（[`SnifferSettings.swift`](../ClashMax/Models/SnifferSettings.swift)），[`SnifferDiagnostics`](../ClashMax/Models/SnifferDiagnostics.swift) 对无域名场景分类并写入修复，`sniffer` 也已作为订阅风险 key 被扫描。**没做完的是签核**：[`MANUAL_TEST_PLAN.md`](MANUAL_TEST_PLAN.md) 里的端到端条目已经写好但没人跑过，而按 A1 的完成定义，正是这次签核才关得掉 A1。参见 [A1](#a1sniffer把内核从未看到的域名找回来) | *（原：全仓 0 命中，且「缺失域名」这个事实在解码器内部就被销毁，任何诊断都够不着它，于是"我写的规则不生效"没有答案）* |
-| **`/dns/query`** | **2026-08-30 已补齐**——`dnsQuery(name:type:)`，对应 Routing 里的「DNS 解析」面板，可从 Connections 行按该连接的域名进入。原问题的一半有了答案，另一半则被证明无从回答：**应答里根本没有 nameserver 字段**（对 v1.19.30 实测），因此面板直说内核不报告上游，而不是猜一个出来。参见 [A2](#a2把-dnsquery-接进-dns-解析面板) | *（原：无法回答"这个域名到底被哪个 nameserver 解析成了什么"，在我们本来能端到端讲完的路由故事中间留了一个洞）* |
-| **`/cache/fakeip/flush`** | **2026-08-27 已补齐**——`flushFakeIPCache()`，通过 `FakeIPDiagnosticsBuilder` 以 L1 修复动作的形式呈现。参见 [A3](#a3把清空-fake-ip-缓存做成-l1-修复动作) | *（原：fake-ip 映射脏了只能靠重启内核清除）* |
-| **`/group/{name}/delay`** | **2026-08-27 已补齐**——成员数超过 8 的组会合并成一次整组请求，不再逐节点扇出。2026-08-29 由 [`script/bench_group_delay.py`](../script/bench_group_delay.py) 在 1200 节点上实测：**5.00 秒 对 350.88 秒，70 倍**。在途的整组单元占满整个并发预算，且只有 404 才降级到逐节点，因此这条兜底路径不会变成一场比它替换掉的更大的风暴。参见 [A6](#a6通过-groupnamedelay-做批量测速) | *（原：批量测速是逐节点打的，而内核有整组接口）* |
-| **`geox-url`、`geo-auto-update`、`geodata-mode`** | **2026-08-27 已补齐**——`GeoDatabaseSettings` 由应用管理，并由 `ConfigNormalizer` 写进运行时 YAML。**ClashX 导入已于 2026-08-29 补齐**——迁移解析器现在会读取这些 key，而不再只是放行，且只认主配置文件。备份/恢复带上了这些设置，诊断读的是实际生效的那份。参见 [B5](#b5geo-数据库维护) | *（原：GeoIP/GeoSite 数据库无法更新，geo 类规则会悄悄过期——2026-08-27 在维护者本机实测：`GeoSite.dat` 最后写入于 6 月 20 日，`geoip.metadb` 于 5 月 4 日）* |
-| **`/configs/geo`** | **2026-08-27 已补齐**——`updateGeoDatabases(timeout:)`，对应「立即更新」动作 | *（原：没有应用内 geo 数据库刷新）* |
-| **`/memory`** | **2026-08-30 已补齐**——`memoryStream()` 复用 `/traffic` 的同一套流式管道，采样存入 `RuntimeDataStore.memorySample`，并在运行中仪表盘上以 **Memory** 指标呈现。两处实测细节写进了代码而不是靠猜：第一帧恒为 `{"inuse":0,"oslimit":0}`，那是握手用的空帧而不是读数，因此 0 样本渲染为 `—`；`oslimit` 在 macOS 上恒为 0（本平台没有 cgroup 上限），因此不画那种永远读作 0 的「占上限百分比」表盘 | *（原：没有内核内存遥测）* |
-| **`tcp-concurrent`、`global-client-fingerprint`、`find-process-mode`、`keep-alive-interval`、`ntp`、`experimental`、`global-ua`、`interface-name`** | **2026-08-29 关闭**——按名字算依然是全仓 0 命中，而且是有意为之：**Raw YAML** 片段载荷（[`RawYAMLPatch.swift`](../ClashMax/Models/RawYAMLPatch.swift)）能够到达它们全部，以及 Mihomo 明天新增的任何 key，应用不需要为此多长一个开关。见 [INV-2](#23-两条不变量) | *（曾经：高级用户会撞到硬天花板；按 INV-2，解法是通用覆盖路径，而不是八个新开关）* |
-| **`listeners`** | **2026-08-30 已作出决定。** 旧条目错了两处：`listeners` 是被*标记*、从未被剥离，而且只在 provider 覆盖 YAML 与 runtime-merge YAML 里被标记（[`CoreModels.swift:744`](../ClashMax/Models/CoreModels.swift#L744)）——普通订阅顶层的 `listeners:` 一直是原封不动地穿过 `ConfigNormalizer`，**并且不带任何标记**，而这才是这个 bug 更糟的那一半。决定写在 [C3](#c3就-listeners-做出决定)：按 [INV-2](#23-两条不变量) 在 L3 经由 Raw YAML 片段支持，条件是它造成的暴露永远不能是无声的。[`ListenerExposureDiagnostics`](../ClashMax/Models/ListenerExposure.swift) 把运行时 YAML 读回来，把「已暴露且没有 `authentication:`」（或 `skip-auth-prefixes` 条目超出回环，2026-10-02 起）的入站报告为开放代理。导入时的提示已于 2026-10-01 随 [C1](#c1导入时的订阅审计报告) 落地：订阅里其他设备可以访问的监听器，在用户允许之前一律保持关闭 | *（原：入站监听（给局域网其他设备用）不可用；这需要一个明确的决定，而不是一个默认值）* |
+| [A1](archive/ROADMAP-2026-11-17.zh-CN.md#a1sniffer把内核从未看到的域名找回来) | 嗅探配置、域名来源解码、域名可见性诊断与一键修复；A1e 签核仍未关闭 | [SnifferDiagnostics](../ClashMax/Models/SnifferDiagnostics.swift)、[SnifferSettings](../ClashMax/Models/SnifferSettings.swift) |
+| [A2](archive/ROADMAP-2026-11-17.zh-CN.md#a2把-dnsquery-接进-dns-解析面板) | 内核 DNS 查询、应答/TTL/否定结果与规则模拟；API 不报告应答的上游 nameserver | [DNSResolutionDiagnostics](../ClashMax/Models/DNSResolutionDiagnostics.swift)、[MihomoAPIClient](../ClashMax/Services/MihomoAPIClient.swift) |
+| [A3](archive/ROADMAP-2026-11-17.zh-CN.md#a3把清空-fake-ip-缓存做成-l1-修复动作) | fake-ip 诊断与缓存清空动作 | [FakeIPDiagnostics](../ClashMax/Models/FakeIPDiagnostics.swift) |
+| [A5](archive/ROADMAP-2026-11-17.zh-CN.md#a5一键生成脱敏诊断包) | 脱敏诊断包预览、复制与文件导出 | [DiagnosticBundle](../ClashMax/Models/DiagnosticBundle.swift)、[DiagnosticBundleSheet](../ClashMax/Views/DiagnosticBundleSheet.swift) |
+| [A6](archive/ROADMAP-2026-11-17.zh-CN.md#a6通过-groupnamedelay-做批量测速) | 整组测速、受限调度、取消与逐节点兜底 | [ProxyDelayTestCoordinator](../ClashMax/Stores/ProxyDelayTestCoordinator.swift) |
+| [A7](archive/ROADMAP-2026-11-17.zh-CN.md#a7tun-dns-modemihomo-v11933) | TUN `dns-mode` 校验、托管与状态报告 | [ConfigNormalizer](../ClashMax/Services/ConfigNormalizer.swift)、[RuntimeDiagnosticsStore](../ClashMax/Stores/RuntimeDiagnosticsStore.swift) |
+| [B1](archive/ROADMAP-2026-11-17.zh-CN.md#b1带真正-app-选择器的按应用分流) | 已安装 App 选择器、覆盖整个 bundle 的进程规则、从连接创建规则 | [AppProcessRule](../ClashMax/Models/AppProcessRule.swift)、[ConnectionsView](../ClashMax/Views/ConnectionsView.swift) |
+| [B3](archive/ROADMAP-2026-11-17.zh-CN.md#b3app-intents-与快捷指令) | 十个 App Intent 动作；九个 App Shortcut，为未来场景动作保留一个名额 | [ClashMaxAppIntents](../ClashMax/App/ClashMaxAppIntents.swift)、[ClashMaxIntentExecutor](../ClashMax/App/ClashMaxIntentExecutor.swift) |
+| [B5](archive/ROADMAP-2026-11-17.zh-CN.md#b5geo-数据库维护) | Geo 设置、文件清单、过期诊断与更新动作 | [GeoDatabaseStore](../ClashMax/Stores/GeoDatabaseStore.swift) |
+| [C1](archive/ROADMAP-2026-11-17.zh-CN.md#c1导入时的订阅审计报告) / [C3](archive/ROADMAP-2026-11-17.zh-CN.md#c3就-listeners-做出决定) | 导入/更新审计、配置页入口、继承监听器授权与实际暴露诊断 | [SubscriptionAudit](../ClashMax/Models/SubscriptionAudit.swift)、[ListenerExposure](../ClashMax/Models/ListenerExposure.swift) |
+| [D2](archive/ROADMAP-2026-11-17.zh-CN.md#d2把-mihomo-升级回归自动化) | 内置内核预检矩阵与架构检查已接入 CI；CI 安装并强制要求固定内核 | [CI](../.github/workflows/ci.yml)、[CoreRuntimePreflightTests](../ClashMaxTests/CoreRuntimePreflightTests.swift)、[BundledCoreArchitectureTests](../ClashMaxTests/BundledCoreArchitectureTests.swift) |
+| UI 焕新 | 原生工作区、九个页面、检查器/Sheet、SwiftUIX 输入适配与 320 pt 菜单栏内容 | [ContentView](../ClashMax/Views/ContentView.swift)、[NativeInputs](../ClashMax/Views/NativeInputs.swift)、[历史方案](UI_REFRESH_PLAN.md) |
+| Observation 迁移 | Store/服务使用 `@Observable` 与类型化环境访问，原 Combine 观察转发已替换 | [AppModel](../ClashMax/Stores/AppModel.swift)、[历史设计](superpowers/specs/2026-08-03-observable-migration-design.md) |
 
-### 3.3 已经建到一半的原生 macOS 优势
+### 保留的运行时决策
 
-| 资产 | 状态 | 缺的那一块 |
+- 新安装的 TUN 栈默认继续使用 **Mixed**，保留已有选择。
+  [v1.19.32 记录](MIHOMO_1_19_32.md)说明了为何没有跟随上游改默认值。
+- 保留应用托管的系统 DNS 覆盖；开启时将 TUN `dns-mode` 固定为 `disabled`，Raw YAML 片段仍按已有规则覆盖。
+  维护者的 [2026-10-25 决定](archive/ROADMAP-2026-11-17.zh-CN.md#a7tun-dns-modemihomo-v11933)继续有效，本次整理不重新决策。
+- 仅支持应用托管的内置 Mihomo 渠道。其他渠道须先具备 manifest、完整性校验、Helper 允许列表、UI 状态与回滚。
+
+## 4. 未完成工作
+
+四组功能仍开放：A4、B2 及其依赖的 B3 场景动作、B4、C2。
+D1/D3 属于工程与验收工作。结构化日志另列，因为它已有基础设施，但产品尚未端到端实现。
+
+### A4——连接路径回放
+
+已有连接历史、内核上报规则/chain、规则解释、DNS 查询与公网 IP 诊断，但尚未串成针对一条连接的完整有序回放。
+
+- [ ] 对选中连接呈现：DNS 应答 → 命中规则 → 代理组 → 实际节点 → 出口 IP。
+- [ ] 标注内核上报、实时探测或模拟的来源、时间，以及不可得的数据。
+- [ ] 支持保留的已关闭连接；现在发起的 DNS/IP 探测不能被展示成旧连接建立时的观测。
+
+### B2——场景化：推广 `NetworkPolicyRule`
+
+[NetworkPolicyRule](../ClashMax/Models/CoreModels.swift) 仍按 SSID 匹配，控制路由模式、系统代理和运行时自动启动，不能选择配置、片段或节点。
+
+- [ ] 触发条件扩展到接口类型、指定网络、VPN 存在与明确的无匹配兜底。
+- [ ] 动作扩展到选择配置、启停具名片段、选择代理组节点。
+- [ ] 同时恰好有一个场景生效，优先级确定，匹配理由可见。
+- [ ] 旧 SSID 策略解码迁移不改变行为，并以持久化 fixture 测试覆盖。
+- [ ] 切换通过菜单栏或通知呈现。
+
+### B3——App Intents 与快捷指令：场景动作
+
+- [ ] B2 有场景模型后，增加**激活场景**，使用已保留的 App Shortcut 名额。
+
+其余十个动作已有实现。Shortcuts.app 与冷启动后台拉起的观察归入 §5 人工验收，不再作为十个待开发动作。
+
+### B4——控制中心小组件
+
+当前工程没有 Widget target 或控制中心实现。
+
+- [ ] 在应用之外切换路由模式并展示实时状态。
+- [ ] 对新 macOS API 做版本门控，保留 macOS 15 部署目标的实用途径。
+- [ ] 消费同一份应用状态，不新增第二个真相来源。
+
+### C2——订阅更新 diff
+
+[ProfileStore](../ClashMax/Stores/ProfileStore.swift) 预检后替换订阅，
+[ProfileCoordinator](../ClashMax/Stores/ProfileOperationsStore.swift) 随后审计。
+旧原文只用于写入失败回滚，尚未成为有历史存储、用户可见 diff 或风险确认门禁。
+
+- [ ] 保留有容量上限且脱敏的信息，与上次抓取比较。
+- [ ] 节点新增/删除/改名与配置变化分开汇总。
+- [ ] 新增危险 key 时阻止静默应用，要求用户决策。
+- [ ] diff 存储有界、脱敏，保留已经生效的 C1/C3 保护。
+
+### D1——拆解 `AppModel`
+
+**进行中。** 配置操作、系统代理、诊断、Geo、出口代理端点、网络策略和测速已有独立 Store/Coordinator。
+旧的整块行数已过时；继续拆分前先核对当前所有权。
+
+- [ ] 随当前工作继续拆运行时与路由职责，保持视图消费的公开接口。
+- [ ] 每次领域拆分可独立回滚；跨领域抽取时用完整套件对照基线，不新增 skip。
+- [ ] 保留初始化预热（`didSet` 在 `init` 不触发）、结构化去重和有意使用的 `@ObservationIgnored` 高频状态。
+
+### D3——补上手工验证的缺口
+
+[已跟踪的每次发版清单](MANUAL_TEST_PLAN.md#per-release-checklist)已经建立。
+剩余工作是执行，并记录被验版本的实际观察。
+
+- [ ] 完成 §5 尚缺的功能与签名安装包观察。
+- [ ] 记录日期、应用/内核版本、macOS/架构、实际现象与证据后，才标记人工验收通过。
+- [ ] 未运行、受阻的门禁保持相应状态；单元测试和 fixture 截图不能代替。
+
+### 相关设计——结构化日志拆分
+
+**基础设施部分实现，端到端实现仍开放。** 已有共享 producer、脱敏器、行累积器和工程保护脚本。
+应用仍使用 `RuntimeDataStore.logs`，计划中的 recorder、应用/运行时独立 Store、JSONL 轮转持久化和双通道查看器尚缺。
+
+保留[已确认设计](superpowers/specs/2026-07-28-structured-logging-design.md)与
+[实施计划](superpowers/plans/2026-07-28-structured-logging.md)作为独立事项。
+恢复实施前重新核对步骤与基线；旧勾选、行号和测试数量不代表当前状态。
+
+## 5. 仓库中仍缺的人工签核
+
+此表记录缺少签核，不能据此断言从未有人用过功能。本次 2026-11-17 文档整理没有执行新的人工验收。
+
+| 范围 | 仍需观察 | 入口 |
 | --- | --- | --- |
-| `PROCESS-NAME` / `PROCESS-PATH` 规则类型 | 规则枚举中已存在，2026-10-01 加入 `PROCESS-PATH-REGEX` | ~~没有 app 选择器。~~ app 选择器会写出整个 bundle 的规则（[B1](#b1带真正-app-选择器的按应用分流)）。 |
-| 实时连接的进程路径与图标 | 已可用（[`ConnectionsView.swift:578`](../ClashMax/Views/ConnectionsView.swift#L578)） | 没有接到规则创建上。 |
-| `NetworkPolicyRule`——按 SSID 的策略 | 可切换路由模式、系统代理、开机自启（[`CoreModels.swift:5580`](../ClashMax/Models/CoreModels.swift#L5580)） | 不能切换**配置文件**或**规则集**。触发条件仅限 SSID。 |
-| `NetworkEnvironmentMonitor`、`WiFiNetworkInfo` | 实时 SSID 与网络路径监控 | 只被策略匹配和诊断消费。 |
-
----
-
-## 4. 四条主线
-
-四条主线。A、B、C 交付产品价值；D 是让 A、B、C 负担得起的那笔税。
-
-Issue ID 是稳定的 slug，不是 GitHub 编号，因此可以按任意顺序提交。
-
----
-
-### 主线 A——把诊断做成产品本身
-
-**目标：** 在一个界面里端到端回答一个问题：*"对这条连接，从域名到出口 IP，每一步到底发生了什么？"*
-
-这就是护城河。这里的一切都是 L1，而每个修复按钮都写入一个 L3 可见的片段。
-
-#### A1——sniffer：把内核从未看到的域名找回来
-
-**优先级：最高。主线 A 的其他所有事项都排在它后面。**
-
-主线 A 的其他每一项，解释的都是内核*做出*的决定。这一项针对的是内核*无法做出*的决定。直连 IP 打开的连接
-不携带域名，因此对它而言，每一条 `DOMAIN`、`DOMAIN-SUFFIX`、`DOMAIN-KEYWORD` 和 `GEOSITE` 规则在结构
-上都不可达。用户写了一条正确的规则，而它永远不会触发。ClashMax 目前没有任何一个界面能说出原因——这使它
-同时成为最大的内核缺口，和产品赖以立足的诊断故事里最大的一个洞。
-
-**状态：A1a–A1d 已于 2026-08-16 交付。A1e 仍开着，因此 A1 并未完成**——下文的完成定义对此是刻意的。
-
-##### A1.0——验证了什么，对着什么验证的
-
-内置 Mihomo v1.19.29（`Resources/Core/mihomo`），核实于 2026-08-14：
-
-| 结论 | 证据 |
-| --- | --- |
-| 内核接受完整的 sniffer schema | 对一份带有 `enable`、`override-destination`、`force-dns-mapping`、`parse-pure-ip`、`sniff.{TLS,HTTP,QUIC}`（含 `ports` 与每协议的 `override-destination`）、`skip-domain`、`force-domain` 的配置执行 `mihomo -t -f` → *test is successful* |
-| 嗅探**不需要** `dns:` 块 | 同一份配置在完全没有 `dns:` key 的情况下既能通过校验也能运行。与 issue #16 背后的 DNS 陷阱不同，这里不存在"因遗漏而失效"的失败模式需要防守 |
-| 未知协议会给出清晰的失败 | `sniff: {BOGUS: {}}` → `level=error msg="not find the sniffer[BOGUS]"`，因此 preflight 能报出真正的原因，而不是那句通用结尾 |
-| sniffer 支持热重载 | 对运行中的内核用 `PUT /configs?force=true` 加载一份 sniffer 关闭的配置，`/configs.sniffing` 从 `true` 变成了 `false`，无需重启 |
-| **`GET /configs` 不返回 sniffer 块** | 响应里只暴露一个布尔值 `sniffing`。整个响应中没有任何 `sniffer` key |
-| 连接 metadata 携带 `sniffHost` | 内核二进制中存在 `json:"sniffHost"`，旁边还有 `dnsMode`、`remoteDestination`、`specialProxy`、`inboundName`——这些 ClashMax **一个都没有**解码 |
-
-在写任何代码之前，有两条结论就已经约束了设计：
-
-1. 因为内核只报告 `sniffing: true|false`，所以**生成的运行时 YAML 是"到底在嗅探什么"的唯一真相来源**。
-   不要为细节去建一条回读路径；按 INV-2，YAML 本来就是诚实的答案，再造一个答案只会多出一份需要同步的真相。
-2. 因为 sniffer 支持热重载，所以 sniffer 编辑在
-   [`RuntimeChangeApplyMode.swift`](../ClashMax/Models/RuntimeChangeApplyMode.swift) 中属于
-   `.hotReload`，与 `.rules`、`.dns` 同列。它不能承诺一次它并不需要的重启。
-
-##### A1.1——因此暴露出的阻塞性缺陷
-
-[`MihomoAPIClient.swift:448`](../ClashMax/Services/MihomoAPIClient.swift#L448) 是这样解码连接 host 的：
-
-```swift
-host: metadata["host"] as? String ?? metadata["destinationIP"] as? String ?? "",
-```
-
-于是一条**不带域名**的连接，会以目标 IP 落在 `host` 字段里的形式被记录，而 `ConnectionSnapshot` 没有保留
-任何标志来区分这两种情况。[`ConnectionsView.swift:137`](../ClashMax/Views/ConnectionsView.swift#L137)
-在预填快速规则的地方记录了这个回退——但坍缩发生在它下面一层，也就是解码器里，因此**下游没有任何消费方能
-区分"域名是 example.com"和"根本没有域名"**。
-
-这正是这个缺口长期不可见的原因：Host 列永远都有个看起来说得过去的东西可显示。它同时也是一个硬前置条件。
-在解码器停止丢弃这个区别之前，本项承诺的诊断根本无法计算，所以下面的 A1a 先单独发布。
-
-##### A1a——不要再把事实丢掉（前置项，用户无感知）
-
-- **范围：** `MihomoAPIClient.decodeConnections`、`ConnectionSnapshot`。不做 UI。
-- **验收标准：**
-  - [x] `ConnectionSnapshot` 以类型化状态（而非靠字符串判断）区分三种情况：原生上报的域名、由嗅探恢复的
-        域名（`sniffHost`）、以及完全没有域名。原始目标 IP 在每种情况下都仍然可取。
-  - [x] 解码 `sniffHost`、`dnsMode`、`remoteDestination`、`specialProxy`，并沿用
-        `stringValue(for:in:)` 在别处已有的多拼写容忍。
-  - [x] Connections 表格的渲染与今天完全一致——IP 回退成为模型之上的*展示*选择，而不是解码器内部对事实的
-        销毁。
-  - [x] `ConnectionsView` 中的 `connectionRuleHost` 改读新的类型化状态，不再从空字符串反推，第 137 行的
-        注释随之迁移。
-  - [x] 解码器测试覆盖以下 fixture：有域名、无域名、有 `sniffHost` 且无 `host`、有 `sniffHost` 且同时有
-        `host`、两者皆无。
-
-##### A1b——生成并接管 `sniffer` 块（L3）
-
-- **范围：** [`ConfigNormalizer.swift`](../ClashMax/Services/ConfigNormalizer.swift)、
-  `RuntimeOverrides`、[`RuntimeSnippet.swift`](../ClashMax/Models/RuntimeSnippet.swift)、
-  `EffectiveRuntimeConfigBuilder`。
-- **形态：** 一个仿照 `TunDNSSettings` 的 `SnifferSettings` 值类型——带 `validationError`、
-  `hasRuntimeOverlay`、`summary`、带默认值解码的 `Codable`——这样它是落进已有的 layer / diff / preflight
-  机器里，而不是并排另起一套。
-- **验收标准：**
-  - [x] `sniffer` 被生成进运行时 YAML，并在每一种 模板 × 路由模式 × DNS 覆盖 组合下通过 `mihomo -t`，
-        包括 `providerBackedConfig` 里的 provider 模板路径。
-  - [x] 新增 `RuntimeSnippetPayloadKind.sniffer` 承载用户编辑，使 sniffer 改动就是普通存储里的一个普通
-        片段：在 Routing 中可编辑、可与其他片段一起排序、可 diff——没有平行存储（INV-1）。
-  - [x] 当运行时正在承载用户流量时，`RuntimeChangeKind.sniffer` 解析为 `.hotReload`，否则为
-        `.appliesOnNextStart`，与已验证的内核行为一致。
-  - [x] 校验在内核看到配置*之前*，就以明确的信息拒绝未知协议、格式错误的端口范围、以及空的 `sniff` map；
-        当内核仍然拒绝某份配置时，界面呈现的文本取 `level=error msg=` 那一行。
-  - [x] Routing 的 diff 预览把 `sniffer` 块作为一个带标签的 layer 展示，就像今天展示 `dns-override` 那样。
-  - [x] 订阅自带的 `sniffer` 块经由已有的 runtime-merge 路径合并，并伴随一个明确、可见的保留或覆盖决定
-        ——任何一个方向上都不能是静默覆盖。
-  - [x] 测试覆盖：关闭、按默认值开启、按每协议端口开启、订阅冲突、非法输入，以及 apply 模式的解析结果。
-
-##### A1c——这一切存在的理由：那条诊断（L1）
-
-路线图此前写的是*"`ProxyEffectDiagnostics` 增加一个 cause"*。那个归属是错的，本计划予以纠正：
-`ProxyEffectDiagnosticsBuilder` 产出的是**基于单个 GeoIP 探测 host 的单一全局结论**，它根本没有连接输入。
-把一个按连接维度的 cause 折进去，会把两种不同的作用域混为一谈。
-
-- **范围：** 一个新的纯分类器——`ClashMax/Models/` 下的 `SnifferDiagnostics`——形态与
-  `ProxyEffectDiagnosticsBuilder` 完全一致（`Input` 结构体 → 携带 `Status`、稳定 `Cause` 枚举、`Fact` 行、
-  `recoveryActions`、`plainTextLines` 的 `Snapshot`），从而免费继承已有的测试与可复制报告约定。
-- **需要分类的 cause：**
-
-  | Cause | 含义 | 状态 |
-  | --- | --- | --- |
-  | `domainReported` | 连接原生携带域名，嗅探不参与 | pass |
-  | `domainRecoveredBySniffing` | `sniffHost` 提供了规则实际匹配所用的域名 | pass |
-  | `domainlessSnifferDisabled` | 无域名，嗅探关闭——**头号场景** | fail |
-  | `domainlessProtocolNotCovered` | 无域名，嗅探开启，但该端口/协议不在 `sniff` map 里 | warn |
-  | `domainlessNotSniffable` | 无域名，嗅探开启且覆盖了它，但什么也没恢复出来 | info |
-  | `sniffedButNotOverridden` | 嗅探出了域名，但 `override-destination` 是关的 | warn |
-
-- **验收标准：**
-  - [x] `sniffedButNotOverridden` 这一条必须先对着运行中的内核确认再发布——即 `override-destination: false`
-        时是否会保留 `sniffHost` 但规则仍然按 IP 匹配。以内核的实际行为为准编码；不要发布一个描述文档而非
-        观测结果的 cause。
-  - [x] 对无域名连接，结论要通过复用 `RuleMatchSimulator` 说出具体后果：*如果域名当时在，本会命中哪条域名
-        规则*。缺了这句话的 cause 只是一个事实，不是一条诊断。
-  - [x] 每个非 pass 的 cause 都带一个修复动作，且该动作只做一件事：写入 A1b 的片段——开启嗅探、把它扩展到
-        这个端口、或打开 `override-destination`。不要在设置里放裸开关（§2.4）。
-  - [x] 修复应用之后，已有的 `RuntimeApplyOutcomeBanner` 会报告结果；对同一目标的新连接重跑诊断会返回
-        pass。闭环是看得见的。
-  - [x] 可从 Connections 行进入，也可从该连接的 Routing 解释进入——用户注意到问题时正站着的那两个地方。
-  - [x] 分类器保持纯函数并被完整覆盖：每个 cause 一个测试，外加"本会命中哪条规则"那句话的测试。
-
-##### A1d——`sniffer` 的订阅可信度（并入 C1）
-
-`sniffer` 此前**不在** [`CoreModels.swift:805`](../ClashMax/Models/CoreModels.swift#L805) 的危险 key
-集合里。也就是说，订阅可以下发 `skip-domain`、`force-domain` 或 `override-destination: false`，改变哪些
-规则命中用户的流量，而界面上不会呈现任何提示。它已于 2026-08-16 以 `warning` 级别加入该集合。
-
-- **验收标准：**
-  - [x] `sniffer` 以 `warning` 级别加入被扫描的 key 集合——它改变的是流量识别，不是局域网暴露面——并给出
-        点明后果的信息，语气与现有的 `dns`、`tun` 条目一致。
-  - [x] 导入时的报告（C1）说明该订阅的 sniffer 块想改什么、以及 ClashMax 保留了什么。→ **2026-10-01**：C1 报告里的
-        `sniffer` 条目列出配置想要什么（开或关、`override-destination`、`skip-domain` / `force-domain` 的条数、哪些协议），
-        哪些子 key 被 ClashMax 替换、哪些按原样运行；当配置关掉嗅探并且就这样运行时，还会说明此时域名规则永远匹配不到
-        直接连 IP 的连接。`SubscriptionAuditTests.testSnifferStatesWhatTheSubscriptionWouldChangeAndWhatWasKept`。
-
-##### A1e——回归与手工验证
-
-- **验收标准：**
-  - [x] 模板 × 模式 矩阵覆盖了 sniffer 开启与关闭，使未来某次改变 schema 的内核升级会让构建失败。它最终
-        落成了一个 XCTest 而不是 D2 的脚本，因为 D2 还没有脚本：
-        [`CoreRuntimePreflightTests.swift`](../ClashMaxTests/CoreRuntimePreflightTests.swift) 里的
-        `testBundledMihomoAccepts…Combinations` 用内置内核跑 5 种配置来源 × 3 种路由模式 × 3 种 DNS
-        模式 × 3 种 sniffer 状态。D2（2026-10-01）把它保留为这个 XCTest，改为让 CI 安装并强制要求内核，
-        而不是搬进一个脚本。
-  - [ ] `MANUAL_TEST_PLAN.md` 增加端到端条目，并在 A1 宣告完成之前签核：一个走硬编码 IP 的 app → 为它写的
-        `DOMAIN-SUFFIX` 规则不触发 → 诊断点名缺失的域名以及本会命中的那条规则 → 按下修复按钮 → 规则现在
-        触发了，并在 Connections 行的 chain 中得到确认。
-
-##### A1 的完成定义
-
-五个阶段全部完成，且 A1e 经人工签核。按 D3 中点名的那个反复出现的失败模式，*"测试通过，但从没亲眼看过"*
-不足以关闭本项——这一项针对的恰恰是"当用户说他的规则不生效时，要相信他"。
-
-#### A2——把 `/dns/query` 接进 DNS 解析面板
-
-**状态：2026-08-30 已交付。** 从没亲眼看过——见下文的缺口。
-
-- **问题：** 路由故事中间有个洞。我们能展示规则，也能展示出口 IP，但展示不了 DNS 实际返回了什么。
-- **这个端点实际返回什么**——2026-08-30 对内置内核 v1.19.30 实测。它的响应体只是长得*像* DoH 而并不是
-  DoH，所以值得实测一遍，而不是照抄规范：
-  - `Status`、`Question`、`RA`/`RD`/`AD`/`CD`/`TC` 标志位，以及**只有真的有答案时才出现的** `Answer`
-    ——`NOERROR` 但无记录时，这个 key 是整个缺席，而不是给一个 `[]`。
-  - `NXDOMAIN` 时 SOA 在 `Authority` 里。那是否定应答的 TTL 与「是哪个 zone 否认了这个名字」唯一的出处。
-  - 未知的 `type` 是 `400 {"message":"invalid query type"}`；`dns.enable: false` 是
-    `500 {"message":"DNS section is disabled"}`。两者都把原因放在响应体里，于是用户看到的是内核自己的
-    那句话，而不是一个状态码。
-  - **即使处在 fake-ip 模式，这个端点应答的也是上游解析结果。** 在 `enhanced-mode: fake-ip` 下，对内核
-    自己的监听端口 `dig` 同一个域名拿到的是 `198.18.0.4`，而这个端点给的是真实地址。
-- **有一条标准做不到，以及为什么。** **应答里从头到尾没有任何 nameserver 字段。** 内核不报告是哪个上游
-  应答的，因此"哪个 nameserver 应答的"这个问题，任何建立在这个端点上的界面都拿不到答案。于是面板把这处
-  缺席作为一条明确的事实写出来——*"内核未报告——它的应答不携带上游信息"*——而不是把这个问题悄悄删掉，
-  也不是把答案归给配置里排在最前面的那个 nameserver。删掉那一行是更省事的改法，也是不诚实的改法。
-- **验收标准：**
-  - [x] `MihomoAPIClient` 增加 `dnsQuery(name:type:)`。
-  - [x] 面板接受一个域名，并报告地址、CNAME 链背后的规范名、TTL，以及否定应答时的 authority 段——否认该
-        名字的 zone 就在那里。至于哪个 nameserver 应答的，按上面的实测结果报告为**不可得**。
-  - [x] "该应答是否来自 fake-ip"这个问题得到了它唯一诚实的答案：从来都不是。面板会说明这是内核实际会去
-        拨的地址，而 app 拿到的是占位地址，于是"两边对不上"是被写明的，而不是等用户自己撞见。
-  - [x] 结果喂给 `RuleMatchSimulator`，使面板在一处呈现 *域名 → 地址 → 命中规则 → 组 → 节点*。它把模拟器
-        **跑两遍**——一遍按名字，一遍按返回的地址——并把两次命中分别标注：它们是两条不同的规则，只跑其中
-        一遍的面板，回答的是用户没有问的那个问题。
-  - [x] 可从 Connections 行针对该连接的域名进入。
-  - [x] 失败状态是明确的。`DNSResolutionSnapshot.Cause` 为用户可能所处的每一种状态各留一个 case——内核未
-        运行、DNS 已禁用、配置尚未读回、就绪、查询中、已解析、空应答、`NXDOMAIN`、`SERVFAIL`、未命名的
-        响应码，以及原样转述内核信息的传输失败——每一个都有自己的测试。
-- **缺口：** 从没对着一个真实的解析器手工跑过。测试覆盖的是分类器与解码器在录制响应上的行为，而这恰恰是
-  D3 点名的那个失败模式。
-
-#### A3——把清空 fake-ip 缓存做成 L1 修复动作
-
-**状态：2026-08-27 已交付。** 尚未人工跑过——见下方缺口。
-
-- **问题：** 目前 fake-ip 映射脏了只能重启内核。
-- **这个端点实际的行为**，拿内置内核 v1.19.30 实测：`POST /cache/fakeip/flush` 一律返回 `204` 空响应体，
-  **无论内核是不是处于 fake-ip 模式**；`GET` 返回 `405`。也就是说，响应本身无法说明这次操作有没有意义——
-  这个判断必须在发请求*之前*做出。实现里正是这么做的，而且判断依据不是 `GET /configs`，因为后者**根本
-  没有 `dns` 这个 key**；[`ActiveDNSConfigReader`](../ClashMax/Services/ActiveDNSConfigReader.swift)
-  改为从真正交给内核的那份运行时 YAML 里回读 `dns:` 块，与 A1a 中读 `sniffer` 的做法一致。
-- **验收标准：**
-  - [x] `MihomoAPIClient` 增加 `flushFakeIPCache()`。
-  - [x] 作为相关诊断上的修复动作出现，而不是一个光秃秃的按钮。
-        [`FakeIPDiagnosticsBuilder`](../ClashMax/Models/FakeIPDiagnostics.swift) 只有在表最后一次
-        「已知干净」之后确实发生了*使其失效的事件*时才会报 `warn`——配置文件被更新，或网络发生了变化。
-        否则就是 `pass`，面板会如实这么说，而不是诱导用户做一次无意义的清空。
-  - [x] 当 `enhanced-mode` 不是 `fake-ip` 时禁用，并说明原因。凡是内核根本不持有 fake-ip 表的情形
-        （内核未运行、配置尚未回读、DNS 未启用、不在 fake-ip 模式），`canFlush` 均为 false，控件会
-        **保持可见但禁用，并把 `reason` 显示出来**，而不是隐藏——一个不存在的控件没法解释自己为什么不在。
-- **基线：** 「已知干净」的时刻取「内核以空表启动」和「我们自己清空过」两者中较晚的一个。这个前提在这里成立，
-  是因为 ClashMax 从不写 `profile.store-fake-ip`，而它默认为 `false`，所以内核启动时这张表确实是空的。
-- **两处误报，2026-08-29 已修：**
-  - 配置文件这一路的信号原本取的是 `Profile.updatedAt`。那是一个清单级时间戳，重命名、改更新策略、改上游
-    地址都会让它前移，而这些都不可能让任何一条 fake-ip 映射失效——结果就是「重命名一下配置文件」也会被报成
-    表已经脏了。现在输入改为 `profileContentFetchedAt`，来源是 `SubscriptionMetadata.lastFetchedAt`，
-    只有一次抓取真的取回了字节才会被写入。本地配置文件没有抓取时间戳，因此不贡献任何信号——这是诚实的答案：
-    ClashMax 本来也观察不到本地配置文件的就地修改。
-  - 当配置文件和网络两边都构成失效时，构建器永远报配置文件，纯粹因为那个分支写在前面。现在它会比较两个时间戳，
-    报**更晚**发生的那一个——那才是表当前所处的状态，否则点名的是一个用户早已越过的原因。
-- **一处漏报，2026-10-24 已修：** 基线原本取自**每一次**运行时应用，包括热重载（`PUT /configs`），
-  前提是重载会清空这张表。它从来不会：`hub/executor` 把旧的 host mapper 交给重载后的解析器
-  （`ResolverEnhancer.PatchFrom` → `fakeip.Pool.CloneFrom`），从 v1.19.33（`e4dd968d`）起连分配游标也一并继承。
-  订阅更新在抓取后会立刻重载正在运行的内核，所以重载时间总是晚于 `profileContentFetchedAt`，
-  `profileReloaded` 警告恰恰在它存在的那个场景里永远不会出现。现在基线改为 `coreLaunchedAt`，
-  只在新内核进程启动（启动或 helper 重启）时写入。
-- **缺口：** 从未针对真实的门户认证网络或真实的订阅更新人工验证过。
-
-#### A4——连接路径回放
-
-- **问题：** 诊断是按子系统切分的。没有人能看到一条连接的完整路径。
-- **验收标准：**
-  - [ ] 对选中的连接，以单一有序视图呈现：DNS 应答（A2）→ 命中规则 → 选中的组 → 实际节点 → 出口 IP。
-  - [ ] 每一步都标明该值的来源（内核 API、实时探测、模拟），使模拟出来的一步永远不会被误当成观测到的一步。
-  - [ ] 对来自最近连接缓冲区的已关闭连接同样有效，而不仅限于活跃连接。
-
-#### A5——一键生成脱敏诊断包
-
-- **问题：** issue 报告过来时都是*"它不工作"*。这是每个 issue 都要付一次的维护成本。
-- **基础：** [`StructuredLogPrivacy.swift`](../Shared/StructuredLogPrivacy.swift)、
-  `SanitizedLineAccumulator`——脱敏本来就已经是一条代码边界。
-- **状态：2026-10-01 交付。预览面板还没有人亲眼看过。**
-- **验收标准：**
-  - [x] 导出内容包括：应用/内核版本、有效运行时 YAML、全部诊断结论、近期日志、helper/TUN/系统代理状态、
-        网络环境。→ **2026-10-01**，由 [`DiagnosticBundleBuilder`](../ClashMax/Models/DiagnosticBundle.swift)
-        生成一个文本文件：应用版本与构建号、内置与运行中的内核、macOS、硬件与进程架构（注明 Rosetta）；运行时、
-        helper、TUN 与系统代理状态；proxy effect、TUN 检查、NE、sniffer（生成的方案与运行中内核的实际设置）、
-        fake-ip、geo、listener exposure 和 DNS（覆盖方案加 DNS 面板）；Wi-Fi 与网络策略状态；运行中内核加载的
-        YAML，或者生成的 YAML，并注明是哪一种；最近 500 条全级别日志、helper 日志和内核进程输出。每个没有数据的
-        章节都会写明原因，而不是空着（`testEverySectionExplainsMissingDataInsteadOfStayingEmpty`）。
-  - [x] 每一个密钥、订阅 URL、凭据和 SSID 在任何内容落盘**之前**就已脱敏，并由针对写入方（而不是 UI）的
-        测试来保证。→ **2026-10-01**。由类型保证：`DiagnosticBundleWriter` 只接受 `DiagnosticBundle`，而它只持有
-        `RedactedDiagnosticText`，后者的初始化方法对脱敏器所在文件之外是 `fileprivate` 的。脱敏器依次移除：app
-        按值持有的每个秘密（控制器密钥；订阅 URL 及其主机名、query token 和较长的路径段；请求头的值；provider
-        文件路径；公网 IP），在配置、已存储的 profile、provider 内容和 merge YAML 中找到的每个凭据*值*——所以错误
-        信息里引用的节点密码也会被去掉——不区分大小写的 Wi-Fi 名称，最后再过一遍日志管线的 `StructuredLogRedactor`
-        规则。YAML 另外还经过按 key 判断的 `RuntimeConfigDisplayRedactor`。证据：
-        `DiagnosticBundleTests.testWrittenBytesContainNoPlantedSecret` 在 YAML、日志、helper 与内核输出、
-        `lastError` 和网络状态里埋下每一类秘密，写出文件，再对读回来的字节断言（并断言它们与预览的字节一致、权限为
-        0600）；`DashboardRuntimeStateTests.testDiagnosticBundleFromALiveModelCarriesNoPlantedSecret` 通过真实的
-        `AppModel` 和 `ProfileStore` 再做一遍。**公网 IP：** 完全不写，只保留国家——即使是可复制报告里用的
-        `a.xxx.xxx.d` 掩码形式，也能把出口缩小到一个网络，而这正是一份公开的 bug 报告最不该带的东西。顺带发现：
-        `RuntimeConfigDisplayRedactor` 会把 Effective Config 视图里的每个 http(s) URL 显示成 `https://<redacted>>`，
-        因为第二遍又匹配了自己的输出（已修复，`testDisplayRedactorRedactsAURLOnceAndIsIdempotent`）；Copy
-        Diagnostics 原来只去掉控制器密钥，日志里引用的订阅 URL 会原样进剪贴板（现在走同一个脱敏器）。
-  - [ ] 文件写入之前，用户先看到确切的内容。已实现：Help → *导出诊断包…* 和 Status 页会打开一个面板，在
-        Copy 或 Save… 之前用等宽、可选中的视图显示诊断包的字节，保存下来的文件与显示的内容逐字节一致（在泄漏测试里
-        断言过）。没有勾，因为还没人看过这个面板——见 [`MANUAL_TEST_PLAN.md` 的 A5](MANUAL_TEST_PLAN.md#a5--the-diagnostic-bundle-shows-exactly-what-it-writes)。
-  - [x] 在 `SECURITY.md` 与 issue 模板中被引用。→ **2026-10-01**：`SECURITY.md` 在报告运行时问题时要求附上诊断包，
-        并写明它去掉什么、保留什么；`bug_report.yml` 的日志字段指向它，并且现在可以把文件作为附件拖进去。
-
-#### A6——通过 `/group/{name}/delay` 做批量测速
-
-**状态：2026-08-27 已交付。传输层已于 2026-08-29 实测；UI 观察部分仍未完成。**
-
-- **这个端点实际的行为**，拿内置内核 v1.19.30 实测：`GET /group/{name}/delay?url=&timeout=` 成功时返回
-  一个扁平的 `[String: Int]`；组名不存在返回 `404`；而最关键的一点是——**探测失败的节点会被从响应里静默
-  省略，而不是被报成错误**。「缺席」就是失败信号，所以把结果映射回逐节点状态这件事必须显式处理，不能写成
-  一次查不到就耸耸肩的字典取值。
-- **验收标准：**
-  - [x] 整组测速走组端点；单节点测速仍走逐节点接口。
-        `AppModel.proxyDelayBatchUnits(items:settings:)` 只在组名非空、成员数不少于 8（一波并发 6 个再加
-        两个余量）、且所有成员共用同一个测速 URL 时，才把一个组提升为一次整组请求；`.nativePing` 永不提升，
-        因为那种模式压根不经过内核。
-  - [x] **在途的整组单元占满整个并发预算，且只有 404 才降级。** 这两点初稿都写错了，而且都足以让 A6 造出
-        比它替换掉的扇出**更大**的一次突发：
-        - 整组单元原本和单节点一样只记一个槽位。但一次整组请求会让内核同时探测所有成员——下面那次实测在
-          一个超时窗口内就解析完了 1200 个成员，说明内核内部并没有更小的一波并发可以指望。六个这样的单元
-          打在六个槽位的预算上，就是几千个并发探测。现在
-          `ProxyDelayBatchUnit.concurrencyCost(budget:)` 让整组单元占满整个预算，因此任何时刻在途的最多
-          只有一个组的探测量；调度器也改成归还它实际扣掉的额度，而不是假定每个单元都只值一个槽位。
-        - 整组请求上的*任何*错误，原本都会被读成「这个内核不支持该端点」并展开成逐节点请求。于是 500、
-          连接被掐断、客户端超时，都会在内核最没能力响应的时刻，用几百个请求去回应一个失败的请求。现在
-          只有 `ClientError.unknownProxyGroup` 会降级——API 客户端把「组被改名了」和「内核老到根本没有
-          这个路由」这两种情况共同产生的 404 都映射到它。其余一律判为该单元失败，并说明原因。
-  - [x] **Unified Delay 在提升阈值两侧含义一致。** 它原本是两个意思：逐节点那一路在本进程内采样两次并上报
-        第二次的结果，而被提升的组只调用一次端点——同一个开关在 7 个节点时改变测量方式，到 8 个节点就什么
-        都不做。Mihomo 自己的 `unified-delay` 是一个配置 key，所以 ClashMax 现在会把它写进运行时 YAML
-        **并**下发给正在运行的内核，而 `DelayTestSettings.clientSideProbeAttempts` 只在 `.nativePing`
-        下重复探测——那种模式内核压根不参与。设置页的文案也重写成描述这个分工，不再承诺「到处都会采第二次
-        样」；正是原来那段文案让这处分歧一直没被发现。附带的好处是：`.mihomoURL` 下失败的节点不再白等两个
-        超时。
-  - [x] issue #18 确立的批次状态语义（running / completed / partial / failed / cancelled）被原样保留——
-        被内核省略的成员会被记为 `.failure(.timeout, …)`，即计入「测过且失败」，而不是「没有数据」。
-  - [x] **在 1000+ 节点的组上实测，且可复现。** 2026-08-29 完成，直接拿内置内核 v1.19.30 实测，脚本是
-        [`script/bench_group_delay.py`](../script/bench_group_delay.py)——已入库，所以下面这些数字可以
-        从一次 clone 重新跑出来，而不必只凭信任。这套装置自己生成配置、在回环上拉起两个内核（不产生任何
-        出网流量）、测完再拆掉。一个 1200 成员的组（400 个可达、400 个立即拒绝、400 个黑洞，超时 5000 ms）
-        走 `/group/{name}/delay` 用 **5.00 秒**，走逐节点扇出（并发 6）用 **350.88 秒**——**70 倍，省下
-        346 秒**。整组请求收敛到恰好一个超时窗口，说明内核并没有再套一层更小的内部并发；这个此前只是假设
-        的前提，现在是实测出来的。它同时在规模上复现了「省略」行为：**1200 个成员里有 800 个是缺席而非
-        报错返回的**——这正是必须把「缺席」显式映射成 `.failure(.timeout, …)` 的原因。
-  - **仍未实测：** 同一次运行*走应用 UI 的部分*——批次跑动时的滚动流畅度、取消语义、屏幕上每个节点都要有
-    终态、以及 Copy Diagnostics 的计数。时间开销在传输层，而传输层现在已是已知量；这四项 UI 观察仍然需要
-    有人坐在键盘前。
-
-#### A7——TUN `dns-mode`（Mihomo v1.19.33）
-
-**状态：2026-10-24 已上线。** ClashMax 校验这个值；自家的系统 DNS 覆盖开着时由 ClashMax 接管；诊断里报告内核实际持有的值。
-
-- **实测而非照抄更新日志。** 以 root 运行 v1.19.33 内核开 TUN，每个取值（不设、`disabled`、`native`、`hijack`）分别与
-  ClashMax 系统 DNS 覆盖开/关组合，在启动前、运行中、`PATCH tun.enable=false` 之后、停止之后各取一次
-  `scutil --dns`、`networksetup -getdnsservers` 和诊断器的 `dig` 探测：
-
-  | 观察 | 证据 |
-  | --- | --- |
-  | macOS 上 `native` 与 `hijack` 完全相同 | 两者都新增 resolver #1 `198.18.0.2`、`Supplemental`、`order 1`，键为 `State:/Network/Service/sing-tun-<随机>/DNS`；sing-tun 0.4.28 里 `hijack` 的额外拦截只在 Linux/Windows 生效 |
-  | 不碰 `networksetup` 读到的设置 | 每次 `native`/`hijack` 运行中 `-getdnsservers` 都不变 |
-  | 每条停止路径都清理干净 | `PATCH tun.enable=false`、SIGTERM、**SIGKILL** 之后键都消失（SystemConfiguration 临时值随进程消亡） |
-  | 覆盖开着时两者叠加 | resolver #1 是内核的 `198.18.0.2`，覆盖写入的 `114.114.114.114` 排在其后；两边各自恢复 |
-  | `-t` 接受任意值 | `dns-mode: bogus` 和 `Native` 都显示 "test is successful" |
-  | 非法值要到 TUN 启动才暴露 | `Start TUN listening error: invalid dns-mode: bogus`；控制器仍在线，没有 utun |
-  | `GET /configs` 总是带这个键 | 不设时为 `"dns-mode": ""`（不会省略，省略的是 PATCH 结构体） |
-  | `PATCH /configs` 只改报告值 | 正在运行的监听器不会重建：解析器既不出现也不消失 |
-
-- **策略：** 系统 DNS 覆盖开着时（默认），normalizer 固定写 `dns-mode: disabled`，由一个所有者描述 macOS 实际在用的解析器；
-  覆盖关闭时原样透传配置文件的值。Raw YAML 片段仍拥有最后决定权，并被报告为覆盖了托管键 `tun.dns-mode`。
-- **验收标准：**
-  - [x] TUN 开启时，`ConfigNormalizer` 在最终配置上拒绝 `""`/`disabled`/`native`/`hijack` 之外的任何值；只是大小写或空白不对时，文案直接给出正确的小写值。
-  - [x] bundled-core 闸门同时钉住两半：`-t` 放行 `bogus`，normalizer 拦下它。
-  - [x] 诊断报告与诊断包带上 `TUN DNS: … / dns-mode: <值|default>`；Dashboard 新增 `TUN dns-mode` 一行。
-- **顺带发现，未改动：** 覆盖关闭且解析器在局域网内（这里是路由器 `192.168.8.1`）时，DNS 完全绕过隧道——路由器所在子网从不进 utun——
-  于是 fake-ip 模式下 `dns-hijack` 检查会报 warn，而它建议的修复（路由修复 / 重启 helper）修不好这个问题。`native` 恰好修的就是这种情况。
-- **2026-10-25 已决定（Marvin）：保留 ClashMax 自己的 `networksetup` 覆盖，不改用 `native`。** 留档备查，实测对 `native` 有利的一点：
-  包括崩溃在内的每条停止路径它都能自行恢复，而 `networksetup` 覆盖要靠 ClashMax 的快照幸存下来。
-
----
-
-### 主线 B——原生 macOS 优势
-
-**目标：** 交付那些原生 macOS 客户端能做、而跨平台 Electron 客户端无法廉价复制的东西。
-
-#### B1——带真正 app 选择器的按应用分流
-
-- **问题：** 规则类型已经存在，缺的是可操作的入口。这是 ClashMax 与 Surge 之间最大的一处差距。
-- **状态：2026-10-01 交付。还没有人亲手用过；TUN 模式下的匹配没有实测。**
-- **内核实际怎么做**，2026-10-01 针对内置内核 v1.19.31 实测：在高端口上起一个一次性内核，把一个最小的
-  HTTP 代理客户端分别编译进假的 `Probe App.app/Contents/MacOS/`，*以及*嵌套在 `Contents/Frameworks/Probe App
-  Helper (Renderer).app` 里的辅助 App，各自经 mixed 端口发一次请求；证据是内核自己打出的 `match` 日志行。
-
-  | 规则 | 主程序 | 嵌套的辅助进程 |
-  | --- | --- | --- |
-  | `PROCESS-PATH-REGEX,^<bundle 路径>/,REJECT` | 命中 | **命中** |
-  | `PROCESS-PATH,<主程序路径>,REJECT` | 命中 | 未命中 |
-  | `PROCESS-NAME,Probe App,REJECT` | 命中 | 未命中 |
-  | 同一个 bundle 模式，加上 `find-process-mode: off` | 未命中 | 未命中 |
-
-  同时测得：内核能把 mixed 端口上的连接正确归到本机进程；`PROCESS-PATH-REGEX` **不区分大小写**（全小写的模式照样
-  命中）；名为 `Probe+ (Beta), Inc.app` 的 bundle 在转义 `+ ( ) .`、并把逗号写成 `\x2C` 后可以命中——直接写逗号会
-  截断规则字段；`-t` 遇到无法编译的模式会以 `error parsing regexp: …` 拒绝整个配置。不设置 `find-process-mode`
-  （内核默认）和设为 `always` 都能命中。**结论：** 选择器写 `PROCESS-PATH-REGEX,^<bundle 路径>/`，因为三者中只有它能
-  覆盖 Chrome、Electron 应用以及其他带渲染进程的 App 真正用来发起连接的辅助进程。
-- **验收标准：**
-  - [x] 选择器列出已安装应用的名称、图标与 bundle identifier，并生成正确的 `PROCESS-NAME` 或
-        `PROCESS-PATH` 规则。→ **2026-10-01**，按上面的实测生成 `PROCESS-PATH-REGEX`。`InstalledAppScanner` 在主线程之外
-        读取 `/Applications`、`~/Applications`、`/System/Applications` 以及下一层文件夹（`Utilities`），从不进入
-        bundle 内部，显示 Finder 名称；*选择…* 可以挑任意其他位置的 `.app`。证据：`AppProcessRuleTests`（fixture 目录扫描、
-        转义、生成的 YAML 逐字节保留模式）以及 `CoreRuntimePreflightTests.testBundledMihomoAcceptsAnAppPickerProcessRule`
-        （内置内核接受生成的配置；按 D2 在 CI 中运行）。
-  - [ ] 从两个地方可达：Routing 编辑器，以及 Connections 行上的*"让这个 app 走…"*（图标与路径本来就在
-        那儿）。已实现：在 Routing 规则表单和规则覆盖编辑器中选中进程类规则时出现 *选择 App…*，快速规则面板里也有；
-        Connections 行菜单里有 *让 <App> 走…*，它把进程路径映射到**最外层**的 `.app`（Chrome 的渲染进程会归到 Google
-        Chrome），不在任何 bundle 里的可执行文件退回 `PROCESS-PATH`。没有勾：两个入口都还没人打开过——见
-        [`MANUAL_TEST_PLAN.md` 的 B1](MANUAL_TEST_PLAN.md#b1--route-an-app-from-the-picker-and-see-it-take-effect)。
-  - [x] 生成的是写入普通片段的普通快速规则（INV-1）——不新增存储。→ **2026-10-01**：从 Connections 进入时，是写进
-        `QuickRuleLibrary` 固定 id 片段的 `QuickRuleDraft`；从 Routing 进入时，是写进正在编辑的片段的普通
-        `ManagedRuleOverlayRule`。`testAnAppRuleLandsInTheSameQuickRulesSnippetAsEveryOtherQuickRule`。
-  - [x] 应用之后，已有的 post-apply 结论说明现在是哪条规则胜出。→ **2026-10-01**：`RuleMatchSimulator` 现在会按上面测得的
-        不区分大小写规则计算 `PROCESS-PATH-REGEX`（以前直接交给"由 Mihomo 内部决定"），App 草稿把主程序——或者从连接进入时
-        实际看到的那个进程——作为探测输入。`testBundlePatternMatchesTheAppAndItsHelpersButNotASiblingApp` 覆盖配置里的写法和
-        内核驼峰式的类型名，并确认 `Google Chrome Canary.app` 不会被 Chrome 的模式误伤。
-  - [x] 帮助文本明确说明进程规则在什么情况下无法命中（例如流量经系统代理到达，而内核无法归因到进程）。→ **2026-10-01**，
-        `ProcessRuleCoverage`，显示在每个 *选择 App…* 下方：运行中的配置里有 `find-process-mode: off`（从文件读回，因为
-        `GET /configs` 不带这个 key）时任何进程规则都不会命中（实测）；NE 代理路由下，扩展用自己的 SOCKS 连接转交每一条流量，
-        内核只能看到扩展（来自扩展代码，未实测）；系统代理路由看不到不理会代理的 App；Safari 的网页（WebKit 网络服务）和后台
-        下载（`nsurlsessiond`）在任何模式下都属于系统进程。`testCoverageNotesNameWhatStopsAProcessRuleFromMatching`。
-        **未实测：** TUN 模式下的匹配，因为需要特权 helper。
-
-#### B2——场景化：推广 `NetworkPolicyRule`
-
-- **问题：** 按 SSID 的策略能切换模式和系统代理，但切换不了配置文件或生效的规则集——而后者才是"在家 / 在
-  公司 / 连热点 / 出差"真正需要的。触发条件也只有 SSID，因此以太网和手机共享网络完全不可见。
-- **验收标准：**
-  - [ ] 触发条件扩展到 SSID 之外：接口类型（Wi-Fi / 以太网 / 蜂窝）、指定网络、存在 VPN，以及作为显式兜底
-        的"无匹配"。
-  - [ ] 动作扩展到：选择配置文件、启用/禁用具名片段、选择代理组节点。
-  - [ ] 同一时刻恰好有一个场景生效，优先级是确定的，且当前匹配的理由是可见的。
-  - [ ] 迁移已有的 `NetworkPolicyRule` 值不改变行为，并由针对已持久化 fixture 的解码测试覆盖。
-  - [ ] 场景切换会被呈现出来（菜单栏 / 通知）；静默重配置别人的网络是不可接受的。
-
-#### B3——App Intents 与快捷指令
-
-**状态：除场景 intent 外已于 2026-10-01 交付。还没有人在快捷指令 App 里亲手跑过。**
-
-- **原先的问题。** 现有的 6 个动作都设了 `openAppWhenRun`，打开一个 `clashmax://` URL 后立刻返回
-  `.result()`，所以 app 还没解析 URL，快捷指令就已经报告成功——启动失败、系统代理被拒绝、配置不存在，看起来
-  都和成功一模一样。现在这些动作在进程内针对正在运行的 `AppModel` 执行（在 `ClashMaxApp.init` 里注册到
-  `AppDependencyManager`，通过 `@Dependency` 取得），并等待自己发起的操作完成。基于 URL scheme 的旧快捷指令
-  不受影响。
-- **验收标准：**
-  - [x] 提供以下 intent：设置路由模式、选择配置文件、在组内选择节点、开关系统代理、开关 TUN。→ **2026-10-01**，
-        见 [`ClashMaxAppIntents.swift`](../ClashMax/App/ClashMaxAppIntents.swift)：路由模式是 `AppEnum`
-        （系统代理 / TUN / NE 代理）；配置、代理组和节点是 `AppEntity`，节点列表取自同一个动作里已选的组
-        （`@IntentParameterDependency`）；系统代理和 TUN 都接受 开启 / 关闭 / 切换。在 ClashMax 里 TUN 是一种路由
-        模式，所以关闭 TUN 意味着回到系统代理路由。组和节点的标识符不依赖内核就能解析，所以 ClashMax 停止时运行
-        一个已保存的快捷指令，会走到它自己的报错，而不是弹出"缺少参数"。自 2026-10-29 起共 9 个 App Shortcut
-        （`AppShortcutsProvider` 上限是 10）：开关 TUN 让出了名额，因为设置路由模式已经覆盖它——`setTun` 就是
-        `setRoutingMode(.tun / .systemProxy)`。这个动作仍在快捷指令 App 里，基于它的快捷指令照常可用，只是少了
-        Siri/聚焦搜索短语。
-  - [ ] 提供 intent：激活场景。**依赖 [B2](#b2场景化推广-networkpolicyrule)**，B2 还没有场景模型。它的 App Shortcut
-        名额已经预留（2026-10-29，由开关 TUN 让出），由 `testAppShortcutsKeepASlotFreeForTheScenarioIntent` 守住。
-  - [x] 每个 intent 都报告成功或具体失败；不允许任何一个静默空转。→ **2026-10-01**。行为集中在
-        [`ClashMaxIntentExecutor`](../ClashMax/App/ClashMaxIntentExecutor.swift)，它要么返回一句结果，要么抛出
-        写明原因的 `ClashMaxIntentError`。在运行中的内核上启动、停止、重启、切换路由或切换配置，都会等生命周期稳定
-        下来——重启只有在出现*新的*一次运行时才算数，被替换的那次不算——45 秒内没稳定就报告"仍在处理"，而不是成功。
-        订阅更新和网络策略应用现在会返回实际结果（`SubscriptionUpdateBatchReport`、`NetworkPolicyApplyOutcome`），
-        而不只是写进状态栏。内核没运行时选节点会直接报错。证据：`ClashMaxIntentExecutorTests`（56 个测试，覆盖全部
-        10 个动作的每个成功和失败分支），以及针对真实 `AppModel` 的
-        `DashboardRuntimeStateTests.testAwaitedNetworkPolicy*` 和 `testIntentSurfaceOfAStoppedModelWithoutAProfile`；
-        命令 `xcodebuild test -only-testing:ClashMaxTests/ClashMaxIntentExecutorTests`。
-  - [x] 需要特权 helper 的 intent，以 UI 给出的同样可操作的指引失败，并复用 `HelperSetupGuidance`。→ **2026-10-01**。
-        `HelperSetupStage.guidanceMessage` 现在是"设置步骤 → 指引文字"的唯一映射，设置面板和动作都读它。在此之上，
-        启动 TUN 或切换到 TUN 之前会先通过 XPC 确认已启用的 helper 真能应答；切换到 TUN 的重启过程中如果 helper
-        失联，会立即停止等待并说明原因。证据：`testStartInTunModeGivesTheHelperSetupGuidanceForEveryUnreadyStage`、
-        `testSwitchIntoTunStopsWaitingWhenTheHelperFailsMidway`、`testHelperGuidanceMatchesWhatTheSetupSheetShows`。
-  - [ ] 在快捷指令 App 中手工验证，并记入 `MANUAL_TEST_PLAN.md`。步骤已写好（[`MANUAL_TEST_PLAN.md` 的 B3](MANUAL_TEST_PLAN.md#b3--every-shortcuts-action-reports-what-actually-happened)），
-        还没有人跑过。同样没验证的：`openAppWhenRun` 关掉之后，快捷指令能否在后台拉起 ClashMax 来执行动作。
-
-#### B4——控制中心小组件
-
-- **验收标准：**
-  - [ ] 可切换路由模式，并在应用之外展示实时状态。
-  - [ ] 按 [`DEVELOPMENT.md`](DEVELOPMENT.md) 中的可用性纪律做 macOS 版本门控，并在更低版本上提供可用的
-        退路。
-  - [ ] 不能变成第二个真相来源：状态来自应用读取的同一个 store。
-
-#### B5——Geo 数据库维护
-
-**状态：2026-08-27 已交付。** 从未用眼睛看过——见下方缺口。
-
-- **问题：** `geox-url` / `geo-auto-update` / `geodata-mode` 被认得但不被支持，因此 geo 规则会漂移。
-  这是 3.2 列表上唯一一项**什么都不做也会持续变坏**的缺口，而且它早就在发生：2026-08-27 在维护者本机，
-  `~/Library/Application Support/ClashMax/Runtime/` 里的 `GeoSite.dat` 最后写入于 **6 月 20 日**，
-  `geoip.metadb` 于 **5 月 4 日**——分别漂了约两个月和四个月，而应用里没有任何一处界面说过这件事。
-- **实现过程中踩到的两个坑**，均已拿内置内核 v1.19.30 实测确认：
-  - 配置**文件**里 `geox-url` 的子 key 必须写成 `geoip` / `geosite` / `mmdb` / `asn`。
-    `GET /configs` 回显时会写成 `geo-ip` / `geo-site`，而把*那种*拼法写进文件会被**静默忽略**——
-    内核继续用它内置的 URL，且不会报任何问题。
-  - `geodata-mode` 决定磁盘上到底存在哪个 GeoIP 文件：关闭时是 `mmdb` 源的 `geoip.metadb`，
-    开启时是 `geoip` 源的 `GeoIP.dat`。判断是否过期，必须针对当前模式实际使用的那个文件。
-- **验收标准：**
-  - [x] 这三个 key 由应用管理并生成进运行时 YAML——`GeoDatabaseSettings` 定义在
-        [`CoreModels.swift`](../ClashMax/Models/CoreModels.swift)，由
-        [`ConfigNormalizer`](../ClashMax/Services/ConfigNormalizer.swift) 写出。
-  - [x] 通过 `/configs/geo` 手动刷新，且最近一次更新时间可见。面板报告的是**运行中的规则真正引用到的那些
-        数据库里最旧的那一份**的年龄，而不是一个记下来的「上次点击时间」，因此重启应用后它依然诚实。
-  - [x] 下载失败或不完整时，绝不会留下一个损坏的数据库。这一条是内核保证的，不是我们保证的，而且是实测过、
-        不是假设的：刷新失败时返回 **`500` 并带一个 `{"message": …}` 响应体**，现有文件保持逐字节不变。
-        那条 message 会被原样呈现——`ClientError.coreMessage` 存在的意义正是不要把内核自己的解释压成
-        一句「HTTP 500」。
-  - [x] 默认 URL 有文档说明，并可在 L3 覆盖（四个 MetaCubeX 地址，逐个可替换，保存前会校验协议和非空）。
-  - [x] **备份与恢复会带上它们。** 这些设置有自己的 defaults key，而初稿就停在了这里：
-        `BackupSettingsSnapshot` 里根本没有 geo 字段，于是恢复一份设置备份会把自定义镜像、自动更新开关和
-        更新间隔悄悄重置回 ClashMax 的默认值——这是一种*无声*的失败，而这恰恰是本项目最不该容忍的那一类。
-        现在快照带上了 `geoDatabaseSettings`，恢复时也会像 store 在其他每一次写入时那样把它同步回
-        `overrides.geoDatabase`。没有 geo key 的旧备份解码为默认值，而不是解码失败。
-  - [x] **诊断描述的是内核实际生效的设置，而不是磁盘上保存的那份。** 运行时重载失败时，ClashMax 会刻意
-        保留已保存的设置并提示「已保存，但未能生效」——可是清点数据库、判断是否过期、以及手动刷新，读的
-        全都还是 `geoDatabaseSettings`。由于 `geodata-mode` 决定了在用的 GeoIP 文件是 `GeoIP.dat` 还是
-        `geoip.metadb`，这两件事凑在一起就会去检查一个内核根本没在用的文件，并报出另一个文件的年龄。
-        现在这三处一律走 `runtimeGeoDatabaseSettings`：内核在跑时取已生效快照，否则取保存值。
-- **防「静默空转」的那道关：** `/configs/geo` 在「下载了四个文件」和「什么都没做」两种情况下都返回 `204`，
-  所以绝不能把状态码本身当成成功来汇报。实现会在调用前后各 stat 一次工作目录，并根据磁盘上实际发生的变化
-  来描述结果：已重写、本来就是最新的（内核会发 `If-None-Match`，远端没变就是 304，不落盘），
-  或者*刷新完什么都没动、但被引用的数据库仍然缺失*——后者才是真正的空转，并且会被如实报成空转。
-- **ClashX 导入——2026-08-29 已补齐。** 解析器过去只是把 `geo-auto-update`、`geodata-mode`、
-  `geox-url` 放行而一个都不读，于是从 ClashX 迁移过来的用户纸面上保留了 geo 设置，实际拿到的
-  却是 ClashMax 的默认值。现在这四个 key 都会被读入 `ClientMigrationReport.geoDatabase`，再由
-  应用步骤交给 `updateGeoDatabaseSettings`。`geo-update-interval` 此前甚至不在放行名单里，还会被
-  额外报成未知 key；现在也一并读取。
-  - 每个字段都在**读取时**单独校验，因为 `updateGeoDatabaseSettings` 会*整体*拒绝一个非法结构：
-    否则只要有一条 `geox-url` 写错，整次导入就会变成一次静默空转，而报告上却写着「已导入」。
-    被拒绝的字段保留 ClashMax 的默认值，并在报告的警告里说明原因。
-  - 只写了部分 key 的配置，其余项保留 ClashMax 的默认值，而不是把默认值重述成用户的选择。
-  - **只有主配置文件说了算**——即 `config.yaml`，或 ClashX 已知主文件名中实际存在的那一个。扫描同时会
-    扫过 `profiles/` 和 `providers/`，而 `FileManager.enumerator` 不保证任何顺序；于是「每个文件都读
-    geo key、保留最后读到的那个」就等于让某个任意的、并未启用的片段来决定 ClashMax 从哪个镜像下载——
-    不确定地决定，然后直接应用。现在，写了这些 key 的片段会被写进报告的警告里——是被点名，而不是被默默
-    照办，也不是被默默丢弃。
-  - `geo-ip` / `geo-site` 这两种拼法——`GET /configs` 回显的形式，也是内核在**配置文件**里遇到时
-    会一声不吭直接忽略的形式——会被当成错误明确指出，而不是原样带过。
-- **缺口：** 从未用眼睛看过。整个功能都是在对「磁盘上是什么」下断言，而还没有人在运行中的应用里看它下过这个断言。
-
----
-
-### 主线 C——订阅可信度
-
-**目标：** 正视订阅的本质——**别人交给你的一份可执行配置**——并让这件事变得可见。
-
-一份订阅可以改你的 DNS、开监听端口、重绑外部控制器。`ProviderOptionsRisk` 已经知道这一点；还没有任何
-客户端把它当成一个正经功能来做。
-
-#### C1——导入时的订阅审计报告
-
-- **基础：** [`CoreModels.swift`](../ClashMax/Models/CoreModels.swift) 中的 `ProviderOptionsRisk`。
-- **状态：2026-10-01 交付。面板、配置上的标记和通知都还没人亲眼看过。**
-- **怎么判断。** [`SubscriptionAuditBuilder`](../ClashMax/Models/SubscriptionAudit.swift) 是纯函数：它把抓下来的配置，和
-  ClashMax 用用户设置、但**不带任何用户片段**生成的配置做比较，所以每一处差异都是针对订阅的决定，而不是用户自己写的东西。
-  它不重新实现 normalizer 的规则，因此不会和规则产生偏差。针对内核 v1.19.31 的实测补充了几点：`authentication:` 列表会让
-  ClashMax **自己的** mixed 端口对本机 App 返回 407，所以带这一项的订阅会让系统代理失效（当天已修复，实测见下）；
-  `script:` 块会被接受然后忽略，`SCRIPT` 规则会让整个配置加载失败（报告为 `info`）；`external-controller-tls/-unix/-pipe`
-  在下面的决定之前按原样运行，现在报告为 `danger`、*已覆盖*。
-- **2026-10-01 决定：normalizer 删除配置文件自带的其他控制器监听。** 针对内核 v1.19.31 实测，socket 绑定在 `/tmp` 下
-  （草稿路径超过了 104 字节的 `sun_path`），所用配置的 TCP 控制器在不带密钥时返回 401：
-  - `external-controller-unix` **不校验密钥。** 不带请求头和带错误的 bearer 都返回 200；未认证的 `PATCH /configs`
-    返回 204 并把模式切成了 `global`；未认证的 `PUT /configs` 重新加载了配置。socket 以 `srw-rw-rw-` 创建。带着它的订阅
-    让这台 Mac 上的每一个进程都能完全控制内核，绕过了控制器唯一的保护——每次运行生成的密钥。
-  - `external-controller-tls` 会校验密钥（401 / 401 / 200），即使没有 `tls:` 证书也会监听（内核自己生成一张）——但监听在
-    配置文件指定的任意地址上，比如 `0.0.0.0`，这违反了控制器只绑定回环地址的规则。内核 home 目录之外的证书路径会被
-    `SAFE_PATHS` 拒绝。
-  - `external-controller-pipe` 只在 Windows 上有效：在 macOS 上被忽略，也不打日志。
-
-  三者都通过 [`ConfigNormalizer.profileControllerVariantKeys`](../ClashMax/Services/ConfigNormalizer.swift) 删除，位置紧跟
-  C3 监听闸门、在旧的合并 YAML 和片段之前，并在应用日志写一行 "Runtime config: Ignored the profile's own extra control
-  API listeners"。和入站端口的删除一样，它作用于所有配置，包括本地文件：TCP 控制器和密钥本来就对所有配置覆盖，而用户自己
-  的逃生口也拒绝这些 key（[`RawYAMLPatchPolicy`](../ClashMax/Models/RawYAMLPatch.swift)；有测试保证两份列表一致）。不过滤的：
-  旧的按配置文件合并 YAML——它由用户自己编写、已不可编辑，`ProviderOptionsRisk` 也不会为这三个 key 标记它。证据：
-  `ConfigNormalizerTests`（带说明删除、托管的那一对不产生说明、与策略一致）、
-  `CoreRuntimePreflightTests.testBundledMihomoUnixControllerIgnoresTheSecretAndTheNormalizerDropsIt`（原始配置那一半固定了
-  实测结果，内核一旦开始校验密钥就会让它失败、重新打开这个决定；规范化那一半证明 socket 从未出现），以及 C1 测试现在期望
-  *已覆盖*——这样的配置不再因为这个 key 需要关注。
-- **`authentication:` 把本机挡在门外——2026-10-01 已修复。** 用一个临时的内置内核 v1.19.31 在高位端口上实测：
-  `authentication: ["u:p"]`、mixed 端口，加一个 `listen: 0.0.0.0` 的 mixed 监听器。下面的「局域网」指这台 Mac 自己的
-  `en0` 地址，内核把它看作非回环来源。
-  - **没有 `skip-auth-prefixes` 时：** mixed 端口对 `127.0.0.1` 返回 `407`（带凭据 `200`），ClashMax 就绪探测发出的
-    SOCKS5 问候收到 `05 02`。所以影响不止系统代理：NE Proxy 启动、运行中应用设置也会卡在就绪检查上
-    （"requires authentication"）。
-  - **加上 `skip-auth-prefixes: [127.0.0.0/8, ::1/128]` 后：** mixed 端口对 `127.0.0.1` 返回 `200`，问候回 `05 00`。
-    暴露的监听器对局域网地址不带凭据返回 `407`、带凭据 `200`，问候回 `05 02`。豁免按来源地址而不是按端口：同一个监听器
-    对 `127.0.0.1` 返回 `200`。
-  - **开启「允许局域网」时**（mixed 端口监听 `*:port`）：`127.0.0.1` 和 `[::1]` 返回 `200`，局域网地址 `407`。只写
-    `127.0.0.0/8` 时 `[::1]` 仍是 `407`，所以两个地址族都需要。重复和重叠的前缀都能被接受；`GET /configs` 会回显
-    `skip-auth-prefixes`（`authentication` 只回显用户名）。
-  - **交付的做法：** 只要最终配置里有非空的 `authentication` 列表，
-    [`ConfigNormalizer`](../ClashMax/Services/ConfigNormalizer.swift) 就把这两个回环前缀追加到配置已有的前缀之后。它在用户的
-    Raw YAML 片段之后也会执行，和入站端口的承诺是同一条规则。列表本身从不改动，所以
-    [`ListenerExposure`](../ClashMax/Models/ListenerExposure.swift) 对暴露监听器「有认证」的判断依然成立。审计从生成的配置
-    里读回这项豁免，把这个 key 报告为 `info`，并说明还有谁需要这些凭据；生成的配置里若没有豁免，仍会报告为带 407 后果的
-    `warning`。测试：`ConfigNormalizerTests` 四个、`SubscriptionAuditTests` 两个，以及
-    `testBundledMihomoExemptsThisMacFromProfileAuthenticationButNotTheNetwork`——它在真实内核上复现 `05 02`，并检查局域网
-    一侧。
-  - **未覆盖（2026-10-02 起见下一条）：** 配置文件自带的 `skip-auth-prefixes` 只会被合并、不会被评判。列出 `0.0.0.0/0`
-    的订阅会把网络也一并豁免，而 `ListenerExposure` 仍会认为它暴露的监听器有认证。
-- **配置文件自带的 `skip-auth-prefixes`——2026-10-02 起会被评判。** 用同样的方式实测（临时的内置内核 v1.19.31、高位端口、
-  `authentication: ["u:p"]`、一个 `listen: 0.0.0.0` 的 mixed 监听器，请求来自这台 Mac 的 `en0` 地址；每个内核结束后都确认
-  已停止、端口已关闭）：
-  - `0.0.0.0/0`、`192.168.0.0/16` 和 `192.168.8.65/16`（主机位会被掩掉）让局域网地址不带凭据就能通过——SOCKS5 `05 00`、
-    HTTP `200`；`10.0.0.0/8` 时它仍是 `407` 和 `05 02`。开启「允许局域网」时，`0.0.0.0/0` 也以同样方式对它开放了 mixed 端口。
-  - 地址族互不覆盖：`::/0` 豁免了 `::1` 和 `en0` 的链路本地地址，但既不豁免 `127.0.0.1` 也不豁免局域网地址；`fe80::/10`
-    豁免了链路本地来源。
-  - 内核在匹配前会把 IPv4 来源去映射：`::ffff:0:0/96` 谁也没有豁免，即使监听器是 `listen: "::"`；单独的
-    `::ffff:127.0.0.0/104` 连 `127.0.0.1` 都还是 `407`。
-  - 不带前缀长度的条目会让整个配置加载失败（`netip.ParsePrefix("192.168.8.65"): no '/'`）。
-  - **规则：** 除非一个条目是回环——`127.0.0.0/8` 之内的 IPv4 前缀，或 `::1/128`——或是 IPv4 映射前缀（`::ffff:0:0/96`
-    之内，因为上面那条去映射行为，内核从不匹配它），否则就算作豁免了其他机器。其余一律算数，连不是前缀的文本也算，因此判断偏向
-    「开放」；不带长度的地址按它所指的那一台主机理解。映射前缀这一条依赖实测的内核行为，所以有内置内核测试固定它。规则只写在
-    一处：[`SkipAuthPrefixes.scope(of:)`](../ClashMax/Models/ListenerExposure.swift)。
-  - **交付的做法：** `ListenerRuntimeFacts.skipAuthPrefixesBeyondThisMac` 记录这些条目，而 `hasInboundAuthentication` 仍只表示
-    「列表非空」——normalizer 的回环豁免依据的就是它，并且保持不变。暴露的监听器若在这样的条目之后，就是 `fail`，原因是新的
-    `authenticationSkipped`：*"对 … 开放的代理"*，点名这些范围（`/0` 会写成「任意 IPv4/IPv6 地址」），恢复建议点名要删掉的
-    条目（设置了 `skip-auth-prefixes` 的 Raw YAML 片段会替换订阅自带的列表，normalizer 仍会把回环加回去）。审计新增一个
-    `skip-auth-prefixes` 条目：被豁免的设备能访问到某个入口——已允许的暴露监听器，或「允许局域网」下的 mixed 端口——时为
-    `danger`，并点名这个入口；什么都访问不到时为 `warning`，说明允许其中任何一个会怎样；只有回环或映射条目、或者没有
-    `authentication` 列表可跳过时为 `info`。`listeners` 和 `authentication` 的后果、以及 normalizer 的日志说明，现在都会点名
-    被豁免的设备，而不再说其他设备一律要登录。测试：`ListenerExposureTests` 六个（三个跑真实的 normalizer，一个证明片段这条
-    恢复路径），`SubscriptionAuditTests` 四个，`ConfigNormalizerTests` 里的日志说明，以及两个检查真实内核和同一份生成配置之判断
-    的内置内核测试：`testBundledMihomoLetsAProfilesWidePrefixPastAuthenticationAndTheVerdictSaysSo`（`0.0.0.0/0`：局域网地址
-    收到 `05 00`，`authenticationSkipped`）和 `testBundledMihomoIgnoresAnIPv4MappedPrefixAndTheVerdictAgrees`
-    （`::` 监听器上的 `::ffff:0:0/96`：`05 02`，`lanExposed`）。还没人亲眼看过——步骤见
-    [`MANUAL_TEST_PLAN.md` 的 C1](MANUAL_TEST_PLAN.md#c1--import-a-subscription-and-read-its-audit-report)。
-- **验收标准：**
-  - [x] 在导入时和更新时，给出一份大白话报告：这份订阅试图改什么、ClashMax 覆盖了什么、放行了什么。→ **2026-10-01**：
-        报告和面板里分成这三组。导入（订阅或本地 YAML）结束时打开面板；手动和自动更新同样会审计，但从不弹面板——手动更新
-        发一条提示，自动更新发一条系统通知，两者都会在配置上做标记，并在 Status 页加一条注意事项，直到报告被打开为止。覆盖的
-        key：控制器及其密钥、CORS 和其他控制器变体、所有入站端口 key、`allow-lan`、`tun`、`dns`（按子 key 区分替换与保留）、
-        `sniffer`、顶层 `listeners`、`authentication`、`script`、`external-ui*`、`hosts`，以及 `find-process-mode: off`。
-        `SubscriptionAuditTests`（13 个测试，跑的是真实的 normalizer）和 AppModel 集成测试，后者还检查了更新会重新审计且
-        不弹面板。`skip-auth-prefixes` 于 2026-10-02 加入（见上）。
-  - [x] 严重级别是可操作的——每个 `danger` 条目都点名具体后果。→ `testEveryDangerItemNamesItsConsequenceAndNoSecretIsKept`
-        （并且没有任何秘密值进入存下来的报告）。
-  - [ ] 该报告之后仍可从配置文件处进入，而不只在导入时出现一次。已实现：最新一份报告存在配置上
-        （`SubscriptionDiagnostics.latestAudit`，最多 40 条、每个字段最多 300 个字符，经过 `StructuredLogRedactor`，不保留
-        URL 路径、query 或凭据——`testStoredTextIsRedactedAndBounded`），可以从配置菜单的 *审计报告…*（对报告功能出现之前
-        导入的配置会当场运行一次）、配置行上的橙色盾牌，或 Status 页打开。没有勾，因为还没人打开过——见
-        [`MANUAL_TEST_PLAN.md` 的 C1](MANUAL_TEST_PLAN.md#c1--import-a-subscription-and-read-its-audit-report)。
-  - [x] 至少覆盖现有的危险 key 集合，外加 `sniffer`（A1d）。→ `ProviderOptionsRisk` 集合里的每个 key 加上上面新增的；
-        每类 key 都有测试，另有干净订阅和只提供节点列表的订阅各一个测试。
-- **这次没做：** 更新 *diff*（C2）——更新带来的新危险 key 会被报告和标记，但不会阻止这次更新。
-
-#### C2——订阅更新 diff
-
-- **问题：** 上周还安全的订阅，可能在下一次更新时悄悄加一个危险 key。今天没有任何地方会呈现这件事。
-- **验收标准：**
-  - [ ] 每次更新都保存足以与上一次抓取做 diff 的信息。
-  - [ ] 节点变动（新增/移除/改名）与**配置**变更分开汇总；只有后者能触发风险提示。
-  - [ ] 新出现的危险 key 会阻止静默自动应用，并主动询问。
-  - [ ] diff 存储有容量上限，并与其他一切一样做脱敏。
-
-#### C3——就 `listeners` 做出决定
-
-**状态：2026-08-30 已作出决定并交付。** 从没亲眼看过——见下文的缺口。
-
-- **把问题重新说对。** 本节此前写的是 `listeners` *"目前被当作风险直接剥离，没有后续路径"*。并不是，也从
-  来不是。`ProviderOptionsRisk`（[`CoreModels.swift:744`](../ClashMax/Models/CoreModels.swift#L744)）是
-  **标记**这个 key，而且只在它出现于 provider 覆盖 YAML 或 runtime-merge YAML 时才标记。普通订阅顶层下发
-  的 `listeners:` 块，一直是原封不动地穿过 `ConfigNormalizer`，**并且不带任何标记**。所以真实状态不是
-  "门锁着"，而是"门开着，且没有挂牌"——这把这条决定要防的东西整个颠倒了过来：风险从来不是用户开不了入站
-  监听，而是订阅可以在没人被告知的情况下替他把监听开起来。
-- **内核实际的行为**——2026-08-30 对内置内核 v1.19.30 实测。四条全都和"想当然"的结论相反，所以每一条都写
-  在它约束的那条标准旁边：
-  - **`GET /configs` 里根本没有 `listeners` 这个 key。** 生效的那份运行时 YAML 是唯一能把它读回来的地方
-    ——和 `dns`、`sniffer` 的处境一样，这也是
-    [`ActiveListenerConfigReader`](../ClashMax/Services/ActiveListenerConfigReader.swift)
-    仿照 `ActiveDNSConfigReader` 而不是去问 API 的原因。
-  - **`allow-lan: false` 管不住它们。** 在 `allow-lan: false` 下，一条 `listen: 0.0.0.0` 的条目对局域网内
-    另一台主机的请求回了 `200`，而应用自己管理的 `mixed-port` 拒绝了同一个请求。`allow-lan` 只管默认入站。
-  - **省略 `listen` 等于绑定所有网卡**（`*:port`）。也就是说，暴露的那一种才是*默认*，一份根本没提到
-    `listen` 的配置其实已经把端口分享给整个网络了。
-  - **全局的 `authentication:` 列表对它们是生效的。** 同一个局域网请求，不带凭据回 `407`，带凭据回 `200`。
-    「已暴露的监听 + 空的 `authentication` 列表」，对任何能够到这个端口的人来说就是一个开放代理。
-- **决定。** `listeners` **在 L3 经由通用的 Raw YAML 片段支持，且不为它做任何专用 UI。** 前半句由 §2.4 与
-  [INV-2](#23-两条不变量) 决定：通用覆盖路径已经够得着的 key 就算做完了，而一个监听器编辑器恰恰是本文存在
-  就是为了拒绝的那种「高级选项卡」。这份支持只附带一个条件——**它造成的暴露永远不能是无声的**——而这个
-  条件才是真正需要动手建的部分。
-- **验收标准：**
-  - [x] 在本文中写下一个决定：要么在 L3 经用户明确同意后支持，要么永久不支持并说明理由。→ 见上文，
-        **在 L3 支持**。所谓明确同意就是 Raw YAML 片段本身：用户自己写下这个块，像其他任何片段一样在运行
-        时 diff 里看到它，也用同样的方式撤销它。
-  - [x] 若支持：局域网暴露按监听器逐个选择加入，并且出现在运行时 diff 中。这两点都是片段本身带来的：除了
-        用户自己一条一条写，没有别的东西会写入监听器；而这个片段和其他任何片段一样出现在 diff 里。
-  - [x] 这条决定额外附加的条件：*已经*存在的监听会被读回来并给出判断。
-        [`ListenerExposureDiagnostics`](../ClashMax/Models/ListenerExposure.swift) 是一个跑在「内核实际拿
-        到的那份运行时 YAML」上的纯分类器——片段写的还是订阅带的，它分不出来，也不需要分。已暴露且没有
-        `authentication:` 的入站是 `fail`，*"局域网上的开放代理"*；带认证的是 `warn`——除非有 `skip-auth-prefixes` 条目
-        超出回环，2026-10-02 起这种情况是点名这些范围的 `fail`（[C1](#c1导入时的订阅审计报告)）；全部只听回环的是
-        `pass`；并且会点名 `allow-lan` **管不着**什么，因为一个把它关掉的用户完全有理由以为它管得着。以
-        Routing 里的 **Inbound Listeners** 面板、以及可复制诊断报告里的一行呈现——是一个持续在那儿的结论，
-        而不是一条滚过去就没了的通知。
-  - [x] 绝不在**无提示**的情况下从订阅继承。→ **2026-10-01**。这个承诺由 normalizer 保证，而不是靠一个面板：对订阅来说，
-        每个其他机器可以访问的 `listeners:` 条目（`listen` 是暴露地址，或者干脆没写）都会在用户自己的 merge YAML 和片段
-        生效之前被去掉，直到用户允许为止；只监听回环地址的条目、本地文件里的监听器照原样运行，Raw YAML 片段里的监听器是
-        用户自己写的，从不受限。这个问题在导入报告里提出（*保持关闭* / *允许…*，确认框会写明后果）；更新带来新的暴露监听器
-        时同样保持关闭，并在配置上做标记。用户的回答存为 `SubscriptionProviderOptions.exposedListenerPolicy`，经由普通的
-        provider options 路径生效。所有生成路径都从同一个地方 `RuntimeConfigOptions.apply(profile:)` 取这个开关，所以启动、
-        预览、Effective Config 视图和预检不可能结论不一致。证据：
-        `SubscriptionAuditTests.testExposedListenersWithoutAuthenticationAreKeptOffUntilAllowed`、
-        `testOnlyASubscriptionsUnapprovedListenersAreGated`、`testAUsersOwnRawYAMLListenerIsNeverGated`，以及
-        `DashboardRuntimeStateTests.testSubscriptionAuditStoresTheReportAndGatesExposedListenersUntilAllowed`。
-        **行为变化：** 已经依赖某个暴露监听器的订阅，下次启动时会失去它，直到从配置的审计报告里允许。
-- **缺口：** 从没亲眼看过。没有任何一处是在运行中的应用里、对着局域网上真实的第二台机器被观察着做出它的
-  结论的——那几次暴露探测是直接打内核跑的。
-
----
-
-### 主线 D——工程可持续性
-
-**目标：** 停止为上面每一个功能支付利息。它不是一个独立里程碑——与 A/B/C 交织进行，只改动当前功能已经碰到
-的那部分。
-
-#### D1——拆解 `AppModel`
-
-- **问题：** [`AppModel.swift`](../ClashMax/Stores/AppModel.swift) 有 **10354 行**；
-  [`SettingsView.swift`](../ClashMax/Views/SettingsView.swift) 有 **3167 行**。本路线图中的每个功能，落到
-  那里都要交一笔税。
-- **时机：** Observation 迁移刚完成，因此失效边界目前是被充分理解的。这种理解会衰减。
-- **验收标准：**
-  - [ ] 按领域拆分——运行时、路由、配置文件、诊断——并保持视图已经在消费的同一套公开接口。
-  - [ ] 行为不变：完整测试套件在当前基线上通过，且不新增 skip。
-  - [ ] 增量进行，一次一个领域，每一步都可独立回滚。
-  - [ ] Observation 迁移的坑继续被尊重：`didSet` 在 `init` 中不会触发（预热钩子必须随属性一起搬家），
-        以及结构化去重守卫是承重的。
-
-#### D2——把 Mihomo 升级回归自动化
-
-- **问题：** 今天验证一次内核升级要跨模板与模式手工进行。
-- **实际出的问题（2026-10-01）。** 矩阵早就以 XCTest 的形式存在（A1e），但 `Resources/Core/mihomo` 被
-  gitignore，CI 从不安装它，所以 [`CoreRuntimePreflightTests.swift`](../ClashMaxTests/CoreRuntimePreflightTests.swift)
-  和 [`BundledCoreArchitectureTests.swift`](../ClashMaxTests/BundledCoreArchitectureTests.swift) 里全部 7 个
-  依赖真实内核的测试每次都报 *skipped*。这一项要的回归闸门，在结构上就注定是绿的。
-- **验收标准：**
-  - [x] 有一个脚本对每一种 生成模板 × 路由模式 × DNS 覆盖 组合运行 `mihomo -t`，并以 `level=error msg=`
-        那一行（而不是通用结尾）作为失败信息。→ **2026-10-01**，保留为 XCTest 而没有另写 shell 脚本，因为
-        矩阵要靠 `ConfigNormalizer` 生成配置：
-        `testBundledMihomoAcceptsGeneratedSnifferAcrossRoutingDNSAndTemplateCombinations`（5 种来源，含
-        `minimal`/`global`/`rule` 模板 × 3 种路由模式 × 3 种 DNS 模式 × 3 种 sniffer 状态 = 135 次
-        `mihomo -t`），外加覆盖 `cn-direct` 的 `testBundledMihomoAcceptsGeneratedSnifferOnGeodataBackedTemplate`。
-        内核拒绝时现在经由 `SubscriptionPreflightDiagnosticFormatter` 报告，失败信息以 `msg=` 的值开头，下面
-        保留完整输出。证据：一个拒绝所有 TUN 配置的替身内核产生 46 个失败（45 个 TUN 组合 + 计数断言），每条形如
-        `Bundled core rejected plain-profile/tun/dns-default/sniffer-app-managed: parse tun config error: …`。
-  - [x] 在 CI 中针对内置内核运行。→ **2026-10-01**，首次在 CI 运行
-        [36828400111](https://github.com/marvinli001/ClashMax/actions/runs/36828400111)（`5306970`）中观察到：安装步骤
-        下载并校验了 v1.19.31 的两个 asset，合并为 `x86_64 arm64`；全部 7 个依赖内置内核的测试和架构检查都是**通过而不是
-        跳过**——135 个组合的矩阵用时 7.1 秒，`cn-direct` 的 geodata 测试 1.4 秒——整次运行 1562 个 XCTest、0 失败、2 个
-        跳过（只对 Intel 有意义的更新渠道测试，以及只存在于开发机的发布手册测试）；本地化 gate 在同一个 DerivedData 上的
-        第二次 xcodebuild 通过；release job 断言内嵌内核为 `x86_64 arm64`。接线方式：test 与 build 两个 job 都会执行 [`script/install_mihomo_core.sh`](../script/install_mihomo_core.sh)，每个
-        asset 都按 [`mihomo-manifest.json`](../Resources/Core/mihomo-manifest.json) 里的 sha256 校验——
-        包括从 `actions/cache` 恢复的那些；缓存里存的是下载包，不是合并后的二进制。test job 设置
-        `TEST_RUNNER_CLASHMAX_REQUIRE_BUNDLED_CORE=1`，xcodebuild 会去掉前缀、以
-        `CLASHMAX_REQUIRE_BUNDLED_CORE` 传给测试进程，`BundledCoreRequirement` 据此把缺内核从 `XCTSkip` 变成
-        `XCTFail`（实测：没有内核 7 个失败；有内核 23/23 通过；不设变量 7 个跳过——没装内核的开发机行为不变）。
-        在全新 DerivedData 上本地复现了整个 job：第二次 xcodebuild（`localization_gate.sh`）干净地重新构建，
-        测试宿主里的 `Core/mihomo` 与安装的内核逐字节一致（`DashboardRuntimeStateTests` 的占位文件根本不会写入），
-        `Sign Nested Core Binaries` 的 `lipo -archs` 检查通过。release build job 的 bundle 检查现在也断言内嵌内核
-        是 `x86_64 arm64`（对本地一份未签名的 universal Release 构建跑过，通过）。
-  - [x] 任何一个组合被新内核版本破坏，都会让构建失败，而不是被发布出去。→ **2026-10-01**：CI 现在会针对 manifest 固定的
-        内核跑这个矩阵，缺内核即失败（见上面的 run 36828400111）；内核一旦拒绝某个组合，构建就会变红——第一条里的替身内核
-        已演示，46 个失败。manifest 里的 sha256 错一位时，安装步骤失败并报 `checksum mismatch for <asset>: the manifest
-        expects … but the downloaded asset is …`，在 GitHub Actions 下会标注到 manifest 文件上。
-
-#### D3——补上手工验证的缺口
-
-- **问题：** 这个项目历史上反复出现的模式是*"测试通过，但从没亲眼看过"*。已完成的若干功能都带着这条备注。
-- **验收标准：**
-  - [ ] `MANUAL_TEST_PLAN.md` 增加一份按版本的清单，覆盖自动化到不了的流程：菜单栏面板、TUN 授权、场景
-        切换、快捷指令、app 选择器。
-  - [ ] 上面每个路线图条目，只有在其手工条目签核后才标记为完成。
-
----
-
-## 5. 排期
-
-刻意保守——一次推进一条主线，D 穿插其中。
-
-| 阶段 | 内容 | 为什么是这个顺序 |
-| --- | --- | --- |
-| **首先** | ~~**A1a**~~ | 一个不带 UI 的解码器修复，也是硬前置：在连接解码器停止把"没有域名"坍缩成"目标 IP"之前，A1c 的诊断根本算不出来。可以单独发布，一天的量。 |
-| **然后** | ~~**A1b + A1c**~~、A1d | 本文中优先级最高的一项，也是能验证整套论点的最小闭环：一个真实的内核缺口、一个真实的诊断缺口、一个修复按钮、不需要新的 UI 范式。如果三层模型是错的，这里能以最低代价暴露出来。**A1a–A1c 已于 2026-08-16 交付**；A1d 的扫描器随它们一起交付，剩下的部分并入 C1。现在还把 A1 摁着不放的是 A1e 的人工签核。 |
-| **然后** | ~~A2~~ | 路由故事的另一半。放在 A1 之后做，这样 DNS 面板里显示的域名和规则实际匹配所用的域名，是已知同一个值。**2026-08-30 交付**，如约排在 A1a–A1d 之后。 |
-| **然后** | ~~A3~~、~~A5~~、~~C1~~ | 低风险、高杠杆。A5 与 C1 都直接降低维护者负担；C1 吸收 A1d。**A3 已于 2026-08-27 随 B5 一并交付。** |
-| **然后** | ~~B1~~、A4 | B1 是最重磅的面向用户功能；A4 是让护城河变得显而易见的那个界面。B1 放在 A1 之后，免得进程规则成为第二个在无域名连接上失效的东西。 |
-| **然后** | B2、C2 | 两者都是有状态的，需要先让前面的工作变得可信。 |
-| **之后** | ~~B3~~、B4、~~B5~~、~~A6~~、~~C3~~ | 有价值，但不承重。**C3 已被提前，于 2026-08-30 作出决定**，因为那次专门去看它的评审发现的事实和本文原先的说法正好相反：顶层的 `listeners:` 块一直在不带标记地穿过去，于是这一项根本不是一个躺着的功能请求，而是一处没挂牌的暴露面。**B5 与 A6 已被提前，于 2026-08-27 交付。** B5 是因为它是本列表上唯一一项什么都不做也会持续劣化的东西——而且在维护者自己的机器上已经劣化了四个月，这是「不承重」这个判断没能预见到的。A6 是因为 #10 / #11 / #18 这一串卡顿问题，源头都在它去掉的那套逐节点扇出上。 |
-| **贯穿始终** | D1、D2、D3 | 永远不作为独立里程碑。 |
-
----
+| A1e | 真实无域名连接 → 原因诊断 → 修复 → 新连接命中域名规则 | [A1](MANUAL_TEST_PLAN.md#a1--a-domainless-connection-is-diagnosed-and-repaired-end-to-end) |
+| A2 / A3 / B5 | 真实 DNS 结果及否定/失败状态、fake-ip 修复适用性、Geo 文件与更新结果 | [人工计划](MANUAL_TEST_PLAN.md) |
+| A5 / B1 / B3 / C1 / C3 | 导出预览字节一致、App/辅助进程分流、快捷指令结果与冷启动、审计入口与监听器授权 | [每次发版清单](MANUAL_TEST_PLAN.md#per-release-checklist)及各功能条目 |
+| A6 | 大组测速滚动、取消、每个节点终态与诊断计数 | [A6](MANUAL_TEST_PLAN.md#a6--whole-group-delay-testing-on-a-group-of-1000-nodes)；传输层实测已有记录 |
+| 原生 UI | macOS 15 外观、真实 MenuBarExtra、键盘焦点、输入法、VoiceOver 与系统辅助功能开关 | [UI 验收](MANUAL_TEST_PLAN.md#native-ui-acceptance) |
+| 签名联动 | 已安装 Helper/NE、TUN/DNS/路由恢复、切网、睡眠唤醒及 UDP/QUIC | [发布指南](RELEASE.md)、[TUN 矩阵](TUN_SMOKE_TEST.md) |
+
+保留 A1 的关闭条件：A1a–A1d 已实现，但 **A1e 签核后才能验收关闭 A1**。
+整组测速传输实测、源测试、签名数据面验收分别记录证据。
 
 ## 6. 非目标
 
-写在这里，是为了不再被反复拿出来讨论：
+- 与其他 Mihomo 客户端比开关数量，或为每个 Mihomo key 单独做控件。
+- 遥测、账号、节点收集/售卖、订阅分析或内嵌 Sub-Store。
+- 运行时 AI 功能；[维护提案](CODEX_OSS_PLAN.md)讨论的是仓库工作。
+- Windows 或 Linux 移植。
 
-- **与 Clash Verge Rev / mihomo-party 的功能对等。** 开关数量不是 ClashMax 竞争的那条轴。
-- **为每个 Mihomo key 都做一个开关。** 按 INV-2，答案是通用覆盖。
-- **遥测或账号体系。** 与 [`DEVELOPMENT.md`](DEVELOPMENT.md) 中的 MVP 范围保持一致，不变。
-- **机场节点收集、节点售卖，或内嵌 Sub-Store。**
-- **任何运行时 AI 功能。** 与 [`CODEX_OSS_PLAN.md`](CODEX_OSS_PLAN.md) 一致：AI 是维护仓库的工具，
-  永远不是随应用发布的功能。
-- **Windows 或 Linux。** 整条主线 B 的论点就是"只对一个平台原生"本身就是优势。
+现有 Sparkle 更新仍可维护；历史 MVP 排除项不代表要删除已存在的更新能力。
 
----
+## 7. 更新规则
 
-## 7. 如何修改本文
-
-- **§2 的原则具有规范效力。** 修改它们需要在本文中写下理由，而不是在某个 pull request 里开一次性例外。
-- **§3 的缺口是带日期的结论。** 引用前请重新核实。§3.1 已于 2026-10-29 重新实测；§3.2 的每一行都带着它
-  的状态被核实的日期。
-- **§4 的主线是一个队列，不是合同。** 可以自由重排；但不要悄悄丢弃某一项——把它移到 §6 并说明理由。
+- §2 继续具有规范效力；改变原则须在这里记录理由。
+- 链接当前符号/文件，避免维护易失效的行数；注明源码核对日期，版本固定值留在原有源文件。
+- 分别记录实现与验收。人工观察只有取得记录证据才勾选。
+- 移动条目保留 ID；可重排，删除事项须在 §6 写明理由。
+- 保留原有依赖顺序：先补 A1e，再 A4；B2/C2 在诊断基础之后；B3 场景动作依赖 B2，B4 排后；D1/D3 随涉及领域推进。
+- 实测契约、安全决策和带日期的结果保存在[英文归档](archive/ROADMAP-2026-11-17.md)与
+  [中文归档](archive/ROADMAP-2026-11-17.zh-CN.md)。旧未勾选框是历史状态，不是另一份活跃队列。

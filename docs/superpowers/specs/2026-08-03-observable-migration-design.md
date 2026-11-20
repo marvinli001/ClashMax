@@ -1,17 +1,24 @@
 # ObservableObject → @Observable Migration
 
 Date: 2026-08-03
-Status: Approved, ready for implementation planning
+Status: Implemented; archived design reference (source review 2026-11-17).
+
+The Observation migration is present in the current stores/services and typed SwiftUI
+injections. The counts and before/after discussion below describe the original design
+baseline, not remaining work. Preserve the initialization-priming, deduplication and
+`@ObservationIgnored` rules when extending it. Current work and checks live in the
+[roadmap](../../ROADMAP.md) and [development guide](../../DEVELOPMENT.md).
+No tests or live acceptance were rerun for this status update.
 
 ## Goal
 
 Replace every remaining `ObservableObject`/`@Published` observation path in ClashMax with the
 Observation framework (`@Observable`), and remove Combine from the app's state fan-out entirely.
 
-`RuntimeDataStore` was migrated in an earlier pass and serves as the reference implementation for
-the patterns below. Everything else still uses Combine.
+At the original design baseline, `RuntimeDataStore` had migrated in an earlier pass and served
+as the reference implementation. The remaining types then still used Combine observation.
 
-## Current state
+## Original State — 2026-08-03
 
 16 `ObservableObject` classes, 81 `@Published` properties, 57 `@EnvironmentObject` reads,
 33 `.environmentObject(_:)` injections, 6 `@StateObject`, 5 `@ObservedObject`.

@@ -1,323 +1,230 @@
 # ClashMax Development Guide
 
-This document contains project-level development rules that should travel with
-the repository. Local agent files such as `AGENTS.md` may add workstation-
-specific context, but they must not be the only place where stable project
-discipline is recorded.
+This is the maintained entry point for repository development. Local `AGENTS.md`
+may add workstation context; shared rules and acceptance procedures belong in tracked
+files. Check current behavior against source and the version pins in `project.yml`,
+`.swiftformat` and `Resources/Core/mihomo-manifest.json`. Product/security rules and
+maintainer decisions remain authoritative; dated measurements retain their original scope.
 
-## Product Direction
+## Documentation Map
 
-- Build ClashMax as a native macOS 15+ SwiftUI app. Keep the UI aligned with
-  the current Apple platform visual language, but gate newer platform APIs with
-  availability checks and practical fallbacks when they are above the deployment
-  target.
-- Keep the first screen as the actual proxy client, not a marketing page.
-- Prioritize a quiet operational interface for profiles, proxy groups,
-  connections, rules, logs, runtime settings, and menu bar controls.
-- Use native SwiftUI first, bridge to AppKit only for integration gaps, and use
-  SF Symbols for controls where possible.
+| Need | Document |
+| --- | --- |
+| Product, installation and everyday capabilities | [README](../README.md) / [简体中文](../README.zh-CN.md) |
+| Setup, architecture, source checks and development rules | This guide |
+| Contribution and review workflow | [CONTRIBUTING](../CONTRIBUTING.md) |
+| Implemented features, remaining work and acceptance gaps | [Roadmap](ROADMAP.md) / [简体中文](ROADMAP.zh-CN.md) |
+| Per-release manual checklist, feature procedures and sign-off | [Manual test plan](MANUAL_TEST_PLAN.md) |
+| Signed bundle, packaging and release gates | [Release guide](RELEASE.md) |
+| TUN data plane and menu bar details | [TUN smoke test](TUN_SMOKE_TEST.md), [menu bar QA](MENU_BAR_RICH_PANEL_QA.md) |
+| Security reports and licensing | [SECURITY](../SECURITY.md), [LICENSE](../LICENSE), [third-party notices](../THIRD_PARTY_NOTICES.md) |
+| Core installation and integrity policy | [Core README](../Resources/Core/README.md) |
+| Partially implemented structured logging design | [Design](superpowers/specs/2026-07-28-structured-logging-design.md), [plan](superpowers/plans/2026-07-28-structured-logging.md) |
+| Historical design and measured decisions | [Roadmap archive](archive/ROADMAP-2026-11-17.md), [UI refresh](UI_REFRESH_PLAN.md), [Observation migration](superpowers/specs/2026-08-03-observable-migration-design.md), [v1.19.32 adaptation](MIHOMO_1_19_32.md) |
+| Open-source maintenance program proposal | [Codex OSS plan](CODEX_OSS_PLAN.md); separate from app features |
 
-## MVP Scope
+The root `MANUAL_TEST_PLAN.md`, `docs/APP_UPDATES.md` and `AGENTS.md` are ignored
+workstation files. They may retain local evidence or operator details, but a fresh clone
+must be able to develop and find release acceptance from the tracked guides above.
 
-- Preserve imported YAML profiles unchanged.
-- Generate a ClashMax-managed runtime YAML before launching Mihomo.
-- Bind Mihomo's controller to `127.0.0.1`.
-- Generate a per-run controller secret and always use Bearer authentication.
-- Let the user-mode core own normal system proxy behavior.
-- Let the privileged helper own TUN mode behavior.
-- Do not add Linux-only `auto-redirect` to macOS TUN runtime config.
-- Keep telemetry, accounts, node collection, subscription analytics, embedded
-  Sub-Store, and Sparkle outside the MVP baseline unless the MVP scope is
-  explicitly expanded.
+## Local Setup
 
-## Security, Signing, And Licensing
+Use macOS with Xcode, its command-line tools, XcodeGen, and the exact SwiftFormat version
+pinned by `.swiftformat`. The app deployment target is macOS 15+; CI's Xcode selection is
+maintained in [ci.yml](../.github/workflows/ci.yml).
 
-- ClashMax is intended to stay GPL-3.0-compatible because it distributes or
-  controls Mihomo.
-- Do not copy code, assets, or UI from proprietary projects.
-- Treat `666OS/ClashMac` as product inspiration only.
-- Code from GPL projects such as Clash Verge Rev may be adapted only when
-  license notices and attribution remain correct.
-- Prefer reimplementing behavior in Swift instead of copying Rust or
-  TypeScript from other projects.
-- Helper and XPC code must validate app-provided paths.
-- Helper and XPC code must not use shell interpolation for app-provided paths.
-- Local test verification may disable signing with `CODE_SIGNING_ALLOWED=NO`.
-  Packaging, helper, entitlement, or notarization changes still require the
-  appropriate signed-release verification before shipping.
-- The `NE Proxy` routing mode uses a macOS System Extension containing a
-  transparent app-proxy provider and requires Developer ID signing with Network
-  Extension, System Extension, and App Group capabilities before it can run on a
-  real machine.
-- The current Network Extension stage targets TCP and UDP transparent proxying:
-  system TCP flows use SOCKS5 CONNECT and UDP flows, including UDP DNS flows,
-  use SOCKS5 UDP ASSOCIATE through the local Mihomo SOCKS5/mixed port. NE mode
-  also generates app-managed Mihomo DNS on `127.0.0.1:1053`, captures TCP/UDP
-  port 53 flows to that listener, and can temporarily apply `114.114.114.114`
-  as the active macOS service DNS with snapshot/restore protection.
-
-## Build And Verification
-
-The Xcode project is generated from `project.yml` with XcodeGen:
+For a fresh clone without an existing generated project:
 
 ```bash
+script/install_mihomo_core.sh
 xcodegen generate
 ```
 
-Main verification command:
+The installer downloads the manifest-pinned architecture assets, checks their sha256 and
+merges a universal `Resources/Core/mihomo`. The binary and generated
+`ClashMax.xcodeproj/` are not committed. See the [core README](../Resources/Core/README.md)
+for caching and bundle requirements.
+
+Open the generated project, or run a focused check:
 
 ```bash
-xcodebuild test -project ClashMax.xcodeproj -scheme ClashMax -destination 'platform=macOS' -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO
+xcodebuild test -project ClashMax.xcodeproj -scheme ClashMax -destination 'platform=macOS' -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO -only-testing:ClashMaxTests/ConfigNormalizerTests
 ```
 
-### Code Formatting
+For an existing local project, regenerate only when new Swift files, membership or project
+configuration require it. First establish that generation preserves the user's Xcode UI
+signing/profile setup, capabilities, entitlements and existing NE App Group. Use the
+[project snapshot](../script/xcode_project_semantic_snapshot.sh) and
+[guarded build wrapper](../script/guarded_xcodebuild.sh) when applicable; a mismatch is a
+blocker to generation, not permission to overwrite the user's project.
 
-Formatting is enforced by [SwiftFormat](https://github.com/nicklockwood/SwiftFormat).
-The pinned version lives in one place — the `--minversion` line in
-`.swiftformat` — and CI asserts that the version it installs matches it.
-
-The gate requires that exact version, not merely a new enough one. `.swiftformat`
-opts rules *out* with `--disable` instead of listing the set it wants with
-`--rules`, so a rule a later release adds and enables by default would apply here
-too: formatting with a newer build produces a diff that CI, pinned to the older
-one, rejects. `brew install swiftformat` tracks latest, so once Homebrew moves
-past the pin, install the pinned release directly or point `SWIFTFORMAT` at it —
-the script's error message carries the download link. Moving the pin means
-bumping `.swiftformat` and `.github/workflows/ci.yml` together and reformatting
-the tree with the new build in that same commit.
-
-```bash
-brew install swiftformat
-script/swiftformat_lint.sh          # check the files this change touches
-script/swiftformat_lint.sh --fix    # format exactly that set
-script/swiftformat_lint.sh --all --summary   # remaining debt, per rule
-```
-
-Adoption is deliberately two-step. The tree reached ~100k lines of Swift with no
-formatter at all, so a repo-wide gate would have been red on arrival and a
-single reformat commit would have collided with whatever was in flight.
-
-- **Step 1 (in place).** The gate checks only files the change under review
-  touches, so the tree converges as it is edited. A file nobody has touched is
-  allowed to be unformatted. The `hygiene` CI job runs this on every push and
-  pull request, and separately prints the whole-tree violation count without
-  failing on it, so the remaining debt is visible as it shrinks.
-- **Step 2 (later).** One mechanical commit that formats the remainder, taken at
-  a quiet point with nothing else in flight, and skipped afterwards with
-  `git blame --ignore-rev`. It is *not* a whitespace-only diff — `trailingCommas`,
-  `hoistTry`, `redundantSelf` and `sortImports` move tokens, and `git diff -w`
-  only shrinks it by a tenth — so review it by confirming the formatter is
-  idempotent and the suite is green, not by reading every line:
-
-  ```bash
-  git status --porcelain          # must be empty; this commit carries nothing else
-  script/swiftformat_lint.sh --all --fix
-  xcodebuild test -project ClashMax.xcodeproj -scheme ClashMax -destination 'platform=macOS' -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO
-  script/localization_gate.sh     # multiline literals move; the keys must not
-  git commit -am "Format the tree with SwiftFormat"
-  git rev-parse HEAD >> .git-blame-ignore-revs
-  git config blame.ignoreRevsFile .git-blame-ignore-revs
-  ```
-
-  Build it, do not just lint it. `--lint` clean does not mean it compiles:
-  `redundantSelf` strips `self.` from inside `os.Logger` interpolations, where
-  the compiler requires it because the interpolation appenders are `@escaping`
-  autoclosures. That is what `--self-required` in `.swiftformat` is for, and it
-  was found by building, not by linting.
-
-  The localization gate is not optional either: `String(localized:)` multiline
-  literals get re-indented, and a literal whose *value* changed would silently
-  orphan its catalog key.
-
-`.swiftformat` is not the SwiftFormat defaults. Two things shaped it:
-
-- Options describe the style the codebase already had, measured rather than
-  guessed — 2-space indent (298 offending lines, against 86,990 at 4), unspaced
-  ranges (`0..<n`, 361 against 19), lowercase hex, and preserved digit grouping.
-  Adopting the formatter is a normalization pass, not a restyle.
-- Disabled rules follow one line: the formatter normalizes mechanical syntax
-  (whitespace, indentation, ordering, redundant tokens, trailing commas) and
-  does not restructure or delete code someone wrote deliberately. That rules out
-  rewriting `if`/`else` assignments into `if` expressions, expanding one-line
-  bodies such as `var id: String { rawValue }`, promoting explanatory comments to
-  `///`, deleting hand-written memberwise initializers, removing SwiftUI `Group`
-  wrappers (which changes view identity), and rewriting force-unwraps in tests.
-  Each disabled rule carries its reason in the file.
-
-`project.yml` sets `indentWidth: 2` / `tabWidth: 2` / `usesTabs: false`, so the
-generated project tells Xcode's editor the same thing `.swiftformat` tells the
-formatter and code typed in Xcode is born formatted. Those land on the project's
-main group rather than on any build setting, so they do not move the semantic
-snapshot `script/guarded_xcodebuild.sh` compares against.
-
-Localization release gate:
-
-```bash
-script/localization_gate.sh
-```
-
-Run this before shipping and after touching user-visible strings. The gate
-validates `Resources/Localizable.xcstrings`, dry-runs catalog compilation, runs
-the new-key translation check below, and runs `LocalizationTests`, including the
-active-key stale check.
-
-Run it again *after* the Xcode archive and before notarizing or publishing.
-Archiving re-extracts the catalog, so it adds untranslated keys to a build that
-was already green: 1.0.22 gained 49 that way, and 1.0.23 gained `"sniffer"` and
-`"Sniffer Patch"` — late enough that the translations could only ride the next
-release.
-
-New keys must ship a Simplified Chinese translation:
-
-```bash
-script/localization_new_key_gate.sh
-```
-
-Every key without a `zh-Hans` value has to be listed in
-`script/localization_untranslated_allowlist.txt`, which snapshots the debt that
-already existed; anything else fails. This is the check that would have caught
-1.0.22, where archiving in Xcode re-extracted the catalog and added 49
-untranslated Quick Rules keys. Keys that get translated must leave the list —
-prune it with `--write-allowlist`. It runs in the `hygiene` CI job, so it does
-not need Xcode; `script/test_localization_new_key_gate.sh` covers the gate
-itself.
-
-Release smoke gate:
-
-```bash
-script/release_smoke_check.sh \
-  --app /Applications/ClashMax.app \
-  --appcast docs/appcast.xml \
-  --sparkle-dir dist/sparkle \
-  --dmg dist/dmg/ClashMax-X.Y.Z.dmg \
-  --report-dir dist/release-smoke \
-  --preflight-only
-```
-
-For RC builds, use `--live --soak-minutes 60` after installing the signed,
-notarized app in `/Applications`. The script records app, helper, Network
-Extension, DNS, route, non-proxy curl, subscription-pool, soak, and sleep/wake
-evidence under `dist/release-smoke`.
-
-Run command:
+Run/restart the app only when that is part of the task:
 
 ```bash
 ./script/build_and_run.sh
 ```
 
-Delay-transport benchmark (roadmap A6 — group endpoint vs per-node fan-out):
+This script stops the current ClashMax process, replaces its local Debug bundle, builds
+with the existing signing configuration and launches it. `--verify` also launches the app;
+it is not a read-only source check. Normal app startup can affect its managed network state.
+
+## Source Layout
+
+| Path | Responsibility |
+| --- | --- |
+| `ClashMax/App` | App lifecycle, URL actions, App Intents and Shortcuts |
+| `ClashMax/Stores` | Observable state and domain coordinators; `AppModel` still owns lifecycle orchestration |
+| `ClashMax/Models` | Configuration, rules, diagnostic facts and pure builders |
+| `ClashMax/Services` | Mihomo API/process, configuration materialization, disk/Keychain and macOS integrations |
+| `ClashMax/Views` | SwiftUI workspaces, native input adapters, dashboard and menu bar |
+| `Shared` | Cross-target protocols, bounded buffers and logging/privacy primitives |
+| `ClashMaxHelper`, `ClashMaxNetworkExtension` | Privileged TUN ownership and transparent proxy provider |
+| `ClashMaxTests` | XCTest/Swift Testing source verification |
+| `Resources`, `Config`, `project.yml` | Localization/core manifest, target configuration and generated-project inputs |
+| `script`, `.github/workflows` | Local verification, packaging and CI |
+| `web`, `docs/web` | Public website source and generated static export; separate from native app UI |
+
+Observation migration is implemented. Keep initialization priming with the properties it
+serves (`didSet` does not run during `init`), preserve structural deduplication, and keep
+high-frequency implementation state intentionally `@ObservationIgnored`. Check the current
+stores/coordinators before adding behavior to `AppModel` or repeating an old extraction plan.
+
+## Product And Runtime Boundaries
+
+- Build a native macOS 15+ SwiftUI app. Gate newer platform APIs and supply practical fallbacks;
+  use AppKit for integration gaps and SF Symbols for controls.
+- The first screen is the proxy console. Keep profiles, proxies, connections, rules, logs,
+  settings and menu bar controls quick to scan and operate.
+- Preserve imported YAML. Generate app-managed runtime YAML before starting Mihomo.
+- Bind the controller to `127.0.0.1`, generate a per-run secret and use Bearer authentication
+  for controller access.
+- User-mode core owns normal system proxy; the privileged helper owns TUN.
+  macOS TUN YAML must not contain Linux-only `auto-redirect`.
+- Keep the app's existing TUN stack and System DNS ownership decisions documented in the
+  [roadmap](ROADMAP.md#retained-runtime-decisions).
+- The historical MVP excluded telemetry, accounts, node collection, subscription analytics,
+  embedded Sub-Store and Sparkle. Sparkle is now an existing, documented dependency and its
+  maintenance is allowed. The other exclusions remain unless explicitly expanded.
+- Follow the roadmap's [three layers and invariants](ROADMAP.md#2-design-principles--the-three-layers):
+  fixes/forms write ordinary rules/snippets, with visible YAML, diff and rollback.
+
+## Security, Signing And Licensing
+
+- Keep ClashMax GPL-3.0-compatible. Do not copy proprietary code/assets/UI;
+  `666OS/ClashMac` is product inspiration only. GPL adaptations retain notices and attribution;
+  prefer implementing behavior in Swift. Sparkle is MIT.
+- Helper/XPC boundaries validate app-provided paths and do not interpolate them into shell commands.
+- Keep credentials, controller secrets, subscription URLs and private profile data out of output,
+  logs, screenshots and external tools. Use the existing redaction boundaries for diagnostics.
+- Signing team, profiles, bundle IDs, signing style/certificates, hardened runtime, capabilities,
+  entitlements and dependency/embed settings are user-owned. Changes require an explicit request;
+  preserve the existing NE App Group `group.678WA95W4U.io.github.clashmax.ClashMax.network-extension`.
+- Real system proxy, DNS, routing, TUN/helper and System Extension operations need authorization
+  covering the live operation. Record the baseline, restore test changes and check only the
+  test's processes/listeners and network changes. The user performs administrator approval.
+- Unsigned source tests cannot establish signed Helper/NE behavior, notarization or release readiness.
+  Use the [release guide](RELEASE.md) for those gates.
+
+## Build And Verification
+
+Choose checks by the changed behavior:
+
+| Change | Verification |
+| --- | --- |
+| Documentation/instructions only | Review diff, local links/anchors and preservation of unrelated work; no formatter, generation, app launch or application tests |
+| Focused source change | Affected test class or test method first; build/check the affected behavior |
+| Broad/cross-cutting source change or explicit full verification | Full suite, compared with the baseline |
+| Swift changes | Exact pinned formatter on the task's files |
+| User-visible strings | Localization gate and new-key translations |
+| Release or signed system integration | [Release gates](RELEASE.md) and recorded manual observations |
+
+Full source-test command:
 
 ```bash
-script/bench_group_delay.py
+xcodebuild test -project ClashMax.xcodeproj -scheme ClashMax -destination 'platform=macOS' -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO
 ```
 
-Needs the bundled core (`script/install_mihomo_core.sh`) or `--core PATH`. It
-generates its own configs, starts two cores on loopback, measures, and tears them
-down; `--nodes`, `--concurrency`, `--timeout-ms` and `--keep` are available. The
-recorded run is in `docs/ROADMAP.md` under A6.
+Keep logs and `.xcresult`. Report actual `PASS`, `FAIL`, `BLOCKED` or `NOT RUN`, including
+skips and the remaining unverified behavior. Broaden/repeat checks after a new change,
+failure or unresolved risk; a documentation cleanup does not need an app test run.
 
-Network Extension signed-build checks are covered by `script/release_smoke_check.sh`.
-For local diagnosis, these commands remain useful:
+[CI](../.github/workflows/ci.yml) runs hygiene checks, source tests, localization and an
+unsigned universal Release build with a bundle-layout check. Both macOS jobs install the
+manifest-pinned core. The test job sets `TEST_RUNNER_CLASHMAX_REQUIRE_BUNDLED_CORE=1`, so
+missing real-core prerequisites fail instead of silently skipping. An ordinary local
+checkout without the core can still skip those tests; install the core when their behavior
+is the claim being verified.
+
+### Code Formatting
+
+[SwiftFormat](https://github.com/nicklockwood/SwiftFormat) must match the exact
+`--minversion` in `.swiftformat`, including CI. Newer releases can enable additional rules
+and produce changes the pinned CI does not accept. If Homebrew has moved past the pin,
+install that release directly or set `SWIFTFORMAT` to its binary. A pin change includes the
+CI version/checksum and the separately scoped normalization it requires.
 
 ```bash
-codesign -dvvv --entitlements :- /path/to/ClashMax.app
-codesign -dvvv --entitlements :- /path/to/ClashMax.app/Contents/Library/SystemExtensions/io.github.clashmax.ClashMax.NetworkExtension.systemextension
-spctl --assess --type execute --verbose /path/to/ClashMax.app
-systemextensionsctl list
+script/swiftformat_lint.sh
+script/swiftformat_lint.sh --fix
+script/swiftformat_lint.sh --all --summary
 ```
 
-Real-device Network Extension validation must use an app bundle installed in
-`/Applications`, then approve the System Extension in System Settings and
-confirm `systemextensionsctl list` reports it as activated and enabled.
-If `nesessionmanager` reports `The VPN app used by the VPN configuration is not
-installed` or `Plugin was disabled` after installing a signed build, verify that
-LaunchServices sees the installed bundle:
+Before `--fix`, verify the script's selection belongs to the task: it includes branch
+changes and all uncommitted/untracked Swift files. If it includes unrelated work, use the
+pinned formatter with `--config .swiftformat` on an explicit list of the task's edited paths.
+Review the resulting diff and do not format unrelated files.
+
+The current gate converges touched files incrementally. Whole-tree formatting remains a
+separate explicitly scoped change at a quiet point with a clean tree. For that change:
+
+1. Format with `script/swiftformat_lint.sh --all --fix` and verify idempotence.
+2. Build/run the full source suite and `script/localization_gate.sh`; lint alone does not prove compilation.
+3. Keep the mechanical change separate and record its revision in `.git-blame-ignore-revs`.
+
+Token-moving rules such as `trailingCommas`, `hoistTry`, `redundantSelf` and `sortImports`
+mean `git diff -w` is not a sufficient review. Preserve the configuration's disabled rules:
+normalization must not restructure deliberate code. `--self-required` protects escaping
+`os.Logger` interpolations; formatting multiline localized literals can change key values.
+`project.yml` editor indentation and `.swiftformat` both use two spaces.
+
+### Localization
+
+`Resources/Localizable.xcstrings` is the source of user-visible strings. New keys require
+`zh-Hans`; existing untranslated debt is explicitly bounded by the allowlist.
 
 ```bash
-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -dump | rg -n "path: +/Applications/ClashMax.app" -C 20
+script/localization_gate.sh
+script/localization_new_key_gate.sh
 ```
 
-ClashMax refreshes the `/Applications/ClashMax.app` LaunchServices registration
-before installing or starting the NE transparent proxy, using:
+The full gate validates/compiles the catalog, checks new keys and runs localization tests.
+The standalone new-key check needs `jq`, not Xcode. Remove translated keys from the allowlist;
+growing it needs a stated reason. Its own fixtures are in `script/test_localization_new_key_gate.sh`.
+Run the full gate after string changes and before shipping, **again after archive**: Xcode's
+extraction can add untranslated keys after an earlier successful check.
 
-```bash
-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f -R /Applications/ClashMax.app
-```
+### Specialized Verification
 
-Manual installed-bundle NE smoke test, recorded through `script/release_smoke_check.sh --live --soak-minutes 60`:
-
-1. Build a signed app, copy it to `/Applications/ClashMax.app`, then approve the
-   System Extension in System Settings.
-2. Select `NE Proxy`.
-3. Start ClashMax and confirm the dashboard shows NE connected, DNS capture
-   enabled, DNS runtime as fake-ip, and System DNS as applied.
-4. Verify TCP traffic through a browser or `curl`, then verify UDP traffic with a
-   UDP-capable endpoint such as QUIC/HTTP3 or a DNS UDP probe.
-5. Verify DNS capture by checking that DNS requests reach Mihomo DNS and fake-ip
-   answers are returned for matching domains.
-6. Stop ClashMax and confirm Transparent Proxy becomes inactive, Mihomo stops
-   only after NE shutdown, and System DNS returns to the pre-start snapshot. Use
-   the `Repair DNS` action if restore reports a failure.
-
-Manual installed-bundle TUN validation matrix, recorded through `script/release_smoke_check.sh --live --soak-minutes 60`:
-
-Use this matrix for real macOS data-plane validation. Unit tests can prove
-runtime YAML, helper/XPC state, and repair semantics, but they cannot prove
-kernel routing, DNS service order, sleep/wake behavior, or UDP behavior on a
-real machine.
-
-1. Build a signed app, install it as `/Applications/ClashMax.app`, and launch
-   that installed bundle rather than an Xcode-run bundle.
-2. Select TUN mode and start ClashMax. On first run, approve the privileged
-   helper in System Settings if macOS prompts for it, then retry start.
-3. Quit and relaunch ClashMax, keep the same installed app, and confirm helper
-   status is reused without another approval prompt. The Settings helper detail
-   should show the helper as enabled, bootstrapped, protocol-compatible, and
-   fingerprint-matched.
-4. Start, stop, and restart TUN mode several times. Confirm Mihomo starts under
-   the helper, the dashboard reaches running state, stop clears TUN diagnostics,
-   and System DNS restores to the pre-start snapshot.
-5. Put the Mac to sleep, wake it, and verify ClashMax either remains connected
-   or reports an actionable TUN/DNS repair state. Re-run diagnostics after wake.
-6. Switch networks, for example Wi-Fi to Ethernet or hotspot and back. Confirm
-   default-route, route-exclude, DNS hijack, and System DNS diagnostics still
-   match the active service after the network change.
-7. Verify browser traffic and non-browser traffic. Use both a browser request
-   and a command-line request that does not rely on the macOS HTTP proxy, such
-   as `curl --proxy "" https://example.com`.
-8. Verify UDP and QUIC traffic with an endpoint that actually uses UDP, such as
-   HTTP/3/QUIC or another UDP probe routed through Mihomo.
-9. Verify DNS leak behavior. Check that DNS queries use the ClashMax/Mihomo DNS
-   path, fake-ip answers are returned for matching domains when fake-ip is
-   enabled, and external resolvers are not used unexpectedly.
-10. Verify route exclusions. Add a known CIDR to route-exclude, restart or apply
-    TUN settings, and confirm traffic to that CIDR bypasses TUN while normal
-    traffic remains captured.
-11. Verify online TUN setting changes. Change DNS hijack, route-exclude, or
-    MTU while TUN is running; ClashMax should reload config, inspect runtime
-    facts, fall back to helper restart if diagnostics still warn, and surface a
-    clear error if the runtime state still does not match.
-12. Verify repair-failure safety semantics. Simulate or force a repair failure
-    where route diagnostics still warn after reload and helper restart. `Repair
-    Routing` must stop TUN safely, clear diagnostics, mark the runtime stopped,
-    and preserve the failed diagnostic in the final user-facing error.
-
-Before claiming progress, run the narrowest command that proves the claim and
-report the actual result. If new Swift files are added or project membership is
-changed, regenerate the Xcode project before trusting build results.
+- Group-delay transport benchmark: `script/bench_group_delay.py`, using the bundled core or
+  `--core PATH`. It starts isolated loopback cores, then tears them down; `--nodes`,
+  `--concurrency`, `--timeout-ms` and `--keep` control the run. The
+  [recorded measurement](MANUAL_TEST_PLAN.md#transport-level-measurement-done-2026-08-29)
+  does not establish app scrolling/cancel behavior.
+- Signed release entry point: `script/release_smoke_check.sh`; see the
+  [release guide](RELEASE.md) for preflight, live scope, evidence and publication order.
+- Menu bar and TUN procedures: [menu bar QA](MENU_BAR_RICH_PANEL_QA.md),
+  [TUN smoke test](TUN_SMOKE_TEST.md). They are acceptance procedures, not automatic authorization
+  to restart the app or alter the user's network.
 
 ## UI Constraints
 
-- Keep dashboards dense, calm, and quick to scan.
-- Avoid decorative hero sections, nested cards, oversized type inside compact
-  panels, and one-hue palettes.
-- Prefer tables, lists, split views, segmented controls, toggles, menus, and
-  icon buttons for operational workflows.
-- Make runtime state explicit: stopped, starting, running, crashed, TUN helper
-  unavailable, no profile, no core binary, and validation failed.
-- Do not hide security-sensitive details behind vague copy.
-- Show actionable recovery messages when user action is required.
-- Loading skeletons must use the shared SwiftUI-Shimmer primitives, not ad hoc
-  shimmer calls. Use skeletons only for temporary async runtime/network loading;
-  never replace stopped, empty, failed, security-sensitive, or recovery states
-  with skeleton placeholders.
+- Keep operational screens dense and calm, using native lists/tables, split views,
+  segmented controls, toggles, menus and icon buttons.
+- Avoid decorative heroes, nested cards, oversized compact-panel type and one-hue palettes.
+- Make stopped, starting, running, crashed, helper unavailable, no profile, no core and
+  validation-failed states explicit. Give actionable, specific recovery messages.
+- Loading skeletons use the shared SwiftUI-Shimmer primitives only for temporary async
+  runtime/network loading. Stopped, empty, failed, security-sensitive and recovery states
+  keep their real content.
+- System materials belong to the appropriate window/control layer; validate real
+  MenuBarExtra presentation and macOS 15 fallbacks separately from fixture content.

@@ -1,16 +1,103 @@
 # ClashMax Manual Test Plan
 
-Line items that automation cannot reach, each signed off by hand before the roadmap item
-it belongs to is called done. The recurring failure mode this file exists to stop is named
-in [`ROADMAP.md`](ROADMAP.md) §4 D3: *"tests pass, never seen by eye."*
+This is the tracked entry point for manual acceptance: the per-release checklist below,
+feature cases, and dated observations. Implementation status is maintained in the
+[roadmap](ROADMAP.md); signed artifact and live integration gates are in the
+[release guide](RELEASE.md).
 
-Sign off by filling in the table at the bottom of the item: date, build, and what was
-actually observed. "Suite is green" is not a sign-off — every item here is written so that
-the observation, not the test result, is the evidence.
+## Scope And Recorded Status
 
-Related by-hand gates that already have their own documents: [`TUN_SMOKE_TEST.md`](TUN_SMOKE_TEST.md)
-for installed-bundle routing, [`MENU_BAR_RICH_PANEL_QA.md`](MENU_BAR_RICH_PANEL_QA.md) for
-the menu bar panel.
+Reviewed on **2026-11-17** against source revision `9fe49fa`. This was a documentation-only
+review. The feature sign-off tables below are still empty, except for A6's recorded
+transport-only measurement. This means **no complete sign-off is recorded here**; it does
+not mean the feature lacks implementation or that nobody has ever used it.
+
+The root `MANUAL_TEST_PLAN.md` is an ignored workstation record. It may retain local
+historical evidence; it is not required to use this tracked checklist. Preserve actual
+observations when bringing evidence into this document, with their date, version and scope.
+
+Sign off with date, app/core build, macOS/architecture, what was actually observed and the
+evidence location. Source tests and fixture screenshots are separate evidence. Leave
+unrun steps `NOT RUN`, blocked checks `BLOCKED` with a reason, and partial runs explicit.
+This cleanup does not promote any existing gap to `PASS`.
+
+All real proxy, DNS, routing, Helper/TUN and System Extension tests require authorization
+covering the live operation. Before starting, record the existing runtime, network,
+process/listener and approval state; restore only changes made by the test and compare
+with that baseline. Do not uninstall an existing helper, disable another setup or kill
+pre-existing processes just to manufacture a test state. The user performs administrator
+and system approvals.
+
+## Per-release Checklist
+
+Use the signed, notarized app extracted from the release zip and installed in
+`/Applications`. Record the version in About and the bundled/running core version.
+The [release smoke gate](RELEASE.md#scripted-release-entry-point) remains required alongside
+these observations. For changed features, run the complete case linked below as well.
+
+1. **Baseline.** Record active profile/routing mode, runtime state, network services,
+   proxies/DNS/default route, Helper/NE approval and existing processes/listeners. Verify
+   the installed bundle is the intended build before any live change.
+2. **Daily controls.** In the real menu bar panel, check stopped → starting → running →
+   stopped, profile and routing/run-mode changes, proxy-group selection, system-proxy
+   applicability, and agreement with the main window. Check real traffic for at least a
+   minute; disabling status-item speeds must leave the panel's traffic display working.
+   Exercise light/dark, English/Chinese and long labels. Use the
+   [menu bar matrix](MENU_BAR_RICH_PANEL_QA.md) for changed panel behavior.
+3. **Feature gates.** Check the following with controlled test data and the authorized live scope:
+
+   | Scope | Required observation | Full procedure |
+   | --- | --- | --- |
+   | TUN / NE | First/reused approval, actionable unready state, startup/stop ordering and restoration; include data-plane, sleep/wake and network-switch gates | [Release guide](RELEASE.md), [TUN matrix](TUN_SMOKE_TEST.md) |
+   | B3 Shortcuts | Success waits for the actual result; failure names the cause; node selection/subscription update outcomes agree with the app; cold background launch is observed | [B3](#b3--every-shortcuts-action-reports-what-actually-happened) |
+   | B1 App routing | App picker/search, bundle-wide rule, helper-process match, creation from a connection and removal of test rules | [B1](#b1--route-an-app-from-the-picker-and-see-it-take-effect) |
+   | A5 Diagnostic bundle | Preview before save/copy, exact output bytes, redacted secrets/SSID/public IP and private file permissions | [A5](#a5--the-diagnostic-bundle-shows-exactly-what-it-writes) |
+   | C1 / C3 Subscription trust | Clean/risky import, later report entry point, update notification/marker, inherited listener stays closed until allowed | [C1](#c1--import-a-subscription-and-read-its-audit-report) |
+   | A1 / A3 / A6 / B5 | Run full cases after a change, including sniffer before/after, fake-IP action applicability, large-batch cancel/final states and Geo update outcomes | Feature cases below |
+   | A2 DNS resolution | Open from a named connection; query A/AAAA, inspect answer/TTL and domain/IP rule simulations; exercise negative/empty/failure states; keep unavailable upstream attribution explicit | Routing → diagnostics → DNS resolution |
+   | A7 TUN DNS | Actual `dns-mode` and System DNS ownership match the applied config; stop restores the baseline | [TUN matrix](TUN_SMOKE_TEST.md), [retained policy](ROADMAP.md#retained-runtime-decisions) |
+   | SSID policy | Saved Wi-Fi policy applies the intended routing/system-proxy/runtime state and unmatched behavior; missing Location access gives an actionable failure | Settings network policy; B3 policy action |
+   | Localization | Menu bar, helper setup, Shortcuts result/error, app picker, diagnostic/audit sheets and notifications use the selected language without truncation | [Menu bar QA](MENU_BAR_RICH_PANEL_QA.md), [native UI](#native-ui-acceptance) |
+
+4. **Cleanup.** Remove only test rules/profiles/exports, stop test servers and runtimes, restore
+   changed preferences, language and network state, and check the test's processes/listeners
+   against the baseline. Record restoration failures as failures, not successful cleanup.
+5. **Sign-off.** Fill the per-version row and affected feature tables. A failed, blocked or
+   unrun release gate blocks publication unless the maintainer explicitly records it as a
+   known issue in the release notes and sign-off.
+
+### Per-release Sign-off
+
+Record `PASS`, `FAIL`, `BLOCKED` or `NOT RUN` in each applicable column. An inapplicable item
+needs a reason in Observed/evidence. A row is not signed off merely because tests passed.
+
+| Date | App / core build | macOS / arch | Menu bar | TUN / NE | Shortcuts | App routing | Diagnostics / DNS / Geo | Audit | Native UI / language | Cleanup | Observed / evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+|  |  |  |  |  |  |  |  |  |  |  |  |
+
+## Native UI Acceptance
+
+The [2026-11-07 refresh](UI_REFRESH_PLAN.md) is implemented. Content rendered with synthetic
+fixtures and source interaction tests do not prove real MenuBarExtra material or signed
+Helper/NE integration. The repository still needs dated human observations for:
+
+- macOS 15 appearance/fallbacks, alongside the newer macOS presentation.
+- Light/dark, English/Chinese, minimum/default/wide windows and long names/errors.
+- Keyboard navigation across pages, sheets/inspectors, dismissal and focus return.
+- Real Chinese input-method candidate/marked-text behavior and undo in search/YAML editors.
+- VoiceOver labels/readout and Reduce Motion, Reduce Transparency and Increase Contrast.
+- The actual menu bar panel and visible/closed/minimized main-window Dock behavior.
+
+Retain a machine/fixture-size baseline and Instruments evidence for performance claims;
+recorded samples without hangs do not establish frame-rate improvements or release performance.
+Restore any user settings changed for these observations.
+
+| Date | Build | macOS / arch | Scope | Observed / evidence |
+| --- | --- | --- | --- | --- |
+|  |  |  |  |  |
+
+The remaining sections are detailed feature procedures. Related gates with separate documents:
+[TUN smoke](TUN_SMOKE_TEST.md) and [menu bar QA](MENU_BAR_RICH_PANEL_QA.md).
 
 ---
 
@@ -28,8 +115,8 @@ thing at the moment they are confused.
 
 ### Setup
 
-1. Run in **TUN mode**. This is where the case exists: under System Proxy an app that
-   speaks to the proxy hands over a hostname, so the domainless connection never appears.
+1. Run in **TUN mode** for this reproduction. A normal proxy-aware browser request often
+   supplies a hostname, so it may not reproduce the domainless case.
 2. Add a rule that can only match on a name, above whatever currently wins, e.g.
    `DOMAIN-SUFFIX,example.com,<some proxy group>`.
 3. Turn sniffing **off** for the first half of the run (Connections → the fix button will

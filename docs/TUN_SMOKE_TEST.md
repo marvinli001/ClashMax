@@ -5,6 +5,13 @@ Unit tests can verify runtime YAML, helper protocol state, and repair semantics,
 cannot prove macOS kernel routing, DNS service order, sleep/wake behavior, network
 switching, UDP, or helper approval persistence.
 
+Use the [release guide](RELEASE.md) for artifact preparation, baseline/cleanup and
+publication gates, and record the result in the [manual plan](MANUAL_TEST_PLAN.md).
+The manual matrix requires authorization for the live operations; record the existing
+network/process/approval state first, restore only the test's changes and compare with
+that baseline. The user performs administrator approval. A new core version does not
+turn an older `NOT RUN` matrix into a pass.
+
 ## Read-Only Preflight
 
 Run:

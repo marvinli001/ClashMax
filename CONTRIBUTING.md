@@ -18,57 +18,16 @@ If an idea is still open-ended, start in Discussions. If it has a concrete goal,
 
 ## Local Setup
 
-ClashMax uses XcodeGen as the source of truth for the generated Xcode project.
+Use the [development guide](docs/DEVELOPMENT.md) as the single source for prerequisites,
+core installation, Xcode project generation, focused/full tests, exact-version formatting
+and localization checks. On an existing checkout, preserve user-owned Xcode signing/profile
+and capability state before regenerating. Inspect the formatter's file selection before
+using `--fix` so unrelated working-tree changes are not reformatted.
 
-```bash
-xcodegen generate
-```
-
-Open the generated `ClashMax.xcodeproj`, or run the main verification command:
-
-```bash
-xcodebuild test -project ClashMax.xcodeproj -scheme ClashMax -destination 'platform=macOS' -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO
-```
-
-Formatting is enforced by SwiftFormat, pinned to the exact version in
-`.swiftformat`:
-
-```bash
-brew install swiftformat
-script/swiftformat_lint.sh --fix
-```
-
-A newer SwiftFormat is rejected as well as an older one, because new releases
-enable new rules by default and would produce a diff CI does not accept. If
-Homebrew has moved past the pin, the script's error message links the release to
-install instead.
-
-CI checks only the files your change touches, so a file you did not open is
-allowed to be unformatted for now — the tree is being formatted incrementally.
-If `--fix` produces more churn than your change, that file simply had never been
-formatted; keep it as its own commit so the review stays readable.
-
-Run the localization gate before release, and whenever a change touches
-user-visible strings:
-
-```bash
-script/localization_gate.sh
-```
-
-That gate needs Xcode. The new-key translation check inside it also stands alone
-and needs only `jq`:
-
-```bash
-script/localization_new_key_gate.sh
-```
-
-For local app runs:
-
-```bash
-./script/build_and_run.sh
-```
-
-See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for project direction, security boundaries, Network Extension notes, and release-sensitive verification.
+Choose work from the [roadmap](docs/ROADMAP.md), which separates implementation from
+manual acceptance. Signed Helper/NE validation and release gates live in the
+[release guide](docs/RELEASE.md); observations go in the tracked
+[manual test plan](docs/MANUAL_TEST_PLAN.md).
 
 ## Contribution Guidelines
 

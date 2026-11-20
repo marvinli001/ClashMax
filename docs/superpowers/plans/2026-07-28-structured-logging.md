@@ -2,6 +2,20 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+## Implementation Status — 2026-11-17
+
+Partially implemented foundation. Shared producer/privacy/line-assembly primitives and
+project-generation guards exist. The app still reads `RuntimeDataStore.logs`; the proposed
+independent channel stores, recorder, rotating JSONL persistence and split-channel viewer
+are not implemented. Do not archive this as a completed feature or execute every old
+"Create" step without checking current files.
+
+Re-establish the implementation/test baseline before resuming. Counts, paths, sample
+layouts and baseline revisions below belong to the original plan; preserve its privacy
+and signing constraints while reconciling them with current source. The logging-only
+Support/Developer projection decision does not restore a global app-wide advanced mode.
+Current status is summarized in the [roadmap](../../ROADMAP.md).
+
 **Goal:** Build two genuinely independent, persistent logging channels for ClashMax application events and Mihomo/Helper/NE/TUN runtime events, with safe Support Debug by default and a native SwiftUI log viewer.
 
 **Architecture:** A shared producer layer removes credentials before any producer-owned buffer, then a main-app recorder validates, sequences, projects, samples, stores, and persists events. Application and runtime channels use separate observable stores and rotating JSONL files; the SwiftUI page consumes immutable snapshots through pure query and viewport policies, while every copy/export/diagnostics path forces the same Support projection.

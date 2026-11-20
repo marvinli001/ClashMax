@@ -84,11 +84,12 @@ Release builds are distributed through GitHub Releases. The DMG is the recommend
 
 ## Local Development
 
-Project-level development rules live in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). Keep local agent notes in `AGENTS.md`; that file is intentionally not committed.
+Start with the [development guide](docs/DEVELOPMENT.md) for setup, source layout, project rules and checks. The [roadmap](docs/ROADMAP.md) separates implemented features from remaining work; the [manual plan](docs/MANUAL_TEST_PLAN.md) and [release guide](docs/RELEASE.md) cover acceptance. Local `AGENTS.md` notes are intentionally not committed.
 
 The Xcode project is generated from `project.yml` with XcodeGen, and `ClashMax.xcodeproj/` is not committed. After cloning the repository, run:
 
 ```bash
+script/install_mihomo_core.sh
 xcodegen generate
 ```
 

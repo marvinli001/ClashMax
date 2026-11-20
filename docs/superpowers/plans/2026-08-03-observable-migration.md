@@ -1,6 +1,10 @@
 # ObservableObject → @Observable Migration Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> Archived implementation plan; migration is implemented in current source (reviewed 2026-11-17).
+> Original task instructions, paths and counts below are historical. Checklist markers were
+> removed to avoid presenting completed migration work as active TODOs; this does not certify
+> that every old test/commit command was executed. Use the [development guide](../../DEVELOPMENT.md)
+> for current checks and the [roadmap](../../ROADMAP.md) for remaining work.
 
 **Goal:** Replace every remaining `ObservableObject`/`@Published` observation path in ClashMax with the Observation framework (`@Observable`), removing Combine from the app's state fan-out.
 
@@ -93,7 +97,7 @@ Task 12 is the dedicated audit step and spells out the procedure.
 **Files:**
 - Modify: `ClashMaxTests/DashboardRuntimeStateTests.swift` (append near the other global-shortcut tests at `:8204-8274`)
 
-- [ ] **Step 1: Confirm you are on the migration branch**
+- **Step 1: Confirm you are on the migration branch**
 
 ```bash
 git branch --show-current
@@ -101,7 +105,7 @@ git branch --show-current
 
 Expected: `observable-migration`. If not, run `git checkout observable-migration`.
 
-- [ ] **Step 2: Run the full suite and record the count**
+- **Step 2: Run the full suite and record the count**
 
 ```bash
 xcodebuild test -scheme ClashMax -destination 'platform=macOS' 2>&1 | grep -E "Executed .* tests|TEST SUCCEEDED|TEST FAILED" | tail -5
@@ -109,7 +113,7 @@ xcodebuild test -scheme ClashMax -destination 'platform=macOS' 2>&1 | grep -E "E
 
 Write the resulting "Executed N tests, with M failures" line into your notes. This is the baseline every later task compares against.
 
-- [ ] **Step 3: Pin the priming behavior with a characterization test**
+- **Step 3: Pin the priming behavior with a characterization test**
 
 Of the three handlers that `@Published` primes on subscribe, only `installGlobalShortcuts` has an observable effect at init: `handleCoreStatusChange` early-returns unless the status is `.crashed` (`AppModel.swift:1559`) and status is `.stopped` at construction, and `schedulePreviewRuntimeStartIfReady` requires non-empty preview groups (`AppModel.swift:6663`) which do not exist yet. The other two priming calls are cheap insurance, not load-bearing — this test covers the one that matters.
 
@@ -148,7 +152,7 @@ Append to `ClashMaxTests/DashboardRuntimeStateTests.swift`:
   }
 ```
 
-- [ ] **Step 4: Run it and confirm it passes on the un-migrated code**
+- **Step 4: Run it and confirm it passes on the un-migrated code**
 
 ```bash
 xcodebuild test -scheme ClashMax -destination 'platform=macOS' -only-testing:ClashMaxTests/DashboardRuntimeStateTests/testGlobalShortcutsAreRegisteredFromPersistedSettingsAtLaunch 2>&1 | tail -20
@@ -156,7 +160,7 @@ xcodebuild test -scheme ClashMax -destination 'platform=macOS' -only-testing:Cla
 
 Expected: PASS. If it fails, the seeding is wrong (wrong defaults suite, or `GlobalShortcutSettings` needs a different initializer) — fix the test until it passes, because a characterization test that fails on the old code pins nothing.
 
-- [ ] **Step 5: Commit**
+- **Step 5: Commit**
 
 ```bash
 git add ClashMaxTests/DashboardRuntimeStateTests.swift
@@ -183,7 +187,7 @@ None of these six types are relayed into `AppModel.objectWillChange`, so they ca
 **Files:**
 - Modify: `ClashMax/Views/ConnectionsView.swift:420` (declaration), `:26` (`@StateObject`), `:481`, `:503` (`@ObservedObject`)
 
-- [ ] **Step 1: Drop the conformance**
+- **Step 1: Drop the conformance**
 
 At `ClashMax/Views/ConnectionsView.swift:419-420`, change:
 
@@ -199,7 +203,7 @@ to:
 final class ConnectionAppIconCache {
 ```
 
-- [ ] **Step 2: Convert the owner to `@State`**
+- **Step 2: Convert the owner to `@State`**
 
 At `ClashMax/Views/ConnectionsView.swift:26`, change:
 
@@ -215,7 +219,7 @@ to:
 
 `@State` holds the reference for the view's lifetime exactly as `@StateObject` did. The initializer is cheap (it stores two values and allocates two empty collections), so re-evaluating the expression on view-struct init is free.
 
-- [ ] **Step 3: Convert the two consumers to plain lets**
+- **Step 3: Convert the two consumers to plain lets**
 
 At `ClashMax/Views/ConnectionsView.swift:481` and `:503`, change both:
 
@@ -229,7 +233,7 @@ to:
 let iconCache: ConnectionAppIconCache
 ```
 
-- [ ] **Step 4: Build and run the suite**
+- **Step 4: Build and run the suite**
 
 ```bash
 xcodebuild test -scheme ClashMax -destination 'platform=macOS' 2>&1 | grep -E "Executed .* tests|TEST SUCCEEDED|TEST FAILED" | tail -5
@@ -237,7 +241,7 @@ xcodebuild test -scheme ClashMax -destination 'platform=macOS' 2>&1 | grep -E "E
 
 Expected: same count as baseline, `** TEST SUCCEEDED **`.
 
-- [ ] **Step 5: Commit**
+- **Step 5: Commit**
 
 ```bash
 git add ClashMax/Views/ConnectionsView.swift
@@ -254,7 +258,7 @@ Same situation: a `Task` handle and a delay constant, no observable state.
 **Files:**
 - Modify: `ClashMax/Views/RoutingView.swift:47` (declaration), `:100` (`@StateObject`)
 
-- [ ] **Step 1: Drop the conformance**
+- **Step 1: Drop the conformance**
 
 At `ClashMax/Views/RoutingView.swift:46-47`, change:
 
@@ -270,7 +274,7 @@ to:
 final class RuleMatchSimulationDebouncer {
 ```
 
-- [ ] **Step 2: Convert the owner to `@State`**
+- **Step 2: Convert the owner to `@State`**
 
 At `ClashMax/Views/RoutingView.swift:100`, change:
 
@@ -284,7 +288,7 @@ to:
 @State private var simulationDebouncer = RuleMatchSimulationDebouncer()
 ```
 
-- [ ] **Step 3: Run the suite**
+- **Step 3: Run the suite**
 
 ```bash
 xcodebuild test -scheme ClashMax -destination 'platform=macOS' 2>&1 | grep -E "Executed .* tests|TEST SUCCEEDED|TEST FAILED" | tail -5
@@ -292,7 +296,7 @@ xcodebuild test -scheme ClashMax -destination 'platform=macOS' 2>&1 | grep -E "E
 
 Expected: baseline count, `** TEST SUCCEEDED **`.
 
-- [ ] **Step 4: Commit**
+- **Step 4: Commit**
 
 ```bash
 git add ClashMax/Views/RoutingView.swift
@@ -307,7 +311,7 @@ Holds only a Task handle and a delay constant; nothing observable."
 - Modify: `ClashMax/Stores/PublicIPCoordinator.swift:4-5`
 - Consumer (converted in Stage 3): `ClashMax/Views/Dashboard/PublicIPInfoCard.swift:5`
 
-- [ ] **Step 1: Migrate the class**
+- **Step 1: Migrate the class**
 
 At `ClashMax/Stores/PublicIPCoordinator.swift:3-5`, change:
 
@@ -326,7 +330,7 @@ final class PublicIPCoordinator {
   private(set) var state: PublicIPInfoState = .idle
 ```
 
-- [ ] **Step 2: Annotate the Task handle**
+- **Step 2: Annotate the Task handle**
 
 The type holds `private var task: Task<...>` (see `PublicIPCoordinator.swift:36` where it is assigned). Mark it per rule R2:
 
@@ -334,7 +338,7 @@ The type holds `private var task: Task<...>` (see `PublicIPCoordinator.swift:36`
 @ObservationIgnored private var task: Task<Void, Never>?
 ```
 
-- [ ] **Step 3: Remove the Combine import if now unused**
+- **Step 3: Remove the Combine import if now unused**
 
 ```bash
 grep -n "Combine\|AnyCancellable\|Publisher" ClashMax/Stores/PublicIPCoordinator.swift
@@ -342,7 +346,7 @@ grep -n "Combine\|AnyCancellable\|Publisher" ClashMax/Stores/PublicIPCoordinator
 
 If the only hit is `import Combine`, delete that line. If there are no hits at all, nothing to do.
 
-- [ ] **Step 4: Run the suite**
+- **Step 4: Run the suite**
 
 ```bash
 xcodebuild test -scheme ClashMax -destination 'platform=macOS' 2>&1 | grep -E "Executed .* tests|TEST SUCCEEDED|TEST FAILED" | tail -5
@@ -359,7 +363,7 @@ Expected: baseline count, `** TEST SUCCEEDED **`.
 
 and change its injection at `ClashMax/App/ClashMaxApp.swift:23`, `:121`, `:151` from `.environmentObject(appModel.publicIP)` to `.environment(appModel.publicIP)`. Then re-run the suite.
 
-- [ ] **Step 5: Commit**
+- **Step 5: Commit**
 
 ```bash
 git add ClashMax/Stores/PublicIPCoordinator.swift ClashMax/Views/Dashboard/PublicIPInfoCard.swift ClashMax/App/ClashMaxApp.swift
@@ -371,7 +375,7 @@ git commit -m "refactor: migrate PublicIPCoordinator to @Observable"
 **Files:**
 - Modify: `ClashMax/Services/TunnelHelperClient.swift:253-254`
 
-- [ ] **Step 1: Migrate the class**
+- **Step 1: Migrate the class**
 
 At `ClashMax/Services/TunnelHelperClient.swift:252-254`, change:
 
@@ -390,7 +394,7 @@ final class TunnelHelperClient {
   var statusMessage: String = "Not registered"
 ```
 
-- [ ] **Step 2: Apply rule R2 to its non-state members**
+- **Step 2: Apply rule R2 to its non-state members**
 
 ```bash
 grep -nE '^  private (var|let) ' ClashMax/Services/TunnelHelperClient.swift
@@ -398,7 +402,7 @@ grep -nE '^  private (var|let) ' ClashMax/Services/TunnelHelperClient.swift
 
 Mark every `Task<...>`, cache dictionary, and generation counter in that output with `@ObservationIgnored`. Leave plain configuration `let`s alone — immutable properties are never mutated, so they never invalidate.
 
-- [ ] **Step 3: Run the suite**
+- **Step 3: Run the suite**
 
 ```bash
 xcodebuild test -scheme ClashMax -destination 'platform=macOS' 2>&1 | grep -E "Executed .* tests|TEST SUCCEEDED|TEST FAILED" | tail -5
@@ -406,7 +410,7 @@ xcodebuild test -scheme ClashMax -destination 'platform=macOS' 2>&1 | grep -E "E
 
 Expected: baseline count, `** TEST SUCCEEDED **`.
 
-- [ ] **Step 4: Commit**
+- **Step 4: Commit**
 
 ```bash
 git add ClashMax/Services/TunnelHelperClient.swift
@@ -421,7 +425,7 @@ This one is an `NSObject` subclass driving Sparkle. `@Observable` works on `NSOb
 - Modify: `ClashMax/Services/AppUpdateController.swift:5-7`
 - Consumer (`@ObservedObject`): `ClashMax/Views/AppUpdateControls.swift:4`
 
-- [ ] **Step 1: Migrate the class**
+- **Step 1: Migrate the class**
 
 At `ClashMax/Services/AppUpdateController.swift:4-7`, change:
 
@@ -442,7 +446,7 @@ final class AppUpdateController: NSObject {
   private(set) var statusMessage = String(localized: "Checking for updates is not configured for this build.")
 ```
 
-- [ ] **Step 2: Annotate the Sparkle members**
+- **Step 2: Annotate the Sparkle members**
 
 At `ClashMax/Services/AppUpdateController.swift:9-10`:
 
@@ -451,7 +455,7 @@ At `ClashMax/Services/AppUpdateController.swift:9-10`:
 @ObservationIgnored private var canCheckObservation: NSKeyValueObservation?
 ```
 
-- [ ] **Step 3: Convert the `@ObservedObject` consumer**
+- **Step 3: Convert the `@ObservedObject` consumer**
 
 At `ClashMax/Views/AppUpdateControls.swift:4`, change:
 
@@ -465,7 +469,7 @@ to:
 let updateController: AppUpdateController
 ```
 
-- [ ] **Step 4: Fix the two `@EnvironmentObject` reads and the injections**
+- **Step 4: Fix the two `@EnvironmentObject` reads and the injections**
 
 `AppUpdateController` is read at `ClashMax/Views/MenuBarView.swift:97` and `ClashMax/Views/SettingsView.swift:8`. Change both:
 
@@ -483,7 +487,7 @@ and the three injections at `ClashMax/App/ClashMaxApp.swift:24`, `:122`, `:152` 
 
 Also `ClashMaxTests/MenuBarPanelLayoutTests.swift:290`, from `.environmentObject(AppUpdateController())` to `.environment(AppUpdateController())`.
 
-- [ ] **Step 5: Run the suite**
+- **Step 5: Run the suite**
 
 ```bash
 xcodebuild test -scheme ClashMax -destination 'platform=macOS' 2>&1 | grep -E "Executed .* tests|TEST SUCCEEDED|TEST FAILED" | tail -5
@@ -491,7 +495,7 @@ xcodebuild test -scheme ClashMax -destination 'platform=macOS' 2>&1 | grep -E "E
 
 Expected: baseline count, `** TEST SUCCEEDED **`.
 
-- [ ] **Step 6: Commit**
+- **Step 6: Commit**
 
 ```bash
 git add ClashMax/Services/AppUpdateController.swift ClashMax/Views/AppUpdateControls.swift ClashMax/Views/MenuBarView.swift ClashMax/Views/SettingsView.swift ClashMax/App/ClashMaxApp.swift ClashMaxTests/MenuBarPanelLayoutTests.swift
@@ -508,7 +512,7 @@ Its re-arm is synchronous inside `onChange` **on purpose**: `withObservationTrac
 - Create: `ClashMaxTests/Support/ObservationChangeCounter.swift`
 - Modify: `ClashMaxTests/DashboardRuntimeStateTests.swift:12750-12767` (delete the private copy)
 
-- [ ] **Step 1: Create the shared helper**
+- **Step 1: Create the shared helper**
 
 Create `ClashMaxTests/Support/ObservationChangeCounter.swift`:
 
@@ -551,11 +555,11 @@ final class ObservationChangeCounter {
 
 The `sources: - path: ClashMaxTests` entry in `project.yml:297-298` is a directory glob, so the new `Support/` subdirectory is picked up with no project file change.
 
-- [ ] **Step 2: Delete the private copy**
+- **Step 2: Delete the private copy**
 
 Delete lines 12750-12767 of `ClashMaxTests/DashboardRuntimeStateTests.swift` — the whole `private final class ObservationChangeCounter { … }` declaration.
 
-- [ ] **Step 3: Regenerate the project and run the suite**
+- **Step 3: Regenerate the project and run the suite**
 
 ```bash
 xcodegen generate && xcodebuild test -scheme ClashMax -destination 'platform=macOS' 2>&1 | grep -E "Executed .* tests|TEST SUCCEEDED|TEST FAILED" | tail -5
@@ -563,7 +567,7 @@ xcodegen generate && xcodebuild test -scheme ClashMax -destination 'platform=mac
 
 Expected: baseline count, `** TEST SUCCEEDED **`. The existing `RuntimeDataStoreTests` and `DashboardRuntimeStateTests` call sites now resolve to the shared type.
 
-- [ ] **Step 4: Commit**
+- **Step 4: Commit**
 
 ```bash
 git add ClashMaxTests/Support/ObservationChangeCounter.swift ClashMaxTests/DashboardRuntimeStateTests.swift ClashMax.xcodeproj/project.pbxproj
@@ -582,7 +586,7 @@ This type guards the issue #10/#11 perf work. The `if snapshot != self.snapshot`
 - Modify: `ClashMaxTests/ProxySearchPipelineTests.swift:280`, `:308`, `:350`
 - Modify: `ClashMax/Views/ProxiesView.swift:8`, `ClashMax/Views/Dashboard/RunningDashboardView.swift:7` (`@ObservedObject` consumers — the coordinators are owned by `AppModel`, not these views)
 
-- [ ] **Step 1: Rewrite the three emission tests against Observation first**
+- **Step 1: Rewrite the three emission tests against Observation first**
 
 These tests currently assert on the Combine publisher. Rewrite them before touching the class so they fail for the right reason.
 
@@ -602,7 +606,7 @@ and replace the later `XCTAssertEqual(snapshotEmissions, 1, ...)` assertion with
 
 `ObservationChangeCounter` needs no `.dropFirst()`: it arms on the current value and counts only subsequent invalidations, which is what `.dropFirst()` was emulating.
 
-- [ ] **Step 2: Run the three tests to verify they fail**
+- **Step 2: Run the three tests to verify they fail**
 
 ```bash
 xcodebuild test -scheme ClashMax -destination 'platform=macOS' -only-testing:ClashMaxTests/ProxySearchPipelineTests 2>&1 | tail -30
@@ -610,7 +614,7 @@ xcodebuild test -scheme ClashMax -destination 'platform=macOS' -only-testing:Cla
 
 Expected: FAIL. The counter reads `coordinator.snapshot`, which is still `@Published` and therefore not Observation-tracked, so `counter.count` stays 0 while the tests expect 1.
 
-- [ ] **Step 3: Migrate the class**
+- **Step 3: Migrate the class**
 
 At `ClashMax/Views/ProxySearchCoordinator.swift:12-13`, change:
 
@@ -649,7 +653,7 @@ Apply rule R2 to the internals at `:38-44` — none of these should invalidate a
 
 Delete `import Combine` at `:1`.
 
-- [ ] **Step 4: Convert the two consumers to plain lets**
+- **Step 4: Convert the two consumers to plain lets**
 
 **Do not reintroduce per-view ownership.** Uncommitted work in the tree moved both coordinators onto `AppModel` (`let proxiesSearchCoordinator` / `let dashboardCurrentNodeCoordinator`, `AppModel.swift:808-809`) precisely because view-owned `@StateObject` instances were torn down on every tab switch, so returning to the page repainted from an empty snapshot. The views now receive the coordinator through an `init` and hold it as `@ObservedObject`. Converting these back to `@State` would revert that fix.
 
@@ -669,7 +673,7 @@ Leave both `init`s and the `ContentView.swift:91` / dashboard call sites exactly
 
 `AppModel` holds both as `let`, so once it becomes `@Observable` in Stage 2, nested tracking covers any view that reaches a coordinator *through* the model. The views here hold it directly, which already works as soon as `ProxySearchCoordinator` is `@Observable`.
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- **Step 5: Run the tests to verify they pass**
 
 ```bash
 xcodebuild test -scheme ClashMax -destination 'platform=macOS' -only-testing:ClashMaxTests/ProxySearchPipelineTests 2>&1 | tail -30
@@ -677,7 +681,7 @@ xcodebuild test -scheme ClashMax -destination 'platform=macOS' -only-testing:Cla
 
 Expected: PASS. In particular the `identical snapshot must not emit a redundant objectWillChange` case must still pass — that is the issue #11 contract, now expressed against Observation.
 
-- [ ] **Step 6: Run the full suite**
+- **Step 6: Run the full suite**
 
 ```bash
 xcodebuild test -scheme ClashMax -destination 'platform=macOS' 2>&1 | grep -E "Executed .* tests|TEST SUCCEEDED|TEST FAILED" | tail -5
@@ -685,7 +689,7 @@ xcodebuild test -scheme ClashMax -destination 'platform=macOS' 2>&1 | grep -E "E
 
 Expected: baseline count, `** TEST SUCCEEDED **`.
 
-- [ ] **Step 7: Commit**
+- **Step 7: Commit**
 
 ```bash
 git add ClashMax/Views/ProxySearchCoordinator.swift ClashMax/Views/ProxiesView.swift ClashMax/Views/Dashboard/RunningDashboardView.swift ClashMaxTests/ProxySearchPipelineTests.swift
@@ -715,7 +719,7 @@ The build will be broken between Task 8 and Task 13. That is expected — do not
 - Modify: `ClashMax/Stores/ProxyPreviewStore.swift:4-7`
 - Modify: `ClashMax/Stores/PersistedSettingsStore.swift:5` and its 20 `@Published` lines
 
-- [ ] **Step 1: `ProfileStore`**
+- **Step 1: `ProfileStore`**
 
 `ClashMax/Stores/ProfileStore.swift:229-238`:
 
@@ -731,7 +735,7 @@ final class ProfileStore {
 
 Mark `manifestLoadTask` (assigned at `:255`) `@ObservationIgnored`.
 
-- [ ] **Step 2: `ProfileCoordinator`**
+- **Step 2: `ProfileCoordinator`**
 
 `ClashMax/Stores/ProfileOperationsStore.swift:4-8`:
 
@@ -746,7 +750,7 @@ final class ProfileCoordinator {
 
 Mark the `hooks` struct and any `Task` handles `@ObservationIgnored`.
 
-- [ ] **Step 3: `ProviderAnalyticsStore`**
+- **Step 3: `ProviderAnalyticsStore`**
 
 `ClashMax/Stores/ProviderAnalyticsStore.swift:3-15`:
 
@@ -758,7 +762,7 @@ final class ProviderAnalyticsStore {
   private(set) var records: [ProviderAnalyticsRecord] = []
 ```
 
-- [ ] **Step 4: `RuntimeSnippetLibraryStore`**
+- **Step 4: `RuntimeSnippetLibraryStore`**
 
 `ClashMax/Stores/RuntimeSnippetLibraryStore.swift:41-44`:
 
@@ -770,7 +774,7 @@ final class RuntimeSnippetLibraryStore {
   private(set) var loadError: String?
 ```
 
-- [ ] **Step 5: `SystemProxyCoordinator`**
+- **Step 5: `SystemProxyCoordinator`**
 
 `ClashMax/Stores/SystemProxyCoordinator.swift:3-5`:
 
@@ -783,7 +787,7 @@ final class SystemProxyCoordinator {
 
 Mark `guardTask` (assigned at `:127`) `@ObservationIgnored`.
 
-- [ ] **Step 6: `ProxyPreviewStore`**
+- **Step 6: `ProxyPreviewStore`**
 
 `ClashMax/Stores/ProxyPreviewStore.swift:3-14`:
 
@@ -803,7 +807,7 @@ final class ProxyPreviewStore {
 
 `refreshGeneration` in particular must be ignored — it increments on every refresh.
 
-- [ ] **Step 7: `PersistedSettingsStore`**
+- **Step 7: `PersistedSettingsStore`**
 
 `ClashMax/Stores/PersistedSettingsStore.swift:4-5`:
 
@@ -827,7 +831,7 @@ Mark `defaults` and `loginItemService` (`:100-101`) `@ObservationIgnored`.
 
 Preserve the `guard refreshed != launchSettings else { return }` in `refreshLaunchSettings` — `applicationDidBecomeActive` calls it repeatedly and without the guard every activation would invalidate every view reading `launchSettings`.
 
-- [ ] **Step 8: Verify no `@Published` remains in these seven files**
+- **Step 8: Verify no `@Published` remains in these seven files**
 
 ```bash
 grep -rn "@Published\|ObservableObject" ClashMax/Stores/ProfileStore.swift ClashMax/Stores/ProfileOperationsStore.swift ClashMax/Stores/ProviderAnalyticsStore.swift ClashMax/Stores/RuntimeSnippetLibraryStore.swift ClashMax/Stores/SystemProxyCoordinator.swift ClashMax/Stores/ProxyPreviewStore.swift ClashMax/Stores/PersistedSettingsStore.swift
@@ -843,7 +847,7 @@ Do not build yet — `AppModel` still relays from these types and will not compi
 - Modify: `ClashMax/Services/CoreProcessController.swift:83-86`
 - Modify: `ClashMax/Services/NetworkExtensionController.swift:334-341`
 
-- [ ] **Step 1: `CoreProcessController`**
+- **Step 1: `CoreProcessController`**
 
 `ClashMax/Services/CoreProcessController.swift:82-86`:
 
@@ -872,7 +876,7 @@ grep -nE '^  private var .*(Task|Timer|Continuation|\[)' ClashMax/Services/CoreP
 
 Mark each hit `@ObservationIgnored`.
 
-- [ ] **Step 2: `NetworkExtensionController`**
+- **Step 2: `NetworkExtensionController`**
 
 `ClashMax/Services/NetworkExtensionController.swift:333-341`:
 
@@ -893,7 +897,7 @@ Mark its status-observation token and `Task` handles `@ObservationIgnored`:
 grep -nE '^  private var .*(Task|Observation|Continuation)' ClashMax/Services/NetworkExtensionController.swift
 ```
 
-- [ ] **Step 3: Verify**
+- **Step 3: Verify**
 
 ```bash
 grep -rn "@Published\|ObservableObject" ClashMax/Services/CoreProcessController.swift ClashMax/Services/NetworkExtensionController.swift
@@ -911,7 +915,7 @@ This replaces the five behavioral Combine pipelines. Each hook is `@ObservationI
 - Modify: `ClashMax/Stores/ProfileStore.swift` (1 hook)
 - Modify: `ClashMax/Services/CoreProcessController.swift` (1 hook)
 
-- [ ] **Step 1: `PersistedSettingsStore` — two hooks**
+- **Step 1: `PersistedSettingsStore` — two hooks**
 
 Add near the other stored members (after `loginItemService` at `:101`):
 
@@ -948,7 +952,7 @@ var globalShortcutSettings = GlobalShortcutSettings.default {
 
 Both hooks are `nil` while the store loads persisted values in `init` (`:179`, `:194`) because `AppModel` assigns them later in `setupBindings` — matching today's behavior, where no subscriber existed yet.
 
-- [ ] **Step 2: `ProxyPreviewStore` — add a `didSet` and a hook**
+- **Step 2: `ProxyPreviewStore` — add a `didSet` and a hook**
 
 `profilePreviewGroups` currently has no `didSet`. Add one:
 
@@ -963,7 +967,7 @@ var profilePreviewGroups: [ProxyGroup] = [] {
 }
 ```
 
-- [ ] **Step 3: `ProfileStore` — add a `didSet` and a hook**
+- **Step 3: `ProfileStore` — add a `didSet` and a hook**
 
 ```swift
 /// Fired after `profiles` changes. Assigned by `AppModel.setupBindings`.
@@ -976,7 +980,7 @@ private(set) var profiles: [Profile] = [] {
 }
 ```
 
-- [ ] **Step 4: `CoreProcessController` — add a `didSet` and a hook**
+- **Step 4: `CoreProcessController` — add a `didSet` and a hook**
 
 `status` is assigned at twelve sites (`:121`, `:167`, `:175`, `:197`, `:212`, `:217`, `:228`, `:230`, `:238`, `:251`, `:301`, `:572`). Add the hook to the declaration rather than editing twelve call sites:
 
@@ -991,7 +995,7 @@ private(set) var status: CoreStatus = .stopped {
 }
 ```
 
-- [ ] **Step 5: Verify all five hooks exist**
+- **Step 5: Verify all five hooks exist**
 
 ```bash
 grep -rn "onSubscriptionFetchSettingsChange\|onGlobalShortcutSettingsChange\|onProfilePreviewGroupsChange\|onProfilesChange\|onStatusChange" ClashMax/Stores ClashMax/Services
@@ -1004,7 +1008,7 @@ Expected: 10 lines — one declaration and one `didSet` invocation per hook.
 **Files:**
 - Modify: `ClashMax/Stores/AppModel.swift:543` (declaration), the 35 `@Published` lines, `:853` (`storeCancellables`), `:998-1057` (the bindings block)
 
-- [ ] **Step 1: Migrate the declaration and the 35 properties**
+- **Step 1: Migrate the declaration and the 35 properties**
 
 `ClashMax/Stores/AppModel.swift:542-544`:
 
@@ -1017,7 +1021,7 @@ final class AppModel {
 
 Delete the `@Published` attribute from all 35 properties (`:544` through `:735`), preserving `private(set)`, `private`, and the `didSet` on `lastError` at `:698-707`.
 
-- [ ] **Step 2: Delete the nine relay sinks**
+- **Step 2: Delete the nine relay sinks**
 
 Delete these blocks entirely from `ClashMax/Stores/AppModel.swift:998-1057` — nested `@Observable` tracking replaces every one of them:
 
@@ -1031,7 +1035,7 @@ Delete these blocks entirely from `ClashMax/Stores/AppModel.swift:998-1057` — 
 - `coreController.objectWillChange` (`:1047-1049`)
 - `networkExtensionController.objectWillChange` (`:1055-1057`)
 
-- [ ] **Step 3: Replace the five behavioral pipelines with hook assignments**
+- **Step 3: Replace the five behavioral pipelines with hook assignments**
 
 Replace the five `.sink` blocks with this. Note the three priming calls at the end — `@Published` publishers emit on subscribe, so `installGlobalShortcuts`, `schedulePreviewRuntimeStartIfReady`, and `handleCoreStatusChange` each ran once at setup today, and `didSet` does not fire during init:
 
@@ -1076,7 +1080,7 @@ Replace the five `.sink` blocks with this. Note the three priming calls at the e
 
 `rescheduleSubscriptionAutoUpdates()` takes no parameter and re-reads `settings.subscriptionFetchSettings` through the hook at `AppModel.swift:960`. Under `@Published`/`willSet` it read the **pre-change** value; under `didSet` it reads the new one. That is a deliberate bug fix, pinned by a test in Task 15.
 
-- [ ] **Step 4: Remove the Combine plumbing**
+- **Step 4: Remove the Combine plumbing**
 
 Delete `private var storeCancellables: Set<AnyCancellable> = []` at `:853`, then:
 
@@ -1086,7 +1090,7 @@ grep -n "AnyCancellable\|storeCancellables\|\.sink\|\.store(in:" ClashMax/Stores
 
 If that returns nothing, delete `import Combine` at `:2`. If it returns hits, they are pipelines this plan did not account for — stop and read them before deleting anything.
 
-- [ ] **Step 5: Apply rule R2 to `AppModel`'s Task handles**
+- **Step 5: Apply rule R2 to `AppModel`'s Task handles**
 
 ```bash
 grep -nE '^  private var .*Task<' ClashMax/Stores/AppModel.swift
@@ -1100,7 +1104,7 @@ Also mark the delay-state cache and any batch coalescing buffers `@ObservationIg
 grep -nE '^  private var .*(delayStateCache|Buffer|pending|Generation)' ClashMax/Stores/AppModel.swift
 ```
 
-- [ ] **Step 6: Verify no `ObservableObject` remains anywhere**
+- **Step 6: Verify no `ObservableObject` remains anywhere**
 
 ```bash
 grep -rn "ObservableObject\|@Published" ClashMax/
@@ -1114,30 +1118,30 @@ This is rule R3, and it is the step that catches silent perf regressions. Do it 
 
 **Files:** `ClashMax/Stores/AppModel.swift` and the nine cluster types
 
-- [ ] **Step 1: List the view-visible computed properties on `AppModel`**
+- **Step 1: List the view-visible computed properties on `AppModel`**
 
 ```bash
 grep -nE '^  (private\(set\) )?var [a-zA-Z]+: .*\{$' ClashMax/Stores/AppModel.swift | grep -v "private var"
 ```
 
-- [ ] **Step 2: For each, check which private stored properties it reads**
+- **Step 2: For each, check which private stored properties it reads**
 
 The known instance is `canRepairTunRouting` (`:631-638`), which reads `private var tunHelperStopUnconfirmed` (`:789`). Others in the same family are `canRepairTunDNS` (`:625`) and `canRepairNetworkExtensionDNS` (`:620`).
 
-- [ ] **Step 3: Classify each hit**
+- **Step 3: Classify each hit**
 
 For every private stored property reached from a view-visible computed property:
 
 - **Low-frequency state whose change should update the UI** (`tunHelperStopUnconfirmed`, `lifecycleStopInFlight`, `tunLaunchInFlight`) → leave observable. It flips a handful of times per runtime transition, and the newly-correct invalidation is the point: today the repair button's enabled state can go stale.
 - **Hot-path state** (per-node delay results, per-line log appends, generation counters, caches) → `@ObservationIgnored`.
 
-- [ ] **Step 4: Write down the classification**
+- **Step 4: Write down the classification**
 
 Record each decision in the Task 13 commit message. A future reader needs to know these were chosen, not missed.
 
 ### Task 13: Build, verify, and commit the cluster
 
-- [ ] **Step 1: Build**
+- **Step 1: Build**
 
 ```bash
 xcodebuild build -scheme ClashMax -destination 'platform=macOS' 2>&1 | grep -E "error:|warning: .*Observable|BUILD" | head -40
@@ -1147,11 +1151,11 @@ Expected: `** BUILD SUCCEEDED **`.
 
 Stage 3 has not run yet, so the 57 `@EnvironmentObject` declarations still reference now-non-`ObservableObject` types. **Expect this build to fail with "does not conform to 'ObservableObject'" errors** — that is the signal to proceed to Stage 3, not a defect. If it fails with anything else, fix that first.
 
-- [ ] **Step 2: Do not commit yet**
+- **Step 2: Do not commit yet**
 
 The cluster is not verifiable until the views compile. Continue to Task 14, then return here.
 
-- [ ] **Step 3: After Stage 3 completes, run the full suite**
+- **Step 3: After Stage 3 completes, run the full suite**
 
 ```bash
 xcodebuild test -scheme ClashMax -destination 'platform=macOS' 2>&1 | grep -E "Executed .* tests|TEST SUCCEEDED|TEST FAILED" | tail -5
@@ -1159,7 +1163,7 @@ xcodebuild test -scheme ClashMax -destination 'platform=macOS' 2>&1 | grep -E "E
 
 Expected: baseline count minus nothing; the nine test rewrites happen in Stage 4 and those tests still pass in their current form only if they were already converted. If `testSettingCurrentModeDoesNotPublishChanges` and the three sibling tests fail to **compile** (`value of type 'AppModel' has no member 'objectWillChange'`), that is expected — jump to Stage 4, then return.
 
-- [ ] **Step 4: Commit the cluster together with Stage 3**
+- **Step 4: Commit the cluster together with Stage 3**
 
 See Task 17.
 
@@ -1172,7 +1176,7 @@ See Task 17.
 **Files:**
 - Modify: `ClashMax/App/ClashMaxApp.swift`
 
-- [ ] **Step 1: Convert the two owners**
+- **Step 1: Convert the two owners**
 
 `:7-8`:
 
@@ -1185,7 +1189,7 @@ See Task 17.
 
 An `App` struct is instantiated once, so the `AppModel.bootstrap()` expression is not re-evaluated per render.
 
-- [ ] **Step 2: Convert all `.environmentObject(...)` to `.environment(...)`**
+- **Step 2: Convert all `.environmentObject(...)` to `.environment(...)`**
 
 There are 33 call sites across the app and tests. Apply mechanically:
 
@@ -1201,7 +1205,7 @@ grep -rn "\.environmentObject(" ClashMax ClashMaxTests --include="*.swift"
 
 Expected: no output.
 
-- [ ] **Step 3: Convert the `@ObservedObject` on `MenuBarStatusLabel`**
+- **Step 3: Convert the `@ObservedObject` on `MenuBarStatusLabel`**
 
 `ClashMax/App/ClashMaxApp.swift:168`:
 
@@ -1215,7 +1219,7 @@ Delete the now-wrong comment at `:171-172` ("ObservableObject migration is out o
 
 **Files:** the 17 view files listed by the grep below
 
-- [ ] **Step 1: Apply the mechanical conversion**
+- **Step 1: Apply the mechanical conversion**
 
 `@EnvironmentObject private var x: T` becomes `@Environment(T.self) private var x`. Run:
 
@@ -1232,7 +1236,7 @@ grep -rn "@Environment(" ClashMax --include="*.swift" | head -20
 
 Expected: first command silent; second shows declarations like `@Environment(AppModel.self) private var appModel`.
 
-- [ ] **Step 2: Add `@Bindable` where bindings are taken**
+- **Step 2: Add `@Bindable` where bindings are taken**
 
 `@Environment` does not vend bindings. Two places take them.
 
@@ -1250,7 +1254,7 @@ Expected: first command silent; second shows declarations like `@Environment(App
 
 Do **not** touch `$settings.dns`, `$settings.stack`, `$settings.mtu` and friends in `DashboardComponents.swift` — those are `@Binding var settings: TunSettings` / `SystemProxySettings` / `NetworkExtensionRoutingSettings` locals (declared at `DashboardComponents.swift:199`, `:378`, `:432`), not the store. Same for `$settings.*` inside `SettingsView` subviews declaring `@Binding var settings:` at `:902`, `:937`, `:1023`, `:1312`, `:1320`.
 
-- [ ] **Step 3: Build**
+- **Step 3: Build**
 
 ```bash
 xcodebuild build -scheme ClashMax -destination 'platform=macOS' 2>&1 | grep -E "error:|BUILD" | head -40
@@ -1263,7 +1267,7 @@ Expected: `** BUILD SUCCEEDED **`. Any remaining error naming a specific view is
 **Files:**
 - Modify: `ClashMaxTests/MenuBarPanelLayoutTests.swift:288`, `:290`
 
-- [ ] **Step 1: Confirm the sed from Task 14 caught them**
+- **Step 1: Confirm the sed from Task 14 caught them**
 
 ```bash
 grep -n "environment" ClashMaxTests/MenuBarPanelLayoutTests.swift
@@ -1271,7 +1275,7 @@ grep -n "environment" ClashMaxTests/MenuBarPanelLayoutTests.swift
 
 Expected: `.environment(model)` and `.environment(AppUpdateController())`.
 
-- [ ] **Step 2: Build the test target**
+- **Step 2: Build the test target**
 
 ```bash
 xcodebuild build-for-testing -scheme ClashMax -destination 'platform=macOS' 2>&1 | grep -E "error:|BUILD" | head -40
@@ -1281,7 +1285,7 @@ Expected: `** BUILD SUCCEEDED **`, or compile errors only in the four `objectWil
 
 ### Task 17: Commit Stages 2 and 3 together
 
-- [ ] **Step 1: Confirm the whole cluster migrated**
+- **Step 1: Confirm the whole cluster migrated**
 
 ```bash
 grep -rn "ObservableObject\|@Published\|@EnvironmentObject\|@StateObject\|@ObservedObject\|\.environmentObject(" ClashMax --include="*.swift"
@@ -1289,7 +1293,7 @@ grep -rn "ObservableObject\|@Published\|@EnvironmentObject\|@StateObject\|@Obser
 
 Expected: no output. Any hit is a missed site that will silently stop updating.
 
-- [ ] **Step 2: Commit**
+- **Step 2: Commit**
 
 ```bash
 git add ClashMax/
@@ -1327,7 +1331,7 @@ Observation has no "did this object publish at all" signal, so each `objectWillC
 **Files:**
 - Modify: `ClashMaxTests/DashboardRuntimeStateTests.swift:9545-9645`
 
-- [ ] **Step 1: `testSettingCurrentModeDoesNotPublishChanges`**
+- **Step 1: `testSettingCurrentModeDoesNotPublishChanges`**
 
 Replace:
 
@@ -1351,7 +1355,7 @@ with:
     XCTAssertEqual(counter.count, 0, "setting the current mode to its existing value must not invalidate `overrides`")
 ```
 
-- [ ] **Step 2: `testRequestingModeDefersPublishedChangesUntilNextActorTurn`**
+- **Step 2: `testRequestingModeDefersPublishedChangesUntilNextActorTurn`**
 
 Replace the same three-line counter setup with:
 
@@ -1361,7 +1365,7 @@ Replace the same three-line counter setup with:
 
 and both assertions with `XCTAssertEqual(counter.count, 0)` and `XCTAssertGreaterThan(counter.count, 0)` in their existing positions. Leave the `for _ in 0..<20 where model.overrides.mode != .global { await Task.yield() }` loop untouched — it is what makes the test deterministic.
 
-- [ ] **Step 3: `testRequestingProxyRoutingModeDefersPublishedChangesUntilNextActorTurn`**
+- **Step 3: `testRequestingProxyRoutingModeDefersPublishedChangesUntilNextActorTurn`**
 
 Same shape, tracking the routing mode:
 
@@ -1371,7 +1375,7 @@ Same shape, tracking the routing mode:
 
 with `XCTAssertEqual(counter.count, 0)` before the yield loop and `XCTAssertGreaterThan(counter.count, 0)` after.
 
-- [ ] **Step 4: `testCoreControllerStatusChangesPublishAppModelChanges`**
+- **Step 4: `testCoreControllerStatusChangesPublishAppModelChanges`**
 
 This one asserts that a change inside `CoreProcessController` reaches `AppModel` — exactly the nested-tracking behavior that replaced the relay, so it is the most valuable test in this group. Track the derived summary:
 
@@ -1394,7 +1398,7 @@ Replace `changeCount = 0` after the successful start with nothing (the counter c
     XCTAssertGreaterThan(counter.count, baseline)
 ```
 
-- [ ] **Step 5: Run the four tests**
+- **Step 5: Run the four tests**
 
 ```bash
 xcodebuild test -scheme ClashMax -destination 'platform=macOS' -only-testing:ClashMaxTests/DashboardRuntimeStateTests 2>&1 | grep -E "Executed .* tests|TEST SUCCEEDED|TEST FAILED" | tail -5
@@ -1408,7 +1412,7 @@ Expected: PASS.
 - Modify: `ClashMaxTests/ProfileStoreTests.swift:145-156`
 - Modify: `ClashMaxTests/DashboardRuntimeStateTests.swift:6009`
 
-- [ ] **Step 1: `testSelectingAlreadyActiveProfileDoesNotPublishChanges`**
+- **Step 1: `testSelectingAlreadyActiveProfileDoesNotPublishChanges`**
 
 At `ClashMaxTests/ProfileStoreTests.swift:149-155`, replace:
 
@@ -1437,7 +1441,7 @@ with:
 
 Reading both properties inside the access block tracks both, so the test keeps its original breadth.
 
-- [ ] **Step 2: The `proxyDelayBatchProgress` counter**
+- **Step 2: The `proxyDelayBatchProgress` counter**
 
 At `ClashMaxTests/DashboardRuntimeStateTests.swift:6009`, replace the `model.$proxyDelayBatchProgress` Combine subscription with:
 
@@ -1447,7 +1451,7 @@ At `ClashMaxTests/DashboardRuntimeStateTests.swift:6009`, replace the `model.$pr
 
 and update that test's assertions to read `progressCounter.count`. Keep the expected counts exactly as they are — they encode the issue #11 coalescing contract, and changing them to make the test pass would silently revert that work.
 
-- [ ] **Step 3: Confirm Combine is gone from the test target**
+- **Step 3: Confirm Combine is gone from the test target**
 
 ```bash
 grep -rn "objectWillChange\|import Combine\|AnyCancellable" ClashMaxTests/
@@ -1462,7 +1466,7 @@ The priming behavior is already pinned by the characterization test from Task 0,
 **Files:**
 - Modify: `ClashMaxTests/DashboardRuntimeStateTests.swift` (there is no `PersistedSettingsStoreTests.swift`; the only settings-adjacent file is `GlobalShortcutSettingsTests.swift`, which is about shortcut parsing)
 
-- [ ] **Step 1: Write the test for the `didSet` timing fix**
+- **Step 1: Write the test for the `didSet` timing fix**
 
 `rescheduleSubscriptionAutoUpdates` takes no new value; it re-reads the store through `hooks.subscriptionUpdateSettings()` (`ProfileOperationsStore.swift:353`), which is wired to `self?.settings.subscriptionFetchSettings` (`AppModel.swift:973`). Under `@Published`/`willSet` that read returned the **pre-change** settings. The cleanest way to pin the fix is at the store boundary, where the semantics actually live:
 
@@ -1491,7 +1495,7 @@ The priming behavior is already pinned by the characterization test from Task 0,
 
 `SubscriptionFetchSettings` is defined at `ClashMax/Models/CoreModels.swift:6145`; the interval field is `defaultUpdateIntervalMinutes`, not an hours-based one.
 
-- [ ] **Step 2: Run it**
+- **Step 2: Run it**
 
 ```bash
 xcodebuild test -scheme ClashMax -destination 'platform=macOS' -only-testing:ClashMaxTests/DashboardRuntimeStateTests/testSubscriptionFetchSettingsHookObservesTheNewValue 2>&1 | tail -20
@@ -1499,7 +1503,7 @@ xcodebuild test -scheme ClashMax -destination 'platform=macOS' -only-testing:Cla
 
 Expected: PASS. This test cannot be written against the pre-migration code — `onSubscriptionFetchSettingsChange` does not exist there — so unlike Task 0's test it has no un-migrated baseline. Sanity-check it by temporarily moving the hook call from `didSet` to a `willSet`, confirming the assertion fails, then restoring it.
 
-- [ ] **Step 3: Confirm Task 0's characterization test still passes**
+- **Step 3: Confirm Task 0's characterization test still passes**
 
 ```bash
 xcodebuild test -scheme ClashMax -destination 'platform=macOS' -only-testing:ClashMaxTests/DashboardRuntimeStateTests/testGlobalShortcutsAreRegisteredFromPersistedSettingsAtLaunch 2>&1 | tail -20
@@ -1507,7 +1511,7 @@ xcodebuild test -scheme ClashMax -destination 'platform=macOS' -only-testing:Cla
 
 Expected: PASS. If it fails, `setupBindings` is missing the `installGlobalShortcuts(settings.globalShortcutSettings)` priming call from Task 11 Step 3.
 
-- [ ] **Step 4: Run the full suite**
+- **Step 4: Run the full suite**
 
 ```bash
 xcodebuild test -scheme ClashMax -destination 'platform=macOS' 2>&1 | grep -E "Executed .* tests|TEST SUCCEEDED|TEST FAILED" | tail -5
@@ -1515,7 +1519,7 @@ xcodebuild test -scheme ClashMax -destination 'platform=macOS' 2>&1 | grep -E "E
 
 Expected: baseline count plus the new tests, `** TEST SUCCEEDED **`.
 
-- [ ] **Step 5: Commit**
+- **Step 5: Commit**
 
 ```bash
 git add ClashMaxTests/
@@ -1540,7 +1544,7 @@ characterization test added before the migration started."
 
 The suite proves logic, not that the UI redraws. This migration changes the invalidation mechanism for the entire UI, so **the work is not done until the app has been run**. This project has a documented pattern of sessions ending here with the box unticked; do not repeat it.
 
-- [ ] **Step 1: Full suite green**
+- **Step 1: Full suite green**
 
 ```bash
 xcodebuild test -scheme ClashMax -destination 'platform=macOS' 2>&1 | grep -E "Executed .* tests|TEST SUCCEEDED|TEST FAILED" | tail -5
@@ -1548,7 +1552,7 @@ xcodebuild test -scheme ClashMax -destination 'platform=macOS' 2>&1 | grep -E "E
 
 Expected: baseline count plus the new tests, zero failures.
 
-- [ ] **Step 2: Confirm the observation surface is fully migrated**
+- **Step 2: Confirm the observation surface is fully migrated**
 
 ```bash
 grep -rn "ObservableObject\|@Published\|@EnvironmentObject\|@StateObject\|@ObservedObject\|\.environmentObject(" ClashMax ClashMaxTests --include="*.swift"
@@ -1562,7 +1566,7 @@ grep -rn "import Combine" ClashMax --include="*.swift"
 
 Expected: no output, or only files with a genuine remaining Combine use (which this plan does not create).
 
-- [ ] **Step 3: Launch and exercise every surface**
+- **Step 3: Launch and exercise every surface**
 
 Use the `run` skill to launch the app. Then confirm live updating on each surface, because each is fed by a different store that was migrated:
 
@@ -1579,11 +1583,11 @@ Use the `run` skill to launch the app. Then confirm live updating on each surfac
 
 A surface that renders but never updates is the exact failure mode this migration risks, and no test in the suite can catch it.
 
-- [ ] **Step 4: Check for runtime traps**
+- **Step 4: Check for runtime traps**
 
 A missing `.environment(...)` injection traps rather than failing to compile. Open every window — main window, Settings scene, and the menu bar panel — since they have separate injection lists (`ClashMaxApp.swift:15-24`, `:113-122`, `:143-152`).
 
-- [ ] **Step 5: Record the result**
+- **Step 5: Record the result**
 
 Report honestly which surfaces were confirmed by eye and which were not. If a surface could not be exercised (needs a live subscription, a running core, a real VPN profile), say so explicitly rather than implying it passed.
 

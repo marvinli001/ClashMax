@@ -84,11 +84,12 @@ ClashMax 是一个使用 SwiftUI 构建的原生 macOS Mihomo 图形客户端。
 
 ## 本地开发
 
-项目级开发纪律见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)。本机 Agent 说明保留在 `AGENTS.md`，该文件有意不提交。
+环境、源码布局、开发规则和检查统一从[开发指南](docs/DEVELOPMENT.md)进入。[路线图](docs/ROADMAP.zh-CN.md)区分已有实现与剩余工作，[人工计划](docs/MANUAL_TEST_PLAN.md)和[发布指南](docs/RELEASE.md)负责验收。本机 `AGENTS.md` 说明有意不提交。
 
 Xcode 工程由 XcodeGen 根据 `project.yml` 生成，不提交 `ClashMax.xcodeproj/`。克隆仓库后先执行：
 
 ```bash
+script/install_mihomo_core.sh
 xcodegen generate
 ```
 
