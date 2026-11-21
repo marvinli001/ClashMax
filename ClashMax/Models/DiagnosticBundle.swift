@@ -145,7 +145,7 @@ struct DiagnosticBundleInput: Sendable {
   /// the file has not been read yet.
   var runningCoreSniffing: Bool?
   var dnsResolution: DNSResolutionSnapshot?
-  var aiServiceReport: String? = nil
+  var aiServiceReport: String?
   var network: DiagnosticBundleNetwork
   var logs: [LogEntry]
   var coreProcessOutput: String

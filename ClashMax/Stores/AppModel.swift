@@ -817,6 +817,7 @@ final class AppModel {
     guard let failure = startValidationFailure, failure.profileID == profileStore.activeProfileID else { return nil }
     return failure.message
   }
+
   private var networkExtensionCoreCrashMessage: String?
   var proxyGroups: [ProxyGroup] {
     get { runtimeData.proxyGroups }
