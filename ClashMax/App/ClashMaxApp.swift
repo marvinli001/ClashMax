@@ -366,9 +366,11 @@ enum MenuBarStatusItemImage {
       width: logoPointSize,
       height: logoPointSize
     ))
-    // Right-aligned rows keep the units flush while the digit widths vary.
-    download.draw(at: NSPoint(x: textMinX + textWidth - downloadSize.width, y: 0))
-    upload.draw(at: NSPoint(x: textMinX + textWidth - uploadSize.width, y: rowHeight))
+    // Leading-aligned rows keep the arrows in one column right next to the logo. The fixed-width
+    // slack falls after the text: right-aligning put it between the logo and a short reading such
+    // as "2KB/s", which read as a detached icon.
+    download.draw(at: NSPoint(x: textMinX, y: 0))
+    upload.draw(at: NSPoint(x: textMinX, y: rowHeight))
     NSGraphicsContext.restoreGraphicsState()
 
     let image = NSImage(size: size)

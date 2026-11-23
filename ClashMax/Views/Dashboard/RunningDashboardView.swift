@@ -1173,29 +1173,40 @@ struct DashboardNetworkExtensionAttention {
 
 /// The NE counterpart of `TunDiagnosticsAttentionRow`. The clock expires transient warnings even
 /// when an idle extension has stopped publishing new diagnostics.
+///
+/// The body must emit nothing when there is nothing to show. A `TimelineView` wrapper is a view of
+/// its own even with empty content, so the Home `VStack` gave it a slot and a second section gap
+/// above the metrics whenever NE Proxy was the capture mode. The expiry clock therefore lives in a
+/// task on the visible row: it re-evaluates the body, which drops the row once its error ages out.
 private struct NetworkExtensionAttentionRow: View {
   @Environment(AppModel.self) private var appModel
   let availableWidth: CGFloat
+  @State private var expiryTick = 0
 
   var body: some View {
-    TimelineView(.periodic(from: Date(), by: 5)) { context in
-      let attention = DashboardNetworkExtensionAttention(
-        diagnostics: appModel.networkExtensionController.diagnostics,
-        dnsError: appModel.networkExtensionSystemDNSState.errorMessage,
-        now: context.date
-      )
-      if attention.needsAttention {
-        DashboardAttentionRow(
-          isError: attention.isError,
-          title: attention.dnsError != nil
-            ? String(localized: "NE system DNS repair needed")
-            : String(localized: "NE Proxy reported an error"),
-          detail: attention.dnsError ?? attention.latestError.map(eventSummary),
-          availableWidth: availableWidth
-        ) {
-          Button(String(localized: "Show in Status")) {
-            appModel.selectedSection = .status
-          }
+    let _ = expiryTick
+    let attention = DashboardNetworkExtensionAttention(
+      diagnostics: appModel.networkExtensionController.diagnostics,
+      dnsError: appModel.networkExtensionSystemDNSState.errorMessage,
+      now: Date()
+    )
+    if attention.needsAttention {
+      DashboardAttentionRow(
+        isError: attention.isError,
+        title: attention.dnsError != nil
+          ? String(localized: "NE system DNS repair needed")
+          : String(localized: "NE Proxy reported an error"),
+        detail: attention.dnsError ?? attention.latestError.map(eventSummary),
+        availableWidth: availableWidth
+      ) {
+        Button(String(localized: "Show in Status")) {
+          appModel.selectedSection = .status
+        }
+      }
+      .task {
+        while !Task.isCancelled {
+          try? await Task.sleep(for: .seconds(5))
+          expiryTick &+= 1
         }
       }
     }

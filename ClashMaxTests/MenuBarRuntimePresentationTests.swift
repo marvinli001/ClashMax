@@ -300,15 +300,17 @@ final class MenuBarStatusItemImageTests: XCTestCase {
     )
   }
 
-  func testRenderRightAlignsTheShorterReadingInsideTheFixedColumn() throws {
-    let image = MenuBarStatusItemImage.render(lines: .init(upload: "↑0B/s", download: "↓0B/s"), logo: nil)
+  func testRenderLeadingAlignsTheShorterReadingNextToTheLogo() throws {
+    let image = MenuBarStatusItemImage.render(lines: .init(upload: "↑2KB/s", download: "↓0B/s"), logo: solidLogo())
     let rep = try XCTUnwrap(image.representations.first as? NSBitmapImageRep)
-    let leftQuarter = 0..<(rep.pixelsWide / 4)
+    let scale = CGFloat(rep.pixelsWide) / image.size.width
+    let textMinX = Int((MenuBarStatusItemImage.logoPointSize + MenuBarStatusItemImage.logoTextGap) * scale)
+    let firstTextColumns = textMinX..<(textMinX + Int(4 * scale))
     let rightQuarter = (rep.pixelsWide * 3 / 4)..<rep.pixelsWide
 
-    // The slack sits between the logo and the text; the units stay flush on the right edge.
-    XCTAssertEqual(alphaPixels(in: rep, xRange: leftQuarter), 0)
-    XCTAssertGreaterThan(alphaPixels(in: rep, xRange: rightQuarter), 0)
+    // A short reading starts right after the logo gap; the fixed-width slack sits after the text.
+    XCTAssertGreaterThan(alphaPixels(in: rep, xRange: firstTextColumns), 0)
+    XCTAssertEqual(alphaPixels(in: rep, xRange: rightQuarter), 0)
   }
 
   func testRenderWithoutLogoStillDrawsBothRows() {
